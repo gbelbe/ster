@@ -2,7 +2,7 @@
 
 **ster** is an interactive CLI for creating and editing [SKOS](https://www.w3.org/TR/skos-reference/) taxonomy files — directly from your terminal.
 
-> *ster* is the Breton word for "star" and also evokes *steervane* — a wind-vane self-steering system for sailing boats, the domain that inspired this tool.
+> *ster* is the Breton word for "meaning", with homonyms meaning "river" and "star" it will guide you in the creation and evolution of your semantic web voyage, keeping the flow and always following your star!
 
 ---
 
