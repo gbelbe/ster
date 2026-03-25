@@ -23,8 +23,10 @@
 ## Features
 
 - **Step-by-step wizard** (`ster init`) to create a new taxonomy with name, description, base URI, languages, and author
+- **Auto file detection** — omit the file argument and ster finds the taxonomy in the current directory; once confirmed, it is remembered for the whole session
 - **ASCII tree view** of the full taxonomy or any subtree, with short auto-generated handles (`[BC]`, `[SP]`, …)
 - **Handle-based editing** — reference any concept by its short handle instead of typing full URIs
+- **Default labels** — omit `--en`/`--fr` and ster derives a human-readable label from the concept name (`SpadeRudder` → `"Spade Rudder"`)
 - **Full SKOS support** — `prefLabel`, `altLabel`, `definition`, `scopeNote`, `broader`, `narrower`, `related`, `topConceptOf`
 - **Multi-language** labels and definitions out of the box
 - **Round-trip safe** — reads and writes `.ttl` (Turtle), `.rdf` (RDF/XML), and `.jsonld` (JSON-LD)
@@ -72,7 +74,8 @@ At every step, press **Enter** to accept the default, type **skip** to leave an 
 ### View the taxonomy tree
 
 ```bash
-ster show my-taxonomy.ttl
+ster show                    # auto-detects the .ttl file in current directory
+ster show -f my-taxonomy.ttl # explicit file (remembered for the session)
 ```
 
 ```
@@ -90,85 +93,101 @@ My Taxonomy
 │   └── ...
 ```
 
+If multiple taxonomy files are found, an interactive picker is shown (with Tab completion):
+
+```
+Multiple taxonomy files found:
+
+   1  windvane.ttl
+   2  materials.ttl
+
+Select file (number or filename, Tab to complete): _
+```
+
+Once selected, the file is used automatically for all subsequent commands in the session.
+
 ### Show a subtree or concept detail
 
 ```bash
-ster show my-taxonomy.ttl -c BC          # subtree rooted at [BC]
-ster show my-taxonomy.ttl -c BC --detail # full detail panel
-ster show my-taxonomy.ttl --handles      # list all handles
+ster show -c BC          # subtree rooted at [BC]
+ster show -c BC --detail # full detail panel
+ster show --handles      # list all handles
 ```
 
 ### Add a concept
 
 ```bash
-ster add my-taxonomy.ttl https://example.org/vocab/NewConcept \
-  --parent BC \
-  --en "New Concept" \
-  --fr "Nouveau Concept" \
+# Labels auto-derived from the name when omitted
+ster add SpadeRudder --parent RT
+
+# Explicit labels
+ster add NewConcept --parent BC --en "New Concept" --fr "Nouveau Concept" \
   --def-en "A new concept under Boat Characteristic."
 ```
 
 ### Remove a concept
 
 ```bash
-ster remove my-taxonomy.ttl SHR           # remove leaf
-ster remove my-taxonomy.ttl RC --cascade  # remove with all descendants
+ster remove SHR           # remove leaf
+ster remove RC --cascade  # remove with all descendants
 ```
 
 ### Move a concept
 
 ```bash
-ster move my-taxonomy.ttl SHR --parent TC   # move [SHR] under [TC]
-ster move my-taxonomy.ttl SHR               # promote to top level
+ster move SHR --parent TC   # move [SHR] under [TC]
+ster move SHR               # promote to top level
 ```
 
 ### Edit labels and definitions
 
 ```bash
-ster label  my-taxonomy.ttl BR en "Balanced Rudder"
-ster label  my-taxonomy.ttl BR fr "Safran Équilibré" --alt
-ster define my-taxonomy.ttl BR en "A rudder with area forward of the pivot axis."
+ster label  BR en "Balanced Rudder"
+ster label  BR fr "Safran Équilibré" --alt
+ster define BR en "A rudder with area forward of the pivot axis."
 ```
 
 ### Add a related link
 
 ```bash
-ster relate my-taxonomy.ttl SP OAR          # add skos:related
-ster relate my-taxonomy.ttl SP OAR --remove # remove it
+ster relate SP OAR          # add skos:related
+ster relate SP OAR --remove # remove it
 ```
 
 ### Rename a URI
 
 ```bash
-ster rename my-taxonomy.ttl OLD https://example.org/vocab/NewURI
+ster rename OldName NewName
 ```
 
 ### Validate
 
 ```bash
-ster validate my-taxonomy.ttl
+ster validate
 ```
 
 ---
 
 ## Command reference
 
+All commands accept an optional `--file / -f` flag. When omitted, ster auto-detects a taxonomy file in the current directory and remembers the choice for the session.
+
 | Command | Description |
 |---|---|
 | `ster init [file]` | Interactive wizard to create a new taxonomy |
-| `ster show <file>` | Display the full taxonomy tree |
-| `ster show <file> -c HANDLE` | Display a subtree |
-| `ster show <file> -c HANDLE -d` | Display concept detail |
-| `ster show <file> -H` | List all handles |
-| `ster add <file> <uri>` | Add a new concept |
-| `ster remove <file> HANDLE` | Remove a concept |
-| `ster move <file> HANDLE` | Move a concept |
-| `ster label <file> HANDLE <lang> <text>` | Set a label |
-| `ster define <file> HANDLE <lang> <text>` | Set a definition |
-| `ster relate <file> HANDLE_A HANDLE_B` | Add/remove a related link |
-| `ster rename <file> HANDLE <new-uri>` | Rename a concept URI |
-| `ster handles <file>` | Print handle index table |
-| `ster validate <file>` | Check SKOS integrity |
+| `ster show` | Display the full taxonomy tree |
+| `ster show -c HANDLE` | Display a subtree |
+| `ster show -c HANDLE -d` | Display concept detail |
+| `ster show -H` | List all handles |
+| `ster add NAME` | Add a new concept (label auto-derived if omitted) |
+| `ster remove HANDLE` | Remove a concept |
+| `ster move HANDLE` | Move a concept |
+| `ster label HANDLE <lang> <text>` | Set a label |
+| `ster define HANDLE <lang> <text>` | Set a definition |
+| `ster relate HANDLE_A HANDLE_B` | Add/remove a related link |
+| `ster rename HANDLE <new-name>` | Rename a concept URI |
+| `ster handles` | Print handle index table |
+| `ster validate` | Check SKOS integrity |
 
 ---
 
@@ -196,7 +215,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-90 tests, all passing.
+112 tests, all passing.
 
 ---
 
