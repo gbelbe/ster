@@ -69,6 +69,7 @@ def simple_taxonomy() -> Taxonomy:
         uri=BASE + "Scheme",
         labels=[Label(lang="en", value="Test Taxonomy")],
         top_concepts=[BASE + "Top"],
+        base_uri=BASE,
     )
     top = Concept(
         uri=BASE + "Top",
