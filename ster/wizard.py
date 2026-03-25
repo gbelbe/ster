@@ -80,11 +80,21 @@ def run(default_path: Path | None = None) -> SetupResult | None:
 
 # ──────────────────────────── welcome ────────────────────────────────────────
 
+_ASCII = """\
+[bold cyan]     _
+    | |
+ ___| |_ ___ _ __
+/ __| __/ _ \\ '__|\n \\__ \\ ||  __/ |
+|___/\\__\\___|_|[/bold cyan]
+
+[dim]  [ Breton: "Meaning" or "Sense" ]
+  [  Druidic Knowledge Command   ][/dim]"""
+
+
 def _welcome() -> None:
     console.print()
     console.print(Panel(
-        "[bold cyan]Welcome to GWEZ[/bold cyan]\n"
-        "[dim]Interactive SKOS taxonomy editor[/dim]\n\n"
+        _ASCII + "\n\n"
         "This wizard will create a new taxonomy file step by step.\n"
         "  • Press [bold]Enter[/bold] to accept the suggested default.\n"
         "  • Type [bold]skip[/bold] on any optional field to move on.\n"
