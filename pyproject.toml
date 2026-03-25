@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ster"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "rdflib>=7.0",
+    "typer[all]>=0.12",
+    "rich>=13.0",
+]
+
+[project.scripts]
+ster = "ster.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short"
+
+[tool.coverage.run]
+source = ["ster"]
