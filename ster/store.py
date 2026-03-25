@@ -5,6 +5,8 @@ from pathlib import Path
 from rdflib import Graph, URIRef, Literal, Namespace, RDF
 from rdflib.namespace import SKOS, DCTERMS, XSD
 
+VOID = Namespace("http://rdfs.org/ns/void#")
+
 from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 from .handles import assign_handles
 
@@ -70,6 +72,8 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
             scheme.created = str(o)
         for _, _, o in g.triples((s_ref, DCTERMS.language, None)):
             scheme.languages.append(str(o))
+        for _, _, o in g.triples((s_ref, VOID.uriSpace, None)):
+            scheme.base_uri = str(o)
 
         taxonomy.schemes[uri] = scheme
 
@@ -122,6 +126,7 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     g.bind("skos", SKOS)
     g.bind("dcterms", DCTERMS)
     g.bind("xsd", XSD)
+    g.bind("void", VOID)
 
     # Try to bind a short prefix for the primary namespace
     _bind_namespace(g, taxonomy)
@@ -140,6 +145,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, DCTERMS.created, Literal(scheme.created, datatype=XSD.date)))
         for lang in scheme.languages:
             g.add((ref, DCTERMS.language, Literal(lang)))
+        if scheme.base_uri:
+            g.add((ref, VOID.uriSpace, Literal(scheme.base_uri)))
         for tc_uri in scheme.top_concepts:
             g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
 

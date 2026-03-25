@@ -58,6 +58,27 @@ def test_load_assigns_handles(taxonomy):
         assert taxonomy.uri_to_handle(uri) is not None
 
 
+def test_base_uri_round_trip(tmp_path):
+    """base_uri stored as void:uriSpace survives a save/reload cycle."""
+    from ster import operations
+    from ster.model import Taxonomy
+    t = Taxonomy()
+    operations.create_scheme(
+        t, BASE + "Scheme", {"en": "Test"}, base_uri=BASE
+    )
+    out = tmp_path / "out.ttl"
+    store.save(t, out)
+    reloaded = store.load(out)
+    scheme = reloaded.primary_scheme()
+    assert scheme is not None
+    assert scheme.base_uri == BASE
+
+
+def test_taxonomy_base_uri_derived_from_concepts(simple_taxonomy):
+    """Taxonomy.base_uri() returns scheme.base_uri when set."""
+    assert simple_taxonomy.base_uri() == BASE
+
+
 def test_unsupported_extension_raises(tmp_path):
     p = tmp_path / "bad.csv"
     p.write_text("nope")

@@ -29,9 +29,38 @@ def test_resolve_by_uri(simple_taxonomy):
     assert uri == BASE + "Top"
 
 
+def test_resolve_by_local_name(simple_taxonomy):
+    uri = operations.resolve(simple_taxonomy, "Top")
+    assert uri == BASE + "Top"
+
+
+def test_resolve_by_local_name_child(simple_taxonomy):
+    uri = operations.resolve(simple_taxonomy, "Child1")
+    assert uri == BASE + "Child1"
+
+
 def test_resolve_missing_raises(simple_taxonomy):
     with pytest.raises(HandleNotFoundError):
         operations.resolve(simple_taxonomy, "NOPE")
+
+
+# ── expand_uri ────────────────────────────────────────────────────────────────
+
+def test_expand_uri_local_name(simple_taxonomy):
+    uri = operations.expand_uri(simple_taxonomy, "NewConcept")
+    assert uri == BASE + "NewConcept"
+
+
+def test_expand_uri_full_uri_passthrough(simple_taxonomy):
+    full = "https://other.org/vocab/Thing"
+    assert operations.expand_uri(simple_taxonomy, full) == full
+
+
+def test_expand_uri_no_base_raises():
+    from ster.model import Taxonomy
+    t = Taxonomy()
+    with pytest.raises(HandleNotFoundError):
+        operations.expand_uri(t, "NoBase")
 
 
 # ── add_concept ───────────────────────────────────────────────────────────────

@@ -13,14 +13,39 @@ from .exceptions import (
 )
 
 
-# ──────────────────────────── resolve ────────────────────────────────────────
+# ──────────────────────────── resolve & expand ───────────────────────────────
 
-def resolve(taxonomy: Taxonomy, handle_or_uri: str) -> str:
-    """Resolve a handle or URI to a URI, raising HandleNotFoundError if missing."""
-    uri = taxonomy.resolve(handle_or_uri)
+def resolve(taxonomy: Taxonomy, handle_or_name: str) -> str:
+    """Resolve a handle, local name, or full URI to a URI.
+
+    Resolution order:
+      1. Full URI (contains "://") — verified against known concepts/schemes.
+      2. Handle (case-insensitive lookup in handle_index).
+      3. Local name (matched against concept.local_name).
+
+    Raises HandleNotFoundError if nothing matches.
+    """
+    uri = taxonomy.resolve(handle_or_name)
     if uri is None:
-        raise HandleNotFoundError(handle_or_uri)
+        raise HandleNotFoundError(handle_or_name)
     return uri
+
+
+def expand_uri(taxonomy: Taxonomy, name_or_uri: str) -> str:
+    """Return a full URI for a local name, expanding with the taxonomy's base URI.
+
+    If name_or_uri already contains "://" it is returned as-is.
+    Otherwise, the taxonomy's base URI is prepended.
+    """
+    if "://" in name_or_uri:
+        return name_or_uri
+    base = taxonomy.base_uri()
+    if not base:
+        raise HandleNotFoundError(
+            f"Cannot expand {name_or_uri!r}: no base URI configured. "
+            "Use a full URI or run 'ster init' to set one."
+        )
+    return base + name_or_uri
 
 
 # ──────────────────────────── add ────────────────────────────────────────────
@@ -273,6 +298,7 @@ def create_scheme(
     creator: str = "",
     created: str = "",
     languages: list[str] | None = None,
+    base_uri: str = "",
 ) -> ConceptScheme:
     scheme = ConceptScheme(
         uri=uri,
@@ -281,6 +307,7 @@ def create_scheme(
         creator=creator,
         created=created,
         languages=languages or list(labels.keys()),
+        base_uri=base_uri,
     )
     taxonomy.schemes[uri] = scheme
     assign_handles(taxonomy)

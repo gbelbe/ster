@@ -92,10 +92,15 @@ def cmd_show(
 @app.command("add")
 def cmd_add(
     file: Path = typer.Argument(..., help="Taxonomy file"),
-    uri: str = typer.Argument(..., help="Full URI for the new concept."),
+    name: str = typer.Argument(
+        ...,
+        help="Local name or full URI for the new concept. "
+             "A local name (e.g. 'SpadeRudder') is automatically expanded "
+             "with the taxonomy's base URI.",
+    ),
     parent: Optional[str] = typer.Option(
-        None, "--parent", "-p", metavar="HANDLE",
-        help="Parent concept or scheme handle (omit for primary scheme top level)."
+        None, "--parent", "-p", metavar="HANDLE|NAME",
+        help="Parent concept handle or name (omit for primary scheme top level)."
     ),
     en: Optional[str] = typer.Option(None, "--en", help="English preferred label."),
     fr: Optional[str] = typer.Option(None, "--fr", help="French preferred label."),
@@ -103,7 +108,11 @@ def cmd_add(
     def_fr: Optional[str] = typer.Option(None, "--def-fr", help="French definition."),
     lang: str = typer.Option("en", "--lang", "-l", help="Display language for confirmation."),
 ) -> None:
-    """Add a new concept to the taxonomy."""
+    """Add a new concept to the taxonomy.
+
+    The concept name is expanded to a full URI using the taxonomy's base URI.
+    You can also pass a full URI directly.
+    """
     labels: dict[str, str] = {}
     if en:
         labels["en"] = en
@@ -120,8 +129,9 @@ def cmd_add(
         definitions["fr"] = def_fr
 
     taxonomy = _load(file)
+    uri = _run(operations.expand_uri, taxonomy, name)
     concept = _run(operations.add_concept, taxonomy, uri, labels, parent, definitions or None)
-    console.print(f"[green]Added[/green]  [{taxonomy.uri_to_handle(uri)}]  {concept.pref_label(lang)}")
+    console.print(f"[green]Added[/green]  [{taxonomy.uri_to_handle(uri)}]  {concept.pref_label(lang)}  [dim]({uri})[/dim]")
     _save(taxonomy, file)
 
 
@@ -242,12 +252,17 @@ def cmd_relate(
 @app.command("rename")
 def cmd_rename(
     file: Path = typer.Argument(..., help="Taxonomy file"),
-    concept: str = typer.Argument(..., metavar="HANDLE", help="Handle or current URI."),
-    new_uri: str = typer.Argument(..., help="New full URI."),
+    concept: str = typer.Argument(..., metavar="HANDLE|NAME", help="Handle or name of concept to rename."),
+    new_name: str = typer.Argument(..., help="New local name or full URI."),
 ) -> None:
-    """Change the URI of a concept (updates all cross-references)."""
+    """Change the URI of a concept (updates all cross-references).
+
+    The new name is expanded to a full URI using the taxonomy's base URI.
+    You can also pass a full URI directly.
+    """
     taxonomy = _load(file)
     old_uri = _resolve(taxonomy, concept)
+    new_uri = _run(operations.expand_uri, taxonomy, new_name)
     _run(operations.rename_uri, taxonomy, old_uri, new_uri)
     console.print(f"[green]Renamed[/green]  {old_uri}  →  {new_uri}")
     _save(taxonomy, file)
@@ -282,6 +297,7 @@ def cmd_init(
         result.creator,
         result.created,
         result.languages,
+        result.base_uri,        # stored as void:uriSpace for URI auto-expansion
     )
     result.file_path.parent.mkdir(parents=True, exist_ok=True)
     _save(taxonomy, result.file_path)

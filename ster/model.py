@@ -80,6 +80,7 @@ class ConceptScheme:
     creator: str = ""
     created: str = ""       # ISO date string e.g. "2026-03-25"
     languages: list[str] = field(default_factory=list)      # declared language codes
+    base_uri: str = ""      # namespace prefix for auto-generating concept URIs
 
     @property
     def local_name(self) -> str:
@@ -106,10 +107,45 @@ class Taxonomy:
     handle_index: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, handle_or_uri: str) -> str | None:
-        """Return URI for a handle or pass through if already a URI."""
-        if handle_or_uri.startswith("http") or "://" in handle_or_uri:
+        """Return URI for a handle, local name, or full URI. Returns None if not found."""
+        # 1. Full URI — pass through if known
+        if "://" in handle_or_uri:
             return handle_or_uri if handle_or_uri in self.concepts or handle_or_uri in self.schemes else None
-        return self.handle_index.get(handle_or_uri.upper())
+        # 2. Handle lookup (case-insensitive)
+        uri = self.handle_index.get(handle_or_uri.upper())
+        if uri:
+            return uri
+        # 3. Local name lookup
+        for u, concept in self.concepts.items():
+            if concept.local_name == handle_or_uri:
+                return u
+        return None
+
+    def base_uri(self) -> str:
+        """Return the base URI for auto-generating concept URIs."""
+        scheme = self.primary_scheme()
+        if scheme and scheme.base_uri:
+            return scheme.base_uri
+        # Derive from existing concept URIs (common prefix)
+        if self.concepts:
+            uris = list(self.concepts)
+            prefix = uris[0]
+            for u in uris[1:]:
+                while not u.startswith(prefix):
+                    idx = max(prefix.rfind("/"), prefix.rfind("#"))
+                    if idx <= 0:
+                        prefix = ""
+                        break
+                    prefix = prefix[:idx + 1]
+            if prefix.endswith(("/", "#")):
+                return prefix
+        # Derive from scheme URI
+        if scheme:
+            s = scheme.uri.rstrip("/")
+            for sep in ("#", "/"):
+                if sep in s:
+                    return s.rsplit(sep, 1)[0] + sep
+        return ""
 
     def uri_to_handle(self, uri: str) -> str | None:
         for h, u in self.handle_index.items():
