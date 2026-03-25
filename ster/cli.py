@@ -1,5 +1,6 @@
 """Typer CLI — load, operate, save pattern for every mutating command."""
 from __future__ import annotations
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -119,8 +120,8 @@ def cmd_add(
     if fr:
         labels["fr"] = fr
     if not labels:
-        err.print("[red]Provide at least one label: --en or --fr[/red]")
-        raise typer.Exit(1)
+        labels[lang] = _humanize(name)
+        console.print(f"[dim]No label provided — using default: {labels[lang]!r}[/dim]")
 
     definitions: dict[str, str] = {}
     if def_en:
@@ -361,6 +362,19 @@ def cmd_validate(
         raise typer.Exit(1)
     else:
         console.print(f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated.")
+
+
+def _humanize(name: str) -> str:
+    """Convert a camelCase/PascalCase local name to a human-readable label.
+
+    Examples:
+        SpadeRudder      → "Spade Rudder"
+        trimTabOnRudder  → "Trim Tab On Rudder"
+        HTTP             → "HTTP"
+    """
+    local = name.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", local)
+    return spaced[0].upper() + spaced[1:] if spaced else local
 
 
 def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
