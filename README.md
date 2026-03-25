@@ -2,6 +2,18 @@
 
 [![CI](https://github.com/gbelbe/ster/actions/workflows/ci.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/ci.yml)
 
+```
+     _
+    | |
+ ___| |_ ___ _ __
+/ __| __/ _ \ '__|
+\__ \ ||  __/ |
+|___/\__\___|_|
+
+  [ Breton: "Meaning" or "Sense" ]
+  [  Druidic Knowledge Command   ]
+```
+
 **ster** is an interactive CLI for creating and editing [SKOS](https://www.w3.org/TR/skos-reference/) taxonomy files — directly from your terminal.
 
 > *ster* is the Breton word for "meaning", with homonyms meaning "river" and "star" it will guide you in the creation and evolution of your semantic web voyage, keeping the flow and always following your star!
