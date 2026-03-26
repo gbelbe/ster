@@ -192,13 +192,24 @@ def cmd_show(
     ),
     concept: Optional[str] = typer.Option(
         None, "--concept", "-c", metavar="HANDLE",
-        help="Show subtree rooted at this concept.",
+        help="Open interactive viewer at this concept.",
     ),
-    detail: bool = typer.Option(False, "--detail", "-d", help="Show full concept detail."),
     lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
-    handles: bool = typer.Option(False, "--handles", "-H", help="Print handle index table."),
+    handles: bool = typer.Option(False, "--handles", "-H", help="Print handle index table then exit."),
+    plain: bool = typer.Option(
+        False, "--plain", "-p",
+        help="Print static tree and exit (no interactive viewer).",
+    ),
 ) -> None:
-    """Display the taxonomy tree (or a subtree)."""
+    """Open the interactive taxonomy viewer.
+
+    Navigate with ↑↓, open detail with → or Enter, go back with ←,
+    edit fields with i, delete with d, quit with Esc or q.
+
+    Pass --plain to print the tree non-interactively and exit.
+    """
+    from .nav import TaxonomyViewer
+
     taxonomy_file = _resolve_file(file)
     taxonomy = _load(taxonomy_file)
 
@@ -206,15 +217,22 @@ def cmd_show(
         console.print(render_handle_list(taxonomy, lang))
         return
 
-    if concept:
-        uri = _resolve(taxonomy, concept)
-        if detail:
-            console.print(render_concept_detail(taxonomy, uri, lang))
-        else:
+    if plain:
+        if concept:
             console.print(render_tree(taxonomy, root_handle=concept, lang=lang))
-            console.print(render_concept_detail(taxonomy, uri, lang))
-    else:
-        console.print(render_tree(taxonomy, lang=lang))
+        else:
+            console.print(render_tree(taxonomy, lang=lang))
+        return
+
+    viewer = TaxonomyViewer(taxonomy, taxonomy_file, lang=lang)
+    if concept:
+        # Pre-position cursor on the requested concept
+        uri = _resolve(taxonomy, concept)
+        for i, line in enumerate(viewer._flat):
+            if line.uri == uri:
+                viewer._cursor = i
+                break
+    viewer.run()
 
 
 # ──────────────────────────── add ────────────────────────────────────────────
@@ -448,24 +466,18 @@ def cmd_init(
     )
 
 
-# ──────────────────────────── nav (interactive shell) ────────────────────────
+# ──────────────────────────── nav (bash-like REPL) ───────────────────────────
 
 @app.command("nav")
 def cmd_nav(
     lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
     file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
-    """Start an interactive bash-like shell for navigating and editing the taxonomy.
+    """Start a bash-like REPL for taxonomy navigation and editing.
 
-    Inside the shell, use familiar commands:\n
-      ls / ls -l    list concepts (arrow keys to navigate, Enter to open)\n
-      cd HANDLE     navigate into a concept\n
-      cd ..         go up   |   cd /  go to root\n
-      pwd           show current breadcrumb path\n
-      show          ASCII tree from current location\n
-      info          full concept detail\n
-      add / mv / rm / label / define   edit the taxonomy\n
-      quit / exit   leave the shell\n
+    Commands: ls  cd  pwd  show  info  add  mv  rm  label  define  quit\n
+
+    For the full-screen interactive viewer use: ster show
     """
     from .nav import TaxonomyShell
 
@@ -476,6 +488,7 @@ def cmd_nav(
         f"\n[bold cyan]ster nav[/bold cyan]  [dim]{taxonomy_file.name}[/dim]  "
         f"[dim]{len(taxonomy.concepts)} concepts[/dim]\n"
         "[dim]Commands: ls  cd  pwd  show  info  add  mv  rm  label  define  quit[/dim]\n"
+        "[dim]Tip: use 'ster show' for the full interactive tree viewer.[/dim]\n"
     )
 
     shell = TaxonomyShell(taxonomy, taxonomy_file, lang=lang)

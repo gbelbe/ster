@@ -1,11 +1,15 @@
-"""Tests for the interactive taxonomy shell (non-curses parts)."""
+"""Tests for the interactive taxonomy navigator and shell (non-curses parts)."""
 from __future__ import annotations
 import pytest
 from pathlib import Path
-from ster.model import Concept, ConceptScheme, Definition, Label, Taxonomy
+from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 from ster.handles import assign_handles
 from ster import operations
-from ster.nav import TaxonomyShell, _breadcrumb, _children, _parent_uri
+from ster.nav import (
+    TaxonomyShell, TaxonomyViewer,
+    _breadcrumb, _children, _parent_uri,
+    flatten_tree, build_detail_fields,
+)
 
 BASE = "https://example.org/test/"
 
@@ -171,3 +175,92 @@ def test_quit_returns_true(shell):
 
 def test_exit_returns_true(shell):
     assert shell.onecmd("exit") is True
+
+
+# ── TaxonomyViewer helpers ────────────────────────────────────────────────────
+
+@pytest.fixture
+def viewer(simple_taxonomy, tmp_path) -> TaxonomyViewer:
+    f = tmp_path / "vocab.ttl"
+    f.write_text("")
+    return TaxonomyViewer(simple_taxonomy, f, lang="en")
+
+
+def test_flatten_tree_contains_all_concepts(simple_taxonomy):
+    lines = flatten_tree(simple_taxonomy)
+    uris = {l.uri for l in lines}
+    assert BASE + "Top" in uris
+    assert BASE + "Child1" in uris
+    assert BASE + "Child2" in uris
+    assert BASE + "Grandchild" in uris
+
+
+def test_flatten_tree_depth_order(simple_taxonomy):
+    lines = flatten_tree(simple_taxonomy)
+    by_uri = {l.uri: l.depth for l in lines}
+    assert by_uri[BASE + "Top"] == 0
+    assert by_uri[BASE + "Child1"] == 1
+    assert by_uri[BASE + "Grandchild"] == 2
+
+
+def test_flatten_tree_prefix_chars(simple_taxonomy):
+    lines = flatten_tree(simple_taxonomy)
+    top_line = next(l for l in lines if l.uri == BASE + "Top")
+    assert "└" in top_line.prefix or "├" in top_line.prefix
+
+
+def test_build_detail_fields_includes_pref_label(simple_taxonomy):
+    fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert "pref:en" in keys
+    assert "pref:fr" in keys
+
+
+def test_build_detail_fields_includes_definition(simple_taxonomy):
+    fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert "def:en" in keys
+
+
+def test_build_detail_fields_narrower_read_only(simple_taxonomy):
+    fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
+    narrower_fields = [f for f in fields if "narrower" in f.key]
+    assert len(narrower_fields) == 2
+    assert all(not f.editable for f in narrower_fields)
+
+
+def test_viewer_initial_cursor(viewer):
+    assert viewer._cursor == 0
+    assert viewer._mode == TaxonomyViewer._TREE
+
+
+def test_viewer_open_detail(viewer, simple_taxonomy):
+    viewer._open_detail()
+    assert viewer._mode == TaxonomyViewer._DETAIL
+    assert viewer._detail_uri == viewer._flat[0].uri
+    assert len(viewer._detail_fields) > 0
+
+
+def test_viewer_back_from_detail(viewer):
+    viewer._open_detail()
+    viewer._back()
+    assert viewer._mode == TaxonomyViewer._TREE
+
+
+def test_viewer_history_preserves_cursor(viewer):
+    viewer._cursor = 2
+    viewer._open_detail()
+    viewer._back()
+    assert viewer._cursor == 2
+
+
+def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
+    # Position on Top concept's pref:en field
+    viewer._open_detail()
+    fields = viewer._detail_fields
+    pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
+    viewer._field_cursor = pref_idx
+    viewer._edit_value = "Updated Top"
+    viewer._edit_pos   = len("Updated Top")
+    viewer._commit_edit()
+    assert simple_taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
