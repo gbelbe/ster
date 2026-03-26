@@ -23,6 +23,12 @@ app = typer.Typer(
 )
 err = Console(stderr=True)
 
+# Commands that must NOT be mistaken for a file path
+_SUBCOMMANDS = frozenset({
+    "show", "add", "remove", "move", "label", "define",
+    "relate", "rename", "init", "handles", "validate", "nav",
+})
+
 _TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 
@@ -181,6 +187,9 @@ def _run(fn, *args, **kwargs):
 
 @app.command("show")
 def cmd_show(
+    file: Optional[Path] = typer.Argument(
+        None, help="Taxonomy file (.ttl / .rdf / .jsonld). Auto-detected if omitted."
+    ),
     concept: Optional[str] = typer.Option(
         None, "--concept", "-c", metavar="HANDLE",
         help="Show subtree rooted at this concept.",
@@ -188,7 +197,6 @@ def cmd_show(
     detail: bool = typer.Option(False, "--detail", "-d", help="Show full concept detail."),
     lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
     handles: bool = typer.Option(False, "--handles", "-H", help="Print handle index table."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl / .rdf / .jsonld)."),
 ) -> None:
     """Display the taxonomy tree (or a subtree)."""
     taxonomy_file = _resolve_file(file)
@@ -555,5 +563,22 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
             _collect_reachable(taxonomy, child, visited)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point: inject 'show' when a bare taxonomy file is passed directly.
+
+    Allows ``ster taxonomy.ttl`` as a shortcut for ``ster show taxonomy.ttl``.
+    """
+    import sys
+
+    if len(sys.argv) >= 2:
+        first = sys.argv[1]
+        if first not in _SUBCOMMANDS and not first.startswith("-"):
+            p = Path(first)
+            if p.suffix.lower() in _TAXONOMY_SUFFIXES:
+                sys.argv.insert(1, "show")
+
     app()
+
+
+if __name__ == "__main__":
+    main()
