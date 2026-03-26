@@ -440,6 +440,40 @@ def cmd_init(
     )
 
 
+# ──────────────────────────── nav (interactive shell) ────────────────────────
+
+@app.command("nav")
+def cmd_nav(
+    lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+) -> None:
+    """Start an interactive bash-like shell for navigating and editing the taxonomy.
+
+    Inside the shell, use familiar commands:\n
+      ls / ls -l    list concepts (arrow keys to navigate, Enter to open)\n
+      cd HANDLE     navigate into a concept\n
+      cd ..         go up   |   cd /  go to root\n
+      pwd           show current breadcrumb path\n
+      show          ASCII tree from current location\n
+      info          full concept detail\n
+      add / mv / rm / label / define   edit the taxonomy\n
+      quit / exit   leave the shell\n
+    """
+    from .nav import TaxonomyShell
+
+    taxonomy_file = _resolve_file(file)
+    taxonomy = _load(taxonomy_file)
+
+    console.print(
+        f"\n[bold cyan]ster nav[/bold cyan]  [dim]{taxonomy_file.name}[/dim]  "
+        f"[dim]{len(taxonomy.concepts)} concepts[/dim]\n"
+        "[dim]Commands: ls  cd  pwd  show  info  add  mv  rm  label  define  quit[/dim]\n"
+    )
+
+    shell = TaxonomyShell(taxonomy, taxonomy_file, lang=lang)
+    shell.cmdloop()
+
+
 # ──────────────────────────── handles ────────────────────────────────────────
 
 @app.command("handles")
