@@ -81,14 +81,14 @@ def run(default_path: Path | None = None) -> SetupResult | None:
 # ──────────────────────────── welcome ────────────────────────────────────────
 
 _ASCII = """\
-[bold cyan]     _
-    | |
- ___| |_ ___ _ __
-/ __| __/ _ \\ '__|\n \\__ \\ ||  __/ |
-|___/\\__\\___|_|[/bold cyan]
+[bold cyan]   _____ ______ ______ ____
+   / ___//_  __// ____// __ \\
+   \\__ \\  / /  / __/  / /_/ /
+  ___/ / / /  / /___ / _, _/
+ /____/ /_/  /_____//_/ |_|[/bold cyan]
 
 [dim]  [ Breton: "Meaning" or "Sense" ]
-  [  Druidic Knowledge Command   ][/dim]"""
+  [  [/dim][bold cyan]S[/bold cyan][dim]imple [/dim][bold cyan]T[/bold cyan][dim]axonomy [/dim][bold cyan]E[/bold cyan][dim]dito[/dim][bold cyan]R[/bold cyan][dim]   ][/dim]"""
 
 
 def _welcome() -> None:
@@ -112,10 +112,14 @@ def _header(step: int, total: int, title: str) -> None:
 
 
 def _ask(prompt: str, default: str = "", optional: bool = False) -> str | None:
-    """Prompt the user. Returns None on 'quit', '' on skip/empty."""
+    """Prompt the user. Returns None on 'quit' or Ctrl+C, '' on skip/empty."""
     hint = f"  {_OPT_HINT}" if optional else ""
     full_prompt = f"[cyan]{prompt}[/cyan]{hint}"
-    val = Prompt.ask(full_prompt, default=default, console=console)
+    try:
+        val = Prompt.ask(full_prompt, default=default, console=console)
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        return None
     if val.strip().lower() == "quit":
         return None
     if val.strip().lower() == "skip":
@@ -244,4 +248,8 @@ def _step_confirm(ctx: dict) -> bool:
     console.print()
     console.print(table)
     console.print()
-    return Confirm.ask("[cyan]Create this taxonomy?[/cyan]", default=True, console=console)
+    try:
+        return Confirm.ask("[cyan]Create this taxonomy?[/cyan]", default=True, console=console)
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        return False

@@ -3,15 +3,14 @@
 [![CI](https://github.com/gbelbe/ster/actions/workflows/ci.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/ci.yml)
 
 ```
-     _
-    | |
- ___| |_ ___ _ __
-/ __| __/ _ \ '__|
-\__ \ ||  __/ |
-|___/\__\___|_|
+   _____ ______ ______ ____
+   / ___//_  __// ____// __ \
+   \__ \  / /  / __/  / /_/ /
+  ___/ / / /  / /___ / _, _/
+ /____/ /_/  /_____//_/ |_|
 
   [ Breton: "Meaning" or "Sense" ]
-  [  Druidic Knowledge Command   ]
+  [  Simple Taxonomy EditoR   ]
 ```
 
 **ster** is an interactive CLI for creating and editing [SKOS](https://www.w3.org/TR/skos-reference/) taxonomy files — directly from your terminal.
