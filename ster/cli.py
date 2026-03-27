@@ -19,18 +19,46 @@ from .model import LabelType, Taxonomy
 app = typer.Typer(
     name="ster",
     help="Interactive SKOS taxonomy editor.",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
 err = Console(stderr=True)
+
+
+@app.callback(invoke_without_command=True)
+def _app_callback(ctx: typer.Context) -> None:
+    """Suppress Typer's default no-args behaviour; main() handles it."""
+    pass
+
+_VERSION = "0.1.0"
+_AUTHOR  = "ster contributors"
+
+
+def _print_welcome() -> None:
+    from rich.panel import Panel
+    from .wizard import _ASCII
+    console.print()
+    console.print(Panel(
+        _ASCII + f"\n\n"
+        f"[bold]SKOS Taxonomy Editor[/bold]  [dim]v{_VERSION}[/dim]\n\n"
+        "[dim]Select a taxonomy file, create a new one, or browse git history.[/dim]\n"
+        "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
+        border_style="cyan",
+        padding=(1, 4),
+    ))
 
 # Commands that must NOT be mistaken for a file path
 _SUBCOMMANDS = frozenset({
     "show", "add", "remove", "move", "label", "define",
-    "relate", "rename", "init", "handles", "validate", "nav",
+    "relate", "rename", "init", "handles", "validate", "nav", "log",
 })
 
 _TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
+
+# Sentinels returned by _pick_file_interactive for special menu entries
+_GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
+_QUIT_SENTINEL:    Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
 
@@ -110,34 +138,101 @@ def _resolve_file(path: Optional[Path]) -> Path:
 
 
 def _pick_file(files: list[Path]) -> Path:
-    """Interactive file picker with optional Tab completion."""
-    console.print("\n[bold]Multiple taxonomy files found:[/bold]\n")
+    """Interactive file picker (used by _resolve_file for multiple files)."""
+    result = _pick_file_interactive(files)
+    if result is None:
+        # User chose "create new" from a sub-command context — abort gracefully
+        raise typer.Exit(0)
+    return result
+
+
+def _pick_file_interactive(
+    files: list[Path],
+    preselect: Path | None = None,
+    show_log_option: bool = False,
+) -> "Path | None":
+    """Display numbered file list; return chosen Path or None for 'create new'.
+
+    The last entry is always '+ Create new taxonomy'.
+    If *show_log_option* is True, a 'Browse git history' entry is shown just before it,
+    and selecting it returns _GIT_LOG_SENTINEL.
+
+    Supports arrow-key navigation in interactive terminals; also accepts typed numbers
+    and filename prefixes (original behaviour).
+    """
+    import sys
+
+    LOG_IDX    = len(files) + 1 if show_log_option else None   # 1-based
+    CREATE_IDX = len(files) + (2 if show_log_option else 1)    # 1-based
+    QUIT_IDX   = len(files) + (3 if show_log_option else 2)    # 1-based
+
+    # Flat ordered list of return values matching the numbered items
+    item_values: list[Path | None] = list(files)
+    if show_log_option:
+        item_values.append(_GIT_LOG_SENTINEL)
+    item_values.append(None)           # "Create new taxonomy"
+    item_values.append(_QUIT_SENTINEL) # "Quit"
+
+    # Initial arrow selection (0-based index into item_values)
+    initial_sel = 0
+    if preselect and preselect in files:
+        initial_sel = files.index(preselect)
+
+    # ── Arrow-key mode (requires interactive tty + tty/termios) ──────────────
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import tty as _tty, termios as _termios
+            return _arrow_file_picker(
+                files, item_values, initial_sel,
+                preselect, show_log_option, LOG_IDX, CREATE_IDX,
+            )
+        except ImportError:
+            pass  # Windows or restricted environment → fall through
+
+    # ── Fallback: plain Rich Prompt.ask ──────────────────────────────────────
     for i, f in enumerate(files, 1):
-        console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}")
+        marker = " [bold green]←[/bold green] [dim](last session)[/dim]" if preselect and f == preselect else ""
+        console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}{marker}")
+    if show_log_option:
+        console.print(f"  [cyan]{LOG_IDX:>2}[/cyan]  [bold magenta]⎇  Browse git history[/bold magenta]")
+    console.print(f"  [cyan]{CREATE_IDX:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]")
+    console.print(f"  [cyan]{QUIT_IDX:>2}[/cyan]  [bold red]✕  Quit[/bold red]")
     console.print()
 
-    # Enable readline tab completion where available (Unix/macOS)
-    try:
-        import readline
-        names = [f.name for f in files]
+    default_num: str | None = (
+        str(initial_sel + 1) if (preselect and preselect in files) else None
+    )
 
-        def _completer(text: str, state: int) -> str | None:
-            matches = [n for n in names if n.lower().startswith(text.lower())]
-            return matches[state] if state < len(matches) else None
-
-        readline.set_completer(_completer)
-        readline.parse_and_bind("tab: complete")
-    except ImportError:
-        pass
+    if default_num:
+        prompt_text = (
+            f"Select [bold](number or filename)[/bold]"
+            f" [dim](Enter → {files[initial_sel].name})[/dim]"
+        )
+    else:
+        prompt_text = f"Select [bold](1–{QUIT_IDX})[/bold]"
 
     while True:
-        choice = Prompt.ask("Select file [bold](number or filename, Tab to complete)[/bold]")
+        try:
+            choice = Prompt.ask(prompt_text, default=default_num or "")
+        except (KeyboardInterrupt, EOFError):
+            raise typer.Exit(0)
+
+        if not choice and default_num:
+            return files[initial_sel]
+
         if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(files):
-                return files[idx]
-            err.print(f"[red]Enter a number between 1 and {len(files)}.[/red]")
+            idx = int(choice)
+            if idx == QUIT_IDX:
+                return _QUIT_SENTINEL
+            if idx == CREATE_IDX:
+                return None
+            if show_log_option and idx == LOG_IDX:
+                return _GIT_LOG_SENTINEL
+            if 1 <= idx <= len(files):
+                return files[idx - 1]
+            err.print(f"[red]Enter a number between 1 and {QUIT_IDX}.[/red]")
             continue
+
         matches = [f for f in files if f.name == choice or f.name.startswith(choice)]
         if len(matches) == 1:
             return matches[0]
@@ -145,6 +240,145 @@ def _pick_file(files: list[Path]) -> Path:
             err.print(f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]")
         else:
             err.print(f"[red]{choice!r} not found.[/red]")
+
+
+def _arrow_file_picker(
+    files: list[Path],
+    item_values: list[Path | None],
+    initial_sel: int,
+    preselect: Path | None,
+    show_log_option: bool,
+    log_idx: int | None,
+    create_idx: int,
+) -> "Path | None":
+    """Arrow-key file picker using raw terminal I/O + ANSI codes.
+
+    Redraws the list in place as the user navigates.  Digits accumulate into a
+    number that auto-moves the selection; Enter confirms.
+    """
+    import sys, tty, termios
+
+    R   = "\033[0m"         # reset all
+    B   = "\033[1m"         # bold
+    D   = "\033[2m"         # dim
+    CY  = "\033[36m"        # cyan
+    BCY = "\033[1;36m"      # bold cyan
+    GR  = "\033[32m"        # green
+    MG  = "\033[35m"        # magenta
+    INV = "\033[7m"         # reverse video (readable on any background)
+
+    # \r\033[2K: go to column 0 then erase entire line — works in both cooked
+    # and raw terminal modes (raw mode does NOT auto-add CR before LF).
+    CLEAR = "\r\033[2K"
+    NL    = "\r\n"          # explicit CR+LF so raw mode doesn't drift columns
+
+    n   = len(item_values)
+    sel = initial_sel
+
+    def _label(idx: int, selected: bool) -> str:
+        num = idx + 1
+        val = item_values[idx]
+        num_s = f"{num:>2}"
+
+        if val == _QUIT_SENTINEL:
+            plain = "✕  Quit"
+            coloured = f"\033[31m{plain}{R}"   # red
+        elif val is None:
+            plain = "+ Create new taxonomy"
+            coloured = f"{GR}{plain}{R}"
+        elif val == _GIT_LOG_SENTINEL:
+            plain = "⎇  Browse git history"
+            coloured = f"{MG}{plain}{R}"
+        else:
+            last     = "  ← last session" if preselect and val == preselect else ""
+            plain    = f"{val.name}{last}"   # type: ignore[union-attr]
+            coloured = f"{val.name}{f'  {D}← last session{R}' if last else ''}"
+
+        if selected:
+            # Reverse-video highlight on number + plain text — readable on any theme
+            return f"  {BCY}{INV} {num_s} {R}  {B}{plain}{R}"
+        return f"    {CY}{num_s}{R}  {coloured}"
+
+    def render(typed: str, first: bool = False) -> None:
+        if not first:
+            # cursor-up n+1: n items + 1 hint line, each ended with NL below
+            sys.stdout.write(f"\033[{n + 1}A")
+        for i in range(n):
+            sys.stdout.write(f"{CLEAR}{_label(i, i == sel)}{NL}")
+        if typed:
+            sys.stdout.write(
+                f"{CLEAR}  {D}type:{R} {B}{typed}▌{R}  {D}Enter: confirm  Esc: clear{R}"
+            )
+        else:
+            sys.stdout.write(
+                f"{CLEAR}  {D}↑↓ navigate  Enter select  or type a number{R}"
+            )
+        # Always end with NL so cursor is at a consistent position one line
+        # below the hint — makes every cursor-up land at the same start row.
+        sys.stdout.write(NL)
+        sys.stdout.flush()
+
+    render(typed="", first=True)
+    # cursor is already below the hint (render() wrote NL); no extra write needed
+
+    typed   = ""
+    fd      = sys.stdin.fileno()
+    old_cfg = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.buffer.read(1)
+
+            if ch in (b"\r", b"\n"):
+                if typed:
+                    try:
+                        num = int(typed)
+                        if 1 <= num <= n:
+                            sel = num - 1
+                    except ValueError:
+                        pass
+                break
+
+            elif ch == b"\x1b":           # escape / arrow keys
+                nxt = sys.stdin.buffer.read(1)
+                if nxt == b"[":
+                    code = sys.stdin.buffer.read(1)
+                    if code == b"A":      # up
+                        typed = ""
+                        sel   = (sel - 1) % n
+                    elif code == b"B":    # down
+                        typed = ""
+                        sel   = (sel + 1) % n
+                # plain Esc: clear typed number if any, otherwise keep sel
+                elif nxt in (b"\r", b"\n"):
+                    break
+                else:
+                    typed = ""
+
+            elif ch in (b"\x7f", b"\x08"):  # backspace
+                typed = typed[:-1]
+
+            elif ch == b"\x03":             # Ctrl+C
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
+                raise KeyboardInterrupt
+
+            elif ch.isdigit():
+                typed += ch.decode()
+                try:
+                    num = int(typed)
+                    if 1 <= num <= n:
+                        sel = num - 1
+                except ValueError:
+                    pass
+
+            render(typed)
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
+        sys.stdout.write(NL)
+        sys.stdout.flush()
+
+    return item_values[sel]
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
@@ -183,6 +417,54 @@ def _run(fn, *args, **kwargs):
         raise typer.Exit(1)
 
 
+# ──────────────────────────── viewer helper ──────────────────────────────────
+
+def _open_viewer(
+    taxonomy_file: Path,
+    lang: str = "en",
+    jump_concept: "str | None" = None,
+) -> None:
+    """Open the interactive taxonomy viewer for *taxonomy_file* and handle git."""
+    from .nav import TaxonomyViewer
+    from .git_manager import GitManager, render_diff
+
+    taxonomy = _load(taxonomy_file)
+
+    gm = GitManager(taxonomy_file)
+    if gm.is_enabled():
+        if not gm.is_configured():
+            gm.setup()
+        if gm.is_configured():
+            diff = gm.pre_edit_check()
+            if diff:
+                console.print("\n[bold]Changes pulled from remote:[/bold]")
+                render_diff(diff)
+                console.print()
+            gm.record_head()
+
+    viewer = TaxonomyViewer(taxonomy, taxonomy_file, lang=lang, git_manager=gm)
+    if jump_concept:
+        uri = _resolve(taxonomy, jump_concept)
+        for i, line in enumerate(viewer._flat):
+            if line.uri == uri:
+                viewer._cursor = i
+                break
+    viewer.run()
+
+    if gm.is_enabled() and gm.is_configured():
+        gm.commit_and_push()
+    elif gm.is_enabled() and not gm.is_configured():
+        try:
+            want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            want_git = False
+        if want_git:
+            gm.setup()
+            if gm.is_configured():
+                msg = _make_taxonomy_commit_msg(taxonomy, taxonomy_file)
+                gm.commit_new_taxonomy(msg)
+
+
 # ──────────────────────────── show ───────────────────────────────────────────
 
 @app.command("show")
@@ -208,8 +490,6 @@ def cmd_show(
 
     Pass --plain to print the tree non-interactively and exit.
     """
-    from .nav import TaxonomyViewer
-
     taxonomy_file = _resolve_file(file)
     taxonomy = _load(taxonomy_file)
 
@@ -224,15 +504,7 @@ def cmd_show(
             console.print(render_tree(taxonomy, lang=lang))
         return
 
-    viewer = TaxonomyViewer(taxonomy, taxonomy_file, lang=lang)
-    if concept:
-        # Pre-position cursor on the requested concept
-        uri = _resolve(taxonomy, concept)
-        for i, line in enumerate(viewer._flat):
-            if line.uri == uri:
-                viewer._cursor = i
-                break
-    viewer.run()
+    _open_viewer(taxonomy_file, lang=lang, jump_concept=concept)
 
 
 # ──────────────────────────── add ────────────────────────────────────────────
@@ -423,24 +695,36 @@ def cmd_rename(
     _save(taxonomy, taxonomy_file)
 
 
-# ──────────────────────────── init (wizard) ──────────────────────────────────
+# ──────────────────────────── wizard helper ───────────────────────────────────
 
-@app.command("init")
-def cmd_init(
-    file: Optional[Path] = typer.Argument(
-        None, help="Output file path (.ttl / .rdf / .jsonld). Prompted if omitted."
-    ),
-) -> None:
-    """Create a new taxonomy via an interactive step-by-step wizard."""
+def _run_create_wizard(default_path: Path | None = None) -> None:
+    """Run the creation wizard and create the resulting taxonomy file.
+
+    Loops if the chosen file already exists so the user can pick a different
+    name.  Does nothing (returns silently) if the user cancels.
+    """
     from . import wizard
+    from .git_manager import GitManager
 
-    result = wizard.run(default_path=file)
-    if result is None:
-        raise typer.Exit(0)
+    console.print("[dim]Running the creation wizard…[/dim]\n")
 
-    if result.file_path.exists():
-        err.print(f"[red]File already exists: {result.file_path}[/red]  Remove it first or choose a different path.")
-        raise typer.Exit(1)
+    while True:
+        try:
+            result = wizard.run(default_path=default_path)
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            return  # Ctrl+C in wizard → silently return to caller
+        if result is None:
+            return  # user cancelled
+
+        if result.file_path.exists():
+            console.print(
+                f"[yellow]⚠  {result.file_path} already exists.[/yellow]  "
+                "Please choose a different file name."
+            )
+            default_path = result.file_path  # pre-fill so user can edit it
+            continue
+        break
 
     taxonomy = Taxonomy()
     _run(
@@ -452,18 +736,137 @@ def cmd_init(
         result.creator,
         result.created,
         result.languages,
-        result.base_uri,        # stored as void:uriSpace for URI auto-expansion
+        result.base_uri,
     )
     result.file_path.parent.mkdir(parents=True, exist_ok=True)
     _save(taxonomy, result.file_path)
-    # Automatically select the new file for this session
     _save_session(result.file_path)
+    global _session_file
+    _session_file = result.file_path
     console.print(
         f"\n[bold green]Taxonomy created![/bold green]  "
-        f"Start adding concepts with:\n\n"
-        f"  [cyan]ster add <name> --parent <handle> --en 'Label'[/cyan]\n"
-        f"  [cyan]ster show[/cyan]"
+        f"Open it with [cyan]ster show[/cyan] or [cyan]ster[/cyan]\n"
     )
+
+    gm = GitManager(result.file_path)
+    if gm.is_enabled() and not gm.is_configured():
+        try:
+            want_git = Confirm.ask("Add taxonomy to git repository?", default=True)
+        except (KeyboardInterrupt, EOFError):
+            want_git = False
+        if want_git:
+            gm.setup()
+            if gm.is_configured():
+                msg = _make_taxonomy_commit_msg(taxonomy, result.file_path)
+                gm.commit_new_taxonomy(msg)
+
+
+# ──────────────────────────── init (wizard) ──────────────────────────────────
+
+@app.command("init")
+def cmd_init(
+    file: Optional[Path] = typer.Argument(
+        None, help="Output file path (.ttl / .rdf / .jsonld). Prompted if omitted."
+    ),
+) -> None:
+    """Set up a taxonomy in the current folder.
+
+    • If no taxonomy files exist: run the creation wizard, then offer git setup.
+    • If files already exist: open one in the interactive viewer; on quit, offer git setup.
+    """
+    from .nav import TaxonomyViewer
+    from .git_manager import GitManager
+
+    _print_welcome()
+
+    # Discover existing taxonomy files
+    found: list[Path] = []
+    for pattern in _TAXONOMY_GLOBS:
+        found.extend(Path.cwd().glob(pattern))
+    found = sorted(set(found))
+
+    # ── Case 1: no files → run creation wizard ────────────────────────────────
+    if not found:
+        console.print("[bold]No taxonomy file found in the current folder.[/bold]")
+        _run_create_wizard(default_path=file)
+        return
+
+    # ── Case 2: files exist → pick one, open viewer, offer git on quit ────────
+    console.print("[bold]Taxonomy files in this folder:[/bold]\n")
+    saved = _load_session()
+
+    picked = _pick_file_interactive(found, preselect=saved)
+    if picked is None:
+        # User chose "Create new taxonomy" → run wizard directly (no recursion)
+        _run_create_wizard()
+        return
+    taxonomy_file = picked
+    _save_session(taxonomy_file)
+    global _session_file
+    _session_file = taxonomy_file
+
+    taxonomy = _load(taxonomy_file)
+
+    gm = GitManager(taxonomy_file)
+    if gm.is_enabled() and gm.is_configured():
+        from .git_manager import render_diff
+        diff = gm.pre_edit_check()
+        if diff:
+            console.print("\n[bold]Changes pulled from remote:[/bold]")
+            render_diff(diff)
+            console.print()
+        gm.record_head()
+
+    viewer = TaxonomyViewer(taxonomy, taxonomy_file, git_manager=gm)
+    viewer.run()
+
+    if gm.is_enabled() and gm.is_configured():
+        gm.commit_and_push()
+    elif gm.is_enabled() and not gm.is_configured():
+        try:
+            want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            want_git = False
+        if want_git:
+            gm.setup()
+            if gm.is_configured():
+                msg = _make_taxonomy_commit_msg(taxonomy, taxonomy_file)
+                gm.commit_new_taxonomy(msg)
+
+
+# ──────────────────────────── log (git history browser) ─────────────────────
+
+@app.command("log")
+def cmd_log(
+    file: Optional[Path] = typer.Argument(
+        None, help="Taxonomy file to scope the diff view. Auto-detected if omitted."
+    ),
+    repo: Optional[Path] = typer.Option(
+        None, "--repo", "-r", help="Git repository root. Detected from file path if omitted."
+    ),
+) -> None:
+    """Browse git commit history in an interactive split-pane viewer.
+
+    Left pane: commit graph with hash, author, and subject.
+    Right pane: diff for the selected commit.
+
+    Keys: ↑↓/jk navigate  Tab/d focus diff  r revert  o restore file  ? help  q quit
+    """
+    from .git_log import launch_git_log
+
+    # Auto-detect file if not given
+    if file is None:
+        found: list[Path] = []
+        for pattern in _TAXONOMY_GLOBS:
+            found.extend(Path.cwd().glob(pattern))
+        found = sorted(set(found))
+        saved = _load_session()
+        if saved and saved in found:
+            file = saved
+        elif len(found) == 1:
+            file = found[0]
+
+    launch_git_log(path=file, repo=repo)
 
 
 # ──────────────────────────── nav (bash-like REPL) ───────────────────────────
@@ -553,6 +956,29 @@ def cmd_validate(
 
 # ──────────────────────────── internal helpers ───────────────────────────────
 
+def _make_taxonomy_commit_msg(taxonomy: "Taxonomy", file_path: "Path", lang: str = "en") -> str:
+    """Build a descriptive git commit message for a newly tracked taxonomy file."""
+    scheme = taxonomy.primary_scheme()
+    title  = scheme.title(lang) if scheme else file_path.stem
+    lines  = [f'feat: create taxonomy "{title}"', ""]
+    lines.append(f"File: {file_path.name}")
+    if scheme:
+        if scheme.uri:
+            lines.append(f"Scheme URI: {scheme.uri}")
+        if scheme.base_uri:
+            lines.append(f"Base URI: {scheme.base_uri}")
+        if scheme.languages:
+            lines.append(f"Languages: {', '.join(sorted(scheme.languages))}")
+        if scheme.creator:
+            lines.append(f"Creator: {scheme.creator}")
+        if scheme.created:
+            lines.append(f"Created: {scheme.created}")
+    n = len(taxonomy.concepts)
+    if n:
+        lines.append(f"Concepts: {n}")
+    return "\n".join(lines)
+
+
 def _humanize(name: str) -> str:
     """Convert a camelCase/PascalCase local name to a human-readable label.
 
@@ -577,20 +1003,76 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
 
 
 def main() -> None:
-    """Entry point: inject 'show' when a bare taxonomy file is passed directly.
+    """Entry point.
 
-    Allows ``ster taxonomy.ttl`` as a shortcut for ``ster show taxonomy.ttl``.
+    • ``ster``                   — interactive home screen (loops until Ctrl+C)
+    • ``ster taxonomy.ttl``      — shortcut for ``ster show taxonomy.ttl``
+    • ``ster <subcommand> …``    — delegate to Typer
     """
     import sys
 
-    if len(sys.argv) >= 2:
-        first = sys.argv[1]
+    args = sys.argv[1:]
+
+    # Non-bare invocation → delegate to Typer once (no loop)
+    if args:
+        first = args[0]
         if first not in _SUBCOMMANDS and not first.startswith("-"):
             p = Path(first)
             if p.suffix.lower() in _TAXONOMY_SUFFIXES:
                 sys.argv.insert(1, "show")
+        app()
+        return
 
-    app()
+    # ── Bare invocation → interactive home screen loop ────────────────────────
+    from .git_log import launch_git_log
+
+    while True:
+        _print_welcome()
+
+        found: list[Path] = []
+        for pattern in _TAXONOMY_GLOBS:
+            found.extend(Path.cwd().glob(pattern))
+        found = sorted(set(found))
+        saved = _load_session()
+
+        if not found:
+            console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
+            _run_create_wizard()
+            continue   # return to home after wizard (created or cancelled)
+
+        if saved and saved in found:
+            console.print(
+                f"[bold]Taxonomy files in this folder[/bold]"
+                f"  [dim](Enter → {saved.name})[/dim]\n"
+            )
+        else:
+            console.print("[bold]Taxonomy files in this folder:[/bold]\n")
+
+        try:
+            taxonomy_file = _pick_file_interactive(found, preselect=saved, show_log_option=True)
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            break   # Ctrl+C at home menu → exit
+
+        if taxonomy_file == _QUIT_SENTINEL:
+            break   # user chose Quit from the menu
+
+        if taxonomy_file is None:
+            _run_create_wizard()
+            continue   # return to home after wizard
+
+        if taxonomy_file == _GIT_LOG_SENTINEL:
+            launch_git_log(path=saved if saved and saved in found else (found[0] if found else None))
+            continue   # return to home after log browser
+
+        _save_session(taxonomy_file)
+        global _session_file
+        _session_file = taxonomy_file
+        try:
+            _open_viewer(taxonomy_file)
+        except Exception:
+            pass
+        continue   # return to home after viewer
 
 
 if __name__ == "__main__":
