@@ -156,6 +156,152 @@ def test_project_load_returns_none_when_missing(tmp_path, monkeypatch):
     assert Project.load(tmp_path) is None
 
 
+def test_project_load_returns_none_on_bad_json(tmp_path, monkeypatch):
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    p = Project(root=tmp_path)
+    p.save()
+    # Corrupt the file
+    (tmp_path / ".ster" / "project.json").write_text("not json")
+    assert Project.load(tmp_path) is None
+
+
+def test_project_add_file_outside_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    p = Project(root=tmp_path / "sub")
+    (tmp_path / "sub").mkdir()
+    outside = tmp_path / "other" / "file.ttl"
+    p.add_file(outside)
+    # Stored as absolute path since it's outside root
+    assert outside.resolve() in p.files
+
+
+def test_project_remove_file_outside_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    p = Project(root=sub)
+    outside = tmp_path / "other" / "file.ttl"
+    p.add_file(outside)
+    p.remove_file(outside)
+    assert outside.resolve() not in p.files
+
+
+def test_project_set_lang(tmp_path, monkeypatch):
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    p = Project(root=tmp_path, lang="en")
+    p.set_lang("de")
+    assert p.lang == "de"
+    # Also persisted
+    loaded = Project.load(tmp_path)
+    assert loaded is not None
+    assert loaded.lang == "de"
+
+
+def test_project_resolved_files_absolute(tmp_path, monkeypatch):
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    abs_file = tmp_path / "abs.ttl"
+    abs_file.write_text("")
+    p = Project(root=tmp_path / "sub")
+    p.files.append(abs_file)  # absolute path stored directly
+    resolved = p.resolved_files()
+    assert abs_file in resolved
+
+
+# ──────────────────────────── TaxonomyWorkspace (extra coverage) ─────────────
+
+
+def test_workspace_from_files(tmp_path):
+    from ster import store
+    from ster.model import Taxonomy
+
+    t = _make_taxonomy(BASE_A, "Scheme A", ["Dog"])
+    path = tmp_path / "a.ttl"
+    store.save(t, path)
+    ws = TaxonomyWorkspace.from_files([path])
+    assert path in ws.taxonomies
+
+
+def test_workspace_add_file(tmp_path):
+    from ster import store
+
+    t = _make_taxonomy(BASE_A, "Scheme A", ["Dog"])
+    path = tmp_path / "a.ttl"
+    store.save(t, path)
+    ws = TaxonomyWorkspace()
+    ws.add_file(path)
+    assert path in ws.taxonomies
+
+
+def test_workspace_save_file(tmp_path):
+    from ster import store
+
+    t = _make_taxonomy(BASE_A, "Scheme A", ["Dog"])
+    path = tmp_path / "a.ttl"
+    store.save(t, path)
+    ws = TaxonomyWorkspace()
+    ws.taxonomies[path] = t
+    ws.save_file(path)  # no crash
+    assert path.exists()
+
+
+def test_workspace_save_file_unknown_path(tmp_path):
+    ws = TaxonomyWorkspace()
+    ws.save_file(tmp_path / "nonexistent.ttl")  # no crash
+
+
+def test_workspace_save_all(tmp_path):
+    from ster import store
+
+    t = _make_taxonomy(BASE_A, "Scheme A", ["Dog"])
+    path = tmp_path / "a.ttl"
+    store.save(t, path)
+    ws = TaxonomyWorkspace()
+    ws.taxonomies[path] = t
+    ws.save_all()
+    assert path.exists()
+
+
+def test_workspace_taxonomy_for_uri(workspace):
+    t = workspace.taxonomy_for_uri(BASE_A + "Dog")
+    assert t is not None
+    assert BASE_A + "Dog" in t.concepts
+
+
+def test_workspace_taxonomy_for_uri_unknown(workspace):
+    assert workspace.taxonomy_for_uri("https://unknown.org/X") is None
+
+
+def test_workspace_concept_for_unknown(workspace):
+    assert workspace.concept_for("https://unknown.org/X") is None
+
+
+def test_workspace_scheme_for_unknown(workspace):
+    assert workspace.scheme_for("https://unknown.org/X") is None
+
+
+def test_workspace_is_known_uri(workspace):
+    assert workspace.is_known_uri(BASE_A + "Dog") is True
+    assert workspace.is_known_uri("https://nope.org/X") is False
+
+
+def test_workspace_all_schemes(workspace):
+    schemes = workspace.all_schemes()
+    assert len(schemes) == 2
+
+
+def test_workspace_scheme_count(workspace):
+    assert workspace.scheme_count() == 2
+
+
+def test_workspace_concept_scheme_uri(workspace):
+    uri = workspace.concept_scheme_uri(BASE_A + "Dog")
+    assert uri == BASE_A + "scheme"
+
+
+def test_workspace_concept_scheme_uri_unknown(workspace):
+    assert workspace.concept_scheme_uri("https://nope.org/X") is None
+
+
 # ──────────────────────────── SkosValidator ──────────────────────────────────
 
 
