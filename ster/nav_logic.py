@@ -1,4 +1,5 @@
 """Pure taxonomy tree / detail logic — no curses dependency."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

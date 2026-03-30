@@ -56,7 +56,7 @@ def test_patch_leaves_existing_files_alone(tmp_path):
 
 def test_patch_leaves_existing_pyproject_alone(tmp_path):
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text("[project]\nname = \"myapp\"\n")
+    pyproject.write_text('[project]\nname = "myapp"\n')
     with _patch_missing_pyproject():
         content = pyproject.read_text()
     assert "myapp" in content
@@ -201,6 +201,7 @@ def test_generate_html_single_language(tmp_path, ttl_file):
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             pylode_available = True
         except ImportError:
             pylode_available = False
@@ -220,6 +221,7 @@ def test_generate_html_multiple_languages(tmp_path, ttl_file):
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             pylode_available = True
         except ImportError:
             pylode_available = False
@@ -243,6 +245,7 @@ def test_generate_html_creates_output_dir(tmp_path, ttl_file):
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             pylode_available = True
         except ImportError:
             pylode_available = False
@@ -282,6 +285,7 @@ def test_generate_html_vocpub_type_error_fallback(tmp_path, ttl_file):
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             pylode_available = True
         except ImportError:
             pylode_available = False
@@ -309,6 +313,7 @@ def test_generate_html_defaults_to_en_when_no_labels(tmp_path):
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             pylode_available = True
         except ImportError:
             pylode_available = False

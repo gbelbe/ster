@@ -293,7 +293,9 @@ def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
     fields = viewer._detail_fields
     pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
     viewer._field_cursor = pref_idx
-    viewer._state = EditState(buffer="Updated Top", pos=len("Updated Top"), field=fields[pref_idx], return_to=None)
+    viewer._state = EditState(
+        buffer="Updated Top", pos=len("Updated Top"), field=fields[pref_idx], return_to=None
+    )
     viewer._commit_edit()
     assert simple_taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
 
@@ -407,8 +409,12 @@ def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
         i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "scheme_title"
     )
     viewer._field_cursor = title_idx
-    viewer._state = EditState(buffer="Renamed Taxonomy", pos=len("Renamed Taxonomy"),
-                              field=viewer._detail_fields[title_idx], return_to=None)
+    viewer._state = EditState(
+        buffer="Renamed Taxonomy",
+        pos=len("Renamed Taxonomy"),
+        field=viewer._detail_fields[title_idx],
+        return_to=None,
+    )
     viewer._commit_edit()
     scheme = simple_taxonomy.schemes[BASE + "Scheme"]
     assert any(lbl.value == "Renamed Taxonomy" for lbl in scheme.labels)
@@ -611,8 +617,9 @@ def test_scheme_create_commit_edit_updates_field(viewer):
     """_commit_edit in SCHEME_CREATE mode writes value into form field."""
     fields = viewer._build_scheme_create_fields()
     scs = SchemeCreateState(fields=fields, cursor=0)
-    viewer._state = EditState(buffer="Draft Title", pos=len("Draft Title"),
-                              field=fields[0], return_to=scs)
+    viewer._state = EditState(
+        buffer="Draft Title", pos=len("Draft Title"), field=fields[0], return_to=scs
+    )
     viewer._commit_edit()
     assert scs.fields[0].value == "Draft Title"
 
@@ -899,8 +906,12 @@ def test_commit_scheme_base_uri_edit(viewer, simple_taxonomy):
     viewer._open_detail()
     base_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "base_uri")
     viewer._field_cursor = base_idx
-    viewer._state = EditState(buffer="https://example.org/new/", pos=len("https://example.org/new/"),
-                              field=viewer._detail_fields[base_idx], return_to=None)
+    viewer._state = EditState(
+        buffer="https://example.org/new/",
+        pos=len("https://example.org/new/"),
+        field=viewer._detail_fields[base_idx],
+        return_to=None,
+    )
     viewer._commit_edit()
     scheme = simple_taxonomy.schemes[BASE + "Scheme"]
     assert scheme.base_uri == "https://example.org/new/"

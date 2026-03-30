@@ -1,4 +1,5 @@
 """Pure taxonomy-diff logic extracted from git_log — no curses, no subprocess."""
+
 from __future__ import annotations
 
 from copy import deepcopy

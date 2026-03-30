@@ -720,7 +720,9 @@ class TaxonomyViewer:
             elif isinstance(self._state, MovePickState):
                 ms = self._state
                 if ms.is_link:
-                    self._draw_move(stdscr, rows, cols, title=" ↗ Link to broader — pick new parent ")
+                    self._draw_move(
+                        stdscr, rows, cols, title=" ↗ Link to broader — pick new parent "
+                    )
                     key = stdscr.getch()
                     if key == curses.KEY_RESIZE:
                         curses.update_lines_cols()
@@ -2148,9 +2150,7 @@ class TaxonomyViewer:
 
         parent_handle = None
         if cs.parent_uri:
-            parent_handle = (
-                target_tax.uri_to_handle(cs.parent_uri) or cs.parent_uri
-            )
+            parent_handle = target_tax.uri_to_handle(cs.parent_uri) or cs.parent_uri
 
         try:
             operations.add_concept(
@@ -2246,7 +2246,9 @@ class TaxonomyViewer:
         if isinstance(self._state, SchemeCreateState):
             scs = self._state
             _in_edit = False
-        elif isinstance(self._state, EditState) and isinstance(self._state.return_to, SchemeCreateState):
+        elif isinstance(self._state, EditState) and isinstance(
+            self._state.return_to, SchemeCreateState
+        ):
             scs = self._state.return_to
             _in_edit = True
         else:
