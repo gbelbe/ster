@@ -1103,6 +1103,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "bandit" },
+    { name = "coverage", extra = ["toml"] },
     { name = "mypy" },
     { name = "pip-audit" },
     { name = "pylode", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1113,6 +1114,7 @@ all = [
 ]
 dev = [
     { name = "bandit" },
+    { name = "coverage", extra = ["toml"] },
     { name = "mypy" },
     { name = "pip-audit" },
     { name = "pytest" },
@@ -1127,6 +1129,7 @@ html = [
 [package.metadata]
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7" },
+    { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "pylode", marker = "extra == 'html'", specifier = ">=3.0" },
