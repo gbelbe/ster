@@ -20,7 +20,7 @@ requires-python = ">=3.11"
 #
 dependencies = [
     "rdflib>=7.0",
-    "typer[all]>=0.12",
+    "typer>=0.12",
     "rich>=13.0",
 ]
 
