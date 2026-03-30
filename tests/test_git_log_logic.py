@@ -5,7 +5,6 @@ from __future__ import annotations
 from ster.git_log_logic import (
     ConceptChange,
     FieldDiff,
-    LogEntry,
     _concept_field_diffs,
     _parse_log,
     _subtree_has_change,

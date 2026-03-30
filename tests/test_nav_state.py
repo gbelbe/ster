@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from ster.nav_logic import TreeLine
 from ster.nav_state import (
     DetailField,
     DetailState,
     SearchState,
     TreeState,
-    _replace_search,
     _search_jump,
     clamp_scroll,
     navigate_detail,

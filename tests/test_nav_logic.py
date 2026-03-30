@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from ster.handles import assign_handles
 from ster.model import (
     Concept,
     ConceptScheme,
-    Definition,
     Label,
     LabelType,
     Taxonomy,
