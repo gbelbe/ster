@@ -24,6 +24,24 @@ from . import operations, store
 from .display import console, render_concept_detail, render_tree
 from .exceptions import SkostaxError
 from .model import Definition, Label, LabelType, Taxonomy
+from .nav_logic import (  # noqa: F401
+    _ACTION_ADD_SCHEME,
+    _FILE_URI_PREFIX,
+    DetailField,
+    TreeLine,
+    _available_langs,
+    _breadcrumb,
+    _children,
+    _count_descendants,
+    _file_sentinel,
+    _flatten_taxonomy,
+    _flatten_workspace,
+    _parent_uri,
+    _sep,
+    build_detail_fields,
+    build_scheme_fields,
+    flatten_tree,
+)
 from .nav_state import (
     ConfirmDeleteState,
     CreateState,
@@ -43,24 +61,6 @@ from .nav_state import (
     navigate_tree,
     search_update,
     update_search_results,
-)
-from .nav_logic import (  # noqa: F401
-    _ACTION_ADD_SCHEME,
-    _FILE_URI_PREFIX,
-    DetailField,
-    TreeLine,
-    _available_langs,
-    _breadcrumb,
-    _children,
-    _count_descendants,
-    _file_sentinel,
-    _flatten_taxonomy,
-    _flatten_workspace,
-    _parent_uri,
-    _sep,
-    build_detail_fields,
-    build_scheme_fields,
-    flatten_tree,
 )
 from .workspace import TaxonomyWorkspace
 
@@ -1512,10 +1512,12 @@ class TaxonomyViewer:
     # ─────────────────────────── EDIT drawing ────────────────────────────────
 
     def _draw_edit_bar(self, stdscr: curses.window, rows: int, cols: int) -> None:
-        if not isinstance(self._state, EditState) or self._state.field is None:
+        if not isinstance(self._state, EditState):
             return
         es = self._state
         f = es.field
+        if f is None:
+            return
         prompt = f" {f.display}: "
         before = es.buffer[: es.pos]
         after = es.buffer[es.pos :]
@@ -1935,10 +1937,12 @@ class TaxonomyViewer:
         tree_w = cols // 3 if wide else 0
         detail_x0 = tree_w
         detail_w = cols - tree_w
+        cs = self._state if isinstance(self._state, CreateState) else None
+        parent_uri = cs.parent_uri if cs else None
         if wide:
-            if self._create_parent_uri:
+            if parent_uri:
                 for i, line in enumerate(self._flat):
-                    if line.uri == self._create_parent_uri:
+                    if line.uri == parent_uri:
                         self._cursor = i
                         break
             self._adjust_tree_scroll(rows)
@@ -1948,7 +1952,7 @@ class TaxonomyViewer:
                 0,
                 tree_w,
                 cursor_idx=self._cursor,
-                highlight_uri=self._create_parent_uri,
+                highlight_uri=parent_uri,
             )
             for y in range(rows):
                 try:
