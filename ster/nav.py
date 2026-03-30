@@ -56,11 +56,9 @@ from .nav_state import (
     TreeState,
     ViewerState,
     WelcomeState,
-    clamp_scroll,
     navigate_detail,
     navigate_tree,
     search_update,
-    update_search_results,
 )
 from .workspace import TaxonomyWorkspace
 

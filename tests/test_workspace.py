@@ -212,7 +212,6 @@ def test_project_resolved_files_absolute(tmp_path, monkeypatch):
 
 def test_workspace_from_files(tmp_path):
     from ster import store
-    from ster.model import Taxonomy
 
     t = _make_taxonomy(BASE_A, "Scheme A", ["Dog"])
     path = tmp_path / "a.ttl"
