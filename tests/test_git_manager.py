@@ -327,9 +327,7 @@ def test_push_direct_success(tmp_path):
 
 def test_push_direct_failure(tmp_path):
     mgr = _make_manager(tmp_path)
-    with patch(
-        "ster.git_manager._git", return_value=MagicMock(returncode=1, stderr="rejected")
-    ):
+    with patch("ster.git_manager._git", return_value=MagicMock(returncode=1, stderr="rejected")):
         mgr._push_direct(tmp_path, "main")  # no crash, prints error
 
 

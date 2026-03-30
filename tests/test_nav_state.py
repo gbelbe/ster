@@ -21,15 +21,15 @@ from ster.nav_state import (
 BASE = "https://example.org/test/"
 
 # Key codes (matching constants in nav_state.py)
-KEY_UP    = 259
-KEY_DOWN  = 258
-KEY_HOME  = 262
-KEY_END   = 360
+KEY_UP = 259
+KEY_DOWN = 258
+KEY_HOME = 262
+KEY_END = 360
 KEY_PPAGE = 339
 KEY_NPAGE = 338
 KEY_BACKSPACE = 263
 KEY_ENTER = 343
-KEY_BTAB  = 353
+KEY_BTAB = 353
 CTRL_D = 4
 CTRL_U = 21
 
@@ -38,10 +38,7 @@ CTRL_U = 21
 
 
 def _make_tree_state(n: int, cursor: int = 0, scroll: int = 0) -> TreeState:
-    flat = [
-        TreeLine(uri=f"{BASE}C{i}", depth=0, prefix="")
-        for i in range(n)
-    ]
+    flat = [TreeLine(uri=f"{BASE}C{i}", depth=0, prefix="") for i in range(n)]
     return TreeState(flat=flat, cursor=cursor, scroll=scroll)
 
 
@@ -241,7 +238,9 @@ def test_navigate_detail_empty_fields():
 def test_search_update_typing_char():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="fo", active=True),
     )
     new = search_update(state, ord("o"))
@@ -252,7 +251,9 @@ def test_search_update_typing_char():
 def test_search_update_backspace():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="foo", active=True),
     )
     new = search_update(state, KEY_BACKSPACE)
@@ -262,7 +263,9 @@ def test_search_update_backspace():
 def test_search_update_backspace_127():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="foo", active=True),
     )
     new = search_update(state, 127)
@@ -272,7 +275,9 @@ def test_search_update_backspace_127():
 def test_search_update_backspace_empty_query():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="", active=True),
     )
     new = search_update(state, KEY_BACKSPACE)
@@ -282,7 +287,9 @@ def test_search_update_backspace_empty_query():
 def test_search_update_escape_clears():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="test", active=True, matches=[1, 2]),
     )
     new = search_update(state, 27)  # Esc
@@ -294,7 +301,9 @@ def test_search_update_escape_clears():
 def test_search_update_enter_commits():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="test", active=True, matches=[1, 2]),
     )
     new = search_update(state, KEY_ENTER)
@@ -305,7 +314,9 @@ def test_search_update_enter_commits():
 def test_search_update_newline_commits():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="test", active=True),
     )
     new = search_update(state, ord("\n"))
@@ -315,7 +326,9 @@ def test_search_update_newline_commits():
 def test_search_update_tab_jumps_next():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=2, scroll=0,
+        flat=state.flat,
+        cursor=2,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[2, 5, 8], current_idx=0),
     )
     new = search_update(state, 9)  # Tab
@@ -326,7 +339,9 @@ def test_search_update_tab_jumps_next():
 def test_search_update_unhandled_key_returns_same():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="x", active=True),
     )
     new = search_update(state, 1)  # Ctrl+A — unhandled
@@ -355,7 +370,9 @@ def test_update_search_results_empty_matches():
 def test_update_search_results_clamps_idx():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=0, scroll=0,
+        flat=state.flat,
+        cursor=0,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[1, 2, 3], current_idx=5),
     )
     new = update_search_results(state, [1, 2], re.compile("x"))
@@ -368,7 +385,9 @@ def test_update_search_results_clamps_idx():
 def test_search_jump_forward():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=2, scroll=0,
+        flat=state.flat,
+        cursor=2,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[2, 5, 8], current_idx=0),
     )
     new = _search_jump(state, +1)
@@ -379,7 +398,9 @@ def test_search_jump_forward():
 def test_search_jump_backward():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=5, scroll=0,
+        flat=state.flat,
+        cursor=5,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[2, 5, 8], current_idx=1),
     )
     new = _search_jump(state, -1)
@@ -390,7 +411,9 @@ def test_search_jump_backward():
 def test_search_jump_wraps_forward():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=8, scroll=0,
+        flat=state.flat,
+        cursor=8,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[2, 5, 8], current_idx=2),
     )
     new = _search_jump(state, +1)
@@ -401,7 +424,9 @@ def test_search_jump_wraps_forward():
 def test_search_jump_wraps_backward():
     state = _make_tree_state(10)
     state = TreeState(
-        flat=state.flat, cursor=2, scroll=0,
+        flat=state.flat,
+        cursor=2,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[2, 5, 8], current_idx=0),
     )
     new = _search_jump(state, -1)
@@ -412,7 +437,9 @@ def test_search_jump_wraps_backward():
 def test_search_jump_no_matches():
     state = _make_tree_state(5)
     state = TreeState(
-        flat=state.flat, cursor=2, scroll=0,
+        flat=state.flat,
+        cursor=2,
+        scroll=0,
         search=SearchState(query="x", active=True, matches=[]),
     )
     new = _search_jump(state, +1)

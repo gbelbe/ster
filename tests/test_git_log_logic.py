@@ -61,7 +61,9 @@ def test_field_diff_status_changed():
 
 
 def test_parse_log_valid_single():
-    line = _make_log_line("a" * 40, "aaaaaaa", "Initial commit", "Alice", "2024-01-15", "HEAD -> main")
+    line = _make_log_line(
+        "a" * 40, "aaaaaaa", "Initial commit", "Alice", "2024-01-15", "HEAD -> main"
+    )
     entries = _parse_log(line)
     assert len(entries) == 1
     e = entries[0]
@@ -241,9 +243,7 @@ def test_build_diff_taxonomy_ghost_attached_to_parent():
     parent = Concept(
         uri=BASE + "P", labels=[Label("en", "P", LabelType.PREF)], narrower=[BASE + "C"]
     )
-    child = Concept(
-        uri=BASE + "C", labels=[Label("en", "C", LabelType.PREF)], broader=[BASE + "P"]
-    )
+    child = Concept(uri=BASE + "C", labels=[Label("en", "C", LabelType.PREF)], broader=[BASE + "P"])
     before.schemes[s.uri] = s
     before.concepts[parent.uri] = parent
     before.concepts[child.uri] = child
