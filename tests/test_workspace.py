@@ -1,12 +1,15 @@
 """Tests for workspace, project, validator and workspace_ops."""
+
 from __future__ import annotations
-import json
-import pytest
+
 from pathlib import Path
+
+import pytest
+
 from ster.model import Concept, ConceptScheme, Label, LabelType, Taxonomy
+from ster.project import Project
+from ster.validator import SkosValidator
 from ster.workspace import TaxonomyWorkspace
-from ster.project import Project, _git_root
-from ster.validator import SkosValidator, ValidationIssue
 from ster.workspace_ops import add_mapping, remove_mapping
 
 BASE_A = "https://a.example.org/"
@@ -14,6 +17,7 @@ BASE_B = "https://b.example.org/"
 
 
 # ──────────────────────────── fixtures ───────────────────────────────────────
+
 
 def _make_taxonomy(base: str, scheme_name: str, concept_names: list[str]) -> Taxonomy:
     t = Taxonomy()
@@ -61,6 +65,7 @@ def workspace(tax_a, tax_b, tmp_path) -> TaxonomyWorkspace:
 
 
 # ──────────────────────────── TaxonomyWorkspace ───────────────────────────────
+
 
 def test_workspace_uri_to_file(workspace, tmp_path):
     assert workspace.uri_to_file(BASE_A + "Dog") == tmp_path / "a.ttl"
@@ -116,6 +121,7 @@ def test_workspace_unresolved_refs(tmp_path):
 
 # ──────────────────────────── Project ────────────────────────────────────────
 
+
 def test_project_save_load(tmp_path, monkeypatch):
     monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
     p = Project(root=tmp_path, files=[Path("a.ttl"), Path("b.ttl")], lang="fr")
@@ -151,6 +157,7 @@ def test_project_load_returns_none_when_missing(tmp_path, monkeypatch):
 
 
 # ──────────────────────────── SkosValidator ──────────────────────────────────
+
 
 def test_validator_no_issues_clean(workspace):
     v = SkosValidator()
@@ -205,10 +212,9 @@ def test_validator_cycle(tmp_path):
 
 # ──────────────────────────── workspace_ops ──────────────────────────────────
 
+
 def test_add_mapping_cross_file(workspace, tmp_path):
-    src_file, tgt_file = add_mapping(
-        workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch"
-    )
+    src_file, tgt_file = add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
     assert src_file == tmp_path / "a.ttl"
     assert tgt_file == tmp_path / "b.ttl"
 
@@ -244,5 +250,6 @@ def test_remove_mapping(workspace):
 
 def test_add_mapping_unknown_source_raises(workspace):
     from ster.exceptions import SkostaxError
+
     with pytest.raises(SkostaxError):
         add_mapping(workspace, "https://unknown.org/X", BASE_B + "Mammal", "broadMatch")

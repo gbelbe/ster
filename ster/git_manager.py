@@ -18,6 +18,7 @@ Config
   (GitHub CLI) and, for one-time use, prompt the user; saving is opt-in with a
   plaintext warning.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -25,16 +26,15 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 
 console = Console()
-err     = Console(stderr=True)
+err = Console(stderr=True)
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-CONFIG_DIR  = Path.home() / ".config" / "ster"
+CONFIG_DIR = Path.home() / ".config" / "ster"
 CONFIG_FILE = CONFIG_DIR / "git_repos.json"
 
 
@@ -54,7 +54,8 @@ def _save_global_config(data: dict) -> None:
 
 # ── subprocess helper ─────────────────────────────────────────────────────────
 
-def _git(*args: str, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+
+def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -72,6 +73,7 @@ def _git_available() -> bool:
 
 
 # ── diff renderer ─────────────────────────────────────────────────────────────
+
 
 def render_diff(diff: str, max_lines: int = 60) -> None:
     """Print a unified diff using Rich markup colours."""
@@ -91,6 +93,7 @@ def render_diff(diff: str, max_lines: int = 60) -> None:
 
 # ── GitManager ────────────────────────────────────────────────────────────────
 
+
 class GitManager:
     """Manages git operations for a single taxonomy file.
 
@@ -100,8 +103,8 @@ class GitManager:
 
     def __init__(self, taxonomy_path: Path) -> None:
         self.taxonomy_path = taxonomy_path.resolve()
-        self._global_cfg   = _load_global_config()
-        self._cfg: dict    = self._global_cfg.get(str(self.taxonomy_path), {})
+        self._global_cfg = _load_global_config()
+        self._cfg: dict = self._global_cfg.get(str(self.taxonomy_path), {})
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -126,16 +129,14 @@ class GitManager:
         repo_root = self._find_repo_root()
         if repo_root:
             self._link_existing_repo(repo_root)
-            console.print(
-                f"[green]✓[/green] Linked to git repo at "
-                f"[bold]{repo_root}[/bold]"
-            )
+            console.print(f"[green]✓[/green] Linked to git repo at [bold]{repo_root}[/bold]")
             if not self._cfg.get("branch_strategy"):
                 self._ask_branch_strategy()
             return True
 
         # Ask the user if they want git at all
         from rich.prompt import Confirm
+
         console.print()
         want = Confirm.ask(
             "[bold]Set up Git version control for this taxonomy?[/bold]",
@@ -148,6 +149,7 @@ class GitManager:
 
         # Present options
         from rich.prompt import Prompt
+
         console.print(
             "\n[bold]Git setup:[/bold]\n"
             "  [cyan]1[/cyan]  Initialise a new local repository here\n"
@@ -168,7 +170,7 @@ class GitManager:
             self._ask_branch_strategy()
         return ok
 
-    def pre_edit_check(self) -> Optional[str]:
+    def pre_edit_check(self) -> str | None:
         """Fetch; pull if behind; return diff text (or None) for display."""
         if not self.is_configured():
             return None
@@ -194,6 +196,7 @@ class GitManager:
             return None
 
         from rich.prompt import Confirm
+
         console.print(
             f"\n[yellow]⚠  {self.taxonomy_path.name} is "
             f"{behind} commit{'s' if behind > 1 else ''} behind the remote.[/yellow]"
@@ -203,7 +206,7 @@ class GitManager:
 
         # Record HEAD before pull so we can diff
         before_r = _git("rev-parse", "HEAD", cwd=repo)
-        before   = before_r.stdout.strip() if before_r.returncode == 0 else None
+        before = before_r.stdout.strip() if before_r.returncode == 0 else None
 
         pull_r = _git("pull", "--ff-only", "origin", main, cwd=repo)
         if pull_r.returncode != 0:
@@ -213,9 +216,7 @@ class GitManager:
         console.print("[green]✓ Updated.[/green]")
 
         if before:
-            diff_r = _git(
-                "diff", before, "HEAD", "--", str(self.taxonomy_path), cwd=repo
-            )
+            diff_r = _git("diff", before, "HEAD", "--", str(self.taxonomy_path), cwd=repo)
             if diff_r.returncode == 0 and diff_r.stdout:
                 return diff_r.stdout
 
@@ -238,7 +239,7 @@ class GitManager:
             return
         _git("add", str(self.taxonomy_path), cwd=repo)
 
-    def stage_path(self, path: "Path") -> None:
+    def stage_path(self, path: Path) -> None:
         """git add an arbitrary file in the same repository."""
         repo = self._repo()
         if not repo:
@@ -290,10 +291,13 @@ class GitManager:
             console.print("[dim]No staged changes — nothing to commit.[/dim]")
             return
 
-        from rich.prompt import Prompt, Confirm
-        repo    = self._repo()
-        main    = self._cfg.get("main_branch", "main")
-        strat   = self._cfg.get("branch_strategy", "direct")
+        from rich.prompt import Prompt
+
+        repo = self._repo()
+        if repo is None:
+            return
+        main = self._cfg.get("main_branch", "main")
+        strat = self._cfg.get("branch_strategy", "direct")
 
         # ── commit message ────────────────────────────────────────────────────
         default_msg = f"Update {self.taxonomy_path.name}"
@@ -344,7 +348,7 @@ class GitManager:
 
     def _init_new_repo(self) -> bool:
         """Initialise a brand-new local repository, optionally wiring a remote."""
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Confirm, Prompt
 
         repo_dir = self.taxonomy_path.parent
         r = _git("init", cwd=repo_dir)
@@ -368,16 +372,12 @@ class GitManager:
                 console.print(f"[dim]Connecting to {url}…[/dim]")
                 ls_r = _git("ls-remote", "--exit-code", url, cwd=repo_dir)
                 if ls_r.returncode not in (0, 2):
-                    err.print(
-                        f"[red]Cannot reach {url}[/red]\n"
-                        f"[dim]{ls_r.stderr.strip()}[/dim]"
-                    )
+                    err.print(f"[red]Cannot reach {url}[/red]\n[dim]{ls_r.stderr.strip()}[/dim]")
                     if not Confirm.ask("Try a different URL?", default=True):
                         break
                     continue
                 _git("remote", "add", "origin", url, cwd=repo_dir)
-                _git("push", "-u", "origin",
-                     self._local_branch(repo_dir), cwd=repo_dir)
+                _git("push", "-u", "origin", self._local_branch(repo_dir), cwd=repo_dir)
                 self._cfg["remote_url"] = url
                 console.print(f"[green]✓ Remote set to {url}[/green]")
                 break
@@ -393,7 +393,7 @@ class GitManager:
         files (init-in-place + fetch).  Loops until connectivity and sync are
         verified, or the user cancels.
         """
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Confirm, Prompt
 
         repo_dir = self.taxonomy_path.parent
 
@@ -406,8 +406,8 @@ class GitManager:
             # ── test connectivity ─────────────────────────────────────────
             console.print(f"[dim]Connecting to {url}…[/dim]")
             ls_r = _git("ls-remote", "--exit-code", "--heads", url, cwd=repo_dir)
-            remote_empty = ls_r.returncode == 2   # connected, but no refs
-            connected    = ls_r.returncode in (0, 2)
+            remote_empty = ls_r.returncode == 2  # connected, but no refs
+            connected = ls_r.returncode in (0, 2)
 
             if not connected:
                 err.print(
@@ -451,8 +451,7 @@ class GitManager:
             verify = _git("remote", "get-url", "origin", cwd=repo_dir)
             if verify.returncode == 0:
                 console.print(
-                    f"[bold green]✓ Git configured.[/bold green]  "
-                    f"Remote: {verify.stdout.strip()}"
+                    f"[bold green]✓ Git configured.[/bold green]  Remote: {verify.stdout.strip()}"
                 )
                 return True
 
@@ -460,11 +459,9 @@ class GitManager:
             if not Confirm.ask("Retry?", default=True):
                 return False
 
-    def _init_inplace_with_remote(
-        self, repo_dir: Path, url: str, remote_empty: bool
-    ) -> bool:
+    def _init_inplace_with_remote(self, repo_dir: Path, url: str, remote_empty: bool) -> bool:
         """Set up git in a non-empty directory and link it to *url*."""
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Prompt
 
         # Init if needed
         already_git = _git("rev-parse", "--git-dir", cwd=repo_dir).returncode == 0
@@ -492,9 +489,7 @@ class GitManager:
         main = self._detect_remote_default_branch(repo_dir)
         self._cfg["main_branch"] = main
 
-        has_remote_branch = (
-            _git("rev-parse", f"origin/{main}", cwd=repo_dir).returncode == 0
-        )
+        has_remote_branch = _git("rev-parse", f"origin/{main}", cwd=repo_dir).returncode == 0
 
         if has_remote_branch:
             # ── remote has content: ask how to sync ───────────────────────
@@ -522,7 +517,6 @@ class GitManager:
 
     def _pull_remote_into_dir(self, repo_dir: Path, main: str) -> bool:
         """Check out the remote branch, merging with any local uncommitted files."""
-        from rich.prompt import Confirm
 
         local_exists = _git("rev-parse", "--verify", main, cwd=repo_dir).returncode == 0
 
@@ -533,9 +527,13 @@ class GitManager:
             r = _git("pull", "--ff-only", "origin", main, cwd=repo_dir)
             if r.returncode != 0:
                 r = _git(
-                    "pull", "--allow-unrelated-histories", "-m",
+                    "pull",
+                    "--allow-unrelated-histories",
+                    "-m",
                     "chore: merge remote history",
-                    "origin", main, cwd=repo_dir,
+                    "origin",
+                    main,
+                    cwd=repo_dir,
                 )
 
         if r.returncode != 0:
@@ -545,9 +543,7 @@ class GitManager:
         console.print(f"[green]✓ Pulled '{main}' from remote.[/green]")
         return True
 
-    def _push_local_to_remote(
-        self, repo_dir: Path, main: str, force: bool
-    ) -> bool:
+    def _push_local_to_remote(self, repo_dir: Path, main: str, force: bool) -> bool:
         """Stage all local files, commit if needed, and push to remote."""
         from rich.prompt import Confirm
 
@@ -569,9 +565,7 @@ class GitManager:
 
         if push_r.returncode != 0:
             err.print(f"[red]Push failed:[/red] {push_r.stderr.strip()}")
-            if not force and Confirm.ask(
-                "Force push? (overwrites remote history)", default=False
-            ):
+            if not force and Confirm.ask("Force push? (overwrites remote history)", default=False):
                 push_r = _git("push", "--force", "-u", "origin", main, cwd=repo_dir)
                 if push_r.returncode != 0:
                     err.print(f"[red]Force push failed:[/red] {push_r.stderr.strip()}")
@@ -611,12 +605,12 @@ class GitManager:
 
     def _link_repo_interactive(self) -> bool:
         """Link to an existing local repository with retry."""
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Confirm, Prompt
 
         while True:
-            default  = str(self.taxonomy_path.parent)
+            default = str(self.taxonomy_path.parent)
             path_str = Prompt.ask("Path to git repository", default=default)
-            p        = Path(path_str).expanduser().resolve()
+            p = Path(path_str).expanduser().resolve()
             if _git("rev-parse", "--git-dir", cwd=p).returncode == 0:
                 self._link_existing_repo(p)
                 console.print(f"[green]✓[/green] Linked to [bold]{p}[/bold]")
@@ -635,6 +629,7 @@ class GitManager:
 
     def _ask_branch_strategy(self) -> None:
         from rich.prompt import Prompt
+
         console.print(
             "\n[bold]Default push strategy:[/bold]\n"
             "  [cyan]1[/cyan]  Direct push to main  (single user, no review)\n"
@@ -657,13 +652,13 @@ class GitManager:
         from rich.prompt import Prompt
 
         # Generate a default branch name
-        ts       = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        default  = f"ster/{ts}"
-        fb       = Prompt.ask("Feature branch name", default=default)
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        default = f"ster/{ts}"
+        fb = Prompt.ask("Feature branch name", default=default)
 
         # Push HEAD to a new remote branch without switching locally
         push_ref = f"HEAD:refs/heads/{fb}"
-        r        = _git("push", "origin", push_ref, cwd=repo)
+        r = _git("push", "origin", push_ref, cwd=repo)
         if r.returncode != 0:
             err.print(f"[red]Push failed:[/red] {r.stderr.strip()}")
             return
@@ -671,7 +666,7 @@ class GitManager:
 
         # PR details
         pr_title = Prompt.ask("PR title", default=commit_msg)
-        pr_body  = Prompt.ask("PR description (optional)", default="")
+        pr_body = Prompt.ask("PR description (optional)", default="")
 
         pr_url = self._create_pr(repo, fb, main, pr_title, pr_body)
         if pr_url:
@@ -681,22 +676,29 @@ class GitManager:
             if "github.com" in remote:
                 clean = remote.rstrip("/").removesuffix(".git")
                 console.print(
-                    f"\n[yellow]Create a PR at:[/yellow]\n"
-                    f"  {clean}/compare/{main}...{fb}"
+                    f"\n[yellow]Create a PR at:[/yellow]\n  {clean}/compare/{main}...{fb}"
                 )
 
-    def _create_pr(
-        self, repo: Path, head: str, base: str, title: str, body: str
-    ) -> Optional[str]:
+    def _create_pr(self, repo: Path, head: str, base: str, title: str, body: str) -> str | None:
         """Try gh CLI, then GitHub REST API.  Returns PR URL or None."""
         # ── 1. gh CLI ─────────────────────────────────────────────────────────
         gh_r = subprocess.run(
-            ["gh", "pr", "create",
-             "--title", title,
-             "--body",  body or " ",
-             "--base",  base,
-             "--head",  head],
-            cwd=repo, capture_output=True, text=True,
+            [
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                body or " ",
+                "--base",
+                base,
+                "--head",
+                head,
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
         )
         if gh_r.returncode == 0:
             return gh_r.stdout.strip()
@@ -705,27 +707,29 @@ class GitManager:
         token = self._get_github_token()
         if not token:
             return None
-        owner_repo = self._parse_github_owner_repo(
-            self._cfg.get("remote_url", "")
-        )
+        owner_repo = self._parse_github_owner_repo(self._cfg.get("remote_url", ""))
         if not owner_repo:
             return None
 
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         owner, repo_name = owner_repo
-        data = json.dumps({
-            "title": title, "body": body,
-            "head": head, "base": base,
-        }).encode()
+        data = json.dumps(
+            {
+                "title": title,
+                "body": body,
+                "head": head,
+                "base": base,
+            }
+        ).encode()
         req = urllib.request.Request(
             f"https://api.github.com/repos/{owner}/{repo_name}/pulls",
             data=data,
             headers={
                 "Authorization": f"token {token}",
-                "Content-Type":  "application/json",
-                "User-Agent":    "ster-taxonomy-editor/1.0",
+                "Content-Type": "application/json",
+                "User-Agent": "ster-taxonomy-editor/1.0",
             },
             method="POST",
         )
@@ -741,12 +745,10 @@ class GitManager:
 
     # ── private: github helpers ───────────────────────────────────────────────
 
-    def _get_github_token(self) -> Optional[str]:
+    def _get_github_token(self) -> str | None:
         """Session-only token: try gh CLI, then prompt (never saved by default)."""
         # 1. gh CLI auth token
-        gh_r = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True
-        )
+        gh_r = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
         if gh_r.returncode == 0 and gh_r.stdout.strip():
             return gh_r.stdout.strip()
 
@@ -756,7 +758,8 @@ class GitManager:
             return stored
 
         # 3. Prompt
-        from rich.prompt import Prompt, Confirm
+        from rich.prompt import Confirm, Prompt
+
         console.print(
             "\n[yellow]GitHub token needed for PR creation.[/yellow]\n"
             "[dim]Create one at github.com/settings/tokens (needs 'repo' scope).[/dim]\n"
@@ -775,24 +778,24 @@ class GitManager:
         return token
 
     @staticmethod
-    def _parse_github_owner_repo(url: str) -> Optional[tuple[str, str]]:
+    def _parse_github_owner_repo(url: str) -> tuple[str, str] | None:
         m = re.search(r"github\.com[:/]([^/]+)/([^/\\.]+)", url)
         return (m.group(1), m.group(2)) if m else None
 
     # ── private: git utility ──────────────────────────────────────────────────
 
-    def _find_repo_root(self) -> Optional[Path]:
+    def _find_repo_root(self) -> Path | None:
         r = _git("rev-parse", "--show-toplevel", cwd=self.taxonomy_path.parent)
         return Path(r.stdout.strip()) if r.returncode == 0 else None
 
-    def _repo(self) -> Optional[Path]:
+    def _repo(self) -> Path | None:
         rp = self._cfg.get("repo_path")
         if rp:
             p = Path(rp)
             return p if p.exists() else None
         return None
 
-    def _get_remote_url(self, repo: Path) -> Optional[str]:
+    def _get_remote_url(self, repo: Path) -> str | None:
         r = _git("remote", "get-url", "origin", cwd=repo)
         return r.stdout.strip() if r.returncode == 0 else None
 

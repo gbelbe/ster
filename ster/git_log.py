@@ -14,7 +14,9 @@ Color legend in diff tree:
   yellow = concept with changes (press ↵ to view field-level diff)
   dim    = unchanged concept
 """
+
 from __future__ import annotations
+
 import curses
 import subprocess
 import sys
@@ -22,69 +24,66 @@ import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from . import store
 from .handles import assign_handles
 from .model import Concept, LabelType, Taxonomy
 from .nav import (
-    _init_colors as _nav_init_colors,
-    _draw_bar,
-    render_tree_col,
-    flatten_tree,
     TreeLine,
-    _C_DIFF_ADD,
-    _C_DIFF_DEL,
-    _C_DIFF_CHG,
-    _C_SEL,
-    _C_NAVIGABLE,
+    flatten_tree,
+    render_tree_col,
+)
+from .nav import (
+    _init_colors as _nav_init_colors,
 )
 
 # ──────────────────────────── git log color pairs ─────────────────────────────
 # Pairs 1-14 are owned by nav._init_colors (called in _loop).
 # We add log-specific pairs in the 20+ range to avoid collisions.
 
-_LC_SUBJECT = 20   # white bold — commit subject (highlighted)
-_LC_DATE    = 21   # cyan  dim  — commit date
-_LC_AUTHOR  = 22   # white dim  — author name
-_LC_BAR     = 23   # black on cyan — git-log title/footer bars
-_LC_FD_ADD  = 24   # green bold — added field value in detail overlay
-_LC_FD_DEL  = 25   # red   bold — removed field value in detail overlay
-_LC_FD_KEY  = 26   # cyan       — field label in detail overlay
+_LC_SUBJECT = 20  # white bold — commit subject (highlighted)
+_LC_DATE = 21  # cyan  dim  — commit date
+_LC_AUTHOR = 22  # white dim  — author name
+_LC_BAR = 23  # black on cyan — git-log title/footer bars
+_LC_FD_ADD = 24  # green bold — added field value in detail overlay
+_LC_FD_DEL = 25  # red   bold — removed field value in detail overlay
+_LC_FD_KEY = 26  # cyan       — field label in detail overlay
 
 
 def _git_init_colors() -> None:
     _nav_init_colors()
     try:
-        curses.init_pair(_LC_SUBJECT, -1,                  -1)   # terminal default
-        curses.init_pair(_LC_DATE,    curses.COLOR_CYAN,   -1)
-        curses.init_pair(_LC_AUTHOR,  -1,                  -1)   # terminal default
-        curses.init_pair(_LC_BAR,     curses.COLOR_BLACK,  curses.COLOR_CYAN)
-        curses.init_pair(_LC_FD_ADD,  curses.COLOR_GREEN,  -1)
-        curses.init_pair(_LC_FD_DEL,  curses.COLOR_RED,    -1)
-        curses.init_pair(_LC_FD_KEY,  curses.COLOR_CYAN,   -1)
+        curses.init_pair(_LC_SUBJECT, -1, -1)  # terminal default
+        curses.init_pair(_LC_DATE, curses.COLOR_CYAN, -1)
+        curses.init_pair(_LC_AUTHOR, -1, -1)  # terminal default
+        curses.init_pair(_LC_BAR, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(_LC_FD_ADD, curses.COLOR_GREEN, -1)
+        curses.init_pair(_LC_FD_DEL, curses.COLOR_RED, -1)
+        curses.init_pair(_LC_FD_KEY, curses.COLOR_CYAN, -1)
     except Exception:
         pass
 
 
 # ──────────────────────────── data model ─────────────────────────────────────
 
+
 @dataclass
 class LogEntry:
-    full_hash:  str   # %H  — full SHA-1
-    short_hash: str   # %h  — abbreviated
-    subject:    str   # %s  — first line of commit message
-    author:     str   # %an — author name
-    date:       str   # %ad — absolute date (YYYY-MM-DD)
-    refs:       str   # %D  — branch/tag decorations
+    full_hash: str  # %H  — full SHA-1
+    short_hash: str  # %h  — abbreviated
+    subject: str  # %s  — first line of commit message
+    author: str  # %an — author name
+    date: str  # %ad — absolute date (YYYY-MM-DD)
+    refs: str  # %D  — branch/tag decorations
 
 
 @dataclass
 class FieldDiff:
     """One field-level change within a concept."""
-    label:  str   # e.g. "prefLabel[en]", "altLabel[fr]", "definition[en]"
-    before: str   # value before the commit  ("" if added)
-    after:  str   # value after the commit   ("" if removed)
+
+    label: str  # e.g. "prefLabel[en]", "altLabel[fr]", "definition[en]"
+    before: str  # value before the commit  ("" if added)
+    after: str  # value after the commit   ("" if removed)
 
     @property
     def status(self) -> str:
@@ -97,27 +96,31 @@ class FieldDiff:
 
 @dataclass
 class ConceptChange:
-    uri:         str
-    status:      str          # "added" | "removed" | "changed" | "unchanged"
+    uri: str
+    status: str  # "added" | "removed" | "changed" | "unchanged"
     field_diffs: list[FieldDiff] = field(default_factory=list)
 
 
 # ──────────────────────────── git helpers ────────────────────────────────────
 
-def _git(*args: str, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+
+def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
     )
 
 
-def find_repo_root(path: Path) -> Optional[Path]:
+def find_repo_root(path: Path) -> Path | None:
     r = _git("rev-parse", "--show-toplevel", cwd=path)
     return Path(r.stdout.strip()) if r.returncode == 0 else None
 
 
 def _parse_log(raw: str) -> list[LogEntry]:
     """Parse ``git log --pretty=tformat:\x1f%H\x1f%h\x1f%s\x1f%an\x1f%ad\x1f%D`` output."""
-    SEP     = "\x1f"
+    SEP = "\x1f"
     entries: list[LogEntry] = []
     for line in raw.splitlines():
         if SEP not in line:
@@ -126,29 +129,34 @@ def _parse_log(raw: str) -> list[LogEntry]:
         # Line starts with SEP → parts[0] is empty, then 6 fields
         if len(parts) < 7:
             continue
+
         # Strip control/escape characters from human-readable fields so they
         # don't corrupt curses rendering (e.g. raw ^[[A from arrow-key mishaps)
         def _clean(s: str) -> str:
             return "".join(c for c in s if c >= " " or c == "\t")
 
-        entries.append(LogEntry(
-            full_hash  = parts[1].strip(),
-            short_hash = parts[2].strip(),
-            subject    = _clean(parts[3]),
-            author     = _clean(parts[4]),
-            date       = parts[5].strip(),
-            refs       = parts[6].strip(),
-        ))
+        entries.append(
+            LogEntry(
+                full_hash=parts[1].strip(),
+                short_hash=parts[2].strip(),
+                subject=_clean(parts[3]),
+                author=_clean(parts[4]),
+                date=parts[5].strip(),
+                refs=parts[6].strip(),
+            )
+        )
     return entries
 
 
-def _fetch_diff(full_hash: str, file_path: Optional[Path], repo: Path) -> list[str]:
+def _fetch_diff(full_hash: str, file_path: Path | None, repo: Path) -> list[str]:
     """Return raw git-diff lines for one commit (kept for revert-preview use)."""
     hdr = _git(
-        "show", "--no-patch",
+        "show",
+        "--no-patch",
         "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n    %s%n",
         "--date=format:%Y-%m-%d %H:%M",
-        full_hash, cwd=repo,
+        full_hash,
+        cwd=repo,
     )
     lines: list[str] = hdr.stdout.rstrip().splitlines() if hdr.returncode == 0 else []
     diff_args = ["show", "--format=", "--stat", "-p", "-M", full_hash]
@@ -184,7 +192,8 @@ def _do_restore(full_hash: str, file_path: Path, repo: Path) -> tuple[bool, str]
 
 # ──────────────────────────── taxonomy diff helpers ──────────────────────────
 
-def _get_file_at_commit(full_hash: str, file_path: Path, repo: Path) -> Optional[str]:
+
+def _get_file_at_commit(full_hash: str, file_path: Path, repo: Path) -> str | None:
     """Return file content at *full_hash*, or None if unavailable."""
     try:
         rel = str(file_path.relative_to(repo))
@@ -194,9 +203,9 @@ def _get_file_at_commit(full_hash: str, file_path: Path, repo: Path) -> Optional
     return r.stdout if r.returncode == 0 else None
 
 
-def _load_taxonomy_safe(content: str, suffix: str = ".ttl") -> Optional[Taxonomy]:
+def _load_taxonomy_safe(content: str, suffix: str = ".ttl") -> Taxonomy | None:
     """Parse taxonomy content from a string; return None on any error."""
-    tmp: Optional[Path] = None
+    tmp: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False) as f:
             f.write(content)
@@ -214,7 +223,7 @@ def _concept_field_diffs(before: Concept, after: Concept) -> list[FieldDiff]:
 
     # prefLabel
     b_pref = {lbl.lang: lbl.value for lbl in before.labels if lbl.type == LabelType.PREF}
-    a_pref = {lbl.lang: lbl.value for lbl in after.labels  if lbl.type == LabelType.PREF}
+    a_pref = {lbl.lang: lbl.value for lbl in after.labels if lbl.type == LabelType.PREF}
     for lang in sorted(set(b_pref) | set(a_pref)):
         b, a = b_pref.get(lang, ""), a_pref.get(lang, "")
         if b != a:
@@ -254,9 +263,7 @@ def _concept_field_diffs(before: Concept, after: Concept) -> list[FieldDiff]:
     return diffs
 
 
-def compute_taxonomy_diff(
-    before: Taxonomy, after: Taxonomy
-) -> dict[str, ConceptChange]:
+def compute_taxonomy_diff(before: Taxonomy, after: Taxonomy) -> dict[str, ConceptChange]:
     """Compare two taxonomies; return a mapping from URI to ConceptChange."""
     result: dict[str, ConceptChange] = {}
     for uri in set(before.concepts) | set(after.concepts):
@@ -320,9 +327,7 @@ def _subtree_has_change(
     return any(_subtree_has_change(taxonomy, c, diff, visited) for c in concept.narrower)
 
 
-def compute_auto_fold(
-    taxonomy: Taxonomy, diff: dict[str, ConceptChange]
-) -> set[str]:
+def compute_auto_fold(taxonomy: Taxonomy, diff: dict[str, ConceptChange]) -> set[str]:
     """Return URIs whose entire subtree is unchanged — fold them by default."""
     folded: set[str] = set()
     for uri, concept in taxonomy.concepts.items():
@@ -338,47 +343,48 @@ def compute_auto_fold(
 
 # ──────────────────────────── viewer ─────────────────────────────────────────
 
+
 class GitLogViewer:
     """Full-screen curses git log browser with taxonomy diff tree."""
 
-    _NORMAL         = "normal"
-    _DIFF_FOCUS     = "diff_focus"
+    _NORMAL = "normal"
+    _DIFF_FOCUS = "diff_focus"
     _CONCEPT_DETAIL = "concept_detail"
-    _CONFIRM        = "confirm_revert"
-    _HELP           = "help"
+    _CONFIRM = "confirm_revert"
+    _HELP = "help"
 
-    _SPLIT_MIN = 80   # minimum cols for side-by-side layout
+    _SPLIT_MIN = 80  # minimum cols for side-by-side layout
 
-    def __init__(self, repo: Path, file_path: Optional[Path] = None) -> None:
-        self._repo      = repo
+    def __init__(self, repo: Path, file_path: Path | None = None) -> None:
+        self._repo = repo
         self._file_path = file_path
 
         # Left panel — commit list
-        self._entries:     list[LogEntry] = []
-        self._cursor       = 0
-        self._list_scroll  = 0
+        self._entries: list[LogEntry] = []
+        self._cursor = 0
+        self._list_scroll = 0
 
         # Right panel — taxonomy diff tree
-        self._diff_taxonomy: Optional[Taxonomy]        = None
-        self._diff_status:   dict[str, ConceptChange]  = {}
-        self._diff_flat:     list[TreeLine]             = []
-        self._diff_cursor    = 0
-        self._diff_scroll    = 0
-        self._diff_folded:   set[str]                   = set()
+        self._diff_taxonomy: Taxonomy | None = None
+        self._diff_status: dict[str, ConceptChange] = {}
+        self._diff_flat: list[TreeLine] = []
+        self._diff_cursor = 0
+        self._diff_scroll = 0
+        self._diff_folded: set[str] = set()
 
         # Concept detail overlay (field-level diff)
-        self._detail_diffs:  list[FieldDiff]  = []
-        self._detail_uri:    Optional[str]    = None
-        self._detail_scroll  = 0
+        self._detail_diffs: list[FieldDiff] = []
+        self._detail_uri: str | None = None
+        self._detail_scroll = 0
 
         # Cache: full_hash → (diff_taxonomy, diff_status)
         self._diff_cache: dict[str, tuple[Taxonomy, dict[str, ConceptChange]]] = {}
 
-        self._mode   = self._NORMAL
+        self._mode = self._NORMAL
         self._status = ""
 
         # Raw diff lines kept for fallback / revert context
-        self._raw_diff:      list[str] = []
+        self._raw_diff: list[str] = []
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -398,7 +404,8 @@ class GitLogViewer:
         SEP = "\x1f"
         fmt = f"{SEP}%H{SEP}%h{SEP}%s{SEP}%an{SEP}%ad{SEP}%D"
         args = [
-            "log", "--color=never",
+            "log",
+            "--color=never",
             f"--pretty=tformat:{fmt}",
             "--date=format:%Y-%m-%d",
             "--max-count=300",
@@ -423,8 +430,8 @@ class GitLogViewer:
             return
         if not self._file_path:
             self._diff_taxonomy = None
-            self._diff_status   = {}
-            self._diff_flat     = []
+            self._diff_status = {}
+            self._diff_flat = []
             return
 
         h = self._entries[idx].full_hash
@@ -433,26 +440,28 @@ class GitLogViewer:
         else:
             suffix = self._file_path.suffix or ".ttl"
 
-            after_raw  = _get_file_at_commit(h, self._file_path, self._repo)
+            after_raw = _get_file_at_commit(h, self._file_path, self._repo)
             parent_raw = _get_file_at_commit(f"{h}^", self._file_path, self._repo)
 
             # _load_taxonomy_safe returns None on parse failure — treat as empty
-            after_tax  = ((_load_taxonomy_safe(after_raw,  suffix) if after_raw  else None)
-                          or Taxonomy())
-            before_tax = ((_load_taxonomy_safe(parent_raw, suffix) if parent_raw else None)
-                          or Taxonomy())
+            after_tax = (
+                _load_taxonomy_safe(after_raw, suffix) if after_raw else None
+            ) or Taxonomy()
+            before_tax = (
+                _load_taxonomy_safe(parent_raw, suffix) if parent_raw else None
+            ) or Taxonomy()
 
-            diff_status   = compute_taxonomy_diff(before_tax, after_tax)
+            diff_status = compute_taxonomy_diff(before_tax, after_tax)
             diff_taxonomy = build_diff_taxonomy(before_tax, after_tax)
 
             self._diff_cache[h] = (diff_taxonomy, diff_status)
             self._diff_taxonomy = diff_taxonomy
-            self._diff_status   = diff_status
+            self._diff_status = diff_status
 
-        self._diff_folded  = compute_auto_fold(self._diff_taxonomy, self._diff_status)
-        self._diff_flat    = flatten_tree(self._diff_taxonomy, folded=self._diff_folded)
-        self._diff_cursor  = 0
-        self._diff_scroll  = 0
+        self._diff_folded = compute_auto_fold(self._diff_taxonomy, self._diff_status)
+        self._diff_flat = flatten_tree(self._diff_taxonomy, folded=self._diff_folded)
+        self._diff_cursor = 0
+        self._diff_scroll = 0
 
     def _diff_status_str(self) -> dict[str, str]:
         """Convert ConceptChange map to the string-status dict render_tree_col expects."""
@@ -460,7 +469,7 @@ class GitLogViewer:
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
-    def _loop(self, stdscr: "curses.window") -> None:
+    def _loop(self, stdscr: curses.window) -> None:
         curses.curs_set(0)
         _git_init_colors()
         stdscr.keypad(True)
@@ -485,14 +494,14 @@ class GitLogViewer:
 
     # ── drawing ───────────────────────────────────────────────────────────────
 
-    def _log_bar(self, stdscr: "curses.window", y: int, x: int, w: int, text: str) -> None:
+    def _log_bar(self, stdscr: curses.window, y: int, x: int, w: int, text: str) -> None:
         attr = curses.color_pair(_LC_BAR) | curses.A_BOLD
         try:
-            stdscr.addstr(y, x, text[:w - 1].ljust(w - 1), attr)
+            stdscr.addstr(y, x, text[: w - 1].ljust(w - 1), attr)
         except curses.error:
             pass
 
-    def _draw(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw(self, stdscr: curses.window, rows: int, cols: int) -> None:
         stdscr.erase()
         if self._mode == self._HELP:
             self._draw_help(stdscr, rows, cols)
@@ -528,18 +537,17 @@ class GitLogViewer:
 
     # ── list panel ────────────────────────────────────────────────────────────
 
-    def _draw_list(self, stdscr: "curses.window", rows: int, x0: int, w: int) -> None:
+    def _draw_list(self, stdscr: curses.window, rows: int, x0: int, w: int) -> None:
         n = len(self._entries)
         name = self._file_path.name if self._file_path else self._repo.name
-        pos  = f"  [{self._cursor + 1}/{n}]" if n else ""
+        pos = f"  [{self._cursor + 1}/{n}]" if n else ""
         self._log_bar(stdscr, 0, x0, w, f" ⎇  {name}{pos} ")
 
         list_h = rows - 2
         # Each entry takes 2 rows: line 1 = date + subject, line 2 = author
         # But with limited width we use 1 row per entry for compactness:
         # "YYYY-MM-DD  Subject…  Author"
-        self._list_scroll = max(0, min(self._list_scroll,
-                                       max(0, n - list_h)))
+        self._list_scroll = max(0, min(self._list_scroll, max(0, n - list_h)))
         if self._cursor < self._list_scroll:
             self._list_scroll = self._cursor
         elif self._cursor >= self._list_scroll + list_h:
@@ -549,36 +557,34 @@ class GitLogViewer:
             idx = self._list_scroll + row
             if idx >= n:
                 break
-            e        = self._entries[idx]
-            y        = row + 1
-            is_sel   = idx == self._cursor
-            date_w   = 10          # "YYYY-MM-DD"
-            avail    = w - date_w - 4  # space for separator + author
+            e = self._entries[idx]
+            y = row + 1
+            is_sel = idx == self._cursor
 
             if is_sel:
-                attr_date    = curses.color_pair(_LC_BAR) | curses.A_BOLD
+                attr_date = curses.color_pair(_LC_BAR) | curses.A_BOLD
                 attr_subject = curses.color_pair(_LC_BAR) | curses.A_BOLD
-                attr_author  = curses.color_pair(_LC_BAR) | curses.A_DIM
+                attr_author = curses.color_pair(_LC_BAR) | curses.A_DIM
                 # clear whole row
                 try:
                     stdscr.addstr(y, x0, " " * (w - 1), attr_date)
                 except curses.error:
                     pass
             else:
-                attr_date    = curses.color_pair(_LC_DATE)  | curses.A_DIM
+                attr_date = curses.color_pair(_LC_DATE) | curses.A_DIM
                 attr_subject = curses.color_pair(_LC_SUBJECT) | curses.A_BOLD
-                attr_author  = curses.color_pair(_LC_AUTHOR) | curses.A_DIM
+                attr_author = curses.color_pair(_LC_AUTHOR) | curses.A_DIM
 
             col = x0
             rem = w - 1
 
-            def _put(text: str, attr: int) -> None:
+            def _put(text: str, attr: int, _row: int = y) -> None:
                 nonlocal col, rem
                 t = text[:rem]
                 if not t:
                     return
                 try:
-                    stdscr.addstr(y, col, t, attr)
+                    stdscr.addstr(_row, col, t, attr)
                 except curses.error:
                     pass
                 col += len(t)
@@ -588,16 +594,14 @@ class GitLogViewer:
             _put("  ", attr_subject)
             # Subject: fill most of the remaining width, then author at end
             author_field = f"  {e.author}"
-            subject_max  = max(0, rem - len(author_field))
+            subject_max = max(0, rem - len(author_field))
             subject_text = e.subject[:subject_max].ljust(subject_max) if subject_max else ""
             _put(subject_text, attr_subject)
             _put(author_field, attr_author)
 
     # ── diff-tree panel ───────────────────────────────────────────────────────
 
-    def _draw_diff_tree(
-        self, stdscr: "curses.window", rows: int, x0: int, w: int
-    ) -> None:
+    def _draw_diff_tree(self, stdscr: curses.window, rows: int, x0: int, w: int) -> None:
         if not self._diff_taxonomy:
             self._log_bar(stdscr, 0, x0, w, " taxonomy diff ")
             if not self._file_path:
@@ -607,17 +611,15 @@ class GitLogViewer:
             else:
                 msg = " Loading… "
             try:
-                stdscr.addstr(2, x0 + 2, msg[:w - 3], curses.A_DIM)
+                stdscr.addstr(2, x0 + 2, msg[: w - 3], curses.A_DIM)
             except curses.error:
                 pass
             return
 
-        e          = self._entries[self._cursor] if self._entries else None
+        e = self._entries[self._cursor] if self._entries else None
         focus_mark = " [DIFF]" if self._mode == self._DIFF_FOCUS else ""
-        title      = f" {e.date}: {e.subject}{focus_mark} " if e else " taxonomy diff "
-        n_changed  = sum(
-            1 for ch in self._diff_status.values() if ch.status != "unchanged"
-        )
+        title = f" {e.date}: {e.subject}{focus_mark} " if e else " taxonomy diff "
+        n_changed = sum(1 for ch in self._diff_status.values() if ch.status != "unchanged")
         if n_changed:
             title = title.rstrip(" ") + f"  {n_changed} change{'s' if n_changed != 1 else ''} "
 
@@ -634,26 +636,31 @@ class GitLogViewer:
         self._diff_scroll = max(0, min(self._diff_scroll, max(0, n - list_h)))
 
         render_tree_col(
-            stdscr, self._diff_flat, self._diff_taxonomy, "en",
-            rows, x0, w, self._diff_scroll, cursor,
+            stdscr,
+            self._diff_flat,
+            self._diff_taxonomy,
+            "en",
+            rows,
+            x0,
+            w,
+            self._diff_scroll,
+            cursor,
             header_title=title.strip(),
             diff_status=self._diff_status_str(),
         )
 
     # ── concept detail overlay ────────────────────────────────────────────────
 
-    def _draw_concept_detail(
-        self, stdscr: "curses.window", rows: int, cols: int
-    ) -> None:
+    def _draw_concept_detail(self, stdscr: curses.window, rows: int, cols: int) -> None:
         if not self._detail_diffs and self._detail_uri is None:
             return
 
         # Draw as full-width overlay panel on the right two-thirds
-        wide    = cols >= self._SPLIT_MIN
-        list_w  = max(24, cols * 3 // 10) if wide else 0
-        x0      = list_w + 1 if wide else 0
-        w       = cols - x0
-        list_h  = rows - 2
+        wide = cols >= self._SPLIT_MIN
+        list_w = max(24, cols * 3 // 10) if wide else 0
+        x0 = list_w + 1 if wide else 0
+        w = cols - x0
+        list_h = rows - 2
 
         # Concept name from taxonomy
         concept_label = self._detail_uri or ""
@@ -664,31 +671,30 @@ class GitLogViewer:
 
         ch = self._diff_status.get(self._detail_uri or "")
         status_tag = f" [{ch.status}]" if ch else ""
-        self._log_bar(stdscr, 0, x0, w,
-                      f" ◈ {concept_label}{status_tag}  ←/Esc: back ")
+        self._log_bar(stdscr, 0, x0, w, f" ◈ {concept_label}{status_tag}  ←/Esc: back ")
 
         # Build display lines
-        diffs    = self._detail_diffs
-        scroll   = max(0, min(self._detail_scroll, max(0, len(diffs) - list_h)))
+        diffs = self._detail_diffs
+        scroll = max(0, min(self._detail_scroll, max(0, len(diffs) - list_h)))
         self._detail_scroll = scroll
 
         for row in range(list_h):
             di = scroll + row
             if di >= len(diffs):
                 break
-            fd  = diffs[di]
-            y   = row + 1
+            fd = diffs[di]
+            y = row + 1
 
             col = x0 + 1
             rem = w - 2
 
-            def _put(text: str, attr: int) -> None:
+            def _put(text: str, attr: int, _row: int = y) -> None:
                 nonlocal col, rem
                 t = text[:rem]
                 if not t:
                     return
                 try:
-                    stdscr.addstr(y, col, t, attr)
+                    stdscr.addstr(_row, col, t, attr)
                 except curses.error:
                     pass
                 col += len(t)
@@ -708,15 +714,15 @@ class GitLogViewer:
 
         if not diffs:
             try:
-                stdscr.addstr(2, x0 + 2,
-                              " (no field-level changes recorded) "[:w - 3],
-                              curses.A_DIM)
+                stdscr.addstr(
+                    2, x0 + 2, " (no field-level changes recorded) "[: w - 3], curses.A_DIM
+                )
             except curses.error:
                 pass
 
     # ── footer / confirm / help ───────────────────────────────────────────────
 
-    def _draw_footer(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw_footer(self, stdscr: curses.window, rows: int, cols: int) -> None:
         if self._status:
             text = f" {self._status} "
             self._status = ""
@@ -728,32 +734,29 @@ class GitLogViewer:
                 "  ←/Tab: back to list  q: quit "
             )
         else:
-            n      = len(self._entries)
-            pos    = f"[{self._cursor + 1}/{n}]" if n else "[0/0]"
-            resto  = "  o: restore" if self._file_path else ""
-            text   = (
-                f" {pos}  ↑↓/jk: commit  Tab/→: diff tree  "
-                f"r: revert{resto}  ?: help  q: quit "
-            )
+            n = len(self._entries)
+            pos = f"[{self._cursor + 1}/{n}]" if n else "[0/0]"
+            resto = "  o: restore" if self._file_path else ""
+            text = f" {pos}  ↑↓/jk: commit  Tab/→: diff tree  r: revert{resto}  ?: help  q: quit "
         self._log_bar(stdscr, rows - 1, 0, cols, text)
 
-    def _draw_confirm(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw_confirm(self, stdscr: curses.window, rows: int, cols: int) -> None:
         if not self._entries:
             return
-        e    = self._entries[self._cursor]
-        msg  = f" Revert commit {e.short_hash}? \"{e.subject}\" "
+        e = self._entries[self._cursor]
+        msg = f' Revert commit {e.short_hash}? "{e.subject}" '
         hint = "  [y] yes   [n / Esc] cancel  "
-        bw   = min(cols - 4, max(len(msg), len(hint)) + 4)
-        by   = rows // 2 - 1
-        bx   = (cols - bw) // 2
+        bw = min(cols - 4, max(len(msg), len(hint)) + 4)
+        by = rows // 2 - 1
+        bx = (cols - bw) // 2
         attr = curses.color_pair(_LC_BAR) | curses.A_BOLD
         try:
-            stdscr.addstr(by,     bx, msg [:bw - 1].center(bw - 1), attr)
-            stdscr.addstr(by + 1, bx, hint[:bw - 1].center(bw - 1), attr)
+            stdscr.addstr(by, bx, msg[: bw - 1].center(bw - 1), attr)
+            stdscr.addstr(by + 1, bx, hint[: bw - 1].center(bw - 1), attr)
         except curses.error:
             pass
 
-    def _draw_help(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw_help(self, stdscr: curses.window, rows: int, cols: int) -> None:
         lines = [
             " git log browser — keyboard shortcuts ",
             "",
@@ -786,7 +789,7 @@ class GitLogViewer:
         by = max(0, (rows - bh) // 2)
         bx = max(0, (cols - bw) // 2)
         self._log_bar(stdscr, by, bx, bw, " git log — help ")
-        for i, text in enumerate(lines[:bh - 2]):
+        for i, text in enumerate(lines[: bh - 2]):
             y = by + 1 + i
             if y >= rows - 1:
                 break
@@ -796,7 +799,7 @@ class GitLogViewer:
             else:
                 attr = curses.A_NORMAL
             try:
-                stdscr.addstr(y, bx, text[:bw - 1].ljust(bw - 1), attr)
+                stdscr.addstr(y, bx, text[: bw - 1].ljust(bw - 1), attr)
             except curses.error:
                 pass
         self._log_bar(stdscr, by + bh - 1, bx, bw, "  Press any key to return … ")
@@ -829,7 +832,7 @@ class GitLogViewer:
                 self._diff_cursor = 0
             elif key in (curses.KEY_END, ord("G")):
                 self._diff_cursor = max(0, n - 1)
-            elif key == 4:   # Ctrl+D
+            elif key == 4:  # Ctrl+D
                 self._diff_cursor = min(n - 1, self._diff_cursor + list_h // 2)
             elif key == 21:  # Ctrl+U
                 self._diff_cursor = max(0, self._diff_cursor - list_h // 2)
@@ -837,7 +840,7 @@ class GitLogViewer:
                 self._toggle_diff_fold()
             elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r")):
                 self._open_concept_detail()
-            elif key in (curses.KEY_LEFT, 9, ord("h")):   # ← or Tab
+            elif key in (curses.KEY_LEFT, 9, ord("h")):  # ← or Tab
                 self._mode = self._NORMAL
             elif key in (ord("q"), ord("Q"), 27):
                 return True
@@ -859,13 +862,13 @@ class GitLogViewer:
         elif key in (curses.KEY_END, ord("G")):
             self._cursor = max(0, len(self._entries) - 1)
             self._load_diff_tree(self._cursor)
-        elif key == 4:   # Ctrl+D
+        elif key == 4:  # Ctrl+D
             self._cursor = min(len(self._entries) - 1, self._cursor + list_h // 2)
             self._load_diff_tree(self._cursor)
         elif key == 21:  # Ctrl+U
             self._cursor = max(0, self._cursor - list_h // 2)
             self._load_diff_tree(self._cursor)
-        elif key in (9, curses.KEY_RIGHT):   # Tab / →
+        elif key in (9, curses.KEY_RIGHT):  # Tab / →
             if self._diff_flat:
                 self._mode = self._DIFF_FOCUS
         elif key == ord("r"):
@@ -873,7 +876,7 @@ class GitLogViewer:
                 self._mode = self._CONFIRM
         elif key == ord("o"):
             if self._file_path and self._entries:
-                e    = self._entries[self._cursor]
+                e = self._entries[self._cursor]
                 ok, msg = _do_restore(e.full_hash, self._file_path, self._repo)
                 self._status = msg
             else:
@@ -889,7 +892,7 @@ class GitLogViewer:
         if not (0 <= self._diff_cursor < len(self._diff_flat)):
             return
         line = self._diff_flat[self._diff_cursor]
-        uri  = line.uri
+        uri = line.uri
         # Check has children
         has_children = False
         if line.is_scheme:
@@ -920,20 +923,20 @@ class GitLogViewer:
         if line.is_scheme:
             return
         uri = line.uri
-        ch  = self._diff_status.get(uri)
+        ch = self._diff_status.get(uri)
         if ch is None or ch.status == "unchanged":
             return
-        self._detail_uri    = uri
-        self._detail_diffs  = ch.field_diffs
+        self._detail_uri = uri
+        self._detail_diffs = ch.field_diffs
         self._detail_scroll = 0
-        self._mode          = self._CONCEPT_DETAIL
+        self._mode = self._CONCEPT_DETAIL
 
     def _on_confirm(self, key: int) -> bool:
         if key in (ord("y"), ord("Y")):
-            e       = self._entries[self._cursor]
+            e = self._entries[self._cursor]
             ok, msg = _do_revert(e.full_hash, self._repo)
             self._status = msg
-            self._mode   = self._NORMAL
+            self._mode = self._NORMAL
             if ok:
                 self._diff_cache.clear()
                 self._load_log()
@@ -944,18 +947,20 @@ class GitLogViewer:
 
 # ──────────────────────────── public entry point ─────────────────────────────
 
+
 def launch_git_log(
-    path: Optional[Path] = None,
-    repo: Optional[Path] = None,
+    path: Path | None = None,
+    repo: Path | None = None,
 ) -> None:
     from rich.console import Console
+
     err = Console(stderr=True)
 
-    target     = path or Path.cwd()
-    file_scope: Optional[Path] = None
+    target = path or Path.cwd()
+    file_scope: Path | None = None
 
     if target.is_file():
-        file_scope  = target.resolve()
+        file_scope = target.resolve()
         search_from = target.parent
     else:
         search_from = target

@@ -1,4 +1,5 @@
 """Tests for the pure domain model."""
+
 from ster.model import Concept, ConceptScheme, Label, LabelType, Taxonomy
 
 BASE = "https://example.org/test/"

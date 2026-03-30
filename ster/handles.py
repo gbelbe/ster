@@ -1,7 +1,10 @@
 """Handle generation — pure functions, no external dependencies."""
+
 from __future__ import annotations
+
 import re
-from .model import Taxonomy, Concept, ConceptScheme
+
+from .model import Taxonomy
 
 
 def extract_local_name(uri: str) -> str:

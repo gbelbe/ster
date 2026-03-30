@@ -1,5 +1,7 @@
 """Pure domain model — no RDF, no IO, no side effects."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -30,16 +32,16 @@ class Concept:
     labels: list[Label] = field(default_factory=list)
     definitions: list[Definition] = field(default_factory=list)
     scope_notes: list[Definition] = field(default_factory=list)
-    broader: list[str] = field(default_factory=list)       # URIs (same scheme)
-    narrower: list[str] = field(default_factory=list)      # URIs (same scheme)
-    related: list[str] = field(default_factory=list)       # URIs (same scheme)
-    top_concept_of: str | None = None                      # scheme URI
+    broader: list[str] = field(default_factory=list)  # URIs (same scheme)
+    narrower: list[str] = field(default_factory=list)  # URIs (same scheme)
+    related: list[str] = field(default_factory=list)  # URIs (same scheme)
+    top_concept_of: str | None = None  # scheme URI
     # SKOS mapping properties — used for cross-scheme links
-    broad_match:   list[str] = field(default_factory=list)
-    narrow_match:  list[str] = field(default_factory=list)
+    broad_match: list[str] = field(default_factory=list)
+    narrow_match: list[str] = field(default_factory=list)
     related_match: list[str] = field(default_factory=list)
-    exact_match:   list[str] = field(default_factory=list)
-    close_match:   list[str] = field(default_factory=list)
+    exact_match: list[str] = field(default_factory=list)
+    close_match: list[str] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:
@@ -58,11 +60,7 @@ class Concept:
         return self.local_name
 
     def pref_labels(self) -> dict[str, str]:
-        return {
-            lbl.lang: lbl.value
-            for lbl in self.labels
-            if lbl.type == LabelType.PREF
-        }
+        return {lbl.lang: lbl.value for lbl in self.labels if lbl.type == LabelType.PREF}
 
     def alt_labels(self) -> dict[str, list[str]]:
         result: dict[str, list[str]] = {}
@@ -83,11 +81,11 @@ class ConceptScheme:
     uri: str
     labels: list[Label] = field(default_factory=list)
     descriptions: list[Definition] = field(default_factory=list)
-    top_concepts: list[str] = field(default_factory=list)   # URIs
+    top_concepts: list[str] = field(default_factory=list)  # URIs
     creator: str = ""
-    created: str = ""       # ISO date string e.g. "2026-03-25"
-    languages: list[str] = field(default_factory=list)      # declared language codes
-    base_uri: str = ""      # namespace prefix for auto-generating concept URIs
+    created: str = ""  # ISO date string e.g. "2026-03-25"
+    languages: list[str] = field(default_factory=list)  # declared language codes
+    base_uri: str = ""  # namespace prefix for auto-generating concept URIs
 
     @property
     def local_name(self) -> str:
@@ -109,17 +107,21 @@ class ConceptScheme:
 @dataclass
 class Taxonomy:
     schemes: dict[str, ConceptScheme] = field(default_factory=dict)  # uri → scheme
-    concepts: dict[str, Concept] = field(default_factory=dict)       # uri → concept
+    concepts: dict[str, Concept] = field(default_factory=dict)  # uri → concept
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
     # set by store.load() — the file this taxonomy was loaded from
-    file_path: "Path | None" = field(default=None, compare=False, repr=False)
+    file_path: Path | None = field(default=None, compare=False, repr=False)
 
     def resolve(self, handle_or_uri: str) -> str | None:
         """Return URI for a handle, local name, or full URI. Returns None if not found."""
         # 1. Full URI — pass through if known
         if "://" in handle_or_uri:
-            return handle_or_uri if handle_or_uri in self.concepts or handle_or_uri in self.schemes else None
+            return (
+                handle_or_uri
+                if handle_or_uri in self.concepts or handle_or_uri in self.schemes
+                else None
+            )
         # 2. Handle lookup (case-insensitive)
         uri = self.handle_index.get(handle_or_uri.upper())
         if uri:
@@ -145,7 +147,7 @@ class Taxonomy:
                     if idx <= 0:
                         prefix = ""
                         break
-                    prefix = prefix[:idx + 1]
+                    prefix = prefix[: idx + 1]
             if prefix.endswith(("/", "#")):
                 return prefix
         # Derive from scheme URI

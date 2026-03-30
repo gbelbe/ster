@@ -1,0 +1,90 @@
+@prefix rdf:	<http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:	<http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:	<http://www.w3.org/2002/07/owl#> .
+@prefix dc:	<http://purl.org/dc/elements/1.1/> .
+@prefix skos: 	<http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:	<http://www.w3.org/2001/XMLSchema#> .
+@prefix dwh:	<http://sekmi.de/histream/dwh#> .
+@prefix :	<http://sekmi.de/histream/skos/tests#> .
+
+: dc:title "HIStream concept ontology for testing".
+
+:TestScheme a skos:ConceptScheme ;
+	skos:hasTopConcept :TestData .
+
+:TestData a skos:Concept ;
+	skos:prefLabel "TestData_label_en"@en ;
+	skos:prefLabel "TestData_label_de"@de ;
+	skos:narrower :TestStringConcept ;
+	skos:narrower :TestIntegerConcept ;
+	skos:narrower :TestDecimalConcept ;
+	skos:narrower :TestEnumConcept ;
+	
+	dc:description "Top concept for test data" .
+
+:TestEnumConcept a skos:Concept;
+	skos:inScheme 	:TestData;
+	dwh:restriction [ a	owl:Restriction ;
+				owl:onProperty rdf:value;
+				owl:oneOf (
+					[rdf:value "1"^^xsd:string; skos:prefLabel "1_de"@de; skos:prefLabel "1_en"@en ]
+					[rdf:value "2"^^xsd:string; skos:prefLabel "2_de"@de; skos:prefLabel "2_en"@en ]
+				)
+			] ;
+	skos:prefLabel 	"Enum_label_de"@de;
+	skos:prefLabel 	"Enum_label_en"@en;
+	skos:notation 	"T:Enum" .
+#######	skos:notation 	"Enum"^^:TestCS .
+
+dwh:Integer a owl:Restriction ;
+	owl:onProperty rdf:value ;
+	owl:allValuesFrom xsd:integer .
+	
+dwh:String a owl:Restriction ;
+	owl:onProperty rdf:value ;
+	owl:allValuesFrom xsd:string .
+
+:TestIntegerConcept a skos:Concept;
+	skos:inScheme	:TestData ;
+	dwh:restriction dwh:Integer ;
+	skos:prefLabel	"Integer_label_en"@en ;
+	skos:prefLabel	"Integer_label_de"@de ;
+	dc:description	"Description_de"@de ;
+	dc:description	"Description_neutral" ;
+	skos:notation	"T:type:int" .
+
+:TestStringConcept a skos:Concept;
+	skos:inScheme	:TestData ;
+	dwh:restriction dwh:String ;
+	skos:prefLabel	"String_label_en"@en ;
+	skos:notation	"T:type:str" .
+	
+:TestDecimalConcept a skos:Concept;
+	skos:inScheme	:TestData ;
+	dwh:restriction [ a	owl:Restriction ;
+				owl:onProperty	rdf:value ;
+				owl:allValuesFrom[	a		rdfs:Datatype; 
+							owl:onDatatype	xsd:decimal; 
+							owl:withRestrictions( 
+									[ xsd:minInclusive 200 ] 	
+									[ xsd:maxInclusive 400 ]
+							)
+						]
+			] ;
+	skos:prefLabel	"Decimal_label_en"@en ;
+	skos:notation	"T:type:dec" .
+
+# Test inferred topConcept and narrower
+:OtherScheme a skos:ConceptScheme .
+
+:OtherTop a skos:Concept ;
+	skos:inScheme	:OtherScheme ;
+	skos:topConceptOf	:OtherScheme ;
+	skos:prefLabel "OtherTop_label_en"@en .
+
+:OtherSub a skos:Concept ;
+	skos:inScheme	:OtherScheme ;
+	skos:inScheme	:TestScheme ;
+	skos:broader	:OtherTop ;
+	skos:prefLabel "OtherSub_label_en"@en ;
+	skos:notation	"other" .

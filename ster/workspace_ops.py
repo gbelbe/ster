@@ -16,33 +16,33 @@ Each ``add_mapping`` call writes the assertion in the source concept's
 taxonomy and the inverse in the target concept's taxonomy.  Both may be
 the same file (same-file cross-scheme mapping).
 """
+
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Literal
 
 from .exceptions import SkostaxError
 from .workspace import TaxonomyWorkspace
 
-MappingType = Literal[
-    "broadMatch", "narrowMatch", "relatedMatch", "exactMatch", "closeMatch"
-]
+MappingType = Literal["broadMatch", "narrowMatch", "relatedMatch", "exactMatch", "closeMatch"]
 
 # Python attribute names for each SKOS mapping property
 _ATTR: dict[str, str] = {
-    "broadMatch":   "broad_match",
-    "narrowMatch":  "narrow_match",
+    "broadMatch": "broad_match",
+    "narrowMatch": "narrow_match",
     "relatedMatch": "related_match",
-    "exactMatch":   "exact_match",
-    "closeMatch":   "close_match",
+    "exactMatch": "exact_match",
+    "closeMatch": "close_match",
 }
 
 # Inverse of each mapping property
 _INVERSE: dict[str, str] = {
-    "broadMatch":   "narrowMatch",
-    "narrowMatch":  "broadMatch",
+    "broadMatch": "narrowMatch",
+    "narrowMatch": "broadMatch",
     "relatedMatch": "relatedMatch",
-    "exactMatch":   "exactMatch",
-    "closeMatch":   "closeMatch",
+    "exactMatch": "exactMatch",
+    "closeMatch": "closeMatch",
 }
 
 

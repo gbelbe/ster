@@ -1,28 +1,42 @@
 """Tests for CLI helper functions and file resolution."""
+
 from __future__ import annotations
+
 import json
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from ster.cli import _humanize, _resolve_file, _save_session, _load_session, _session_cache_path, _make_taxonomy_commit_msg
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 import ster.cli as cli_module
+from ster.cli import (
+    _humanize,
+    _load_session,
+    _make_taxonomy_commit_msg,
+    _resolve_file,
+    _save_session,
+)
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("SpadeRudder", "Spade Rudder"),
-    ("trimTabOnRudder", "Trim Tab On Rudder"),
-    ("HTTP", "HTTP"),
-    ("myConceptName", "My Concept Name"),
-    ("https://example.org/ns/SpadeRudder", "Spade Rudder"),
-    ("https://example.org/ns#SpadeRudder", "Spade Rudder"),
-    ("SimpleName", "Simple Name"),
-    ("alreadylower", "Alreadylower"),
-])
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("SpadeRudder", "Spade Rudder"),
+        ("trimTabOnRudder", "Trim Tab On Rudder"),
+        ("HTTP", "HTTP"),
+        ("myConceptName", "My Concept Name"),
+        ("https://example.org/ns/SpadeRudder", "Spade Rudder"),
+        ("https://example.org/ns#SpadeRudder", "Spade Rudder"),
+        ("SimpleName", "Simple Name"),
+        ("alreadylower", "Alreadylower"),
+    ],
+)
 def test_humanize(name, expected):
     assert _humanize(name) == expected
 
 
 # ── session persistence ───────────────────────────────────────────────────────
+
 
 def test_save_and_load_session(tmp_path, monkeypatch):
     """Session file survives a save/load round-trip."""
@@ -53,6 +67,7 @@ def test_load_session_missing_cache_returns_none(tmp_path, monkeypatch):
 
 
 # ── _resolve_file ─────────────────────────────────────────────────────────────
+
 
 def test_resolve_file_explicit_path(tmp_path, monkeypatch):
     """Explicit path is returned immediately and saved as session."""
@@ -101,13 +116,14 @@ def test_resolve_file_no_files_exits(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     import click
+
     with pytest.raises((SystemExit, click.exceptions.Exit)):
         _resolve_file(None)
 
 
 # ── _pick_file_interactive ────────────────────────────────────────────────────
 
-from ster.cli import _pick_file_interactive, _GIT_LOG_SENTINEL
+from ster.cli import _GIT_LOG_SENTINEL, _pick_file_interactive
 
 
 def test_pick_file_numeric_selection(tmp_path):
@@ -180,10 +196,13 @@ def test_pick_file_ambiguous_prefix_retries(tmp_path):
 def test_pick_file_keyboard_interrupt_exits(tmp_path):
     """KeyboardInterrupt raises typer.Exit(0)."""
     import typer
+
     files = [tmp_path / "a.ttl"]
-    with patch("ster.cli.Prompt.ask", side_effect=KeyboardInterrupt):
-        with pytest.raises((SystemExit, typer.Exit)):
-            _pick_file_interactive(files)
+    with (
+        patch("ster.cli.Prompt.ask", side_effect=KeyboardInterrupt),
+        pytest.raises((SystemExit, typer.Exit)),
+    ):
+        _pick_file_interactive(files)
 
 
 def test_pick_file_not_found_prefix_retries(tmp_path):
@@ -196,15 +215,15 @@ def test_pick_file_not_found_prefix_retries(tmp_path):
 
 # ── _arrow_file_picker ────────────────────────────────────────────────────────
 
-from ster.cli import _arrow_file_picker, _GIT_LOG_SENTINEL as _SENTINEL
+from ster.cli import _arrow_file_picker
 
 
 def _run_picker(files, item_values, initial_sel, input_bytes, preselect=None):
     """Helper: run _arrow_file_picker with mocked stdin/stdout."""
-    import io, sys
+    import io
 
     # Build a fake stdin with a .buffer that serves raw bytes
-    fake_buf   = io.BytesIO(input_bytes)
+    fake_buf = io.BytesIO(input_bytes)
     fake_stdin = MagicMock()
     fake_stdin.isatty.return_value = True
     fake_stdin.fileno.return_value = 0
@@ -212,16 +231,23 @@ def _run_picker(files, item_values, initial_sel, input_bytes, preselect=None):
 
     fake_stdout = io.StringIO()
 
-    with patch("sys.stdin",         fake_stdin), \
-         patch("sys.stdout.isatty", return_value=True), \
-         patch("sys.stdout.write",  side_effect=lambda s: fake_stdout.write(s)), \
-         patch("sys.stdout.flush",  return_value=None), \
-         patch("tty.setraw",        return_value=None), \
-         patch("termios.tcgetattr", return_value=[]), \
-         patch("termios.tcsetattr", return_value=None):
+    with (
+        patch("sys.stdin", fake_stdin),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("sys.stdout.write", side_effect=lambda s: fake_stdout.write(s)),
+        patch("sys.stdout.flush", return_value=None),
+        patch("tty.setraw", return_value=None),
+        patch("termios.tcgetattr", return_value=[]),
+        patch("termios.tcsetattr", return_value=None),
+    ):
         return _arrow_file_picker(
-            files, item_values, initial_sel,
-            preselect, False, None, len(files) + 1,
+            files,
+            item_values,
+            initial_sel,
+            preselect,
+            False,
+            None,
+            len(files) + 1,
         )
 
 
@@ -246,7 +272,7 @@ def test_arrow_picker_down_wraps(tmp_path):
     """Arrow-down wraps from last item to first."""
     files = [tmp_path / "a.ttl"]
     item_values = files + [None]
-    down = b"\x1b[B"   # goes to create new
+    down = b"\x1b[B"  # goes to create new
     down2 = b"\x1b[B"  # wraps back to first
     result = _run_picker(files, item_values, 0, down + down2 + b"\r")
     assert result == files[0]
@@ -289,6 +315,7 @@ def test_arrow_picker_backspace_clears_typed(tmp_path):
 def test_arrow_picker_ctrl_c_raises(tmp_path):
     """Ctrl+C raises KeyboardInterrupt."""
     import pytest
+
     files = [tmp_path / "a.ttl"]
     item_values = files + [None]
     with pytest.raises(KeyboardInterrupt):
@@ -306,6 +333,7 @@ def test_arrow_picker_preselect_is_initial(tmp_path):
 
 # ── _GIT_LOG_SENTINEL ─────────────────────────────────────────────────────────
 
+
 def test_git_log_sentinel_is_path():
     assert isinstance(_GIT_LOG_SENTINEL, Path)
 
@@ -317,9 +345,11 @@ def test_git_log_sentinel_unique():
 
 # ── _collect_reachable ────────────────────────────────────────────────────────
 
+
 def test_collect_reachable(simple_taxonomy):
     """_collect_reachable visits all descendants without revisiting."""
     from ster.cli import _collect_reachable
+
     visited: set[str] = set()
     _collect_reachable(simple_taxonomy, BASE + "Top", visited)
     assert BASE + "Top" in visited
@@ -366,8 +396,10 @@ def test_run_create_wizard_happy_path(tmp_path, monkeypatch):
     gm_mock = MagicMock()
     gm_mock.is_enabled.return_value = False
 
-    with patch("ster.wizard.run", return_value=result), \
-         patch("ster.git_manager.GitManager", return_value=gm_mock):
+    with (
+        patch("ster.wizard.run", return_value=result),
+        patch("ster.git_manager.GitManager", return_value=gm_mock),
+    ):
         _run_create_wizard()
 
     assert result.file_path.exists()
@@ -390,12 +422,14 @@ def test_run_create_wizard_file_exists_retries(tmp_path, monkeypatch):
     gm_mock = MagicMock()
     gm_mock.is_enabled.return_value = False
 
-    with patch("ster.wizard.run", side_effect=[first_result, second_result]), \
-         patch("ster.git_manager.GitManager", return_value=gm_mock):
+    with (
+        patch("ster.wizard.run", side_effect=[first_result, second_result]),
+        patch("ster.git_manager.GitManager", return_value=gm_mock),
+    ):
         _run_create_wizard()
 
     assert second_result.file_path.exists()
-    assert not (tmp_path / "new_name.ttl") == existing
+    assert (tmp_path / "new_name.ttl") != existing
 
 
 def test_run_create_wizard_file_exists_then_cancel(tmp_path, monkeypatch):
@@ -432,9 +466,11 @@ def test_cmd_init_with_files_create_new_runs_wizard(tmp_path, monkeypatch):
     def fake_run_create_wizard(default_path=None):
         wizard_called_with.append(default_path)
 
-    with patch("ster.cli._print_welcome"), \
-         patch("ster.cli._pick_file_interactive", return_value=None), \
-         patch("ster.cli._run_create_wizard", side_effect=fake_run_create_wizard):
+    with (
+        patch("ster.cli._print_welcome"),
+        patch("ster.cli._pick_file_interactive", return_value=None),
+        patch("ster.cli._run_create_wizard", side_effect=fake_run_create_wizard),
+    ):
         cmd_init()
 
     assert len(wizard_called_with) == 1
@@ -447,8 +483,9 @@ BASE = "https://example.org/test/"
 
 @pytest.fixture
 def simple_taxonomy_for_cli():
-    from ster.model import Taxonomy, ConceptScheme, Label
     from ster.handles import assign_handles
+    from ster.model import ConceptScheme, Label, Taxonomy
+
     t = Taxonomy()
     s = ConceptScheme(
         uri=BASE + "Scheme",
@@ -496,6 +533,7 @@ def test_make_taxonomy_commit_msg_contains_creator(simple_taxonomy_for_cli, tmp_
 def test_make_taxonomy_commit_msg_no_scheme(tmp_path):
     """Falls back to file stem when taxonomy has no scheme."""
     from ster.model import Taxonomy
+
     t = Taxonomy()
     f = tmp_path / "fallback.ttl"
     msg = _make_taxonomy_commit_msg(t, f)
@@ -508,19 +546,22 @@ BASE = "https://example.org/test/"
 @pytest.fixture
 def simple_taxonomy():
     """Minimal in-memory taxonomy for CLI tests."""
-    from ster.model import Concept, ConceptScheme, Label, Taxonomy
     from ster.handles import assign_handles
+    from ster.model import Concept, ConceptScheme, Label, Taxonomy
+
     t = Taxonomy()
-    scheme = ConceptScheme(uri=BASE + "Scheme",
-                           labels=[Label(lang="en", value="Test")],
-                           top_concepts=[BASE + "Top"],
-                           base_uri=BASE)
-    top = Concept(uri=BASE + "Top",
-                  labels=[Label(lang="en", value="Top")],
-                  narrower=[BASE + "Child"])
-    child = Concept(uri=BASE + "Child",
-                    labels=[Label(lang="en", value="Child")],
-                    broader=[BASE + "Top"])
+    scheme = ConceptScheme(
+        uri=BASE + "Scheme",
+        labels=[Label(lang="en", value="Test")],
+        top_concepts=[BASE + "Top"],
+        base_uri=BASE,
+    )
+    top = Concept(
+        uri=BASE + "Top", labels=[Label(lang="en", value="Top")], narrower=[BASE + "Child"]
+    )
+    child = Concept(
+        uri=BASE + "Child", labels=[Label(lang="en", value="Child")], broader=[BASE + "Top"]
+    )
     t.schemes[scheme.uri] = scheme
     t.concepts[top.uri] = top
     t.concepts[child.uri] = child

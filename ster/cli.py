@@ -1,18 +1,19 @@
 """Typer CLI — load, operate, save pattern for every mutating command."""
+
 from __future__ import annotations
+
 import hashlib
 import json
 import re
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
-from . import store, operations
-from .display import render_tree, render_concept_detail, render_handle_list, console
+from . import operations, store
+from .display import console, render_handle_list, render_tree
 from .exceptions import SkostaxError
 from .model import LabelType, Taxonomy
 from .project import Project, _git_root
@@ -32,45 +33,65 @@ def _app_callback(ctx: typer.Context) -> None:
     """Suppress Typer's default no-args behaviour; main() handles it."""
     pass
 
+
 _VERSION = "0.1.0"
-_AUTHOR  = "ster contributors"
+_AUTHOR = "ster contributors"
 
 
 def _print_welcome() -> None:
     from rich.panel import Panel
+
     from .wizard import _ASCII
+
     console.print()
-    console.print(Panel(
-        _ASCII + f"\n\n"
-        f"[bold]SKOS Taxonomy Editor[/bold]  [dim]v{_VERSION}[/dim]\n\n"
-        "[dim]Select a taxonomy file, create a new one, or browse git history.[/dim]\n"
-        "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
-        border_style="cyan",
-        padding=(1, 4),
-    ))
+    console.print(
+        Panel(
+            _ASCII + f"\n\n"
+            f"[bold]SKOS Taxonomy Editor[/bold]  [dim]v{_VERSION}[/dim]\n\n"
+            "[dim]Select a taxonomy file, create a new one, or browse git history.[/dim]\n"
+            "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
+            border_style="cyan",
+            padding=(1, 4),
+        )
+    )
+
 
 # Commands that must NOT be mistaken for a file path
-_SUBCOMMANDS = frozenset({
-    "show", "add", "remove", "move", "label", "define",
-    "relate", "rename", "init", "handles", "validate", "nav", "log",
-})
+_SUBCOMMANDS = frozenset(
+    {
+        "show",
+        "add",
+        "remove",
+        "move",
+        "label",
+        "define",
+        "relate",
+        "rename",
+        "init",
+        "handles",
+        "validate",
+        "nav",
+        "log",
+    }
+)
 
 _TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 
 # Sentinels returned by _pick_file_interactive for special menu entries
-_GIT_LOG_SENTINEL:  Path = Path(".__ster_log__")
-_HTML_SENTINEL:     Path = Path(".__ster_html__")
-_QUIT_SENTINEL:     Path = Path(".__ster_quit__")
+_GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
+_HTML_SENTINEL: Path = Path(".__ster_html__")
+_QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
 
 
 # ──────────────────────────── session / file resolution ──────────────────────
 
+
 def _session_cache_path() -> Path:
     """Return a per-CWD temp file used to persist the selected taxonomy file."""
-    cwd_hash = hashlib.md5(str(Path.cwd()).encode()).hexdigest()[:12]
+    cwd_hash = hashlib.md5(str(Path.cwd()).encode(), usedforsecurity=False).hexdigest()[:12]
     return Path(tempfile.gettempdir()) / f"ster_{cwd_hash}"
 
 
@@ -91,7 +112,7 @@ def _save_session(path: Path) -> None:
     _session_cache_path().write_text(json.dumps({"file": str(path.resolve())}))
 
 
-def _resolve_file(path: Optional[Path]) -> Path:
+def _resolve_file(path: Path | None) -> Path:
     """Return the taxonomy file to operate on.
 
     Priority:
@@ -153,7 +174,7 @@ def _pick_file_interactive(
     files: list[Path],
     preselect: Path | None = None,
     show_log_option: bool = False,
-) -> "Path | None":
+) -> Path | None:
     """Display numbered file list; return chosen Path or None for 'create new'.
 
     The last entry is always '+ Create new taxonomy'.
@@ -165,16 +186,16 @@ def _pick_file_interactive(
     """
     import sys
 
-    LOG_IDX    = len(files) + 1 if show_log_option else None   # 1-based
-    CREATE_IDX = len(files) + (2 if show_log_option else 1)    # 1-based
-    QUIT_IDX   = len(files) + (3 if show_log_option else 2)    # 1-based
+    LOG_IDX = len(files) + 1 if show_log_option else None  # 1-based
+    CREATE_IDX = len(files) + (2 if show_log_option else 1)  # 1-based
+    QUIT_IDX = len(files) + (3 if show_log_option else 2)  # 1-based
 
     # Flat ordered list of return values matching the numbered items
     item_values: list[Path | None] = list(files)
     if show_log_option:
         item_values.append(_GIT_LOG_SENTINEL)
-    item_values.append(None)           # "Create new taxonomy"
-    item_values.append(_QUIT_SENTINEL) # "Quit"
+    item_values.append(None)  # "Create new taxonomy"
+    item_values.append(_QUIT_SENTINEL)  # "Quit"
 
     # Initial arrow selection (0-based index into item_values)
     initial_sel = 0
@@ -184,27 +205,38 @@ def _pick_file_interactive(
     # ── Arrow-key mode (requires interactive tty + tty/termios) ──────────────
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
-            import tty as _tty, termios as _termios
+            import termios as _termios  # noqa: F401 – import tests availability on this platform
+            import tty as _tty  # noqa: F401
+
             return _arrow_file_picker(
-                files, item_values, initial_sel,
-                preselect, show_log_option, LOG_IDX, CREATE_IDX,
+                files,
+                item_values,
+                initial_sel,
+                preselect,
+                show_log_option,
+                LOG_IDX,
+                CREATE_IDX,
             )
         except ImportError:
             pass  # Windows or restricted environment → fall through
 
     # ── Fallback: plain Rich Prompt.ask ──────────────────────────────────────
     for i, f in enumerate(files, 1):
-        marker = " [bold green]←[/bold green] [dim](last session)[/dim]" if preselect and f == preselect else ""
+        marker = (
+            " [bold green]←[/bold green] [dim](last session)[/dim]"
+            if preselect and f == preselect
+            else ""
+        )
         console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}{marker}")
     if show_log_option:
-        console.print(f"  [cyan]{LOG_IDX:>2}[/cyan]  [bold magenta]⎇  Browse git history[/bold magenta]")
+        console.print(
+            f"  [cyan]{LOG_IDX:>2}[/cyan]  [bold magenta]⎇  Browse git history[/bold magenta]"
+        )
     console.print(f"  [cyan]{CREATE_IDX:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]")
     console.print(f"  [cyan]{QUIT_IDX:>2}[/cyan]  [bold red]✕  Quit[/bold red]")
     console.print()
 
-    default_num: str | None = (
-        str(initial_sel + 1) if (preselect and preselect in files) else None
-    )
+    default_num: str | None = str(initial_sel + 1) if (preselect and preselect in files) else None
 
     if default_num:
         prompt_text = (
@@ -240,7 +272,9 @@ def _pick_file_interactive(
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
-            err.print(f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]")
+            err.print(
+                f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]"
+            )
         else:
             err.print(f"[red]{choice!r} not found.[/red]")
 
@@ -253,29 +287,31 @@ def _arrow_file_picker(
     show_log_option: bool,
     log_idx: int | None,
     create_idx: int,
-) -> "Path | None":
+) -> Path | None:
     """Arrow-key file picker using raw terminal I/O + ANSI codes.
 
     Redraws the list in place as the user navigates.  Digits accumulate into a
     number that auto-moves the selection; Enter confirms.
     """
-    import sys, tty, termios
+    import sys
+    import termios
+    import tty
 
-    R   = "\033[0m"         # reset all
-    B   = "\033[1m"         # bold
-    D   = "\033[2m"         # dim
-    CY  = "\033[36m"        # cyan
-    BCY = "\033[1;36m"      # bold cyan
-    GR  = "\033[32m"        # green
-    MG  = "\033[35m"        # magenta
-    INV = "\033[7m"         # reverse video (readable on any background)
+    R = "\033[0m"  # reset all
+    B = "\033[1m"  # bold
+    D = "\033[2m"  # dim
+    CY = "\033[36m"  # cyan
+    BCY = "\033[1;36m"  # bold cyan
+    GR = "\033[32m"  # green
+    MG = "\033[35m"  # magenta
+    INV = "\033[7m"  # reverse video (readable on any background)
 
     # \r\033[2K: go to column 0 then erase entire line — works in both cooked
     # and raw terminal modes (raw mode does NOT auto-add CR before LF).
     CLEAR = "\r\033[2K"
-    NL    = "\r\n"          # explicit CR+LF so raw mode doesn't drift columns
+    NL = "\r\n"  # explicit CR+LF so raw mode doesn't drift columns
 
-    n   = len(item_values)
+    n = len(item_values)
     sel = initial_sel
 
     def _label(idx: int, selected: bool) -> str:
@@ -285,7 +321,7 @@ def _arrow_file_picker(
 
         if val == _QUIT_SENTINEL:
             plain = "✕  Quit"
-            coloured = f"\033[31m{plain}{R}"   # red
+            coloured = f"\033[31m{plain}{R}"  # red
         elif val is None:
             plain = "+ Create new taxonomy"
             coloured = f"{GR}{plain}{R}"
@@ -293,8 +329,8 @@ def _arrow_file_picker(
             plain = "⎇  Browse git history"
             coloured = f"{MG}{plain}{R}"
         else:
-            last     = "  ← last session" if preselect and val == preselect else ""
-            plain    = f"{val.name}{last}"   # type: ignore[union-attr]
+            last = "  ← last session" if preselect and val == preselect else ""
+            plain = f"{val.name}{last}"  # type: ignore[union-attr]
             coloured = f"{val.name}{f'  {D}← last session{R}' if last else ''}"
 
         if selected:
@@ -313,9 +349,7 @@ def _arrow_file_picker(
                 f"{CLEAR}  {D}type:{R} {B}{typed}▌{R}  {D}Enter: confirm  Esc: clear{R}"
             )
         else:
-            sys.stdout.write(
-                f"{CLEAR}  {D}↑↓ navigate  Enter select  or type a number{R}"
-            )
+            sys.stdout.write(f"{CLEAR}  {D}↑↓ navigate  Enter select  or type a number{R}")
         # Always end with NL so cursor is at a consistent position one line
         # below the hint — makes every cursor-up land at the same start row.
         sys.stdout.write(NL)
@@ -324,8 +358,8 @@ def _arrow_file_picker(
     render(typed="", first=True)
     # cursor is already below the hint (render() wrote NL); no extra write needed
 
-    typed   = ""
-    fd      = sys.stdin.fileno()
+    typed = ""
+    fd = sys.stdin.fileno()
     old_cfg = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
@@ -342,16 +376,16 @@ def _arrow_file_picker(
                         pass
                 break
 
-            elif ch == b"\x1b":           # escape / arrow keys
+            elif ch == b"\x1b":  # escape / arrow keys
                 nxt = sys.stdin.buffer.read(1)
                 if nxt == b"[":
                     code = sys.stdin.buffer.read(1)
-                    if code == b"A":      # up
+                    if code == b"A":  # up
                         typed = ""
-                        sel   = (sel - 1) % n
-                    elif code == b"B":    # down
+                        sel = (sel - 1) % n
+                    elif code == b"B":  # down
                         typed = ""
-                        sel   = (sel + 1) % n
+                        sel = (sel + 1) % n
                 # plain Esc: clear typed number if any, otherwise keep sel
                 elif nxt in (b"\r", b"\n"):
                     break
@@ -361,7 +395,7 @@ def _arrow_file_picker(
             elif ch in (b"\x7f", b"\x08"):  # backspace
                 typed = typed[:-1]
 
-            elif ch == b"\x03":             # Ctrl+C
+            elif ch == b"\x03":  # Ctrl+C
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
                 raise KeyboardInterrupt
 
@@ -385,6 +419,7 @@ def _arrow_file_picker(
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
+
 
 def _load(path: Path) -> Taxonomy:
     try:
@@ -422,10 +457,11 @@ def _run(fn, *args, **kwargs):
 
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
 
+
 def _multi_file_picker(
     found: list[Path],
     preselect: list[Path] | None = None,
-) -> "list[Path] | Path | None":
+) -> list[Path] | Path | None:
     """Checkbox picker for taxonomy files plus action items (git log, new, quit).
 
     Returns:
@@ -450,25 +486,25 @@ def _multi_file_picker(
 
     # Action items appended below the file list (numbered 1-based from 1)
     _ACTIONS: list[tuple[object, str]] = [
-        (True,              "↵  Open checked files"),   # True = "open" sentinel
+        (True, "↵  Open checked files"),  # True = "open" sentinel
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
-        (_HTML_SENTINEL,    "🌐 Generate webpage"),
-        (None,              "+ Create new taxonomy"),
-        (_QUIT_SENTINEL,    "✕  Quit"),
+        (_HTML_SENTINEL, "🌐 Generate webpage"),
+        (None, "+ Create new taxonomy"),
+        (_QUIT_SENTINEL, "✕  Quit"),
     ]
-    n_files   = len(found)
+    n_files = len(found)
     n_actions = len(_ACTIONS)
-    n_total   = n_files + n_actions
+    n_total = n_files + n_actions
 
     # ── Non-TTY fallback ──────────────────────────────────────────────────────
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         for f in found:
             console.print(f"  ✓  {f.name}")
-        console.print(f"  [cyan] 1[/cyan]  ↵  Open checked files")
-        console.print(f"  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print(f"  [cyan] 3[/cyan]  [blue]🌐 Generate webpage[/blue]")
-        console.print(f"  [cyan] 4[/cyan]  [green]+ Create new taxonomy[/green]")
-        console.print(f"  [cyan] 5[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 1[/cyan]  ↵  Open checked files")
+        console.print("  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan] 3[/cyan]  [blue]🌐 Generate webpage[/blue]")
+        console.print("  [cyan] 4[/cyan]  [green]+ Create new taxonomy[/green]")
+        console.print("  [cyan] 5[/cyan]  [red]✕  Quit[/red]")
         console.print()
         choice = Prompt.ask("Action (1–5) or filename to toggle", default="1")
         s = choice.strip().lower()
@@ -486,21 +522,22 @@ def _multi_file_picker(
         return list(found)
 
     try:
-        import tty, termios
+        import termios
+        import tty
     except ImportError:
         return list(found)
 
-    R   = "\033[0m"
-    B   = "\033[1m"
-    D   = "\033[2m"
-    CY  = "\033[36m"
-    GR  = "\033[32m"
-    MG  = "\033[35m"
-    RE  = "\033[31m"
+    R = "\033[0m"
+    B = "\033[1m"
+    D = "\033[2m"
+    CY = "\033[36m"
+    GR = "\033[32m"
+    MG = "\033[35m"
+    RE = "\033[31m"
     INV = "\033[7m"
     BCY = "\033[1;36m"
     CLEAR = "\r\033[2K"
-    NL    = "\r\n"
+    NL = "\r\n"
 
     cursor = 0
 
@@ -508,12 +545,12 @@ def _multi_file_picker(
         if sentinel == _GIT_LOG_SENTINEL:
             return MG
         if sentinel == _HTML_SENTINEL:
-            return "\033[34m"   # blue
+            return "\033[34m"  # blue
         if sentinel == _QUIT_SENTINEL:
             return RE
         if sentinel is True:
-            return CY   # "open checked files"
-        return GR       # create new
+            return CY  # "open checked files"
+        return GR  # create new
 
     def render(first: bool = False) -> None:
         total_lines = n_files + 1 + n_actions + 1  # files + blank sep + actions + hint
@@ -534,8 +571,8 @@ def _multi_file_picker(
 
         # Action rows — numbered 1…n_actions
         for j, (sentinel, label) in enumerate(_ACTIONS):
-            col   = _action_colour(sentinel)
-            idx   = n_files + j
+            col = _action_colour(sentinel)
+            idx = n_files + j
             num_s = f"{j + 1:>2}"
             if idx == cursor:
                 row = f"  {BCY}{INV} {num_s} {R}  {col}{B}{label}{R}"
@@ -550,9 +587,9 @@ def _multi_file_picker(
         sys.stdout.flush()
 
     render(first=True)
-    fd  = sys.stdin.fileno()
+    fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    result: "list[Path] | Path | None" = _QUIT_SENTINEL
+    result: list[Path] | Path | None = _QUIT_SENTINEL
 
     try:
         tty.setraw(fd)
@@ -617,6 +654,7 @@ def _resolve_broken_mappings_at_load(
 ) -> None:
     """Before opening the TUI, ask user to load any files referenced by mappings."""
     from .validator import SkosValidator
+
     issues = SkosValidator().validate(workspace)
     broken = [i for i in issues if i.code == "broken_mapping"]
     if not broken:
@@ -667,15 +705,16 @@ def _load_workspace(
 
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
+
 def _open_viewer(
     taxonomy_file: Path,
     lang: str = "en",
-    jump_concept: "str | None" = None,
-    workspace: "TaxonomyWorkspace | None" = None,
+    jump_concept: str | None = None,
+    workspace: TaxonomyWorkspace | None = None,
 ) -> None:
     """Open the interactive taxonomy viewer for *taxonomy_file* and handle git."""
-    from .nav import TaxonomyViewer
     from .git_manager import GitManager, render_diff
+    from .nav import TaxonomyViewer
 
     taxonomy = _load(taxonomy_file)
 
@@ -692,8 +731,11 @@ def _open_viewer(
             gm.record_head()
 
     viewer = TaxonomyViewer(
-        taxonomy, taxonomy_file, lang=lang,
-        git_manager=gm, workspace=workspace,
+        taxonomy,
+        taxonomy_file,
+        lang=lang,
+        git_manager=gm,
+        workspace=workspace,
     )
     if jump_concept:
         uri = _resolve(taxonomy, jump_concept)
@@ -719,19 +761,27 @@ def _open_viewer(
 
 # ──────────────────────────── show ───────────────────────────────────────────
 
+
 @app.command("show")
 def cmd_show(
-    file: Optional[Path] = typer.Argument(
+    file: Path | None = typer.Argument(
         None, help="Taxonomy file (.ttl / .rdf / .jsonld). Auto-detected if omitted."
     ),
-    concept: Optional[str] = typer.Option(
-        None, "--concept", "-c", metavar="HANDLE",
+    concept: str | None = typer.Option(
+        None,
+        "--concept",
+        "-c",
+        metavar="HANDLE",
         help="Open interactive viewer at this concept.",
     ),
     lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
-    handles: bool = typer.Option(False, "--handles", "-H", help="Print handle index table then exit."),
+    handles: bool = typer.Option(
+        False, "--handles", "-H", help="Print handle index table then exit."
+    ),
     plain: bool = typer.Option(
-        False, "--plain", "-p",
+        False,
+        "--plain",
+        "-p",
         help="Print static tree and exit (no interactive viewer).",
     ),
 ) -> None:
@@ -761,24 +811,28 @@ def cmd_show(
 
 # ──────────────────────────── add ────────────────────────────────────────────
 
+
 @app.command("add")
 def cmd_add(
     name: str = typer.Argument(
         ...,
         help="Local name or full URI for the new concept. "
-             "A local name (e.g. 'SpadeRudder') is automatically expanded "
-             "with the taxonomy's base URI.",
+        "A local name (e.g. 'SpadeRudder') is automatically expanded "
+        "with the taxonomy's base URI.",
     ),
-    parent: Optional[str] = typer.Option(
-        None, "--parent", "-p", metavar="HANDLE|NAME",
+    parent: str | None = typer.Option(
+        None,
+        "--parent",
+        "-p",
+        metavar="HANDLE|NAME",
         help="Parent concept handle or name (omit for primary scheme top level).",
     ),
-    en: Optional[str] = typer.Option(None, "--en", help="English preferred label."),
-    fr: Optional[str] = typer.Option(None, "--fr", help="French preferred label."),
-    def_en: Optional[str] = typer.Option(None, "--def-en", help="English definition."),
-    def_fr: Optional[str] = typer.Option(None, "--def-fr", help="French definition."),
+    en: str | None = typer.Option(None, "--en", help="English preferred label."),
+    fr: str | None = typer.Option(None, "--fr", help="French preferred label."),
+    def_en: str | None = typer.Option(None, "--def-en", help="English definition."),
+    def_fr: str | None = typer.Option(None, "--def-fr", help="French definition."),
     lang: str = typer.Option("en", "--lang", "-l", help="Display language for confirmation."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Add a new concept to the taxonomy.
 
@@ -804,11 +858,14 @@ def cmd_add(
     taxonomy = _load(taxonomy_file)
     uri = _run(operations.expand_uri, taxonomy, name)
     concept = _run(operations.add_concept, taxonomy, uri, labels, parent, definitions or None)
-    console.print(f"[green]Added[/green]  [{taxonomy.uri_to_handle(uri)}]  {concept.pref_label(lang)}  [dim]({uri})[/dim]")
+    console.print(
+        f"[green]Added[/green]  [{taxonomy.uri_to_handle(uri)}]  {concept.pref_label(lang)}  [dim]({uri})[/dim]"
+    )
     _save(taxonomy, taxonomy_file)
 
 
 # ──────────────────────────── remove ─────────────────────────────────────────
+
 
 @app.command("remove")
 def cmd_remove(
@@ -816,7 +873,7 @@ def cmd_remove(
     cascade: bool = typer.Option(False, "--cascade", help="Also remove all descendants."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Remove a concept from the taxonomy."""
     taxonomy_file = _resolve_file(file)
@@ -839,15 +896,19 @@ def cmd_remove(
 
 # ──────────────────────────── move ───────────────────────────────────────────
 
+
 @app.command("move")
 def cmd_move(
     concept: str = typer.Argument(..., metavar="HANDLE", help="Concept to move."),
-    parent: Optional[str] = typer.Option(
-        None, "--parent", "-p", metavar="HANDLE",
+    parent: str | None = typer.Option(
+        None,
+        "--parent",
+        "-p",
+        metavar="HANDLE",
         help="New parent handle (omit to promote to top level).",
     ),
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Move a concept to a new parent."""
     taxonomy_file = _resolve_file(file)
@@ -857,12 +918,17 @@ def cmd_move(
 
     _run(operations.move_concept, taxonomy, uri, parent_uri)
 
-    dest = taxonomy.concepts[parent_uri].pref_label(lang) if parent_uri and parent_uri in taxonomy.concepts else "top level"
+    dest = (
+        taxonomy.concepts[parent_uri].pref_label(lang)
+        if parent_uri and parent_uri in taxonomy.concepts
+        else "top level"
+    )
     console.print(f"[green]Moved[/green]  {taxonomy.concepts[uri].pref_label(lang)}  →  {dest}")
     _save(taxonomy, taxonomy_file)
 
 
 # ──────────────────────────── label ──────────────────────────────────────────
+
 
 @app.command("label")
 def cmd_label(
@@ -870,7 +936,7 @@ def cmd_label(
     lang: str = typer.Argument(..., help="Language code (en, fr, …)"),
     text: str = typer.Argument(..., help="Label text"),
     alt: bool = typer.Option(False, "--alt", help="Add as alt label (default: pref label)."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Set a preferred or alternative label on a concept."""
     taxonomy_file = _resolve_file(file)
@@ -885,12 +951,13 @@ def cmd_label(
 
 # ──────────────────────────── define ─────────────────────────────────────────
 
+
 @app.command("define")
 def cmd_define(
     concept: str = typer.Argument(..., metavar="HANDLE"),
     lang: str = typer.Argument(..., help="Language code"),
     text: str = typer.Argument(..., help="Definition text"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Set a definition on a concept."""
     taxonomy_file = _resolve_file(file)
@@ -903,12 +970,13 @@ def cmd_define(
 
 # ──────────────────────────── relate ─────────────────────────────────────────
 
+
 @app.command("relate")
 def cmd_relate(
     concept_a: str = typer.Argument(..., metavar="HANDLE_A"),
     concept_b: str = typer.Argument(..., metavar="HANDLE_B"),
     remove: bool = typer.Option(False, "--remove", help="Remove instead of adding."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Add or remove a skos:related link between two concepts."""
     taxonomy_file = _resolve_file(file)
@@ -927,11 +995,14 @@ def cmd_relate(
 
 # ──────────────────────────── rename ─────────────────────────────────────────
 
+
 @app.command("rename")
 def cmd_rename(
-    concept: str = typer.Argument(..., metavar="HANDLE|NAME", help="Handle or name of concept to rename."),
+    concept: str = typer.Argument(
+        ..., metavar="HANDLE|NAME", help="Handle or name of concept to rename."
+    ),
     new_name: str = typer.Argument(..., help="New local name or full URI."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Change the URI of a concept (updates all cross-references).
 
@@ -948,6 +1019,7 @@ def cmd_rename(
 
 
 # ──────────────────────────── wizard helper ───────────────────────────────────
+
 
 def _run_create_wizard(default_path: Path | None = None) -> None:
     """Run the creation wizard and create the resulting taxonomy file.
@@ -996,8 +1068,8 @@ def _run_create_wizard(default_path: Path | None = None) -> None:
     global _session_file
     _session_file = result.file_path
     console.print(
-        f"\n[bold green]Taxonomy created![/bold green]  "
-        f"Open it with [cyan]ster show[/cyan] or [cyan]ster[/cyan]\n"
+        "\n[bold green]Taxonomy created![/bold green]  "
+        "Open it with [cyan]ster show[/cyan] or [cyan]ster[/cyan]\n"
     )
 
     gm = GitManager(result.file_path)
@@ -1015,9 +1087,10 @@ def _run_create_wizard(default_path: Path | None = None) -> None:
 
 # ──────────────────────────── init (wizard) ──────────────────────────────────
 
+
 @app.command("init")
 def cmd_init(
-    file: Optional[Path] = typer.Argument(
+    file: Path | None = typer.Argument(
         None, help="Output file path (.ttl / .rdf / .jsonld). Prompted if omitted."
     ),
 ) -> None:
@@ -1026,8 +1099,8 @@ def cmd_init(
     • If no taxonomy files exist: run the creation wizard, then offer git setup.
     • If files already exist: open one in the interactive viewer; on quit, offer git setup.
     """
-    from .nav import TaxonomyViewer
     from .git_manager import GitManager
+    from .nav import TaxonomyViewer
 
     _print_welcome()
 
@@ -1062,6 +1135,7 @@ def cmd_init(
     gm = GitManager(taxonomy_file)
     if gm.is_enabled() and gm.is_configured():
         from .git_manager import render_diff
+
         diff = gm.pre_edit_check()
         if diff:
             console.print("\n[bold]Changes pulled from remote:[/bold]")
@@ -1088,12 +1162,13 @@ def cmd_init(
 
 # ──────────────────────────── log (git history browser) ─────────────────────
 
+
 @app.command("log")
 def cmd_log(
-    file: Optional[Path] = typer.Argument(
+    file: Path | None = typer.Argument(
         None, help="Taxonomy file to scope the diff view. Auto-detected if omitted."
     ),
-    repo: Optional[Path] = typer.Option(
+    repo: Path | None = typer.Option(
         None, "--repo", "-r", help="Git repository root. Detected from file path if omitted."
     ),
 ) -> None:
@@ -1123,10 +1198,11 @@ def cmd_log(
 
 # ──────────────────────────── nav (bash-like REPL) ───────────────────────────
 
+
 @app.command("nav")
 def cmd_nav(
     lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Start a bash-like REPL for taxonomy navigation and editing.
 
@@ -1152,10 +1228,11 @@ def cmd_nav(
 
 # ──────────────────────────── handles ────────────────────────────────────────
 
+
 @app.command("handles")
 def cmd_handles(
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Print the full handle → label → URI index."""
     taxonomy_file = _resolve_file(file)
@@ -1165,10 +1242,11 @@ def cmd_handles(
 
 # ──────────────────────────── validate ───────────────────────────────────────
 
+
 @app.command("validate")
 def cmd_validate(
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
 ) -> None:
     """Check SKOS integrity: missing labels, orphans, duplicate prefLabels."""
     taxonomy_file = _resolve_file(file)
@@ -1203,16 +1281,26 @@ def cmd_validate(
             console.print(f"  • {issue}")
         raise typer.Exit(1)
     else:
-        console.print(f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated.")
+        console.print(
+            f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated."
+        )
 
 
 # ──────────────────────────── export ─────────────────────────────────────────
 
+
 @app.command("export")
 def cmd_export(
-    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory (default: same folder as taxonomy)."),
-    lang: Optional[str] = typer.Option(None, "--lang", "-l", help="Comma-separated language codes to generate, e.g. en,fr. Defaults to all languages found."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output directory (default: same folder as taxonomy)."
+    ),
+    lang: str | None = typer.Option(
+        None,
+        "--lang",
+        "-l",
+        help="Comma-separated language codes to generate, e.g. en,fr. Defaults to all languages found.",
+    ),
 ) -> None:
     """Export the taxonomy to a browsable HTML website (requires pyLODE).
 
@@ -1226,8 +1314,8 @@ def cmd_export(
     from .html_export import generate_html
 
     taxonomy_file = _resolve_file(file)
-    output_dir    = output or taxonomy_file.parent / "html"
-    languages     = [l.strip() for l in lang.split(",")] if lang else None
+    output_dir = output or taxonomy_file.parent / "html"
+    languages = [lg.strip() for lg in lang.split(",")] if lang else None
 
     console.print(f"[dim]Generating HTML from[/dim] [bold]{taxonomy_file.name}[/bold]…")
     try:
@@ -1244,8 +1332,7 @@ def cmd_export(
 
     if created:
         console.print(
-            f"\n[bold]Generated {len(created)} file(s)[/bold] in "
-            f"[cyan]{output_dir}[/cyan]"
+            f"\n[bold]Generated {len(created)} file(s)[/bold] in [cyan]{output_dir}[/cyan]"
         )
         if len(created) == 1:
             console.print(f"  Open with:  open {created[0]}")
@@ -1256,11 +1343,12 @@ def cmd_export(
 
 # ──────────────────────────── internal helpers ───────────────────────────────
 
-def _make_taxonomy_commit_msg(taxonomy: "Taxonomy", file_path: "Path", lang: str = "en") -> str:
+
+def _make_taxonomy_commit_msg(taxonomy: Taxonomy, file_path: Path, lang: str = "en") -> str:
     """Build a descriptive git commit message for a newly tracked taxonomy file."""
     scheme = taxonomy.primary_scheme()
-    title  = scheme.title(lang) if scheme else file_path.stem
-    lines  = [f'feat: create taxonomy "{title}"', ""]
+    title = scheme.title(lang) if scheme else file_path.stem
+    lines = [f'feat: create taxonomy "{title}"', ""]
     lines.append(f"File: {file_path.name}")
     if scheme:
         if scheme.uri:
@@ -1305,9 +1393,11 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
 def _ensure_pylode() -> bool:
     """Return True if pyLODE is importable, offering to install it if not."""
     from .html_export import _patch_missing_pyproject
+
     with _patch_missing_pyproject():
         try:
             import pylode  # noqa: F401
+
             return True
         except ImportError:
             pass
@@ -1325,7 +1415,9 @@ def _ensure_pylode() -> bool:
     if answer != "y":
         return False
 
-    import subprocess, sys
+    import subprocess
+    import sys
+
     console.print("[dim]Installing pyLODE…[/dim]")
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "pylode"],
@@ -1342,7 +1434,7 @@ def _run_html_export_interactive(files: list[Path]) -> None:
     if not _ensure_pylode():
         return
 
-    from .html_export import generate_html, _available_languages
+    from .html_export import _available_languages, generate_html
 
     if not files:
         err.print("[red]No taxonomy files selected.[/red]")
@@ -1354,8 +1446,7 @@ def _run_html_export_interactive(files: list[Path]) -> None:
         langs = _available_languages(taxonomy)
         lang_str = ", ".join(langs) if langs else "en"
         console.print(
-            f"[bold]{taxonomy_file.name}[/bold]  "
-            f"[dim]Languages detected: {lang_str}[/dim]"
+            f"[bold]{taxonomy_file.name}[/bold]  [dim]Languages detected: {lang_str}[/dim]"
         )
 
     console.print()
@@ -1368,7 +1459,7 @@ def _run_html_export_interactive(files: list[Path]) -> None:
         console.print("\n[dim]Cancelled.[/dim]")
         return
 
-    languages = [l.strip() for l in lang_input.split(",") if l.strip()] or None
+    languages = [lg.strip() for lg in lang_input.split(",") if lg.strip()] or None
 
     output_dir = files[0].parent / "html"
     console.print()
@@ -1399,8 +1490,7 @@ def _run_html_export_interactive(files: list[Path]) -> None:
 
     if all_created:
         console.print(
-            f"\n[bold]Done.[/bold]  {len(all_created)} file(s) in "
-            f"[cyan]{output_dir}[/cyan]"
+            f"\n[bold]Done.[/bold]  {len(all_created)} file(s) in [cyan]{output_dir}[/cyan]"
         )
         entry = next((p for p in all_created if "_en" in p.name), all_created[0])
         console.print(f"  Open with:  open {entry}")
@@ -1477,6 +1567,10 @@ def main() -> None:
             _run_create_wizard()
             continue
 
+        # Normalise: _multi_file_picker may return a single Path or list[Path]
+        if isinstance(selected, Path):
+            selected = [selected]
+
         # ── Save / update project ─────────────────────────────────────────────
         git_root = _git_root(Path.cwd()) or Path.cwd()
         updated_project = Project(
@@ -1507,7 +1601,7 @@ def main() -> None:
             _open_viewer(primary, lang=updated_project.lang, workspace=workspace)
         except Exception as exc:
             err.print(f"[red]Viewer error: {exc}[/red]")
-        continue   # return to home after viewer
+        continue  # return to home after viewer
 
 
 if __name__ == "__main__":

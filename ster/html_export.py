@@ -3,6 +3,7 @@
 Generates one HTML file per language found in the taxonomy. Each file includes
 a header language-switcher bar that links to the other language versions.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -40,9 +41,11 @@ def _patch_missing_pyproject():
 
 # ── language detection ────────────────────────────────────────────────────────
 
-def _available_languages(taxonomy: "object") -> list[str]:
+
+def _available_languages(taxonomy: object) -> list[str]:
     """Return sorted list of language codes present in the taxonomy."""
     from .model import Taxonomy
+
     assert isinstance(taxonomy, Taxonomy)
     langs: set[str] = set()
     for scheme in taxonomy.schemes.values():
@@ -94,6 +97,7 @@ _SWITCHER_CSS = """
 </style>
 """
 
+
 def _lang_switcher_html(stem: str, current: str, all_langs: list[str]) -> str:
     items = []
     for lang in all_langs:
@@ -104,11 +108,11 @@ def _lang_switcher_html(stem: str, current: str, all_langs: list[str]) -> str:
             items.append(f'<a href="{stem}_{lang}.html">{label}</a>')
     links = "\n    ".join(items)
     return (
-        f'{_SWITCHER_CSS}\n'
+        f"{_SWITCHER_CSS}\n"
         f'<div id="ster-lang-bar">\n'
         f'  <span class="ster-label">Language:</span>\n'
-        f'  {links}\n'
-        f'</div>'
+        f"  {links}\n"
+        f"</div>"
     )
 
 
@@ -119,10 +123,11 @@ def _inject_switcher(html: str, stem: str, current: str, all_langs: list[str]) -
     idx = html.lower().find(tag)
     if idx == -1:
         return bar + "\n" + html
-    return html[: idx + len(tag)] + "\n" + bar + html[idx + len(tag):]
+    return html[: idx + len(tag)] + "\n" + bar + html[idx + len(tag) :]
 
 
 # ── core export ───────────────────────────────────────────────────────────────
+
 
 def generate_html(
     taxonomy_path: Path,
@@ -158,9 +163,7 @@ def generate_html(
             from pylode import VocPub  # type: ignore[import]
         except ImportError:
             raise RuntimeError(
-                "pyLODE is not installed.\n"
-                "Run:  pip install pylode\n"
-                "Then try again."
+                "pyLODE is not installed.\nRun:  pip install pylode\nThen try again."
             )
 
     from .store import load as _load
