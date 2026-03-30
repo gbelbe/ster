@@ -1,8 +1,10 @@
 # ster
 
 [![CI](https://github.com/gbelbe/ster/actions/workflows/ci.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/gbelbe/ster/graph/badge.svg)](https://codecov.io/gh/gbelbe/ster)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 [![rdflib](https://img.shields.io/pypi/v/rdflib?label=rdflib&color=orange)](https://pypi.org/project/rdflib/)
 [![typer](https://img.shields.io/pypi/v/typer?label=typer&color=brightgreen)](https://pypi.org/project/typer/)
@@ -207,6 +209,41 @@ Each layer depends only on the layers below it, keeping every module independent
 pip install -e ".[dev]"
 pytest
 pytest --cov=ster --cov-report=term-missing
+```
+
+---
+
+## CI / CD
+
+Every push and pull request runs four parallel jobs via GitHub Actions:
+
+| Job | Tool | What it checks |
+|---|---|---|
+| **Lint** | [ruff](https://docs.astral.sh/ruff/) | Code style, import order, common bugs |
+| **Type check** | [mypy](https://mypy.readthedocs.io/) | Static type correctness |
+| **Security** | [bandit](https://bandit.readthedocs.io/) + [pip-audit](https://pypi.org/project/pip-audit/) | SAST + known CVEs in dependencies |
+| **Tests** | [pytest](https://pytest.org/) × Python 3.11 / 3.12 / 3.13 | Full test suite + coverage report |
+
+Coverage is uploaded to [Codecov](https://codecov.io/gh/gbelbe/ster) on every run.
+
+### Run checks locally
+
+```bash
+pip install -e ".[dev]"
+
+ruff check .            # lint
+ruff format --check .   # format
+mypy ster/              # types
+bandit -r ster/ -c pyproject.toml   # security
+pip-audit               # dependency CVEs
+pytest --cov=ster       # tests + coverage
+```
+
+Or install the pre-commit hooks to run ruff automatically on every commit:
+
+```bash
+pip install pre-commit
+pre-commit install
 ```
 
 ---
