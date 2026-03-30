@@ -6,9 +6,78 @@ on:
   pull_request:
     branches: ["master", "main"]
 
+# Cancel any in-progress run for the same branch / PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ── Jobs run in parallel; 'test' is the only matrix job ───────────────────────
+
 jobs:
+
+  # ── 1. Lint & format ────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: ruff — check rules
+        run: ruff check .
+
+      - name: ruff — check formatting
+        run: ruff format --check .
+
+  # ── 2. Static type checking ──────────────────────────────────────────────────
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install mypy + package
+        run: pip install mypy -e ".[html]"
+
+      - name: mypy
+        run: mypy ster/
+
+  # ── 3. Security ──────────────────────────────────────────────────────────────
+  security:
+    name: Security (bandit + pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install security tools + package
+        run: pip install bandit[toml] pip-audit -e ".[html]"
+
+      - name: bandit — static analysis
+        run: bandit -r ster/ -c pyproject.toml
+
+      - name: pip-audit — dependency CVEs
+        run: pip-audit
+
+  # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
-    name: Python ${{ matrix.python-version }}
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -18,14 +87,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Install package + dev deps
+        run: pip install -e ".[dev,html]"
 
-      - name: Run tests
-        run: pytest --tb=short -q
+      - name: Run tests with coverage
+        run: pytest --tb=short -q --cov=ster --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        # Upload only once (latest Python) to avoid duplicate reports
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false   # don't break CI if Codecov is unreachable
+          token: ${{ secrets.CODECOV_TOKEN }}
