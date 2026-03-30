@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from ster import store
-from ster.model import LabelType
+from ster.model import Concept, ConceptScheme, Label, LabelType, Taxonomy
+from ster.handles import assign_handles
 
 BASE = "https://example.org/test/"
 
@@ -114,3 +115,164 @@ def test_round_trip_jsonld(tmp_path, minimal_turtle):
     t2 = store.load(jsonld)
 
     assert set(t1.concepts) == set(t2.concepts)
+
+
+# ── top concept normalization ─────────────────────────────────────────────────
+
+def test_load_sets_top_concept_of(taxonomy):
+    """Concepts in hasTopConcept get top_concept_of set on load."""
+    top = taxonomy.concepts[BASE + "Top"]
+    assert top.top_concept_of == BASE + "Scheme"
+
+
+def test_load_only_top_concept_has_top_concept_of(taxonomy):
+    """Non-top concepts do NOT have top_concept_of set."""
+    for uri in (BASE + "Child1", BASE + "Child2", BASE + "Grandchild"):
+        assert taxonomy.concepts[uri].top_concept_of is None
+
+
+def test_top_concept_of_round_trips(tmp_ttl, tmp_path, taxonomy):
+    """top_concept_of is written as skos:topConceptOf and survives reload."""
+    out = tmp_path / "out.ttl"
+    store.save(taxonomy, out)
+    reloaded = store.load(out)
+    top = reloaded.concepts[BASE + "Top"]
+    assert top.top_concept_of == BASE + "Scheme"
+    # Non-top-concepts should not have it set
+    assert reloaded.concepts[BASE + "Child1"].top_concept_of is None
+
+
+def test_normalize_top_concept_from_has_top_concept():
+    """hasTopConcept on scheme → topConceptOf on concept after normalization."""
+    t = Taxonomy()
+    s = ConceptScheme(uri=BASE + "S", labels=[Label("en", "S")],
+                      top_concepts=[BASE + "C"])
+    c = Concept(uri=BASE + "C", labels=[Label("en", "C")])
+    t.schemes[s.uri] = s
+    t.concepts[c.uri] = c
+    assign_handles(t)
+    store._normalize_hierarchy(t)
+    assert t.concepts[BASE + "C"].top_concept_of == BASE + "S"
+
+
+def test_normalize_top_concept_from_top_concept_of():
+    """topConceptOf on concept → hasTopConcept on scheme after normalization."""
+    t = Taxonomy()
+    s = ConceptScheme(uri=BASE + "S", labels=[Label("en", "S")])
+    c = Concept(uri=BASE + "C", labels=[Label("en", "C")], top_concept_of=BASE + "S")
+    t.schemes[s.uri] = s
+    t.concepts[c.uri] = c
+    assign_handles(t)
+    store._normalize_hierarchy(t)
+    assert BASE + "C" in t.schemes[BASE + "S"].top_concepts
+
+
+def test_auto_detect_top_concept_no_broader():
+    """Concept with no broader and not yet in top_concepts is auto-added."""
+    t = Taxonomy()
+    s = ConceptScheme(uri=BASE + "S", labels=[Label("en", "S")])
+    c = Concept(uri=BASE + "C", labels=[Label("en", "C")])  # no broader, no top_concept_of
+    t.schemes[s.uri] = s
+    t.concepts[c.uri] = c
+    assign_handles(t)
+    store._normalize_hierarchy(t)
+    assert BASE + "C" in t.schemes[BASE + "S"].top_concepts
+    assert t.concepts[BASE + "C"].top_concept_of == BASE + "S"
+
+
+def test_auto_detect_not_triggered_for_narrower_concepts():
+    """Concepts with a broader link are NOT auto-detected as top concepts."""
+    t = Taxonomy()
+    s = ConceptScheme(uri=BASE + "S", labels=[Label("en", "S")],
+                      top_concepts=[BASE + "Parent"])
+    parent = Concept(uri=BASE + "Parent", labels=[Label("en", "P")],
+                     narrower=[BASE + "Child"])
+    child = Concept(uri=BASE + "Child", labels=[Label("en", "C")],
+                    broader=[BASE + "Parent"])
+    t.schemes[s.uri] = s
+    t.concepts[parent.uri] = parent
+    t.concepts[child.uri] = child
+    assign_handles(t)
+    store._normalize_hierarchy(t)
+    assert BASE + "Child" not in t.schemes[BASE + "S"].top_concepts
+    assert t.concepts[BASE + "Child"].top_concept_of is None
+
+
+def test_in_scheme_scoped_to_correct_scheme(tmp_path):
+    """Each concept is inScheme of exactly the scheme it belongs to."""
+    from rdflib import Graph, URIRef
+    from rdflib.namespace import SKOS
+
+    t = Taxonomy()
+    s1 = ConceptScheme(uri=BASE + "S1", labels=[Label("en", "S1")],
+                       top_concepts=[BASE + "C1"], base_uri=BASE + "s1/")
+    s2 = ConceptScheme(uri=BASE + "S2", labels=[Label("en", "S2")],
+                       top_concepts=[BASE + "C2"], base_uri=BASE + "s2/")
+    c1 = Concept(uri=BASE + "C1", labels=[Label("en", "C1")], top_concept_of=BASE + "S1")
+    c2 = Concept(uri=BASE + "C2", labels=[Label("en", "C2")], top_concept_of=BASE + "S2")
+    t.schemes[s1.uri] = s1
+    t.schemes[s2.uri] = s2
+    t.concepts[c1.uri] = c1
+    t.concepts[c2.uri] = c2
+    assign_handles(t)
+
+    out = tmp_path / "out.ttl"
+    store.save(t, out)
+    g = Graph()
+    g.parse(str(out), format="turtle")
+
+    c1_schemes = set(str(o) for o in g.objects(URIRef(BASE + "C1"), SKOS.inScheme))
+    c2_schemes = set(str(o) for o in g.objects(URIRef(BASE + "C2"), SKOS.inScheme))
+
+    assert BASE + "S1" in c1_schemes
+    assert BASE + "S2" not in c1_schemes
+    assert BASE + "S2" in c2_schemes
+    assert BASE + "S1" not in c2_schemes
+
+
+def test_concept_scheme_uri_helper():
+    """_concept_scheme_uri traverses up to find the scheme."""
+    from ster.store import _concept_scheme_uri
+    t = Taxonomy()
+    s = ConceptScheme(uri=BASE + "S", labels=[Label("en", "S")])
+    top = Concept(uri=BASE + "Top", labels=[Label("en", "T")],
+                  top_concept_of=BASE + "S", narrower=[BASE + "Child"])
+    child = Concept(uri=BASE + "Child", labels=[Label("en", "C")],
+                    broader=[BASE + "Top"])
+    t.schemes[s.uri] = s
+    t.concepts[top.uri] = top
+    t.concepts[child.uri] = child
+
+    assert _concept_scheme_uri(t, BASE + "Top") == BASE + "S"
+    assert _concept_scheme_uri(t, BASE + "Child") == BASE + "S"
+    assert _concept_scheme_uri(t, BASE + "Ghost") is None
+
+
+def test_concept_scheme_uri_circular_safe():
+    """_concept_scheme_uri handles circular broader references without infinite loop."""
+    from ster.store import _concept_scheme_uri
+    t = Taxonomy()
+    a = Concept(uri=BASE + "A", labels=[Label("en", "A")], broader=[BASE + "B"])
+    b = Concept(uri=BASE + "B", labels=[Label("en", "B")], broader=[BASE + "A"])
+    t.concepts[a.uri] = a
+    t.concepts[b.uri] = b
+    # Should return None without crashing
+    assert _concept_scheme_uri(t, BASE + "A") is None
+
+
+# ── top_concept_of in detail fields ──────────────────────────────────────────
+
+def test_build_detail_fields_shows_top_concept_of(simple_taxonomy):
+    """Top concept has a topConceptOf field in its detail view."""
+    from ster.nav import build_detail_fields
+    fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert "top_concept_of" in keys
+
+
+def test_build_detail_fields_no_top_concept_of_for_child(simple_taxonomy):
+    """Non-top-concept does NOT get a topConceptOf field."""
+    from ster.nav import build_detail_fields
+    fields = build_detail_fields(simple_taxonomy, BASE + "Child1", "en")
+    keys = [f.key for f in fields]
+    assert "top_concept_of" not in keys

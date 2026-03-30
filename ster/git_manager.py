@@ -238,6 +238,13 @@ class GitManager:
             return
         _git("add", str(self.taxonomy_path), cwd=repo)
 
+    def stage_path(self, path: "Path") -> None:
+        """git add an arbitrary file in the same repository."""
+        repo = self._repo()
+        if not repo:
+            return
+        _git("add", str(path), cwd=repo)
+
     def has_staged_changes(self) -> bool:
         repo = self._repo()
         if not repo:
@@ -291,10 +298,14 @@ class GitManager:
         # ── commit message ────────────────────────────────────────────────────
         default_msg = f"Update {self.taxonomy_path.name}"
         console.print()
-        msg = Prompt.ask(
-            "[bold]Commit message[/bold]",
-            default=default_msg,
-        )
+        try:
+            msg = Prompt.ask(
+                "[bold]Commit message[/bold]",
+                default=default_msg,
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Commit cancelled.[/dim]")
+            return
 
         commit_r = _git("commit", "-m", msg, cwd=repo)
         if commit_r.returncode != 0:
@@ -313,7 +324,11 @@ class GitManager:
             "  [cyan]2[/cyan]  Push to a feature branch and open a Pull Request"
         )
         default_choice = "1" if strat == "direct" else "2"
-        choice = Prompt.ask("Choose", choices=["1", "2"], default=default_choice)
+        try:
+            choice = Prompt.ask("Choose", choices=["1", "2"], default=default_choice)
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Push cancelled.[/dim]")
+            return
 
         if choice == "1":
             self._push_direct(repo, main)

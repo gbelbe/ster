@@ -23,6 +23,7 @@ from . import operations, store
 from .display import render_concept_detail, render_tree, console
 from .exceptions import SkostaxError
 from .model import Definition, Label, LabelType, Taxonomy
+from .workspace import TaxonomyWorkspace
 
 err = Console(stderr=True)
 
@@ -89,12 +90,20 @@ def _save_prefs(data: dict) -> None:
 # ──────────────────────────── tree helpers ────────────────────────────────────
 
 _ACTION_ADD_SCHEME = "__ster:add_scheme__"   # sentinel URI for action rows
+_FILE_URI_PREFIX   = "__ster:file::"        # prefix for file-node sentinel URIs
+
+
+def _file_sentinel(path: "Path") -> str:
+    return f"{_FILE_URI_PREFIX}{path}"
+
 
 @dataclass
 class TreeLine:
     uri: str
     depth: int
     prefix: str          # e.g. "│   ├── "
+    is_file: bool = False    # file-level root node (multi-file workspace)
+    file_path: "Path | None" = None  # owning file (set for file/scheme/concept rows)
     is_scheme: bool = False
     is_folded: bool = False
     hidden_count: int = 0
@@ -102,7 +111,7 @@ class TreeLine:
 
 
 def _count_descendants(taxonomy: Taxonomy, uri: str) -> int:
-    """Count total reachable descendants of a concept (excluding itself)."""
+    """Count total reachable descendants of a concept that exist in taxonomy.concepts."""
     seen: set[str] = set()
 
     def _count(u: str) -> int:
@@ -112,37 +121,64 @@ def _count_descendants(taxonomy: Taxonomy, uri: str) -> int:
         c = taxonomy.concepts.get(u)
         if not c:
             return 0
-        return len(c.narrower) + sum(_count(ch) for ch in c.narrower)
+        existing = [ch for ch in c.narrower if ch in taxonomy.concepts]
+        return len(existing) + sum(_count(ch) for ch in existing)
 
     return _count(uri)
 
 
 def flatten_tree(
-    taxonomy: Taxonomy,
+    taxonomy_or_workspace: "Taxonomy | TaxonomyWorkspace",
     folded: "set[str] | None" = None,
 ) -> list[TreeLine]:
-    """Flatten the full taxonomy tree into a list of displayable lines.
+    """Flatten the taxonomy tree into a list of displayable TreeLine objects.
 
-    Each ConceptScheme appears as a ◉ header row followed by its top concepts.
-    All schemes in the taxonomy are shown (not just the primary one).
-    URIs in *folded* have their children hidden; the node is marked is_folded=True
-    and hidden_count is set to the number of hidden descendants.
+    Accepts either a single Taxonomy (original behaviour) or a
+    TaxonomyWorkspace (multi-file: adds file-level root nodes above schemes).
+    URIs in *folded* are collapsed; their hidden descendant count is set.
+    """
+    from .workspace import TaxonomyWorkspace as _WS
+    if isinstance(taxonomy_or_workspace, _WS):
+        ws = taxonomy_or_workspace
+        if len(ws.taxonomies) == 1:
+            # Single file in workspace — no file node, same display as before
+            tax = next(iter(ws.taxonomies.values()))
+            fp  = next(iter(ws.taxonomies.keys()))
+            return _flatten_taxonomy(tax, folded, file_path=fp)
+        return _flatten_workspace(ws, folded)
+    return _flatten_taxonomy(taxonomy_or_workspace, folded)
+
+
+def _flatten_taxonomy(
+    taxonomy: Taxonomy,
+    folded: "set[str] | None" = None,
+    file_path: "Path | None" = None,
+    scheme_depth: int = 0,
+    scheme_prefix: str = "",
+    concept_base_depth: int = 0,
+) -> list[TreeLine]:
+    """Flatten a single Taxonomy into TreeLine rows.
+
+    *scheme_depth* / *scheme_prefix* / *concept_base_depth* let callers
+    embed the output inside a parent file node (multi-file workspace).
     """
     if folded is None:
         folded = set()
     result: list[TreeLine] = []
 
     def visit(uri: str, depth: int, prefix: str, is_last: bool) -> None:
-        connector = "└── " if is_last else "├── "
         concept = taxonomy.concepts.get(uri)
-        children = concept.narrower if concept else []
+        if not concept:
+            return  # dangling reference — skip silently
+        connector = "└── " if is_last else "├── "
+        children = concept.narrower
         is_fold = uri in folded and bool(children)
         hidden = _count_descendants(taxonomy, uri) if is_fold else 0
         result.append(TreeLine(
             uri=uri, depth=depth, prefix=prefix + connector,
-            is_folded=is_fold, hidden_count=hidden,
+            is_folded=is_fold, hidden_count=hidden, file_path=file_path,
         ))
-        if not is_fold and concept:
+        if not is_fold:
             ext = "    " if is_last else "│   "
             for i, child in enumerate(children):
                 visit(child, depth + 1, prefix + ext, i == len(children) - 1)
@@ -153,14 +189,53 @@ def flatten_tree(
         hidden_under_scheme = 0
         if scheme_folded:
             for tc in tops:
-                hidden_under_scheme += 1 + _count_descendants(taxonomy, tc)
+                if tc in taxonomy.concepts:
+                    hidden_under_scheme += 1 + _count_descendants(taxonomy, tc)
         result.append(TreeLine(
-            uri=scheme.uri, depth=0, prefix="", is_scheme=True,
-            is_folded=scheme_folded, hidden_count=hidden_under_scheme,
+            uri=scheme.uri, depth=scheme_depth, prefix=scheme_prefix,
+            is_scheme=True, is_folded=scheme_folded,
+            hidden_count=hidden_under_scheme, file_path=file_path,
         ))
         if not scheme_folded:
-            for i, uri in enumerate(tops):
-                visit(uri, 0, "", i == len(tops) - 1)
+            existing_tops = [u for u in tops if u in taxonomy.concepts]
+            for i, uri in enumerate(existing_tops):
+                visit(uri, concept_base_depth, scheme_prefix, i == len(existing_tops) - 1)
+
+    return result
+
+
+def _flatten_workspace(
+    workspace: "TaxonomyWorkspace",
+    folded: "set[str] | None" = None,
+) -> list[TreeLine]:
+    """Flatten a multi-file workspace: file nodes > scheme nodes > concepts."""
+    if folded is None:
+        folded = set()
+    result: list[TreeLine] = []
+
+    for file_path, taxonomy in workspace.taxonomies.items():
+        file_uri = _file_sentinel(file_path)
+        file_folded = file_uri in folded
+        hidden_in_file = 0
+        if file_folded:
+            for scheme in taxonomy.schemes.values():
+                hidden_in_file += 1
+                for tc in scheme.top_concepts:
+                    if tc in taxonomy.concepts:
+                        hidden_in_file += 1 + _count_descendants(taxonomy, tc)
+
+        result.append(TreeLine(
+            uri=file_uri, depth=0, prefix="",
+            is_file=True, file_path=file_path,
+            is_folded=file_folded, hidden_count=hidden_in_file,
+        ))
+        if not file_folded:
+            inner = _flatten_taxonomy(
+                taxonomy, folded, file_path=file_path,
+                scheme_depth=1, scheme_prefix="    ",
+                concept_base_depth=1,
+            )
+            result.extend(inner)
 
     return result
 
@@ -204,23 +279,39 @@ class DetailField:
     meta: dict = dc_field(default_factory=dict)
 
 
-def build_detail_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+def _sep(label: str) -> "DetailField":
+    """Create a non-selectable section-separator row."""
+    return DetailField(
+        f"sep:{label}", label, "", editable=False, meta={"type": "separator"},
+    )
+
+
+def build_detail_fields(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+    show_mappings: bool = False,
+) -> list[DetailField]:
     concept = taxonomy.concepts.get(uri)
     if not concept:
         return []
 
     fields: list[DetailField] = []
 
+    # ── Identity ───────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
     fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
 
     if concept.top_concept_of:
         scheme = taxonomy.schemes.get(concept.top_concept_of)
         scheme_label = scheme.title(lang) if scheme else concept.top_concept_of
         fields.append(DetailField(
-            "top_concept_of", "◈ topConceptOf", scheme_label, editable=False,
+            "top_concept_of", "◈ scheme", scheme_label, editable=False,
             meta={"type": "top_concept_of", "uri": concept.top_concept_of},
         ))
 
+    # ── Labels ─────────────────────────────────────────────────────────────────
+    fields.append(_sep("Labels"))
     pref: dict[str, str] = {
         lbl.lang: lbl.value for lbl in concept.labels if lbl.type == LabelType.PREF
     }
@@ -241,20 +332,28 @@ def build_detail_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailF
                 meta={"type": "alt", "lang": lg, "idx": idx},
             ))
 
+    # ── Definition ─────────────────────────────────────────────────────────────
     defs: dict[str, str] = {d.lang: d.value for d in concept.definitions}
-    for lg, val in sorted(defs.items()):
-        fields.append(DetailField(
-            f"def:{lg}", f"definition [{lg}]", val, editable=True,
-            meta={"type": "def", "lang": lg},
-        ))
+    if defs:
+        fields.append(_sep("Definition"))
+        for lg, val in sorted(defs.items()):
+            fields.append(DetailField(
+                f"def:{lg}", f"definition [{lg}]", val, editable=True,
+                meta={"type": "def", "lang": lg},
+            ))
+
+    # ── Hierarchy ──────────────────────────────────────────────────────────────
+    has_hierarchy = bool(concept.narrower or concept.broader or concept.related)
+    if has_hierarchy:
+        fields.append(_sep("Hierarchy"))
 
     for child_uri in concept.narrower:
         h = taxonomy.uri_to_handle(child_uri) or "?"
         child = taxonomy.concepts.get(child_uri)
         lbl = child.pref_label(lang) if child else child_uri
         fields.append(DetailField(
-            f"narrower:{child_uri}", "↓ narrower", f"[{h}]  {lbl}", editable=False,
-            meta={"type": "relation", "uri": child_uri},
+            f"narrower:{child_uri}", "↓ narrower", f"{lbl}  [{h}]", editable=False,
+            meta={"type": "relation", "uri": child_uri, "nav": True},
         ))
 
     for p_uri in concept.broader:
@@ -262,8 +361,8 @@ def build_detail_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailF
         parent = taxonomy.concepts.get(p_uri)
         lbl = parent.pref_label(lang) if parent else p_uri
         fields.append(DetailField(
-            f"broader:{p_uri}", "↑ broader", f"[{h}]  {lbl}", editable=False,
-            meta={"type": "relation", "uri": p_uri},
+            f"broader:{p_uri}", "↑ broader", f"{lbl}  [{h}]", editable=False,
+            meta={"type": "relation", "uri": p_uri, "nav": True},
         ))
 
     for r_uri in concept.related:
@@ -271,27 +370,65 @@ def build_detail_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailF
         rel = taxonomy.concepts.get(r_uri)
         lbl = rel.pref_label(lang) if rel else r_uri
         fields.append(DetailField(
-            f"related:{r_uri}", "~ related", f"[{h}]  {lbl}", editable=False,
-            meta={"type": "relation", "uri": r_uri},
+            f"related:{r_uri}", "~ related", f"{lbl}  [{h}]", editable=False,
+            meta={"type": "relation", "uri": r_uri, "nav": True},
         ))
 
-    # ── action fields ──────────────────────────────────────────────────────────
+    # ── Existing cross-scheme mapping links ────────────────────────────────────
+    _MAP_DISPLAY = (
+        ("exact_match",   "⟺ exactMatch"),
+        ("close_match",   "≈  closeMatch"),
+        ("broad_match",   "↑  broadMatch"),
+        ("narrow_match",  "↓  narrowMatch"),
+        ("related_match", "↔  relatedMatch"),
+    )
+    for attr, display in _MAP_DISPLAY:
+        for m_uri in getattr(concept, attr):
+            mapped = taxonomy.concepts.get(m_uri)
+            lbl = mapped.pref_label(lang) if mapped else m_uri
+            h = taxonomy.uri_to_handle(m_uri) or "?"
+            fields.append(DetailField(
+                f"{attr}:{m_uri}", display, f"{lbl}  [{h}]", editable=False,
+                meta={"type": "mapping", "uri": m_uri, "nav": bool(mapped), "attr": attr},
+            ))
+            fields.append(DetailField(
+                f"rm_map:{attr}:{m_uri}", "   ✗ Remove link", "", editable=False,
+                meta={"type": "mapping_remove", "uri": m_uri, "attr": attr},
+            ))
+
+    # ── Structural actions ─────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
     fields.append(DetailField(
         "action:add_child", "+ Add narrower concept", "",
         editable=False, meta={"type": "action", "action": "add_narrower"},
     ))
     fields.append(DetailField(
-        "action:link_broader", "↗ Link to broader", "",
+        "action:link_broader", "↑ Link to broader concept", "",
         editable=False, meta={"type": "action", "action": "link_broader"},
     ))
     fields.append(DetailField(
-        "action:delete", "⊘ Delete concept", "",
-        editable=False, meta={"type": "action", "action": "delete"},
-    ))
-    fields.append(DetailField(
-        "action:move", "↷ Move concept", "",
+        "action:move", "↷ Move under different parent", "",
         editable=False, meta={"type": "action", "action": "move"},
     ))
+    fields.append(DetailField(
+        "action:delete", "⊘ Delete this concept", "",
+        editable=False, meta={"type": "action", "action": "delete"},
+    ))
+
+    # ── Cross-scheme mapping actions (only when multiple schemes loaded) ────────
+    if show_mappings:
+        fields.append(_sep("Cross-scheme mappings"))
+        for map_type, label in (
+            ("exactMatch",   "⟺ exactMatch  — same concept, different vocabulary"),
+            ("closeMatch",   "≈  closeMatch  — very similar meaning"),
+            ("broadMatch",   "↑  broadMatch  — target is broader"),
+            ("narrowMatch",  "↓  narrowMatch — target is narrower"),
+            ("relatedMatch", "↔  relatedMatch — associative link"),
+        ):
+            fields.append(DetailField(
+                f"action:map_{map_type}", label, "",
+                editable=False, meta={"type": "action", "action": f"map:{map_type}"},
+            ))
 
     return fields
 
@@ -387,9 +524,9 @@ def build_scheme_fields(
 _C_NAVIGABLE     = 1   # cyan bold — has children
 _C_SEL           = 2   # white on blue — selected
 _C_SEL_NAV       = 3   # cyan on blue — selected + navigable
-_C_DIM           = 4   # dim
+_C_DIM           = 4   # dim — muted text (separators, read-only)
 _C_FIELD_LABEL   = 5   # green — editable field name
-_C_FIELD_VAL     = 6   # white bold — editable field value
+_C_FIELD_VAL     = 6   # default bold — editable field value
 _C_EDIT_BAR      = 7   # white on green — edit input bar
 _C_DETAIL_CURSOR = 8   # selected field in detail view
 _C_SEARCH_MATCH  = 9   # black on yellow — search match highlight
@@ -398,8 +535,11 @@ _C_TOP_CONCEPT   = 11  # magenta bold — top concept row
 _C_DIFF_ADD      = 12  # green — added concept/field in diff view
 _C_DIFF_DEL      = 13  # red   — removed concept/field in diff view
 _C_DIFF_CHG      = 14  # yellow — modified concept in diff view
-_C_HELP_HINT     = 15  # black on cyan — the "? help" badge
-_C_HELP_SECTION  = 16  # black on green — section header bars in help
+_C_HELP_SECTION  = 15  # black on green — section header bars in help
+_C_FILE_NODE     = 16  # bold yellow — file-level root node in multi-file tree
+_C_BROKEN_REF    = 17  # red — broader/narrower pointing to unloaded URI
+_C_BROKEN_MAP    = 18  # magenta — mapping property pointing to unloaded URI
+_C_MAPPING_NAV   = 19  # yellow — existing cross-scheme mapping link
 
 
 def _init_colors() -> None:
@@ -408,9 +548,9 @@ def _init_colors() -> None:
         curses.init_pair(_C_NAVIGABLE,     curses.COLOR_CYAN,    -1)
         curses.init_pair(_C_SEL,           curses.COLOR_WHITE,    curses.COLOR_BLUE)
         curses.init_pair(_C_SEL_NAV,       curses.COLOR_CYAN,     curses.COLOR_BLUE)
-        curses.init_pair(_C_DIM,           curses.COLOR_WHITE,    -1)
+        curses.init_pair(_C_DIM,           -1,                    -1)   # terminal default
         curses.init_pair(_C_FIELD_LABEL,   curses.COLOR_GREEN,    -1)
-        curses.init_pair(_C_FIELD_VAL,     curses.COLOR_WHITE,    -1)
+        curses.init_pair(_C_FIELD_VAL,     -1,                    -1)   # terminal default
         curses.init_pair(_C_EDIT_BAR,      curses.COLOR_BLACK,    curses.COLOR_GREEN)
         curses.init_pair(_C_DETAIL_CURSOR, curses.COLOR_BLACK,    curses.COLOR_CYAN)
         curses.init_pair(_C_SEARCH_MATCH,  curses.COLOR_BLACK,    curses.COLOR_YELLOW)
@@ -419,8 +559,11 @@ def _init_colors() -> None:
         curses.init_pair(_C_DIFF_ADD,      curses.COLOR_GREEN,    -1)
         curses.init_pair(_C_DIFF_DEL,      curses.COLOR_RED,      -1)
         curses.init_pair(_C_DIFF_CHG,      curses.COLOR_YELLOW,   -1)
-        curses.init_pair(_C_HELP_HINT,     curses.COLOR_BLACK,    curses.COLOR_CYAN)
         curses.init_pair(_C_HELP_SECTION,  curses.COLOR_BLACK,    curses.COLOR_GREEN)
+        curses.init_pair(_C_FILE_NODE,     curses.COLOR_YELLOW,   -1)
+        curses.init_pair(_C_BROKEN_REF,    curses.COLOR_RED,      -1)
+        curses.init_pair(_C_BROKEN_MAP,    curses.COLOR_MAGENTA,  -1)
+        curses.init_pair(_C_MAPPING_NAV,   curses.COLOR_YELLOW,   -1)
     except Exception:
         pass
 
@@ -502,7 +645,12 @@ def render_tree_col(
     """
     list_h = rows - 2
     n = len(flat)
-    counter = f" [{cursor_idx + 1}/{n}]" if n else ""
+    if n and cursor_idx >= 0:
+        counter = f" [{cursor_idx + 1}/{n}]"
+    elif n:
+        counter = f" [{n}]"
+    else:
+        counter = ""
     bar = f" {header_title}{counter} " if header_title else f" Taxonomy{counter} "
     _draw_bar(stdscr, 0, x0, width, bar)
 
@@ -514,6 +662,22 @@ def render_tree_col(
         y         = row + 1
         is_cursor = idx == cursor_idx
         is_detail = line.uri == highlight_uri
+
+        # ── file-level root node (multi-file workspace) ───────────────────
+        if line.is_file:
+            fname = line.file_path.name if line.file_path else line.uri
+            fold_marker = "▶" if line.is_folded else "▼"
+            hidden_str  = f"  (+{line.hidden_count} hidden)" if line.is_folded else ""
+            text = f" {fold_marker} 📄 {fname}{hidden_str}"
+            if is_cursor:
+                base_attr = curses.color_pair(_C_SEL) | curses.A_BOLD
+            else:
+                base_attr = curses.color_pair(0) | curses.A_BOLD
+            try:
+                stdscr.addstr(y, x0, text.ljust(width - 1)[:width - 1], base_attr)
+            except curses.error:
+                pass
+            continue
 
         # ── action row (e.g. "➕ Add new scheme") ─────────────────────────
         if line.is_action:
@@ -546,7 +710,7 @@ def render_tree_col(
             count_str   = f"  ·  {n_concepts} concept{'s' if n_concepts != 1 else ''}"
             fold_marker = "▶" if line.is_folded else " "
             hidden_str  = f"  (+{line.hidden_count} hidden)" if line.is_folded else ""
-            text = f"◉{fold_marker} {s_title}{count_str}{hidden_str}"
+            text = f"{line.prefix}◉{fold_marker} {s_title}{count_str}{hidden_str}"
 
             if is_cursor:
                 base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
@@ -568,6 +732,10 @@ def render_tree_col(
         n_children = len(concept.narrower)
         is_top     = bool(concept.top_concept_of)
         d_status   = diff_status.get(line.uri, "unchanged") if diff_status else "unchanged"
+        has_map    = bool(
+            concept.exact_match or concept.close_match or concept.broad_match
+            or concept.narrow_match or concept.related_match
+        )
 
         # Nav marker
         if diff_status:
@@ -590,6 +758,9 @@ def render_tree_col(
             suffix = "  ↵"
         else:
             suffix = ""
+
+        # Cross-scheme mapping indicator (rendered separately in yellow)
+        map_tag = "  ⇔" if has_map else ""
 
         text     = f"{line.prefix}{nav} [{handle}]  {label}{suffix}"
         is_match = bool(search_pattern and search_matches and idx in search_matches)
@@ -630,6 +801,18 @@ def render_tree_col(
             except curses.error:
                 pass
 
+        # Overlay the mapping indicator in yellow (skipped when cursor or diff mode)
+        if map_tag and not is_cursor and not diff_status:
+            tag_x = x0 + len(text)
+            if tag_x + len(map_tag) < x0 + width - 1:
+                try:
+                    stdscr.addstr(
+                        y, tag_x, map_tag,
+                        curses.color_pair(_C_MAPPING_NAV) | curses.A_BOLD,
+                    )
+                except curses.error:
+                    pass
+
 
 # ──────────────────────────── TaxonomyViewer ─────────────────────────────────
 
@@ -642,10 +825,12 @@ class TaxonomyViewer:
     _WELCOME = "welcome"
     _CREATE         = "create"
     _CONFIRM_DELETE = "confirm_delete"
-    _MOVE_PICK      = "move_pick"
-    _LINK_PICK      = "link_pick"
-    _LANG_PICK      = "lang_pick"
-    _SCHEME_CREATE  = "scheme_create"
+    _MOVE_PICK        = "move_pick"
+    _LINK_PICK        = "link_pick"
+    _LANG_PICK        = "lang_pick"
+    _SCHEME_CREATE    = "scheme_create"
+    _MAP_SCHEME_PICK  = "map_scheme_pick"
+    _MAP_CONCEPT_PICK = "map_concept_pick"
 
     # Minimum terminal width for side-by-side tree + detail
     _SPLIT_MIN_COLS = 120
@@ -656,7 +841,15 @@ class TaxonomyViewer:
         file_path: Path,
         lang: str = "en",
         git_manager: "object | None" = None,
+        workspace: "TaxonomyWorkspace | None" = None,
     ) -> None:
+        # Store workspace; if none provided, create a single-file workspace.
+        if workspace is not None:
+            self._workspace = workspace
+        else:
+            self._workspace = TaxonomyWorkspace.from_taxonomy(taxonomy, file_path)
+
+        # self.taxonomy / self.file_path are the "primary" file for single-file ops.
         self.taxonomy    = taxonomy
         self.file_path   = file_path
         # Load persisted language preference; fall back to argument
@@ -709,6 +902,17 @@ class TaxonomyViewer:
 
         self._link_source_uri = ""
 
+        self._map_source_uri    = ""
+        self._map_type          = ""   # "broadMatch" | "narrowMatch" | …
+        self._map_scheme_cands: "list[tuple[str,str]]" = []
+        self._map_scheme_cursor = 0
+        self._map_scheme_scroll = 0
+        self._map_concept_cands: "list[tuple[str,str]]" = []
+        self._map_concept_cursor = 0
+        self._map_concept_scroll = 0
+        self._map_concept_filter = ""
+        self._map_target_scheme  = ""
+
         self._lang_options:  "list[str]" = []
         self._lang_cursor    = 0
         self._lang_scroll    = 0
@@ -720,11 +924,27 @@ class TaxonomyViewer:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _rebuild(self) -> None:
-        self._flat = flatten_tree(self.taxonomy, folded=self._folded)
+        self._flat = flatten_tree(self._workspace, folded=self._folded)
         # Prepend the synthetic "Add new scheme" action row at position 0
         self._flat.insert(0, TreeLine(
             uri=_ACTION_ADD_SCHEME, depth=0, prefix="", is_action=True,
         ))
+        # Always keep self.taxonomy in sync with the workspace so mutations
+        # made on workspace taxonomy objects are immediately reflected.
+        if self._workspace.multiple_schemes() or len(self._workspace.taxonomies) > 1:
+            self.taxonomy = self._workspace.merged_taxonomy()
+        else:
+            # Single-file: point at the workspace's own taxonomy object
+            prim = self._workspace.taxonomies.get(self.file_path)
+            if prim is not None:
+                self.taxonomy = prim
+
+    def _bdf(self, uri: str) -> "list[DetailField]":
+        """Build detail fields, enabling mapping actions when multiple schemes open."""
+        return build_detail_fields(
+            self.taxonomy, uri, self.lang,
+            show_mappings=self._workspace.multiple_schemes(),
+        )
 
     def _push(self) -> None:
         self._history.append(dict(
@@ -752,15 +972,36 @@ class TaxonomyViewer:
                     self.taxonomy, self.lang, scheme_uri=self._detail_uri
                 )
             else:
-                self._detail_fields = build_detail_fields(
-                    self.taxonomy, self._detail_uri, self.lang
-                )
+                self._detail_fields = self._bdf(self._detail_uri)
         return True
 
-    def _save_file(self) -> None:
+    def _individual_taxonomy_for(
+        self, uri: "str | None"
+    ) -> "tuple[Taxonomy, Path]":
+        """Return (individual_taxonomy, path) owning *uri*, or primary file as fallback."""
+        if uri and self._workspace:
+            for path, tax in self._workspace.taxonomies.items():
+                if uri in tax.concepts or uri in tax.schemes:
+                    return tax, path
+        prim_tax = self._workspace.taxonomies.get(self.file_path, self.taxonomy)
+        return prim_tax, self.file_path
+
+    def _save_file(
+        self,
+        uri: "str | None" = None,
+        path: "Path | None" = None,
+    ) -> None:
+        """Save the file that owns *uri*, or *path* explicitly, or the primary file."""
         try:
-            store.save(self.taxonomy, self.file_path)
-            self._status = f"Saved  {self.file_path.name}"
+            if path is not None:
+                target_path = path
+            elif uri and self._workspace:
+                target_path = self._workspace.uri_to_file(uri) or self.file_path
+            else:
+                target_path = self.file_path
+            target_tax = self._workspace.taxonomies.get(target_path, self.taxonomy)
+            store.save(target_tax, target_path)
+            self._status = f"Saved  {target_path.name}"
             if self._git_manager:
                 self._git_manager.stage_file()
         except Exception as exc:
@@ -773,6 +1014,14 @@ class TaxonomyViewer:
         if line.is_action:
             self._trigger_action("add_scheme")
             return
+        if line.is_file:
+            # Toggle fold on Enter for file nodes
+            if line.uri in self._folded:
+                self._folded.discard(line.uri)
+            else:
+                self._folded.add(line.uri)
+            self._rebuild()
+            return
         self._push()
         self._detail_uri = line.uri
         if line.is_scheme:
@@ -780,12 +1029,9 @@ class TaxonomyViewer:
                 self.taxonomy, self.lang, scheme_uri=line.uri
             )
         else:
-            self._detail_fields = build_detail_fields(
-                self.taxonomy, self._detail_uri, self.lang
-            )
-        self._field_cursor   = 0
-        self._detail_scroll  = 0
-        self._mode           = self._DETAIL
+            self._detail_fields = self._bdf(self._detail_uri)
+        self._reset_detail_cursor()
+        self._mode = self._DETAIL
 
     def _back(self) -> None:
         if not self._pop():
@@ -901,6 +1147,22 @@ class TaxonomyViewer:
                     continue
                 self._on_scheme_create(key, rows)
 
+            elif self._mode == self._MAP_SCHEME_PICK:
+                self._draw_map_scheme_pick(stdscr, rows, cols)
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                self._on_map_scheme_pick(key)
+
+            elif self._mode == self._MAP_CONCEPT_PICK:
+                self._draw_map_concept_pick(stdscr, rows, cols)
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                self._on_map_concept_pick(key, rows)
+
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
     def _draw_welcome(self, stdscr: "curses.window", rows: int, cols: int) -> None:
@@ -980,18 +1242,6 @@ class TaxonomyViewer:
         _draw_bar(stdscr, box_y + box_h - 1, box_x, box_w, "", dim=True)
 
         stdscr.refresh()
-
-    # ─────────────────────────── help hint ───────────────────────────────────
-
-    def _draw_help_hint(self, stdscr: "curses.window", cols: int) -> None:
-        """Draw a small '? help' badge at the top-right corner of any screen."""
-        badge = " ? help "
-        x = max(0, cols - len(badge) - 1)
-        try:
-            stdscr.addstr(0, x, badge,
-                          curses.color_pair(_C_HELP_HINT) | curses.A_BOLD)
-        except curses.error:
-            pass
 
     # ─────────────────────────── search ──────────────────────────────────────
 
@@ -1118,6 +1368,16 @@ class TaxonomyViewer:
             line = self._flat[self._cursor]
             if line.is_action:
                 is_action_row = True
+            elif line.is_file:
+                enter_hint = "→/Enter: fold/unfold file"
+                # Return early — simplified footer for file nodes
+                at_top    = self._cursor == 0
+                at_bottom = self._cursor == n - 1
+                jump_hint = "G: last" if at_top else ("g: first" if at_bottom else "g/G: first/last")
+                return (
+                    f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}"
+                    f"   Space bar: fold/unfold  {jump_hint}  q: quit "
+                )
             else:
                 concept = self.taxonomy.concepts.get(line.uri)
                 has_children = bool(concept and concept.narrower)
@@ -1137,8 +1397,8 @@ class TaxonomyViewer:
                 f"Enter: open  /: new search  Esc: clear "
             )
         return (
-            f" {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
-            f"   Spc: fold  +: add  ^D/^U: ½-page  {jump_hint}  /: search  ◉: scheme  q: quit "
+            f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
+            f"   Space bar: fold/unfold  +: add  ^D/^U: ½-page  {jump_hint}  /: search  ◉: scheme  q: quit "
         )
 
     def _draw_tree(self, stdscr: "curses.window", rows: int, cols: int) -> None:
@@ -1152,7 +1412,6 @@ class TaxonomyViewer:
             self._draw_search_bar(stdscr, rows - 1, 0, cols)
         else:
             _draw_bar(stdscr, rows - 1, 0, cols, self._tree_footer(rows), dim=True)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _draw_search_bar(
@@ -1285,10 +1544,11 @@ class TaxonomyViewer:
         elif key == ord(" "):
             if 0 <= self._cursor < n:
                 uri = self._flat[self._cursor].uri
-                # Only fold/unfold nodes that have children
                 line = self._flat[self._cursor]
                 has_children = False
-                if line.is_scheme:
+                if line.is_file:
+                    has_children = True   # file nodes are always foldable
+                elif line.is_scheme:
                     s = self.taxonomy.schemes.get(uri)
                     has_children = bool(s and s.top_concepts)
                 else:
@@ -1321,9 +1581,7 @@ class TaxonomyViewer:
                     self._trigger_action("add_top_concept")
                 else:
                     self._detail_uri    = line.uri
-                    self._detail_fields = build_detail_fields(
-                        self.taxonomy, line.uri, self.lang
-                    )
+                    self._detail_fields = self._bdf(line.uri)
                     self._trigger_action("add_narrower")
 
         elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
@@ -1380,7 +1638,6 @@ class TaxonomyViewer:
                     pass
 
         self._render_detail_col(stdscr, rows, detail_x0, detail_w)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_detail_col(
@@ -1424,7 +1681,7 @@ class TaxonomyViewer:
         elif self._field_cursor >= self._detail_scroll + list_h:
             self._detail_scroll = self._field_cursor - list_h + 1
 
-        lbl_w = 18
+        lbl_w = 20
         for row in range(list_h):
             idx = self._detail_scroll + row
             if idx >= n_fields:
@@ -1432,40 +1689,56 @@ class TaxonomyViewer:
             f   = self._detail_fields[idx]
             sel = idx == self._field_cursor
 
-            is_narrower = (
-                f.meta.get("type") == "relation" and f.key.startswith("narrower:")
-            )
-            # Actions use full label (not padded/truncated — some labels > lbl_w)
-            fl = f.display if f.meta.get("type") == "action" else f.display[:lbl_w].ljust(lbl_w)
+            is_sep        = f.meta.get("type") == "separator"
+            is_mapping    = f.meta.get("type") == "mapping"
+            is_map_remove = f.meta.get("type") == "mapping_remove"
+            is_navigable  = f.meta.get("nav") is True and not is_mapping
+            is_action     = f.meta.get("type") == "action"
+            # Actions and separator labels can exceed lbl_w — use full display
+            fl = f.display if (is_action or is_sep or is_map_remove) else f.display[:lbl_w].ljust(lbl_w)
             fv  = f.value[:width - lbl_w - 5]
             y   = row + 1
 
             try:
-                if sel:
+                if is_sep:
+                    # Section header: " ── Label ──────────"
+                    hdr = f" ── {f.display} "
+                    line = hdr + "─" * max(0, width - len(hdr) - 1)
+                    stdscr.addstr(y, x0, line[:width - 1],
+                                  curses.color_pair(_C_DIM) | curses.A_DIM)
+                elif sel:
                     line = f"  {fl}  {fv}"
                     stdscr.addstr(y, x0, line.ljust(width - 1)[:width - 1],
                                   curses.color_pair(_C_SEL_NAV) | curses.A_BOLD)
-                elif f.meta.get("type") == "action":
+                elif is_action:
                     stdscr.addstr(y, x0,   "  ")
                     stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD)
+                elif is_map_remove:
+                    stdscr.addstr(y, x0,   "  ")
+                    stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_DIFF_DEL))
+                elif is_mapping:
+                    stdscr.addstr(y, x0,   "  ")
+                    stdscr.addstr(y, x0+2, fl[:lbl_w].ljust(lbl_w),
+                                  curses.color_pair(_C_MAPPING_NAV) | curses.A_BOLD)
+                    stdscr.addstr(y, x0+2+lbl_w+2, fv,
+                                  curses.color_pair(_C_MAPPING_NAV))
+                elif is_navigable:
+                    stdscr.addstr(y, x0,   "  ")
+                    stdscr.addstr(y, x0+2, fl[:lbl_w].ljust(lbl_w),
+                                  curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD)
+                    stdscr.addstr(y, x0+2+lbl_w+2, fv,
+                                  curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD)
                 elif f.editable:
                     stdscr.addstr(y, x0,   "  ")
                     stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_FIELD_LABEL))
                     stdscr.addstr(y, x0+2+lbl_w+2, fv,
                                   curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD)
-                elif is_narrower:
-                    stdscr.addstr(y, x0,   "  ")
-                    stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD)
-                    stdscr.addstr(y, x0+2+lbl_w+2, fv,
-                                  curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD)
                 elif f.meta.get("type") == "scheme_base_uri":
-                    # base URI — editable, shown with field label styling
                     stdscr.addstr(y, x0,   "  ")
                     stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_FIELD_LABEL))
                     stdscr.addstr(y, x0+2+lbl_w+2, fv[:width - lbl_w - 5],
                                   curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD)
                 elif f.meta.get("type") == "scheme_uri":
-                    # URI — read-only but fully legible
                     stdscr.addstr(y, x0,   "  ")
                     stdscr.addstr(y, x0+2, fl, curses.color_pair(_C_DIM))
                     stdscr.addstr(y, x0+2+lbl_w+2, fv[:width - lbl_w - 5],
@@ -1496,8 +1769,14 @@ class TaxonomyViewer:
                 edit_hint = "i/Enter: edit  -: delete val"
             elif f.editable:
                 edit_hint = "i/Enter: edit"
-            elif f.meta.get("type") == "relation" and f.key.startswith("narrower:"):
+            elif f.meta.get("type") == "mapping" and f.meta.get("nav"):
+                edit_hint = "Enter: open"
+            elif f.meta.get("type") in ("mapping", "mapping_remove"):
+                edit_hint = "Enter/-: remove link"
+            elif f.meta.get("nav"):
                 edit_hint = "Enter: open concept"
+            elif f.meta.get("type") == "separator":
+                edit_hint = ""
             else:
                 edit_hint = "(read-only)"
         else:
@@ -1506,9 +1785,22 @@ class TaxonomyViewer:
         at_bottom = self._field_cursor == n - 1
         jump_hint = "G: last" if at_top else ("g: first" if at_bottom else "g/G: first/last")
         return (
-            f" {pos}  ↑↓/j·k  {edit_hint}  {jump_hint}"
-            f"  m: move  b: broader  -: delete  ^D/^U  ←/Esc: back  ?: help "
+            f" ?: help  {pos}  ↑↓/j·k  {edit_hint}  {jump_hint}"
+            f"  m: move  b: broader  -: delete  ^D/^U  ←/Esc: back "
         )
+
+    def _skip_sep(self, direction: int) -> None:
+        """Advance cursor past any separator rows in the given direction (+1/-1)."""
+        n = len(self._detail_fields)
+        while (0 <= self._field_cursor < n and
+               self._detail_fields[self._field_cursor].meta.get("type") == "separator"):
+            self._field_cursor = max(0, min(n - 1, self._field_cursor + direction))
+
+    def _reset_detail_cursor(self) -> None:
+        """Reset field cursor to first non-separator row."""
+        self._field_cursor  = 0
+        self._detail_scroll = 0
+        self._skip_sep(+1)
 
     def _on_detail(self, key: int, rows: int) -> bool:
         n = len(self._detail_fields)
@@ -1516,56 +1808,65 @@ class TaxonomyViewer:
 
         if key in (curses.KEY_UP, ord("k")):
             self._field_cursor = max(0, self._field_cursor - 1)
+            self._skip_sep(-1)
 
         elif key in (curses.KEY_DOWN, ord("j")):
             self._field_cursor = min(n - 1, self._field_cursor + 1)
+            self._skip_sep(+1)
 
         elif key in (curses.KEY_HOME, ord("g")):
             self._field_cursor = 0
+            self._skip_sep(+1)
 
         elif key in (curses.KEY_END, ord("G")):
             self._field_cursor = n - 1
+            self._skip_sep(-1)
 
         elif key == curses.KEY_PPAGE:
             self._field_cursor = max(0, self._field_cursor - list_h)
+            self._skip_sep(-1)
 
         elif key == curses.KEY_NPAGE:
             self._field_cursor = min(n - 1, self._field_cursor + list_h)
+            self._skip_sep(+1)
 
         elif key == 4:   # Ctrl+D — half-page down
             self._field_cursor = min(n - 1, self._field_cursor + list_h // 2)
+            self._skip_sep(+1)
 
         elif key == 21:  # Ctrl+U — half-page up
             self._field_cursor = max(0, self._field_cursor - list_h // 2)
+            self._skip_sep(-1)
 
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r"), ord("i"), ord("e")):
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
                 if f.meta.get("type") == "action":
                     self._trigger_action(f.meta.get("action", ""))
+                elif f.meta.get("type") == "mapping_remove":
+                    self._remove_mapping_field(f)
                 elif f.editable:
                     self._edit_field       = f
                     self._edit_value       = f.value
                     self._edit_pos         = len(f.value)
                     self._edit_return_mode = self._DETAIL
                     self._mode             = self._EDIT
-                elif f.meta.get("type") == "relation" and f.key.startswith("narrower:"):
-                    child_uri = f.meta["uri"]
-                    if child_uri in self.taxonomy.concepts:
+                elif f.meta.get("nav"):
+                    # broader / narrower / related — navigate to that concept
+                    dest_uri = f.meta["uri"]
+                    if dest_uri in self.taxonomy.concepts:
                         self._push()
-                        self._detail_uri    = child_uri
-                        self._detail_fields = build_detail_fields(
-                            self.taxonomy, child_uri, self.lang
-                        )
-                        self._field_cursor  = 0
-                        self._detail_scroll = 0
+                        self._detail_uri    = dest_uri
+                        self._detail_fields = self._bdf(dest_uri)
+                        self._reset_detail_cursor()
 
         elif key == ord("-"):
-            # Delete field value when on an editable field; delete concept when
-            # on a non-editable / action field (mirrors ⊘ Delete action).
+            # Remove mapping link, delete field value, or delete concept.
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
-                if f.editable:
+                if f.meta.get("type") in ("mapping", "mapping_remove"):
+                    self._remove_mapping_field(f)
+                elif f.editable:
                     self._delete_field(f)
                 else:
                     self._trigger_action("delete")
@@ -1728,9 +2029,7 @@ class TaxonomyViewer:
                 )
         except SkostaxError:
             return
-        self._detail_fields = build_detail_fields(
-            self.taxonomy, self._detail_uri, self.lang
-        )
+        self._detail_fields = self._bdf(self._detail_uri)
         self._save_file()
 
     def _commit_scheme_edit(self, f: DetailField, new_value: str) -> None:
@@ -1792,13 +2091,60 @@ class TaxonomyViewer:
                     ]
         except SkostaxError:
             return
-        self._detail_fields = build_detail_fields(
-            self.taxonomy, self._detail_uri, self.lang
-        )
+        self._detail_fields = self._bdf(self._detail_uri)
         self._field_cursor = min(
             self._field_cursor, max(0, len(self._detail_fields) - 1)
         )
         self._save_file()
+
+    _ATTR_TO_SKOS: "dict[str, str]" = {
+        "exact_match":   "exactMatch",
+        "close_match":   "closeMatch",
+        "broad_match":   "broadMatch",
+        "narrow_match":  "narrowMatch",
+        "related_match": "relatedMatch",
+    }
+
+    def _remove_mapping_field(self, f: "DetailField") -> None:
+        """Remove a cross-scheme mapping link shown in the detail view."""
+        attr      = f.meta.get("attr", "")
+        tgt_uri   = f.meta.get("uri", "")
+        skos_type = self._ATTR_TO_SKOS.get(attr)
+        if not skos_type or not tgt_uri or not self._detail_uri:
+            return
+
+        src_tax, src_path = self._individual_taxonomy_for(self._detail_uri)
+        src_concept = src_tax.concepts.get(self._detail_uri)
+        if not src_concept:
+            return
+
+        # Remove from source side
+        src_list: list = getattr(src_concept, attr)
+        if tgt_uri in src_list:
+            src_list.remove(tgt_uri)
+
+        # Remove inverse from target side if it exists in the workspace
+        tgt_info = self._workspace.concept_for(tgt_uri)
+        if tgt_info is not None:
+            tgt_path, tgt_concept = tgt_info
+            from .workspace_ops import _ATTR, _INVERSE
+            inv_list: list = getattr(tgt_concept, _ATTR[_INVERSE[skos_type]])
+            if self._detail_uri in inv_list:
+                inv_list.remove(self._detail_uri)
+            self._workspace.save_file(tgt_path)
+            if self._git_manager:
+                self._git_manager.stage_path(tgt_path)
+
+        self._workspace.save_file(src_path)
+        if self._git_manager:
+            self._git_manager.stage_path(src_path)
+        src_h = self.taxonomy.uri_to_handle(self._detail_uri) or self._detail_uri
+        tgt_h = self.taxonomy.uri_to_handle(tgt_uri) or tgt_uri
+        self._status = f"Removed {skos_type}: {src_h} → {tgt_h}"
+        self._rebuild()
+        self._detail_fields = self._bdf(self._detail_uri)
+        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+        self._skip_sep(-1)
 
     # ─────────────────────────── action dispatch ─────────────────────────────
 
@@ -1873,6 +2219,19 @@ class TaxonomyViewer:
             self._lang_scroll = 0
             self._mode = self._LANG_PICK
 
+        elif action.startswith("map:"):
+            mapping_type = action[4:]   # "broadMatch", "narrowMatch", …
+            if self._detail_uri:
+                self._map_source_uri   = self._detail_uri
+                self._map_type         = mapping_type
+                self._map_scheme_cands = self._build_map_scheme_candidates()
+                self._map_scheme_cursor = 0
+                self._map_scheme_scroll = 0
+                if not self._map_scheme_cands:
+                    self._status = "No other scheme available for mapping"
+                else:
+                    self._mode = self._MAP_SCHEME_PICK
+
     # ─────────────────────────── CREATE mode ─────────────────────────────────
 
     def _build_create_fields(self) -> "list[DetailField]":
@@ -1935,7 +2294,6 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
         self._render_create_col(stdscr, rows, detail_x0, detail_w)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_create_col(
@@ -2080,15 +2438,19 @@ class TaxonomyViewer:
             self._create_error = "Concept name is required"
             return
 
+        target_tax, target_path = self._individual_taxonomy_for(
+            self._create_parent_uri
+        )
+
         if (self._create_parent_uri
-                and self._create_parent_uri in self.taxonomy.schemes):
-            s    = self.taxonomy.schemes[self._create_parent_uri]
-            base = s.base_uri or self.taxonomy.base_uri()
+                and self._create_parent_uri in target_tax.schemes):
+            s    = target_tax.schemes[self._create_parent_uri]
+            base = s.base_uri or target_tax.base_uri()
         else:
-            base = self.taxonomy.base_uri()
+            base = target_tax.base_uri()
         new_uri = base + name
 
-        if new_uri in self.taxonomy.concepts:
+        if new_uri in target_tax.concepts:
             self._create_error = f"'{name}' already exists"
             return
 
@@ -2099,13 +2461,13 @@ class TaxonomyViewer:
         parent_handle = None
         if self._create_parent_uri:
             parent_handle = (
-                self.taxonomy.uri_to_handle(self._create_parent_uri)
+                target_tax.uri_to_handle(self._create_parent_uri)
                 or self._create_parent_uri
             )
 
         try:
             operations.add_concept(
-                self.taxonomy, new_uri, pref_labels,
+                target_tax, new_uri, pref_labels,
                 parent_handle=parent_handle,
                 definitions=definitions if definitions else None,
             )
@@ -2114,7 +2476,7 @@ class TaxonomyViewer:
             return
 
         self._rebuild()
-        self._save_file()
+        self._save_file(uri=new_uri)
 
         # Navigate to the new concept detail
         for i, line in enumerate(self._flat):
@@ -2122,7 +2484,7 @@ class TaxonomyViewer:
                 self._cursor = i
                 break
         self._detail_uri    = new_uri
-        self._detail_fields = build_detail_fields(self.taxonomy, new_uri, self.lang)
+        self._detail_fields = self._bdf(new_uri)
         self._field_cursor  = 0
         self._detail_scroll = 0
         self._history.clear()
@@ -2171,7 +2533,6 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
         self._render_scheme_create_col(stdscr, rows, detail_x0, detail_w)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_scheme_create_col(
@@ -2289,7 +2650,8 @@ class TaxonomyViewer:
         if "://" not in uri:
             self._scheme_create_error = "URI must be a full URL (e.g. https://…)"
             return
-        if uri in self.taxonomy.schemes:
+        prim_tax = self._workspace.taxonomies.get(self.file_path, self.taxonomy)
+        if uri in prim_tax.schemes:
             self._scheme_create_error = f"Scheme URI already exists"
             return
 
@@ -2298,7 +2660,7 @@ class TaxonomyViewer:
 
         try:
             operations.create_scheme(
-                self.taxonomy,
+                prim_tax,
                 uri,
                 labels={self.lang: title},
                 base_uri=base_uri,
@@ -2309,7 +2671,7 @@ class TaxonomyViewer:
             return
 
         self._rebuild()
-        self._save_file()
+        self._save_file(path=self.file_path)
 
         # Navigate to the new scheme detail
         for i, line in enumerate(self._flat):
@@ -2351,7 +2713,6 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
         self._render_confirm_col(stdscr, rows, detail_x0, detail_w)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_confirm_col(
@@ -2417,18 +2778,19 @@ class TaxonomyViewer:
 
     def _on_confirm_delete(self, key: int) -> None:
         if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
-            concept     = self.taxonomy.concepts.get(self._detail_uri) if self._detail_uri else None
+            target_tax, target_path = self._individual_taxonomy_for(self._detail_uri)
+            concept      = target_tax.concepts.get(self._detail_uri) if self._detail_uri else None
             has_children = bool(concept and concept.narrower)
             try:
                 operations.remove_concept(
-                    self.taxonomy, self._detail_uri, cascade=has_children
+                    target_tax, self._detail_uri, cascade=has_children
                 )
             except SkostaxError as exc:
                 self._status = str(exc)
                 self._mode   = self._DETAIL
                 return
+            self._save_file(path=target_path)
             self._rebuild()
-            self._save_file()
             self._history.clear()
             self._cursor = min(self._cursor, max(0, len(self._flat) - 1))
             self._mode   = self._TREE
@@ -2483,7 +2845,6 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
         self._render_move_col(stdscr, rows, detail_x0, detail_w, title=title)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_move_col(
@@ -2570,9 +2931,7 @@ class TaxonomyViewer:
         elif key == 27:  # Esc
             self._mode          = self._DETAIL
             self._detail_uri    = self._move_source_uri
-            self._detail_fields = build_detail_fields(
-                self.taxonomy, self._detail_uri, self.lang
-            )
+            self._detail_fields = self._bdf(self._detail_uri)
         elif key in (curses.KEY_BACKSPACE, 127, 8):
             if self._move_filter:
                 self._move_filter = self._move_filter[:-1]
@@ -2590,9 +2949,7 @@ class TaxonomyViewer:
             self._status        = str(exc)
             self._mode          = self._DETAIL
             self._detail_uri    = self._move_source_uri
-            self._detail_fields = build_detail_fields(
-                self.taxonomy, self._detail_uri, self.lang
-            )
+            self._detail_fields = self._bdf(self._detail_uri)
             return
         self._rebuild()
         self._save_file()
@@ -2601,9 +2958,7 @@ class TaxonomyViewer:
                 self._cursor = i
                 break
         self._detail_uri    = self._move_source_uri
-        self._detail_fields = build_detail_fields(
-            self.taxonomy, self._move_source_uri, self.lang
-        )
+        self._detail_fields = self._bdf(self._move_source_uri)
         self._field_cursor  = 0
         self._history.clear()
         self._mode = self._DETAIL
@@ -2631,9 +2986,7 @@ class TaxonomyViewer:
             self._mode          = self._DETAIL
             self._detail_uri    = back_uri
             if self._detail_uri:
-                self._detail_fields = build_detail_fields(
-                    self.taxonomy, self._detail_uri, self.lang
-                )
+                self._detail_fields = self._bdf(self._detail_uri)
         elif key in (curses.KEY_BACKSPACE, 127, 8):
             if self._move_filter:
                 self._move_filter = self._move_filter[:-1]
@@ -2653,7 +3006,7 @@ class TaxonomyViewer:
             self._status        = str(exc)
             self._mode          = self._DETAIL
             self._detail_uri    = src
-            self._detail_fields = build_detail_fields(self.taxonomy, src, self.lang)
+            self._detail_fields = self._bdf(src)
             return
         self._rebuild()
         self._save_file()
@@ -2662,7 +3015,299 @@ class TaxonomyViewer:
                 self._cursor = i
                 break
         self._detail_uri    = src
-        self._detail_fields = build_detail_fields(self.taxonomy, src, self.lang)
+        self._detail_fields = self._bdf(src)
+        self._field_cursor  = 0
+        self._history.clear()
+        self._mode = self._DETAIL
+
+    # ─────────────────── MAPPING (cross-scheme) pickers ─────────────────────
+
+    _MAP_TYPE_LABELS: "dict[str, str]" = {
+        "exactMatch":   "⟺ exactMatch",
+        "closeMatch":   "≈  closeMatch",
+        "broadMatch":   "↗ broadMatch",
+        "narrowMatch":  "↙ narrowMatch",
+        "relatedMatch": "↔ relatedMatch",
+    }
+
+    def _build_map_scheme_candidates(self) -> "list[tuple[str,str]]":
+        """All schemes in the workspace except the one owning the source concept."""
+        src_scheme = self._workspace.concept_scheme_uri(self._map_source_uri)
+        result: list[tuple[str, str]] = []
+        for path, t in self._workspace.taxonomies.items():
+            for s_uri, scheme in t.schemes.items():
+                if s_uri == src_scheme:
+                    continue
+                title  = scheme.title(self.lang) or s_uri
+                n_conc = sum(
+                    1 + len(t.concepts[tc].narrower)
+                    for tc in scheme.top_concepts
+                    if tc in t.concepts
+                )
+                result.append((s_uri, f"{title}  [{path.name}]"))
+        return result
+
+    def _build_map_concept_candidates(self, scheme_uri: str) -> "list[tuple[str,str]]":
+        """All concepts in *scheme_uri*, in tree order."""
+        t = self._workspace.taxonomy_for_uri(scheme_uri)
+        if not t:
+            return []
+        scheme = t.schemes.get(scheme_uri)
+        if not scheme:
+            return []
+        result: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def walk(uri: str, depth: int) -> None:
+            if uri in seen:
+                return
+            seen.add(uri)
+            c = t.concepts.get(uri)
+            if not c:
+                return
+            label  = c.pref_label(self.lang) or uri
+            handle = t.uri_to_handle(uri) or "?"
+            result.append((uri, f"{'  ' * depth}[{handle}]  {label}"))
+            for child in c.narrower:
+                walk(child, depth + 1)
+
+        for tc in scheme.top_concepts:
+            walk(tc, 0)
+        return result
+
+    # ── Step 1: scheme picker ─────────────────────────────────────────────────
+
+    def _draw_map_scheme_pick(
+        self, stdscr: "curses.window", rows: int, cols: int
+    ) -> None:
+        stdscr.erase()
+        wide     = cols >= self._SPLIT_MIN_COLS
+        tree_w   = cols // 3 if wide else 0
+        detail_x = tree_w
+        detail_w = cols - tree_w
+        if wide:
+            if self._map_source_uri:
+                for i, line in enumerate(self._flat):
+                    if line.uri == self._map_source_uri:
+                        self._cursor = i
+                        break
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr, rows, 0, tree_w,
+                cursor_idx=self._cursor,
+                highlight_uri=self._map_source_uri,
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+
+        src_handle = self.taxonomy.uri_to_handle(self._map_source_uri) or "?"
+        type_label = self._MAP_TYPE_LABELS.get(self._map_type, self._map_type)
+        _draw_bar(
+            stdscr, 0, detail_x, detail_w,
+            f" {type_label} for [{src_handle}] — pick target scheme ",
+        )
+
+        cands  = self._map_scheme_cands
+        list_h = rows - 2
+        if cands:
+            self._map_scheme_cursor = min(self._map_scheme_cursor, len(cands) - 1)
+        if self._map_scheme_cursor < self._map_scheme_scroll:
+            self._map_scheme_scroll = self._map_scheme_cursor
+        elif self._map_scheme_cursor >= self._map_scheme_scroll + list_h:
+            self._map_scheme_scroll = self._map_scheme_cursor - list_h + 1
+
+        for row in range(list_h):
+            idx = self._map_scheme_scroll + row
+            if idx >= len(cands):
+                break
+            _, display = cands[idx]
+            sel  = idx == self._map_scheme_cursor
+            text = f"  ◉  {display}"
+            y    = row + 1
+            try:
+                if sel:
+                    stdscr.addstr(y, detail_x, text[:detail_w - 1].ljust(detail_w - 1),
+                                  curses.color_pair(_C_SEL) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(y, detail_x, text[:detail_w - 1],
+                                  curses.color_pair(_C_NAVIGABLE))
+            except curses.error:
+                pass
+
+        _draw_bar(stdscr, rows - 1, detail_x, detail_w,
+                  " ↑↓: navigate  Enter: select scheme  Esc: cancel ", dim=True)
+        stdscr.refresh()
+
+    def _on_map_scheme_pick(self, key: int) -> None:
+        n = len(self._map_scheme_cands)
+        if key == curses.KEY_UP:
+            self._map_scheme_cursor = max(0, self._map_scheme_cursor - 1)
+        elif key == curses.KEY_DOWN:
+            self._map_scheme_cursor = min(n - 1, self._map_scheme_cursor + 1)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= self._map_scheme_cursor < n:
+                chosen_scheme, _ = self._map_scheme_cands[self._map_scheme_cursor]
+                self._map_target_scheme  = chosen_scheme
+                self._map_concept_cands  = self._build_map_concept_candidates(chosen_scheme)
+                if not self._map_concept_cands:
+                    self._status = "This scheme has no concepts to map to"
+                else:
+                    self._map_concept_cursor = 0
+                    self._map_concept_scroll = 0
+                    self._map_concept_filter = ""
+                    self._mode = self._MAP_CONCEPT_PICK
+        elif key == 27:  # Esc
+            self._mode          = self._DETAIL
+            self._detail_uri    = self._map_source_uri
+            self._detail_fields = self._bdf(self._map_source_uri)
+
+    # ── Step 2: concept picker inside chosen scheme ───────────────────────────
+
+    def _filtered_map_concept_cands(self) -> "list[tuple[str,str]]":
+        flt = self._map_concept_filter.lower()
+        return [(u, d) for u, d in self._map_concept_cands
+                if not flt or flt in d.lower()]
+
+    def _draw_map_concept_pick(
+        self, stdscr: "curses.window", rows: int, cols: int
+    ) -> None:
+        stdscr.erase()
+        wide     = cols >= self._SPLIT_MIN_COLS
+        tree_w   = cols // 3 if wide else 0
+        detail_x = tree_w
+        detail_w = cols - tree_w
+        if wide:
+            if self._map_source_uri:
+                for i, line in enumerate(self._flat):
+                    if line.uri == self._map_source_uri:
+                        self._cursor = i
+                        break
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr, rows, 0, tree_w,
+                cursor_idx=self._cursor,
+                highlight_uri=self._map_source_uri,
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+
+        src_handle = self.taxonomy.uri_to_handle(self._map_source_uri) or "?"
+        type_label = self._MAP_TYPE_LABELS.get(self._map_type, self._map_type)
+        t          = self._workspace.taxonomy_for_uri(self._map_target_scheme)
+        scheme_obj = t.schemes.get(self._map_target_scheme) if t else None
+        scheme_title = scheme_obj.title(self.lang) if scheme_obj else self._map_target_scheme
+        _draw_bar(
+            stdscr, 0, detail_x, detail_w,
+            f" {type_label} [{src_handle}] → {scheme_title} — pick concept ",
+        )
+
+        # Filter bar
+        filter_prompt = f" Filter: {self._map_concept_filter}▌"
+        try:
+            stdscr.addstr(1, detail_x, filter_prompt[:detail_w - 1].ljust(detail_w - 1),
+                          curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        filtered = self._filtered_map_concept_cands()
+        list_h   = rows - 3
+        if filtered:
+            self._map_concept_cursor = min(self._map_concept_cursor, len(filtered) - 1)
+        if self._map_concept_cursor < self._map_concept_scroll:
+            self._map_concept_scroll = self._map_concept_cursor
+        elif self._map_concept_cursor >= self._map_concept_scroll + list_h:
+            self._map_concept_scroll = self._map_concept_cursor - list_h + 1
+
+        for row in range(list_h):
+            idx = self._map_concept_scroll + row
+            if idx >= len(filtered):
+                break
+            _, display = filtered[idx]
+            sel  = idx == self._map_concept_cursor
+            text = f"  {display}"
+            y    = row + 2
+            try:
+                if sel:
+                    stdscr.addstr(y, detail_x, text[:detail_w - 1].ljust(detail_w - 1),
+                                  curses.color_pair(_C_SEL) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(y, detail_x, text[:detail_w - 1])
+            except curses.error:
+                pass
+
+        _draw_bar(
+            stdscr, rows - 1, detail_x, detail_w,
+            " ↑↓: navigate  Enter: confirm  Esc: back to schemes  type to filter ",
+            dim=True,
+        )
+        stdscr.refresh()
+
+    def _on_map_concept_pick(self, key: int, rows: int) -> None:
+        filtered = self._filtered_map_concept_cands()
+        n        = len(filtered)
+        list_h   = rows - 3
+
+        if key == curses.KEY_UP:
+            self._map_concept_cursor = max(0, self._map_concept_cursor - 1)
+        elif key == curses.KEY_DOWN:
+            self._map_concept_cursor = min(n - 1, self._map_concept_cursor + 1)
+        elif key == curses.KEY_PPAGE:
+            self._map_concept_cursor = max(0, self._map_concept_cursor - list_h)
+        elif key == curses.KEY_NPAGE:
+            self._map_concept_cursor = min(n - 1, self._map_concept_cursor + list_h)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= self._map_concept_cursor < n:
+                target_uri, _ = filtered[self._map_concept_cursor]
+                self._confirm_mapping(target_uri)
+        elif key == 27:  # Esc → back to scheme picker
+            self._mode = self._MAP_SCHEME_PICK
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if self._map_concept_filter:
+                self._map_concept_filter = self._map_concept_filter[:-1]
+                self._map_concept_cursor = 0
+                self._map_concept_scroll = 0
+        elif 32 <= key < 256:
+            self._map_concept_filter += chr(key)
+            self._map_concept_cursor  = 0
+            self._map_concept_scroll  = 0
+
+    def _confirm_mapping(self, target_uri: str) -> None:
+        from .workspace_ops import add_mapping
+        src = self._map_source_uri
+        try:
+            src_file, tgt_file = add_mapping(
+                self._workspace, src, target_uri, self._map_type  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            self._status        = str(exc)
+            self._mode          = self._DETAIL
+            self._detail_uri    = src
+            self._detail_fields = self._bdf(src)
+            return
+        # Save both affected files and stage them in git
+        self._workspace.save_file(src_file)
+        self._workspace.save_file(tgt_file)
+        if self._git_manager:
+            self._git_manager.stage_path(src_file)
+            if tgt_file != src_file:
+                self._git_manager.stage_path(tgt_file)
+        self._status = (
+            f"Added {self._map_type}: {self.taxonomy.uri_to_handle(src) or src}"
+            f" → {self.taxonomy.uri_to_handle(target_uri) or target_uri}"
+        )
+        self._rebuild()
+        for i, line in enumerate(self._flat):
+            if line.uri == src:
+                self._cursor = i
+                break
+        self._detail_uri    = src
+        self._detail_fields = self._bdf(src)
         self._field_cursor  = 0
         self._history.clear()
         self._mode = self._DETAIL
@@ -2672,7 +3317,6 @@ class TaxonomyViewer:
     def _draw_lang_pick(self, stdscr: "curses.window", rows: int, cols: int) -> None:
         stdscr.erase()
         self._render_lang_col(stdscr, rows, 0, cols)
-        self._draw_help_hint(stdscr, cols)
         stdscr.refresh()
 
     def _render_lang_col(

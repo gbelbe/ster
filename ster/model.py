@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 
 class LabelType(str, Enum):
@@ -29,10 +30,16 @@ class Concept:
     labels: list[Label] = field(default_factory=list)
     definitions: list[Definition] = field(default_factory=list)
     scope_notes: list[Definition] = field(default_factory=list)
-    broader: list[str] = field(default_factory=list)    # URIs
-    narrower: list[str] = field(default_factory=list)   # URIs
-    related: list[str] = field(default_factory=list)    # URIs
-    top_concept_of: str | None = None                   # scheme URI
+    broader: list[str] = field(default_factory=list)       # URIs (same scheme)
+    narrower: list[str] = field(default_factory=list)      # URIs (same scheme)
+    related: list[str] = field(default_factory=list)       # URIs (same scheme)
+    top_concept_of: str | None = None                      # scheme URI
+    # SKOS mapping properties — used for cross-scheme links
+    broad_match:   list[str] = field(default_factory=list)
+    narrow_match:  list[str] = field(default_factory=list)
+    related_match: list[str] = field(default_factory=list)
+    exact_match:   list[str] = field(default_factory=list)
+    close_match:   list[str] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:
@@ -105,6 +112,8 @@ class Taxonomy:
     concepts: dict[str, Concept] = field(default_factory=dict)       # uri → concept
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
+    # set by store.load() — the file this taxonomy was loaded from
+    file_path: "Path | None" = field(default=None, compare=False, repr=False)
 
     def resolve(self, handle_or_uri: str) -> str | None:
         """Return URI for a handle, local name, or full URI. Returns None if not found."""

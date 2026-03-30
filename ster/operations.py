@@ -137,6 +137,14 @@ def remove_concept(
                 other.related.remove(r_uri)
         del taxonomy.concepts[r_uri]
 
+    # Final defensive pass: strip any remaining dangling refs across ALL concepts
+    # (handles inconsistent data or multi-broader scenarios)
+    for c in taxonomy.concepts.values():
+        c.narrower = [u for u in c.narrower if u not in to_remove]
+        c.broader  = [u for u in c.broader  if u not in to_remove]
+    for scheme in taxonomy.schemes.values():
+        scheme.top_concepts = [u for u in scheme.top_concepts if u not in to_remove]
+
     # Rebuild handle index (removed concepts should no longer appear)
     assign_handles(taxonomy)
     return to_remove
@@ -186,6 +194,34 @@ def move_concept(
         if uri not in new_parent.narrower:
             new_parent.narrower.append(uri)
         concept.broader.append(new_parent_uri)
+
+
+# ──────────────────────────── add broader link ───────────────────────────────
+
+def add_broader_link(
+    taxonomy: Taxonomy, uri: str, new_parent_uri: str
+) -> None:
+    """Add an additional skos:broader link without removing existing ones.
+
+    The concept keeps all its current parents; new_parent_uri is added as an
+    extra broader.  The concept's narrower subtree moves with it (polyhierarchy).
+    """
+    concept = taxonomy.concepts.get(uri)
+    if concept is None:
+        raise ConceptNotFoundError(uri)
+    if new_parent_uri not in taxonomy.concepts:
+        raise ConceptNotFoundError(new_parent_uri)
+    if new_parent_uri == uri:
+        raise CircularHierarchyError(uri, new_parent_uri)
+    if _is_ancestor(taxonomy, uri, new_parent_uri):
+        raise CircularHierarchyError(uri, new_parent_uri)
+    if new_parent_uri in concept.broader:
+        return  # already linked — no-op
+
+    concept.broader.append(new_parent_uri)
+    new_parent = taxonomy.concepts[new_parent_uri]
+    if uri not in new_parent.narrower:
+        new_parent.narrower.append(uri)
 
 
 # ──────────────────────────── labels ─────────────────────────────────────────
