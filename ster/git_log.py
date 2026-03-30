@@ -56,9 +56,9 @@ _LC_FD_KEY  = 26   # cyan       — field label in detail overlay
 def _git_init_colors() -> None:
     _nav_init_colors()
     try:
-        curses.init_pair(_LC_SUBJECT, curses.COLOR_WHITE,  -1)
+        curses.init_pair(_LC_SUBJECT, -1,                  -1)   # terminal default
         curses.init_pair(_LC_DATE,    curses.COLOR_CYAN,   -1)
-        curses.init_pair(_LC_AUTHOR,  curses.COLOR_WHITE,  -1)
+        curses.init_pair(_LC_AUTHOR,  -1,                  -1)   # terminal default
         curses.init_pair(_LC_BAR,     curses.COLOR_BLACK,  curses.COLOR_CYAN)
         curses.init_pair(_LC_FD_ADD,  curses.COLOR_GREEN,  -1)
         curses.init_pair(_LC_FD_DEL,  curses.COLOR_RED,    -1)
@@ -126,12 +126,17 @@ def _parse_log(raw: str) -> list[LogEntry]:
         # Line starts with SEP → parts[0] is empty, then 6 fields
         if len(parts) < 7:
             continue
+        # Strip control/escape characters from human-readable fields so they
+        # don't corrupt curses rendering (e.g. raw ^[[A from arrow-key mishaps)
+        def _clean(s: str) -> str:
+            return "".join(c for c in s if c >= " " or c == "\t")
+
         entries.append(LogEntry(
-            full_hash  = parts[1],
-            short_hash = parts[2],
-            subject    = parts[3],
-            author     = parts[4],
-            date       = parts[5],
+            full_hash  = parts[1].strip(),
+            short_hash = parts[2].strip(),
+            subject    = _clean(parts[3]),
+            author     = _clean(parts[4]),
+            date       = parts[5].strip(),
             refs       = parts[6].strip(),
         ))
     return entries
@@ -431,8 +436,11 @@ class GitLogViewer:
             after_raw  = _get_file_at_commit(h, self._file_path, self._repo)
             parent_raw = _get_file_at_commit(f"{h}^", self._file_path, self._repo)
 
-            after_tax  = _load_taxonomy_safe(after_raw,  suffix) if after_raw  else Taxonomy()
-            before_tax = _load_taxonomy_safe(parent_raw, suffix) if parent_raw else Taxonomy()
+            # _load_taxonomy_safe returns None on parse failure — treat as empty
+            after_tax  = ((_load_taxonomy_safe(after_raw,  suffix) if after_raw  else None)
+                          or Taxonomy())
+            before_tax = ((_load_taxonomy_safe(parent_raw, suffix) if parent_raw else None)
+                          or Taxonomy())
 
             diff_status   = compute_taxonomy_diff(before_tax, after_tax)
             diff_taxonomy = build_diff_taxonomy(before_tax, after_tax)
@@ -590,9 +598,14 @@ class GitLogViewer:
     def _draw_diff_tree(
         self, stdscr: "curses.window", rows: int, x0: int, w: int
     ) -> None:
-        if not self._diff_taxonomy or not self._file_path:
+        if not self._diff_taxonomy:
             self._log_bar(stdscr, 0, x0, w, " taxonomy diff ")
-            msg = " No file scope — run: ster log <file.ttl> "
+            if not self._file_path:
+                msg = " No file scope — run: ster log <file.ttl> "
+            elif not self._entries:
+                msg = " No commits found for this file "
+            else:
+                msg = " Loading… "
             try:
                 stdscr.addstr(2, x0 + 2, msg[:w - 3], curses.A_DIM)
             except curses.error:

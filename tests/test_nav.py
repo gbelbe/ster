@@ -733,7 +733,8 @@ def test_enter_on_narrower_navigates(viewer, simple_taxonomy):
 
     # Should now be viewing Child1's detail
     assert viewer._detail_uri == BASE + "Child1"
-    assert viewer._field_cursor == 0
+    # cursor lands on first non-separator row (>= 1 because index 0 is a separator)
+    assert viewer._detail_fields[viewer._field_cursor].meta.get("type") != "separator"
     # Can go back to Top
     viewer._back()
     assert viewer._detail_uri == BASE + "Top"

@@ -15,6 +15,8 @@ from . import store, operations
 from .display import render_tree, render_concept_detail, render_handle_list, console
 from .exceptions import SkostaxError
 from .model import LabelType, Taxonomy
+from .project import Project, _git_root
+from .workspace import TaxonomyWorkspace
 
 app = typer.Typer(
     name="ster",
@@ -57,8 +59,9 @@ _TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 
 # Sentinels returned by _pick_file_interactive for special menu entries
-_GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
-_QUIT_SENTINEL:    Path = Path(".__ster_quit__")
+_GIT_LOG_SENTINEL:  Path = Path(".__ster_log__")
+_HTML_SENTINEL:     Path = Path(".__ster_html__")
+_QUIT_SENTINEL:     Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
 
@@ -417,12 +420,258 @@ def _run(fn, *args, **kwargs):
         raise typer.Exit(1)
 
 
+# ──────────────────────────── multi-file / workspace helpers ─────────────────
+
+def _multi_file_picker(
+    found: list[Path],
+    preselect: list[Path] | None = None,
+) -> "list[Path] | Path | None":
+    """Checkbox picker for taxonomy files plus action items (git log, new, quit).
+
+    Returns:
+      list[Path]         — files to open (Enter on a file row, or Enter on open action)
+      _GIT_LOG_SENTINEL  — user chose Browse git history
+      None               — user chose Create new taxonomy
+      _QUIT_SENTINEL     — user chose Quit
+    Ctrl+C / plain Esc also returns _QUIT_SENTINEL.
+    Falls back to a plain prompt in non-interactive terminals.
+    """
+    import sys
+
+    if not found:
+        return []
+
+    # All files pre-checked by default; honour project preselect if provided
+    selected: set[int] = set(range(len(found)))
+    if preselect is not None:
+        override = {i for i, f in enumerate(found) if f in preselect}
+        if override:
+            selected = override
+
+    # Action items appended below the file list (numbered 1-based from 1)
+    _ACTIONS: list[tuple[object, str]] = [
+        (True,              "↵  Open checked files"),   # True = "open" sentinel
+        (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
+        (_HTML_SENTINEL,    "🌐 Generate webpage"),
+        (None,              "+ Create new taxonomy"),
+        (_QUIT_SENTINEL,    "✕  Quit"),
+    ]
+    n_files   = len(found)
+    n_actions = len(_ACTIONS)
+    n_total   = n_files + n_actions
+
+    # ── Non-TTY fallback ──────────────────────────────────────────────────────
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        for f in found:
+            console.print(f"  ✓  {f.name}")
+        console.print(f"  [cyan] 1[/cyan]  ↵  Open checked files")
+        console.print(f"  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print(f"  [cyan] 3[/cyan]  [blue]🌐 Generate webpage[/blue]")
+        console.print(f"  [cyan] 4[/cyan]  [green]+ Create new taxonomy[/green]")
+        console.print(f"  [cyan] 5[/cyan]  [red]✕  Quit[/red]")
+        console.print()
+        choice = Prompt.ask("Action (1–5) or filename to toggle", default="1")
+        s = choice.strip().lower()
+        if s == "1" or s == "all":
+            return list(found)
+        if s == "2":
+            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
+        if s == "3":
+            return _HTML_SENTINEL  # type: ignore[return-value]
+        if s == "4":
+            return None
+        if s == "5":
+            return _QUIT_SENTINEL  # type: ignore[return-value]
+        # filename match → toggle and reask (simplified: just open all)
+        return list(found)
+
+    try:
+        import tty, termios
+    except ImportError:
+        return list(found)
+
+    R   = "\033[0m"
+    B   = "\033[1m"
+    D   = "\033[2m"
+    CY  = "\033[36m"
+    GR  = "\033[32m"
+    MG  = "\033[35m"
+    RE  = "\033[31m"
+    INV = "\033[7m"
+    BCY = "\033[1;36m"
+    CLEAR = "\r\033[2K"
+    NL    = "\r\n"
+
+    cursor = 0
+
+    def _action_colour(sentinel: object) -> str:
+        if sentinel == _GIT_LOG_SENTINEL:
+            return MG
+        if sentinel == _HTML_SENTINEL:
+            return "\033[34m"   # blue
+        if sentinel == _QUIT_SENTINEL:
+            return RE
+        if sentinel is True:
+            return CY   # "open checked files"
+        return GR       # create new
+
+    def render(first: bool = False) -> None:
+        total_lines = n_files + 1 + n_actions + 1  # files + blank sep + actions + hint
+        if not first:
+            sys.stdout.write(f"\033[{total_lines}A")
+
+        # File rows — checkbox only, no number
+        for i, f in enumerate(found):
+            tick = f"{GR}✓{R}" if i in selected else f"{D}·{R}"
+            if i == cursor:
+                row = f"  {BCY}{INV}   {R}  {tick}  {B}{f.name}{R}"
+            else:
+                row = f"       {tick}  {f.name}"
+            sys.stdout.write(f"{CLEAR}{row}{NL}")
+
+        # Blank separator line
+        sys.stdout.write(f"{CLEAR}{NL}")
+
+        # Action rows — numbered 1…n_actions
+        for j, (sentinel, label) in enumerate(_ACTIONS):
+            col   = _action_colour(sentinel)
+            idx   = n_files + j
+            num_s = f"{j + 1:>2}"
+            if idx == cursor:
+                row = f"  {BCY}{INV} {num_s} {R}  {col}{B}{label}{R}"
+            else:
+                row = f"    {CY}{num_s}{R}  {col}{label}{R}"
+            sys.stdout.write(f"{CLEAR}{row}{NL}")
+
+        # Hint line
+        sys.stdout.write(
+            f"{CLEAR}  {D}Space: toggle  a: all  n: none  ↑↓: navigate  Enter/1: open{R}{NL}"
+        )
+        sys.stdout.flush()
+
+    render(first=True)
+    fd  = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    result: "list[Path] | Path | None" = _QUIT_SENTINEL
+
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.buffer.read(1)
+
+            if ch in (b"\r", b"\n"):
+                if cursor < n_files:
+                    # Enter on a file row → open checked files
+                    result = [found[i] for i in sorted(selected)]
+                else:
+                    sentinel, _ = _ACTIONS[cursor - n_files]
+                    if sentinel is True:
+                        # "Open checked files" action
+                        result = [found[i] for i in sorted(selected)]
+                    else:
+                        result = sentinel  # type: ignore[assignment]
+                break
+
+            elif ch in (b"q", b"Q", b"\x03"):
+                result = _QUIT_SENTINEL
+                break
+
+            elif ch == b"\x1b":
+                nxt = sys.stdin.buffer.read(1)
+                if nxt == b"[":
+                    code = sys.stdin.buffer.read(1)
+                    if code == b"A":
+                        cursor = (cursor - 1) % n_total
+                    elif code == b"B":
+                        cursor = (cursor + 1) % n_total
+                else:
+                    result = _QUIT_SENTINEL
+                    break
+
+            elif ch == b" " and cursor < n_files:
+                if cursor in selected:
+                    selected.discard(cursor)
+                else:
+                    selected.add(cursor)
+
+            elif ch in (b"a", b"A"):
+                selected = set(range(n_files))
+                cursor = 0
+
+            elif ch in (b"n", b"N"):
+                selected.clear()
+
+            render()
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write(NL)
+        sys.stdout.flush()
+
+    return result
+
+
+def _resolve_broken_mappings_at_load(
+    workspace: TaxonomyWorkspace,
+    found_files: list[Path],
+) -> None:
+    """Before opening the TUI, ask user to load any files referenced by mappings."""
+    from .validator import SkosValidator
+    issues = SkosValidator().validate(workspace)
+    broken = [i for i in issues if i.code == "broken_mapping"]
+    if not broken:
+        return
+
+    # Collect unique missing URIs
+    missing_uris: set[str] = {i.related_uri for i in broken if i.related_uri}
+
+    # Which files in this folder might contain them?
+    unloaded = [f for f in found_files if f not in workspace.taxonomies]
+    if not unloaded:
+        console.print(
+            f"[yellow]⚠  {len(missing_uris)} unresolved mapping reference(s) — "
+            "no additional files available in this folder.[/yellow]"
+        )
+        return
+
+    console.print(
+        f"\n[yellow]⚠  Found {len(missing_uris)} unresolved mapping reference(s).[/yellow]"
+    )
+    console.print("[dim]The following files in this folder may contain them:[/dim]")
+    for f in unloaded:
+        console.print(f"  • {f.name}")
+
+    try:
+        want = Confirm.ask("Load these files to resolve references?", default=True)
+    except (KeyboardInterrupt, EOFError):
+        want = False
+
+    if want:
+        for f in unloaded:
+            try:
+                workspace.add_file(f)
+                console.print(f"  [green]✓ Loaded[/green] {f.name}")
+            except Exception as exc:
+                console.print(f"  [red]✗ Failed to load {f.name}: {exc}[/red]")
+
+
+def _load_workspace(
+    files: list[Path],
+    all_found: list[Path],
+) -> TaxonomyWorkspace:
+    """Load all *files* into a workspace, then resolve broken mappings."""
+    workspace = TaxonomyWorkspace.from_files(files)
+    _resolve_broken_mappings_at_load(workspace, all_found)
+    return workspace
+
+
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
 def _open_viewer(
     taxonomy_file: Path,
     lang: str = "en",
     jump_concept: "str | None" = None,
+    workspace: "TaxonomyWorkspace | None" = None,
 ) -> None:
     """Open the interactive taxonomy viewer for *taxonomy_file* and handle git."""
     from .nav import TaxonomyViewer
@@ -442,7 +691,10 @@ def _open_viewer(
                 console.print()
             gm.record_head()
 
-    viewer = TaxonomyViewer(taxonomy, taxonomy_file, lang=lang, git_manager=gm)
+    viewer = TaxonomyViewer(
+        taxonomy, taxonomy_file, lang=lang,
+        git_manager=gm, workspace=workspace,
+    )
     if jump_concept:
         uri = _resolve(taxonomy, jump_concept)
         for i, line in enumerate(viewer._flat):
@@ -954,6 +1206,54 @@ def cmd_validate(
         console.print(f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated.")
 
 
+# ──────────────────────────── export ─────────────────────────────────────────
+
+@app.command("export")
+def cmd_export(
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory (default: same folder as taxonomy)."),
+    lang: Optional[str] = typer.Option(None, "--lang", "-l", help="Comma-separated language codes to generate, e.g. en,fr. Defaults to all languages found."),
+) -> None:
+    """Export the taxonomy to a browsable HTML website (requires pyLODE).
+
+    Generates one HTML page per language with a language-switcher bar.
+
+    Examples:\n
+      ster export                         # auto-detect languages\n
+      ster export --lang en               # English only\n
+      ster export --lang en,fr --output ./docs\n
+    """
+    from .html_export import generate_html
+
+    taxonomy_file = _resolve_file(file)
+    output_dir    = output or taxonomy_file.parent / "html"
+    languages     = [l.strip() for l in lang.split(",")] if lang else None
+
+    console.print(f"[dim]Generating HTML from[/dim] [bold]{taxonomy_file.name}[/bold]…")
+    try:
+        created = generate_html(taxonomy_file, output_dir, languages=languages)
+    except RuntimeError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        err.print(f"[red]Export failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+    for path in created:
+        console.print(f"  [green]✓[/green]  {path}")
+
+    if created:
+        console.print(
+            f"\n[bold]Generated {len(created)} file(s)[/bold] in "
+            f"[cyan]{output_dir}[/cyan]"
+        )
+        if len(created) == 1:
+            console.print(f"  Open with:  open {created[0]}")
+        else:
+            entry = next((p for p in created if "_en" in p.name), created[0])
+            console.print(f"  Open with:  open {entry}")
+
+
 # ──────────────────────────── internal helpers ───────────────────────────────
 
 def _make_taxonomy_commit_msg(taxonomy: "Taxonomy", file_path: "Path", lang: str = "en") -> str:
@@ -1002,6 +1302,115 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
             _collect_reachable(taxonomy, child, visited)
 
 
+def _ensure_pylode() -> bool:
+    """Return True if pyLODE is importable, offering to install it if not."""
+    from .html_export import _patch_missing_pyproject
+    with _patch_missing_pyproject():
+        try:
+            import pylode  # noqa: F401
+            return True
+        except ImportError:
+            pass
+
+    console.print("\n[yellow]pyLODE is not installed.[/yellow]")
+    try:
+        answer = Prompt.ask(
+            "Install it now?  [dim](pip install pylode)[/dim]",
+            choices=["y", "n"],
+            default="y",
+        )
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+    if answer != "y":
+        return False
+
+    import subprocess, sys
+    console.print("[dim]Installing pyLODE…[/dim]")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "pylode"],
+    )
+    if result.returncode != 0:
+        err.print("[red]Installation failed.[/red]")
+        return False
+    console.print("[green]✓ pyLODE installed.[/green]")
+    return True
+
+
+def _run_html_export_interactive(files: list[Path]) -> None:
+    """Interactive HTML export from the home-screen menu."""
+    if not _ensure_pylode():
+        return
+
+    from .html_export import generate_html, _available_languages
+
+    if not files:
+        err.print("[red]No taxonomy files selected.[/red]")
+        return
+
+    console.print()
+    for taxonomy_file in files:
+        taxonomy = _load(taxonomy_file)
+        langs = _available_languages(taxonomy)
+        lang_str = ", ".join(langs) if langs else "en"
+        console.print(
+            f"[bold]{taxonomy_file.name}[/bold]  "
+            f"[dim]Languages detected: {lang_str}[/dim]"
+        )
+
+    console.print()
+    try:
+        lang_input = Prompt.ask(
+            "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return
+
+    languages = [l.strip() for l in lang_input.split(",") if l.strip()] or None
+
+    output_dir = files[0].parent / "html"
+    console.print()
+    try:
+        out_input = Prompt.ask(
+            "Output directory",
+            default=str(output_dir),
+        )
+        output_dir = Path(out_input.strip())
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return
+
+    console.print()
+    all_created: list[Path] = []
+    for taxonomy_file in files:
+        console.print(f"[dim]Generating[/dim] [bold]{taxonomy_file.name}[/bold]…")
+        try:
+            created = generate_html(taxonomy_file, output_dir, languages=languages)
+            for p in created:
+                console.print(f"  [green]✓[/green]  {p}")
+            all_created.extend(created)
+        except RuntimeError as exc:
+            err.print(f"[red]{exc}[/red]")
+            return
+        except Exception as exc:
+            err.print(f"[red]Export failed for {taxonomy_file.name}: {exc}[/red]")
+
+    if all_created:
+        console.print(
+            f"\n[bold]Done.[/bold]  {len(all_created)} file(s) in "
+            f"[cyan]{output_dir}[/cyan]"
+        )
+        entry = next((p for p in all_created if "_en" in p.name), all_created[0])
+        console.print(f"  Open with:  open {entry}")
+
+    try:
+        Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
+    except (KeyboardInterrupt, EOFError):
+        pass
+
+
 def main() -> None:
     """Entry point.
 
@@ -1033,45 +1442,71 @@ def main() -> None:
         for pattern in _TAXONOMY_GLOBS:
             found.extend(Path.cwd().glob(pattern))
         found = sorted(set(found))
-        saved = _load_session()
 
+        # ── No files in folder → run creation wizard ──────────────────────────
         if not found:
             console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
             _run_create_wizard()
-            continue   # return to home after wizard (created or cancelled)
+            continue
 
-        if saved and saved in found:
-            console.print(
-                f"[bold]Taxonomy files in this folder[/bold]"
-                f"  [dim](Enter → {saved.name})[/dim]\n"
-            )
-        else:
-            console.print("[bold]Taxonomy files in this folder:[/bold]\n")
+        # ── Check for existing project (drives preselection) ──────────────────
+        project = Project.load(Path.cwd())
+        preselect = project.resolved_files() if project else None
+
+        console.print("[bold]Taxonomy files in this folder:[/bold]\n")
 
         try:
-            taxonomy_file = _pick_file_interactive(found, preselect=saved, show_log_option=True)
+            selected = _multi_file_picker(found, preselect=preselect)
         except (KeyboardInterrupt, EOFError):
             console.print()
-            break   # Ctrl+C at home menu → exit
+            break
 
-        if taxonomy_file == _QUIT_SENTINEL:
-            break   # user chose Quit from the menu
+        if selected is _QUIT_SENTINEL or selected is None:
+            break
 
-        if taxonomy_file is None:
+        if selected is _GIT_LOG_SENTINEL:
+            launch_git_log(path=found[0] if found else None)
+            continue
+
+        if selected is _HTML_SENTINEL:
+            _run_html_export_interactive(found)
+            continue
+
+        if not selected:
+            # All files unchecked → create new taxonomy
             _run_create_wizard()
-            continue   # return to home after wizard
+            continue
 
-        if taxonomy_file == _GIT_LOG_SENTINEL:
-            launch_git_log(path=saved if saved and saved in found else (found[0] if found else None))
-            continue   # return to home after log browser
-
-        _save_session(taxonomy_file)
-        global _session_file
-        _session_file = taxonomy_file
+        # ── Save / update project ─────────────────────────────────────────────
+        git_root = _git_root(Path.cwd()) or Path.cwd()
+        updated_project = Project(
+            root=git_root,
+            files=[],
+            lang=project.lang if project else "en",
+        )
+        for f in selected:
+            updated_project.add_file(f)
         try:
-            _open_viewer(taxonomy_file)
+            updated_project.save()
         except Exception:
-            pass
+            pass  # non-fatal if .ster/ can't be written
+
+        # ── Load workspace (with broken-mapping resolution) ───────────────────
+        try:
+            workspace = _load_workspace(selected, found)
+        except Exception as exc:
+            err.print(f"[red]Failed to load workspace: {exc}[/red]")
+            continue
+
+        # ── Open viewer ───────────────────────────────────────────────────────
+        primary = selected[0]
+        _save_session(primary)
+        global _session_file
+        _session_file = primary
+        try:
+            _open_viewer(primary, lang=updated_project.lang, workspace=workspace)
+        except Exception as exc:
+            err.print(f"[red]Viewer error: {exc}[/red]")
         continue   # return to home after viewer
 
 

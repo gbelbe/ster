@@ -38,6 +38,7 @@ def load(path: str | Path) -> Taxonomy:
     g = Graph()
     g.parse(str(path), format=fmt)
     taxonomy = graph_to_taxonomy(g)
+    taxonomy.file_path = path
     assign_handles(taxonomy)
     return taxonomy
 
@@ -112,6 +113,16 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                 concept.related.append(str(o))
             elif ps == str(SKOS.topConceptOf):
                 concept.top_concept_of = str(o)
+            elif ps == str(SKOS.broadMatch):
+                concept.broad_match.append(str(o))
+            elif ps == str(SKOS.narrowMatch):
+                concept.narrow_match.append(str(o))
+            elif ps == str(SKOS.relatedMatch):
+                concept.related_match.append(str(o))
+            elif ps == str(SKOS.exactMatch):
+                concept.exact_match.append(str(o))
+            elif ps == str(SKOS.closeMatch):
+                concept.close_match.append(str(o))
 
         taxonomy.concepts[uri] = concept
 
@@ -155,9 +166,14 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
         ref = URIRef(uri)
         g.add((ref, RDF.type, SKOS.Concept))
 
-        # inScheme for all schemes
-        for s_uri in taxonomy.schemes:
+        # inScheme: use topConceptOf if set, otherwise traverse up the hierarchy
+        s_uri = _concept_scheme_uri(taxonomy, uri)
+        if s_uri:
             g.add((ref, SKOS.inScheme, URIRef(s_uri)))
+        else:
+            # Orphan concept — add to all schemes as a fallback
+            for s_uri in taxonomy.schemes:
+                g.add((ref, SKOS.inScheme, URIRef(s_uri)))
 
         if concept.top_concept_of:
             g.add((ref, SKOS.topConceptOf, URIRef(concept.top_concept_of)))
@@ -179,6 +195,16 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, SKOS.broader, URIRef(b_uri)))
         for r_uri in concept.related:
             g.add((ref, SKOS.related, URIRef(r_uri)))
+        for u in concept.broad_match:
+            g.add((ref, SKOS.broadMatch, URIRef(u)))
+        for u in concept.narrow_match:
+            g.add((ref, SKOS.narrowMatch, URIRef(u)))
+        for u in concept.related_match:
+            g.add((ref, SKOS.relatedMatch, URIRef(u)))
+        for u in concept.exact_match:
+            g.add((ref, SKOS.exactMatch, URIRef(u)))
+        for u in concept.close_match:
+            g.add((ref, SKOS.closeMatch, URIRef(u)))
 
     return g
 
@@ -186,7 +212,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 # ──────────────────────────── helpers ────────────────────────────────────────
 
 def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
-    """Ensure both skos:broader and skos:narrower are populated symmetrically."""
+    """Ensure skos:broader/narrower and skos:topConceptOf/hasTopConcept are symmetric."""
+    # 1. Bidirectional broader ↔ narrower
     for uri, concept in taxonomy.concepts.items():
         for child_uri in concept.narrower:
             child = taxonomy.concepts.get(child_uri)
@@ -196,6 +223,56 @@ def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
             parent = taxonomy.concepts.get(parent_uri)
             if parent and uri not in parent.narrower:
                 parent.narrower.append(uri)
+
+    # 2. hasTopConcept → topConceptOf
+    for scheme_uri, scheme in taxonomy.schemes.items():
+        for tc_uri in scheme.top_concepts:
+            concept = taxonomy.concepts.get(tc_uri)
+            if concept and concept.top_concept_of is None:
+                concept.top_concept_of = scheme_uri
+
+    # 3. topConceptOf → hasTopConcept
+    for concept_uri, concept in taxonomy.concepts.items():
+        if concept.top_concept_of:
+            scheme = taxonomy.schemes.get(concept.top_concept_of)
+            if scheme and concept_uri not in scheme.top_concepts:
+                scheme.top_concepts.append(concept_uri)
+
+    # 4. Auto-detect: concepts with no broader that aren't yet a top concept
+    #    are top concepts of whatever scheme lists them in its hierarchy.
+    primary = taxonomy.primary_scheme()
+    for concept_uri, concept in taxonomy.concepts.items():
+        if concept.broader or concept.top_concept_of:
+            continue
+        # Check if any scheme lists this concept in its top_concepts (already handled
+        # above). If not, assign to the primary scheme as a top concept.
+        in_any_scheme = any(
+            concept_uri in s.top_concepts for s in taxonomy.schemes.values()
+        )
+        if not in_any_scheme and primary:
+            primary.top_concepts.append(concept_uri)
+            concept.top_concept_of = primary.uri
+
+
+def _concept_scheme_uri(
+    taxonomy: Taxonomy, uri: str, _visited: "frozenset[str] | None" = None
+) -> str | None:
+    """Return the scheme URI for a concept by traversing up to a top concept."""
+    if _visited is None:
+        _visited = frozenset()
+    if uri in _visited:
+        return None
+    concept = taxonomy.concepts.get(uri)
+    if not concept:
+        return None
+    if concept.top_concept_of:
+        return concept.top_concept_of
+    _visited = _visited | {uri}
+    for parent_uri in concept.broader:
+        s = _concept_scheme_uri(taxonomy, parent_uri, _visited)
+        if s:
+            return s
+    return None
 
 
 def _bind_namespace(g: Graph, taxonomy: Taxonomy) -> None:
