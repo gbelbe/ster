@@ -1,15 +1,17 @@
 """Interactive first-time setup wizard for creating a new taxonomy."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.table import Table
-from rich import box
 
 console = Console()
 
@@ -56,7 +58,7 @@ def run(default_path: Path | None = None) -> SetupResult | None:
     for idx, step_fn in enumerate(steps[:-1], start=1):
         _header(idx, len(steps) - 1, step_fn.__doc__ or "")
         result = step_fn(ctx)
-        if result is False:          # user typed 'quit'
+        if result is False:  # user typed 'quit'
             console.print("[yellow]Setup cancelled.[/yellow]")
             return None
 
@@ -93,18 +95,21 @@ _ASCII = """\
 
 def _welcome() -> None:
     console.print()
-    console.print(Panel(
-        _ASCII + "\n\n"
-        "This wizard will create a new taxonomy file step by step.\n"
-        "  • Press [bold]Enter[/bold] to accept the suggested default.\n"
-        "  • Type [bold]skip[/bold] on any optional field to move on.\n"
-        "  • Type [bold]quit[/bold] at any prompt to cancel.",
-        border_style="cyan",
-        padding=(1, 4),
-    ))
+    console.print(
+        Panel(
+            _ASCII + "\n\n"
+            "This wizard will create a new taxonomy file step by step.\n"
+            "  • Press [bold]Enter[/bold] to accept the suggested default.\n"
+            "  • Type [bold]skip[/bold] on any optional field to move on.\n"
+            "  • Type [bold]quit[/bold] at any prompt to cancel.",
+            border_style="cyan",
+            padding=(1, 4),
+        )
+    )
 
 
 # ──────────────────────────── step helpers ───────────────────────────────────
+
 
 def _header(step: int, total: int, title: str) -> None:
     console.print()
@@ -129,6 +134,7 @@ def _ask(prompt: str, default: str = "", optional: bool = False) -> str | None:
 
 # ──────────────────────────── steps ──────────────────────────────────────────
 
+
 def _step_file(ctx: dict) -> bool:
     """Output file"""
     suggestion = str(ctx.get("file_path") or "taxonomy.ttl")
@@ -147,9 +153,7 @@ def _step_file(ctx: dict) -> bool:
 def _step_languages(ctx: dict) -> bool:
     """Languages"""
     console.print(
-        "  Supported: [dim]" +
-        ", ".join(f"{k} ({v})" for k, v in _KNOWN_LANGS.items()) +
-        "[/dim]"
+        "  Supported: [dim]" + ", ".join(f"{k} ({v})" for k, v in _KNOWN_LANGS.items()) + "[/dim]"
     )
     val = _ask("Languages to include (comma-separated)", default="en,fr")
     if val is None:
@@ -179,7 +183,7 @@ def _step_title(ctx: dict) -> bool:
             val = _ask(prompt)
             if val is None:
                 return False
-            titles[lang] = val or f"Unnamed Taxonomy"
+            titles[lang] = val or "Unnamed Taxonomy"
     ctx["titles"] = titles
     return True
 

@@ -1,6 +1,9 @@
 """Tests for all business-logic operations."""
+
 from __future__ import annotations
+
 import pytest
+
 from ster import operations
 from ster.exceptions import (
     CircularHierarchyError,
@@ -17,6 +20,7 @@ NEW = BASE + "NewConcept"
 
 
 # ── resolve ───────────────────────────────────────────────────────────────────
+
 
 def test_resolve_by_handle(simple_taxonomy):
     handle = simple_taxonomy.uri_to_handle(BASE + "Top")
@@ -46,6 +50,7 @@ def test_resolve_missing_raises(simple_taxonomy):
 
 # ── expand_uri ────────────────────────────────────────────────────────────────
 
+
 def test_expand_uri_local_name(simple_taxonomy):
     uri = operations.expand_uri(simple_taxonomy, "NewConcept")
     assert uri == BASE + "NewConcept"
@@ -58,12 +63,14 @@ def test_expand_uri_full_uri_passthrough(simple_taxonomy):
 
 def test_expand_uri_no_base_raises():
     from ster.model import Taxonomy
+
     t = Taxonomy()
     with pytest.raises(HandleNotFoundError):
         operations.expand_uri(t, "NoBase")
 
 
 # ── add_concept ───────────────────────────────────────────────────────────────
+
 
 def test_add_concept_under_parent(simple_taxonomy):
     parent_uri = BASE + "Child2"
@@ -96,6 +103,7 @@ def test_add_concept_bad_parent_raises(simple_taxonomy):
 
 
 # ── remove_concept ────────────────────────────────────────────────────────────
+
 
 def test_remove_leaf(simple_taxonomy):
     uri = BASE + "Child2"
@@ -132,6 +140,7 @@ def test_remove_missing_raises(simple_taxonomy):
 
 # ── move_concept ──────────────────────────────────────────────────────────────
 
+
 def test_move_to_new_parent(simple_taxonomy):
     uri = BASE + "Child2"
     new_parent = BASE + "Child1"
@@ -162,6 +171,7 @@ def test_move_missing_raises(simple_taxonomy):
 
 # ── set_label ─────────────────────────────────────────────────────────────────
 
+
 def test_set_pref_label_new_lang(simple_taxonomy):
     uri = BASE + "Top"
     operations.set_label(simple_taxonomy, uri, "de", "Oberbegriff")
@@ -172,8 +182,11 @@ def test_set_pref_label_replaces_existing(simple_taxonomy):
     uri = BASE + "Top"
     operations.set_label(simple_taxonomy, uri, "en", "Updated")
     assert simple_taxonomy.concepts[uri].pref_label("en") == "Updated"
-    en_pref = [l for l in simple_taxonomy.concepts[uri].labels
-               if l.type == LabelType.PREF and l.lang == "en"]
+    en_pref = [
+        l
+        for l in simple_taxonomy.concepts[uri].labels
+        if l.type == LabelType.PREF and l.lang == "en"
+    ]
     assert len(en_pref) == 1
 
 
@@ -187,6 +200,7 @@ def test_set_alt_label_coexists(simple_taxonomy):
 
 
 # ── set_definition ────────────────────────────────────────────────────────────
+
 
 def test_set_definition_new(simple_taxonomy):
     uri = BASE + "Child2"
@@ -203,6 +217,7 @@ def test_set_definition_replaces(simple_taxonomy):
 
 
 # ── add_related / remove_related ─────────────────────────────────────────────
+
 
 def test_add_related_symmetric(simple_taxonomy):
     uri_a = BASE + "Child2"
@@ -228,6 +243,7 @@ def test_remove_related(simple_taxonomy):
 
 
 # ── rename_uri ────────────────────────────────────────────────────────────────
+
 
 def test_rename_updates_concept_dict(simple_taxonomy):
     old = BASE + "Child2"
@@ -255,8 +271,10 @@ def test_rename_updates_top_concept_of(simple_taxonomy):
     old = BASE + "Top"
     new = BASE + "TopRenamed"
     operations.rename_uri(simple_taxonomy, old, new)
-    assert simple_taxonomy.concepts[new].top_concept_of is None or \
-           simple_taxonomy.concepts[new].top_concept_of != old
+    assert (
+        simple_taxonomy.concepts[new].top_concept_of is None
+        or simple_taxonomy.concepts[new].top_concept_of != old
+    )
 
 
 def test_rename_missing_raises(simple_taxonomy):
@@ -265,6 +283,7 @@ def test_rename_missing_raises(simple_taxonomy):
 
 
 # ── add_broader_link ───────────────────────────────────────────────────────────
+
 
 def test_add_broader_link_adds_polyhierarchy(simple_taxonomy):
     """Child2 gains a second broader (Grandchild's parent Child1)."""
@@ -323,17 +342,22 @@ def test_add_broader_link_new_parent_narrower_not_duplicated(simple_taxonomy):
 
 # ── remove_label ──────────────────────────────────────────────────────────────
 
+
 def test_remove_label_removes_alt_label(simple_taxonomy):
     uri = BASE + "Child2"
     # Child2 has altLabel "Second child"@en in the conftest TTL but not in simple_taxonomy
     # Add it first
     from ster.model import Label, LabelType
+
     simple_taxonomy.concepts[uri].labels.append(
         Label(lang="en", value="Second child", type=LabelType.ALT)
     )
     operations.remove_label(simple_taxonomy, uri, "en", "Second child", LabelType.ALT)
-    alts = [l for l in simple_taxonomy.concepts[uri].labels
-            if l.type == LabelType.ALT and l.lang == "en" and l.value == "Second child"]
+    alts = [
+        l
+        for l in simple_taxonomy.concepts[uri].labels
+        if l.type == LabelType.ALT and l.lang == "en" and l.value == "Second child"
+    ]
     assert alts == []
 
 
@@ -353,6 +377,7 @@ def test_remove_label_nonexistent_value_is_noop(simple_taxonomy):
 
 # ── set_label errors ──────────────────────────────────────────────────────────
 
+
 def test_set_label_missing_concept_raises(simple_taxonomy):
     with pytest.raises(ConceptNotFoundError):
         operations.set_label(simple_taxonomy, BASE + "Ghost", "en", "value")
@@ -360,12 +385,14 @@ def test_set_label_missing_concept_raises(simple_taxonomy):
 
 # ── set_definition errors ─────────────────────────────────────────────────────
 
+
 def test_set_definition_missing_concept_raises(simple_taxonomy):
     with pytest.raises(ConceptNotFoundError):
         operations.set_definition(simple_taxonomy, BASE + "Ghost", "en", "value")
 
 
 # ── add_related errors ────────────────────────────────────────────────────────
+
 
 def test_add_related_missing_concept_a_raises(simple_taxonomy):
     with pytest.raises(ConceptNotFoundError):
@@ -388,6 +415,7 @@ def test_add_related_duplicate_is_noop(simple_taxonomy):
 
 # ── remove_related errors ─────────────────────────────────────────────────────
 
+
 def test_remove_related_missing_concept_a_raises(simple_taxonomy):
     with pytest.raises(ConceptNotFoundError):
         operations.remove_related(simple_taxonomy, BASE + "Ghost", BASE + "Child1")
@@ -399,6 +427,7 @@ def test_remove_related_missing_concept_b_raises(simple_taxonomy):
 
 
 # ── move_concept edge cases ───────────────────────────────────────────────────
+
 
 def test_move_to_scheme_parent(simple_taxonomy):
     """Moving a concept to a scheme URI makes it a top concept of that scheme."""
@@ -417,16 +446,19 @@ def test_move_missing_new_parent_raises(simple_taxonomy):
 
 # ── add_concept to scheme ─────────────────────────────────────────────────────
 
+
 def test_add_concept_under_scheme(simple_taxonomy):
     """Adding a concept with a scheme URI as parent makes it a top concept."""
     scheme_uri = BASE + "Scheme"
-    operations.add_concept(simple_taxonomy, BASE + "NewTop", {"en": "New Top"},
-                           parent_handle=scheme_uri)
+    operations.add_concept(
+        simple_taxonomy, BASE + "NewTop", {"en": "New Top"}, parent_handle=scheme_uri
+    )
     scheme = simple_taxonomy.schemes[scheme_uri]
     assert BASE + "NewTop" in scheme.top_concepts
 
 
 # ── remove_concept defensive pass ────────────────────────────────────────────
+
 
 def test_remove_concept_defensive_pass_top_concepts(simple_taxonomy):
     """Removing a top concept also cleans scheme.top_concepts."""
@@ -440,11 +472,14 @@ def test_remove_concept_defensive_pass_top_concepts(simple_taxonomy):
 
 # ── create_scheme ─────────────────────────────────────────────────────────────
 
+
 def test_create_scheme_basic():
     from ster.model import Taxonomy
+
     t = Taxonomy()
     scheme = operations.create_scheme(
-        t, "https://example.org/s",
+        t,
+        "https://example.org/s",
         labels={"en": "My Scheme"},
         descriptions={"en": "A description"},
         creator="Alice",
@@ -460,9 +495,11 @@ def test_create_scheme_basic():
 
 def test_create_scheme_default_languages():
     from ster.model import Taxonomy
+
     t = Taxonomy()
     scheme = operations.create_scheme(
-        t, "https://example.org/s",
+        t,
+        "https://example.org/s",
         labels={"en": "My Scheme", "fr": "Mon Schéma"},
     )
     # languages defaults to the label keys

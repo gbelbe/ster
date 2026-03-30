@@ -1,0 +1,23 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix void: <http://rdfs.org/ns/void#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/test> a skos:Concept ;
+    skos:inScheme <file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/scheme> ;
+    skos:prefLabel "Test"@en ;
+    skos:topConceptOf <file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/scheme> .
+
+<mytaxo/taxonomy> a skos:Concept ;
+    skos:inScheme <file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/scheme> ;
+    skos:prefLabel "Taxonomy"@en ;
+    skos:topConceptOf <file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/scheme> .
+
+<file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/scheme> a skos:ConceptScheme ;
+    dcterms:created "2026-03-25"^^xsd:date ;
+    dcterms:language "fr" ;
+    dcterms:title "test"@fr ;
+    void:uriSpace "mytaxo/" ;
+    skos:hasTopConcept <file:///Users/20002797/Documents/Claude/ster/ster/mytaxo/test>,
+        <mytaxo/taxonomy> .
+

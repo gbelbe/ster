@@ -1,11 +1,13 @@
 """Tests for handle generation."""
-from ster.handles import derive_candidate, extract_local_name, handle_for_uri, assign_handles
-from ster.model import Concept, ConceptScheme, Label, Taxonomy
+
+from ster.handles import assign_handles, derive_candidate, extract_local_name, handle_for_uri
+from ster.model import Concept, ConceptScheme, Taxonomy
 
 BASE = "https://example.org/test/"
 
 
 # ── extract_local_name ────────────────────────────────────────────────────────
+
 
 def test_extract_local_name_fragment():
     assert extract_local_name("https://example.org/ns#BoatChar") == "BoatChar"
@@ -24,6 +26,7 @@ def test_extract_local_name_bare():
 
 
 # ── derive_candidate ─────────────────────────────────────────────────────────
+
 
 def test_derive_candidate_pascal_case():
     assert derive_candidate("BoatCharacteristic") == "BC"
@@ -50,6 +53,7 @@ def test_derive_candidate_all_caps():
 
 # ── handle_for_uri ────────────────────────────────────────────────────────────
 
+
 def test_handle_for_uri_unique():
     used: set[str] = set()
     h = handle_for_uri(BASE + "BoatCharacteristic", used)
@@ -69,6 +73,7 @@ def test_handle_for_uri_multiple_collisions():
 
 
 # ── assign_handles ────────────────────────────────────────────────────────────
+
 
 def test_assign_handles_unique():
     t = Taxonomy(

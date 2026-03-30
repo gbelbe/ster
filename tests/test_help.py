@@ -1,10 +1,11 @@
 """Tests for ster/help.py — welcome_lines and readme_section."""
-from __future__ import annotations
-import pytest
-from ster.help import SECTIONS, welcome_lines, readme_section, VERSION, AUTHOR
 
+from __future__ import annotations
+
+from ster.help import AUTHOR, SECTIONS, VERSION, readme_section, welcome_lines
 
 # ── SECTIONS structure ────────────────────────────────────────────────────────
+
 
 def test_sections_is_list():
     assert isinstance(SECTIONS, list)
@@ -38,6 +39,7 @@ def test_sections_contains_general():
 
 
 # ── welcome_lines ─────────────────────────────────────────────────────────────
+
 
 def test_welcome_lines_returns_list():
     lines = welcome_lines()
@@ -94,6 +96,7 @@ def test_welcome_lines_includes_key_shortcuts():
 
 
 # ── readme_section ────────────────────────────────────────────────────────────
+
 
 def test_readme_section_returns_string():
     md = readme_section()

@@ -1,16 +1,18 @@
 """Rich-based display layer — returns renderables, no direct console.print calls."""
+
 from __future__ import annotations
+
+from rich import box
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
-from rich.panel import Panel
-from rich import box
 
 from .model import LabelType, Taxonomy
 
-
 # ──────────────────────────── tree rendering ─────────────────────────────────
+
 
 def render_tree(
     taxonomy: Taxonomy,
@@ -96,6 +98,7 @@ def _concept_text(handle: str, label: str) -> Text:
 
 # ──────────────────────────── concept detail ─────────────────────────────────
 
+
 def render_concept_detail(taxonomy: Taxonomy, uri: str, lang: str = "en") -> Panel:
     """Render a detailed panel for a single concept."""
     concept = taxonomy.concepts.get(uri)
@@ -150,6 +153,7 @@ def render_concept_detail(taxonomy: Taxonomy, uri: str, lang: str = "en") -> Pan
 
 
 # ──────────────────────────── handle list ────────────────────────────────────
+
 
 def render_handle_list(taxonomy: Taxonomy, lang: str = "en") -> Table:
     """Render a table of all handles with their labels and URIs."""

@@ -4,7 +4,9 @@ The workspace is the central runtime object for multi-file editing.
 Individual files are loaded and saved through their own Taxonomy; the workspace
 provides a unified read view and cross-file resolution utilities.
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,7 +23,7 @@ class TaxonomyWorkspace:
     # ── loading ───────────────────────────────────────────────────────────────
 
     @classmethod
-    def from_files(cls, paths: list[Path]) -> "TaxonomyWorkspace":
+    def from_files(cls, paths: list[Path]) -> TaxonomyWorkspace:
         """Load all *paths* and return a new workspace."""
         ws = cls()
         for p in paths:
@@ -30,7 +32,7 @@ class TaxonomyWorkspace:
         return ws
 
     @classmethod
-    def from_taxonomy(cls, taxonomy: Taxonomy, path: Path) -> "TaxonomyWorkspace":
+    def from_taxonomy(cls, taxonomy: Taxonomy, path: Path) -> TaxonomyWorkspace:
         """Wrap a single already-loaded Taxonomy in a workspace."""
         ws = cls()
         ws.taxonomies[path] = taxonomy
@@ -101,9 +103,7 @@ class TaxonomyWorkspace:
 
     def all_schemes(self) -> list[tuple[Path, ConceptScheme]]:
         return [
-            (path, scheme)
-            for path, t in self.taxonomies.items()
-            for scheme in t.schemes.values()
+            (path, scheme) for path, t in self.taxonomies.items() for scheme in t.schemes.values()
         ]
 
     def scheme_count(self) -> int:
@@ -116,6 +116,7 @@ class TaxonomyWorkspace:
     def concept_scheme_uri(self, concept_uri: str) -> str | None:
         """Return the ConceptScheme URI for *concept_uri*, searching all files."""
         from .store import _concept_scheme_uri
+
         for t in self.taxonomies.values():
             if concept_uri in t.concepts:
                 return _concept_scheme_uri(t, concept_uri)

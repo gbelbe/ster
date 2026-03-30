@@ -1,18 +1,15 @@
 """Tests for the setup wizard (pure logic, no interactive prompts)."""
+
 from __future__ import annotations
+
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-from ster.wizard import SetupResult, run, _KNOWN_LANGS
-
-
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-from ster.handles import derive_candidate  # already tested in test_handles
-
+from ster.wizard import _KNOWN_LANGS, SetupResult, run
 
 # ── SetupResult dataclass ─────────────────────────────────────────────────────
+
 
 def test_setup_result_fields():
     r = SetupResult(
@@ -44,12 +41,14 @@ def test_setup_result_defaults():
 
 # ── known languages dict ──────────────────────────────────────────────────────
 
+
 def test_known_langs_has_en_fr():
     assert "en" in _KNOWN_LANGS
     assert "fr" in _KNOWN_LANGS
 
 
 # ── wizard.run with mocked prompts ────────────────────────────────────────────
+
 
 def _mock_prompts(answers: list[str]):
     """Return a Prompt.ask mock that pops answers sequentially."""
@@ -67,14 +66,14 @@ def _mock_prompts(answers: list[str]):
 def test_run_happy_path(tmp_path):
     out_file = tmp_path / "new.ttl"
     answers = [
-        str(out_file),               # file path
-        "en,fr",                     # languages
-        "My Taxonomy",               # title en
-        "Ma Taxonomie",              # title fr
-        "A test taxonomy.",          # description en
-        "",                          # description fr (skip)
-        "https://example.org/test/", # base URI
-        "Alice",                     # creator
+        str(out_file),  # file path
+        "en,fr",  # languages
+        "My Taxonomy",  # title en
+        "Ma Taxonomie",  # title fr
+        "A test taxonomy.",  # description en
+        "",  # description fr (skip)
+        "https://example.org/test/",  # base URI
+        "Alice",  # creator
     ]
     with (
         patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
@@ -106,7 +105,7 @@ def test_run_cancelled_at_confirm(tmp_path):
 
 
 def test_run_quit_mid_wizard(tmp_path):
-    answers = ["quit"]   # user quits on first prompt
+    answers = ["quit"]  # user quits on first prompt
     with (
         patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
         patch("ster.wizard.Confirm.ask", return_value=True),
@@ -130,7 +129,7 @@ def test_run_adds_slash_to_base_uri(tmp_path):
 
 
 def test_run_adds_ttl_extension_if_missing(tmp_path):
-    out_file = tmp_path / "notaxonomy"   # no extension
+    out_file = tmp_path / "notaxonomy"  # no extension
     answers = [str(out_file), "en", "Title", "", "https://example.org/x/", ""]
     with (
         patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
@@ -145,12 +144,12 @@ def test_run_adds_ttl_extension_if_missing(tmp_path):
 def test_run_skip_optional_fields(tmp_path):
     out_file = tmp_path / "new.ttl"
     answers = [
-        str(out_file),               # file
-        "en",                        # languages
-        "Title",                     # title en
-        "skip",                      # description — skip
-        "https://example.org/x/",    # base URI
-        "skip",                      # creator — skip
+        str(out_file),  # file
+        "en",  # languages
+        "Title",  # title en
+        "skip",  # description — skip
+        "https://example.org/x/",  # base URI
+        "skip",  # creator — skip
     ]
     with (
         patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
@@ -174,4 +173,5 @@ def test_run_sets_created_date(tmp_path):
 
     assert result is not None
     import re
+
     assert re.match(r"\d{4}-\d{2}-\d{2}", result.created)

@@ -1,8 +1,12 @@
 """Tests for the display layer."""
+
 from __future__ import annotations
+
 from io import StringIO
+
 from rich.console import Console
-from ster.display import render_tree, render_concept_detail, render_handle_list
+
+from ster.display import render_concept_detail, render_handle_list, render_tree
 
 BASE = "https://example.org/test/"
 
@@ -15,6 +19,7 @@ def _render_to_str(renderable) -> str:
 
 
 # ── render_tree ───────────────────────────────────────────────────────────────
+
 
 def test_render_tree_contains_all_handles(simple_taxonomy):
     output = _render_to_str(render_tree(simple_taxonomy))
@@ -47,6 +52,7 @@ def test_render_tree_unknown_handle(simple_taxonomy):
 
 
 # ── render_concept_detail ─────────────────────────────────────────────────────
+
 
 def test_render_detail_contains_uri(simple_taxonomy):
     uri = BASE + "Top"
@@ -83,9 +89,9 @@ def test_render_detail_missing_concept(simple_taxonomy):
 
 # ── render_handle_list ────────────────────────────────────────────────────────
 
+
 def test_render_handle_list_row_count(simple_taxonomy):
     output = _render_to_str(render_handle_list(simple_taxonomy))
-    total = len(simple_taxonomy.handle_index)
     # Each handle should appear exactly once
     for handle in simple_taxonomy.handle_index:
         assert handle in output

@@ -1,15 +1,21 @@
 """Tests for the interactive taxonomy navigator and shell (non-curses parts)."""
+
 from __future__ import annotations
+
 import pytest
-from pathlib import Path
-from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
+
 from ster.handles import assign_handles
-from ster import operations
+from ster.model import Concept, ConceptScheme, Label, Taxonomy
 from ster.nav import (
-    TaxonomyShell, TaxonomyViewer,
-    _breadcrumb, _children, _parent_uri,
-    flatten_tree, build_detail_fields, build_scheme_fields,
+    TaxonomyShell,
+    TaxonomyViewer,
+    _breadcrumb,
+    _children,
     _count_descendants,
+    _parent_uri,
+    build_detail_fields,
+    build_scheme_fields,
+    flatten_tree,
 )
 
 BASE = "https://example.org/test/"
@@ -23,6 +29,7 @@ def shell(simple_taxonomy, tmp_path) -> TaxonomyShell:
 
 
 # ── navigation helpers ────────────────────────────────────────────────────────
+
 
 def test_children_root(simple_taxonomy):
     kids = _children(simple_taxonomy, None)
@@ -53,11 +60,12 @@ def test_breadcrumb_root(simple_taxonomy):
 
 def test_breadcrumb_child(simple_taxonomy):
     bc = _breadcrumb(simple_taxonomy, BASE + "Child1")
-    assert "[TOP]" in bc or "[" in bc   # handle varies; path contains at least one handle
+    assert "[TOP]" in bc or "[" in bc  # handle varies; path contains at least one handle
     assert bc.startswith("/")
 
 
 # ── shell prompt ──────────────────────────────────────────────────────────────
+
 
 def test_initial_prompt_is_root(shell):
     assert shell.prompt == "/ $ "
@@ -93,6 +101,7 @@ def test_cd_bad_handle_stays_put(shell, capsys):
 
 # ── pwd ───────────────────────────────────────────────────────────────────────
 
+
 def test_pwd_at_root(shell, capsys):
     shell.onecmd("pwd")
     out = capsys.readouterr().out
@@ -100,6 +109,7 @@ def test_pwd_at_root(shell, capsys):
 
 
 # ── add ───────────────────────────────────────────────────────────────────────
+
 
 def test_add_at_cwd(shell, simple_taxonomy):
     handle_top = simple_taxonomy.uri_to_handle(BASE + "Top")
@@ -117,6 +127,7 @@ def test_add_default_label(shell, simple_taxonomy):
 
 
 # ── rm ────────────────────────────────────────────────────────────────────────
+
 
 def test_rm_leaf(shell, simple_taxonomy):
     handle = simple_taxonomy.uri_to_handle(BASE + "Child2")
@@ -140,6 +151,7 @@ def test_rm_current_cwd_resets_to_root(shell, simple_taxonomy):
 
 # ── mv ────────────────────────────────────────────────────────────────────────
 
+
 def test_mv_reparent(shell, simple_taxonomy):
     h_child2 = simple_taxonomy.uri_to_handle(BASE + "Child2")
     h_child1 = simple_taxonomy.uri_to_handle(BASE + "Child1")
@@ -156,6 +168,7 @@ def test_mv_to_top_level(shell, simple_taxonomy):
 
 # ── label / define ────────────────────────────────────────────────────────────
 
+
 def test_label_command(shell, simple_taxonomy):
     handle = simple_taxonomy.uri_to_handle(BASE + "Top")
     shell.onecmd(f'label {handle} de "Oberbegriff"')
@@ -170,6 +183,7 @@ def test_define_command(shell, simple_taxonomy):
 
 # ── quit ──────────────────────────────────────────────────────────────────────
 
+
 def test_quit_returns_true(shell):
     assert shell.onecmd("quit") is True
 
@@ -180,11 +194,13 @@ def test_exit_returns_true(shell):
 
 # ── TaxonomyViewer helpers ────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def viewer(simple_taxonomy, tmp_path, monkeypatch) -> TaxonomyViewer:
     f = tmp_path / "vocab.ttl"
     f.write_text("")
     import ster.nav as nav_mod
+
     monkeypatch.setattr(nav_mod, "_load_prefs", lambda: {})
     return TaxonomyViewer(simple_taxonomy, f, lang="en")
 
@@ -270,20 +286,29 @@ def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
     pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
     viewer._field_cursor = pref_idx
     viewer._edit_value = "Updated Top"
-    viewer._edit_pos   = len("Updated Top")
+    viewer._edit_pos = len("Updated Top")
     viewer._commit_edit()
     assert simple_taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
 
 
 # ── multi-scheme flatten_tree ─────────────────────────────────────────────────
 
+
 def test_flatten_tree_multiple_schemes():
     """All schemes appear as is_scheme rows; concepts under each scheme follow."""
     t = Taxonomy()
-    s1 = ConceptScheme(uri=BASE + "S1", labels=[Label(lang="en", value="Scheme 1")],
-                       top_concepts=[BASE + "C1"], base_uri=BASE)
-    s2 = ConceptScheme(uri=BASE + "S2", labels=[Label(lang="en", value="Scheme 2")],
-                       top_concepts=[BASE + "C2"], base_uri=BASE)
+    s1 = ConceptScheme(
+        uri=BASE + "S1",
+        labels=[Label(lang="en", value="Scheme 1")],
+        top_concepts=[BASE + "C1"],
+        base_uri=BASE,
+    )
+    s2 = ConceptScheme(
+        uri=BASE + "S2",
+        labels=[Label(lang="en", value="Scheme 2")],
+        top_concepts=[BASE + "C2"],
+        base_uri=BASE,
+    )
     c1 = Concept(uri=BASE + "C1", labels=[Label(lang="en", value="C1")])
     c2 = Concept(uri=BASE + "C2", labels=[Label(lang="en", value="C2")])
     t.schemes[s1.uri] = s1
@@ -318,6 +343,7 @@ def test_flatten_tree_empty_scheme():
 
 
 # ── build_scheme_fields ───────────────────────────────────────────────────────
+
 
 def test_build_scheme_fields_primary_scheme(simple_taxonomy):
     """Without scheme_uri, falls back to primary scheme."""
@@ -356,9 +382,10 @@ def test_build_scheme_fields_display_lang_is_first(simple_taxonomy):
 
 # ── scheme detail panel (viewer) ─────────────────────────────────────────────
 
+
 def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
     """Opening the scheme row (index 1, after action row at 0) loads scheme fields."""
-    viewer._cursor = 1   # scheme row (action row is at index 0)
+    viewer._cursor = 1  # scheme row (action row is at index 0)
     viewer._open_detail()
     assert viewer._mode == TaxonomyViewer._DETAIL
     assert viewer._detail_uri == BASE + "Scheme"
@@ -367,14 +394,13 @@ def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
 
 def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
     """Editing a scheme_title field updates the scheme label."""
-    viewer._cursor = 1   # scheme row (action row is at index 0)
+    viewer._cursor = 1  # scheme row (action row is at index 0)
     viewer._open_detail()
     title_idx = next(
-        i for i, f in enumerate(viewer._detail_fields)
-        if f.meta.get("type") == "scheme_title"
+        i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "scheme_title"
     )
     viewer._field_cursor = title_idx
-    viewer._edit_value   = "Renamed Taxonomy"
+    viewer._edit_value = "Renamed Taxonomy"
     viewer._commit_edit()
     scheme = simple_taxonomy.schemes[BASE + "Scheme"]
     assert any(lbl.value == "Renamed Taxonomy" for lbl in scheme.labels)
@@ -389,9 +415,11 @@ def test_viewer_add_scheme_trigger(viewer):
 
 # ── scheme detail: add top concept ────────────────────────────────────────────
 
+
 def test_build_scheme_fields_has_add_top_concept(simple_taxonomy):
     """Scheme detail fields include the '+ Add top concept' action."""
     from ster.nav import build_scheme_fields
+
     fields = build_scheme_fields(simple_taxonomy, "en", scheme_uri=BASE + "Scheme")
     actions = [f.meta.get("action") for f in fields]
     assert "add_top_concept" in actions
@@ -400,12 +428,13 @@ def test_build_scheme_fields_has_add_top_concept(simple_taxonomy):
 def test_build_scheme_fields_uri_type(simple_taxonomy):
     """URI field uses 'scheme_uri' meta type (read-only); base URI uses 'scheme_base_uri' (editable)."""
     from ster.nav import build_scheme_fields
+
     fields = build_scheme_fields(simple_taxonomy, "en", scheme_uri=BASE + "Scheme")
     uri_field = next(f for f in fields if f.key == "scheme_uri")
     base_field = next(f for f in fields if f.key == "base_uri")
     assert uri_field.meta.get("type") == "scheme_uri"
     assert base_field.meta.get("type") == "scheme_base_uri"
-    assert not uri_field.editable   # URI rename not supported (would break top_concept_of refs)
+    assert not uri_field.editable  # URI rename not supported (would break top_concept_of refs)
     assert base_field.editable
 
 
@@ -466,6 +495,7 @@ def test_add_top_concept_uses_scheme_base_uri(viewer, simple_taxonomy):
 
 # ── scheme create flow ────────────────────────────────────────────────────────
 
+
 def test_build_scheme_create_fields(viewer):
     """Scheme create form has required fields."""
     fields = viewer._build_scheme_create_fields()
@@ -498,8 +528,7 @@ def test_submit_scheme_create_missing_uri(viewer):
         if f.meta.get("field") == "title":
             f.value = "New Scheme"
     viewer._submit_scheme_create()
-    assert "required" in viewer._scheme_create_error.lower() or \
-           viewer._scheme_create_error != ""
+    assert "required" in viewer._scheme_create_error.lower() or viewer._scheme_create_error != ""
 
 
 def test_submit_scheme_create_invalid_uri(viewer):
@@ -564,13 +593,14 @@ def test_scheme_create_commit_edit_updates_field(viewer):
     """_commit_edit in SCHEME_CREATE mode writes value into form field."""
     viewer._scheme_create_fields = viewer._build_scheme_create_fields()
     viewer._scheme_create_cursor = 0  # title field
-    viewer._edit_return_mode     = TaxonomyViewer._SCHEME_CREATE
-    viewer._edit_value           = "Draft Title"
+    viewer._edit_return_mode = TaxonomyViewer._SCHEME_CREATE
+    viewer._edit_value = "Draft Title"
     viewer._commit_edit()
     assert viewer._scheme_create_fields[0].value == "Draft Title"
 
 
 # ── fold / unfold ─────────────────────────────────────────────────────────────
+
 
 def test_count_descendants_leaf(simple_taxonomy):
     # Child2 is a true leaf; Grandchild is also a leaf
@@ -629,9 +659,9 @@ def test_flatten_tree_fold_leaf_has_no_effect(simple_taxonomy):
     """Folding a leaf concept (no children) is a no-op visually."""
     # Grandchild is a true leaf
     folded = {BASE + "Grandchild"}
-    flat_folded   = flatten_tree(simple_taxonomy, folded=folded)
+    flat_folded = flatten_tree(simple_taxonomy, folded=folded)
     flat_unfolded = flatten_tree(simple_taxonomy)
-    uris_folded   = [l.uri for l in flat_folded]
+    uris_folded = [l.uri for l in flat_folded]
     uris_unfolded = [l.uri for l in flat_unfolded]
     # Leaf has no children so nothing is hidden — same URIs visible
     assert uris_folded == uris_unfolded
@@ -642,7 +672,6 @@ def test_flatten_tree_fold_leaf_has_no_effect(simple_taxonomy):
 
 def test_viewer_fold_unfold_via_space(viewer, simple_taxonomy):
     """Pressing space on a concept with children toggles fold state."""
-    import curses
     # Find cursor position of Top concept in the flat list
     top_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._cursor = top_idx
@@ -690,14 +719,14 @@ def test_viewer_space_on_scheme_folds_scheme(viewer, simple_taxonomy):
 
 # ── detail view: narrower navigation & colour hints ──────────────────────────
 
+
 def test_detail_footer_hint_narrower(viewer, simple_taxonomy):
     """Detail footer says 'Enter: open concept' when cursor is on a narrower field."""
     viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     # Find a narrower field
     narrower_idx = next(
-        i for i, f in enumerate(viewer._detail_fields)
-        if f.key.startswith("narrower:")
+        i for i, f in enumerate(viewer._detail_fields) if f.key.startswith("narrower:")
     )
     viewer._field_cursor = narrower_idx
     footer = viewer._detail_footer()
@@ -709,8 +738,7 @@ def test_detail_footer_hint_action(viewer, simple_taxonomy):
     viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     action_idx = next(
-        i for i, f in enumerate(viewer._detail_fields)
-        if f.meta.get("type") == "action"
+        i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "action"
     )
     viewer._field_cursor = action_idx
     footer = viewer._detail_footer()
@@ -719,13 +747,13 @@ def test_detail_footer_hint_action(viewer, simple_taxonomy):
 
 def test_enter_on_narrower_navigates(viewer, simple_taxonomy):
     """Pressing Enter on a narrower field opens the child concept's detail."""
-    import curses
     viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     assert viewer._mode == TaxonomyViewer._DETAIL
 
     narrower_idx = next(
-        i for i, f in enumerate(viewer._detail_fields)
+        i
+        for i, f in enumerate(viewer._detail_fields)
         if f.key.startswith("narrower:") and "Child1" in f.key
     )
     viewer._field_cursor = narrower_idx
@@ -742,8 +770,8 @@ def test_enter_on_narrower_navigates(viewer, simple_taxonomy):
 
 def test_enter_on_narrower_missing_uri_does_nothing(viewer, simple_taxonomy):
     """Enter on a narrower field whose URI is not in taxonomy does nothing."""
-    import curses
     from ster.nav import DetailField
+
     viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     # Inject a broken narrower field
@@ -777,9 +805,11 @@ def test_tree_footer_contains_space_fold_hint(viewer, simple_taxonomy):
 
 # ── action row (➕ Add new scheme) in tree ────────────────────────────────────
 
+
 def test_flat_first_row_is_action(viewer):
     """After _rebuild(), flat[0] is the '➕ Add new scheme' action row."""
     from ster.nav import _ACTION_ADD_SCHEME
+
     assert viewer._flat[0].is_action
     assert viewer._flat[0].uri == _ACTION_ADD_SCHEME
 
@@ -820,10 +850,7 @@ def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
 
 def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
     """Pressing + on a concept row launches CREATE mode for a narrower concept."""
-    concept_idx = next(
-        i for i, l in enumerate(viewer._flat)
-        if not l.is_scheme and not l.is_action
-    )
+    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
     assert viewer._mode == TaxonomyViewer._CREATE
@@ -831,6 +858,7 @@ def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
 
 
 # ── scheme URI and base URI editability ───────────────────────────────────────
+
 
 def test_scheme_uri_field_readonly(simple_taxonomy):
     """scheme_uri field is read-only (URI rename would break top_concept_of references)."""
@@ -868,13 +896,11 @@ def test_add_top_concept_display_uses_emoji(simple_taxonomy):
 
 # ── regression: cancel from CREATE/SCHEME_CREATE triggered from tree ──────────
 
+
 def test_cancel_create_from_tree_returns_to_tree(viewer, simple_taxonomy):
     """Esc from CREATE mode entered via '+' from the tree returns to TREE, not DETAIL."""
     # Navigate to a concept row and press +
-    concept_idx = next(
-        i for i, l in enumerate(viewer._flat)
-        if not l.is_scheme and not l.is_action
-    )
+    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
     viewer._mode = viewer._TREE
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
@@ -909,6 +935,7 @@ def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
 
 # ── regression: scheme URI is read-only (rename would break top_concept_of) ───
 
+
 def test_scheme_uri_not_editable_in_detail(viewer, simple_taxonomy):
     """Pressing Enter on the URI field in scheme detail must not enter EDIT mode."""
     viewer._cursor = 1  # scheme row
@@ -916,4 +943,4 @@ def test_scheme_uri_not_editable_in_detail(viewer, simple_taxonomy):
     uri_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "scheme_uri")
     viewer._field_cursor = uri_idx
     viewer._on_detail(ord("\n"), 24)
-    assert viewer._mode == viewer._DETAIL   # not EDIT
+    assert viewer._mode == viewer._DETAIL  # not EDIT

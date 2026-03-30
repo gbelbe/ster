@@ -4,21 +4,25 @@ A Project records which taxonomy files belong to the current editing session
 and stores display preferences (language).  The project file is the only
 ster-managed file in the repository; all taxonomy data stays in the .ttl files.
 """
+
 from __future__ import annotations
+
 import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 # ──────────────────────────── git helpers ────────────────────────────────────
+
 
 def _git_root(cwd: Path) -> Path | None:
     """Return the git root for *cwd*, or None if not inside a repository."""
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd), capture_output=True, text=True,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
         )
         if r.returncode == 0:
             return Path(r.stdout.strip())
@@ -29,11 +33,12 @@ def _git_root(cwd: Path) -> Path | None:
 
 # ──────────────────────────── Project ────────────────────────────────────────
 
+
 @dataclass
 class Project:
     """Persistent session settings tied to a git repository (or directory)."""
 
-    root: Path                          # git root or CWD
+    root: Path  # git root or CWD
     files: list[Path] = field(default_factory=list)  # paths relative to *root*
     lang: str = "en"
 
@@ -51,7 +56,7 @@ class Project:
     # ── persistence ───────────────────────────────────────────────────────────
 
     @staticmethod
-    def load(cwd: Path) -> "Project | None":
+    def load(cwd: Path) -> Project | None:
         """Load the project file for *cwd*, or return None if none exists."""
         p = Project._project_file(cwd)
         if not p.exists():
@@ -94,7 +99,7 @@ class Project:
         try:
             rel = path.resolve().relative_to(self.root.resolve())
         except ValueError:
-            rel = path.resolve()   # not under root — store absolute
+            rel = path.resolve()  # not under root — store absolute
         if rel not in self.files:
             self.files.append(rel)
 

@@ -1,14 +1,16 @@
 """RDF persistence layer — translates between rdflib.Graph and Taxonomy."""
+
 from __future__ import annotations
+
 from pathlib import Path
 
-from rdflib import Graph, URIRef, Literal, Namespace, RDF
-from rdflib.namespace import SKOS, DCTERMS, XSD
+from rdflib import RDF, Graph, Literal, Namespace, URIRef
+from rdflib.namespace import DCTERMS, SKOS, XSD
 
 VOID = Namespace("http://rdfs.org/ns/void#")
 
-from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 from .handles import assign_handles
+from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 
 _FORMAT_MAP = {
     ".ttl": "turtle",
@@ -23,13 +25,13 @@ def _detect_format(path: Path) -> str:
     fmt = _FORMAT_MAP.get(path.suffix.lower())
     if fmt is None:
         raise ValueError(
-            f"Unsupported file extension {path.suffix!r}. "
-            f"Use one of: {', '.join(_FORMAT_MAP)}"
+            f"Unsupported file extension {path.suffix!r}. Use one of: {', '.join(_FORMAT_MAP)}"
         )
     return fmt
 
 
 # ──────────────────────────── public API ─────────────────────────────────────
+
 
 def load(path: str | Path) -> Taxonomy:
     """Parse a SKOS RDF file and return a fully handle-annotated Taxonomy."""
@@ -53,6 +55,7 @@ def save(taxonomy: Taxonomy, path: str | Path) -> None:
 
 # ──────────────────────────── conversion ─────────────────────────────────────
 
+
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
     taxonomy = Taxonomy()
 
@@ -62,9 +65,11 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         scheme = ConceptScheme(uri=uri)
 
         for _, _, o in g.triples((s_ref, DCTERMS.title, None)):
-            scheme.labels.append(Label(lang=o.language or "", value=str(o)))
+            scheme.labels.append(Label(lang=getattr(o, "language", None) or "", value=str(o)))
         for _, _, o in g.triples((s_ref, DCTERMS.description, None)):
-            scheme.descriptions.append(Definition(lang=o.language or "", value=str(o)))
+            scheme.descriptions.append(
+                Definition(lang=getattr(o, "language", None) or "", value=str(o))
+            )
         for _, _, o in g.triples((s_ref, SKOS.hasTopConcept, None)):
             scheme.top_concepts.append(str(o))
         for _, _, o in g.triples((s_ref, DCTERMS.creator, None)):
@@ -87,23 +92,27 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
             ps = str(p)
             if ps == str(SKOS.prefLabel):
                 concept.labels.append(
-                    Label(lang=o.language or "", value=str(o), type=LabelType.PREF)
+                    Label(
+                        lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.PREF
+                    )
                 )
             elif ps == str(SKOS.altLabel):
                 concept.labels.append(
-                    Label(lang=o.language or "", value=str(o), type=LabelType.ALT)
+                    Label(lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.ALT)
                 )
             elif ps == str(SKOS.hiddenLabel):
                 concept.labels.append(
-                    Label(lang=o.language or "", value=str(o), type=LabelType.HIDDEN)
+                    Label(
+                        lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.HIDDEN
+                    )
                 )
             elif ps == str(SKOS.definition):
                 concept.definitions.append(
-                    Definition(lang=o.language or "", value=str(o))
+                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
                 )
             elif ps == str(SKOS.scopeNote):
                 concept.scope_notes.append(
-                    Definition(lang=o.language or "", value=str(o))
+                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
                 )
             elif ps == str(SKOS.narrower):
                 concept.narrower.append(str(o))
@@ -211,6 +220,7 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 
 # ──────────────────────────── helpers ────────────────────────────────────────
 
+
 def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
     """Ensure skos:broader/narrower and skos:topConceptOf/hasTopConcept are symmetric."""
     # 1. Bidirectional broader ↔ narrower
@@ -227,16 +237,16 @@ def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
     # 2. hasTopConcept → topConceptOf
     for scheme_uri, scheme in taxonomy.schemes.items():
         for tc_uri in scheme.top_concepts:
-            concept = taxonomy.concepts.get(tc_uri)
-            if concept and concept.top_concept_of is None:
-                concept.top_concept_of = scheme_uri
+            tc_concept = taxonomy.concepts.get(tc_uri)
+            if tc_concept and tc_concept.top_concept_of is None:
+                tc_concept.top_concept_of = scheme_uri
 
     # 3. topConceptOf → hasTopConcept
     for concept_uri, concept in taxonomy.concepts.items():
         if concept.top_concept_of:
-            scheme = taxonomy.schemes.get(concept.top_concept_of)
-            if scheme and concept_uri not in scheme.top_concepts:
-                scheme.top_concepts.append(concept_uri)
+            tc_scheme = taxonomy.schemes.get(concept.top_concept_of)
+            if tc_scheme and concept_uri not in tc_scheme.top_concepts:
+                tc_scheme.top_concepts.append(concept_uri)
 
     # 4. Auto-detect: concepts with no broader that aren't yet a top concept
     #    are top concepts of whatever scheme lists them in its hierarchy.
@@ -246,16 +256,14 @@ def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
             continue
         # Check if any scheme lists this concept in its top_concepts (already handled
         # above). If not, assign to the primary scheme as a top concept.
-        in_any_scheme = any(
-            concept_uri in s.top_concepts for s in taxonomy.schemes.values()
-        )
+        in_any_scheme = any(concept_uri in s.top_concepts for s in taxonomy.schemes.values())
         if not in_any_scheme and primary:
             primary.top_concepts.append(concept_uri)
             concept.top_concept_of = primary.uri
 
 
 def _concept_scheme_uri(
-    taxonomy: Taxonomy, uri: str, _visited: "frozenset[str] | None" = None
+    taxonomy: Taxonomy, uri: str, _visited: frozenset[str] | None = None
 ) -> str | None:
     """Return the scheme URI for a concept by traversing up to a top concept."""
     if _visited is None:

@@ -1,19 +1,20 @@
 """Business logic — all mutations to a Taxonomy live here."""
+
 from __future__ import annotations
-from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
-from .handles import assign_handles, handle_for_uri
+
 from .exceptions import (
     CircularHierarchyError,
     ConceptAlreadyExistsError,
     ConceptNotFoundError,
-    DuplicatePrefLabelError,
     HandleNotFoundError,
     HasChildrenError,
     RelatedHierarchyConflictError,
 )
-
+from .handles import assign_handles, handle_for_uri
+from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 
 # ──────────────────────────── resolve & expand ───────────────────────────────
+
 
 def resolve(taxonomy: Taxonomy, handle_or_name: str) -> str:
     """Resolve a handle, local name, or full URI to a URI.
@@ -50,6 +51,7 @@ def expand_uri(taxonomy: Taxonomy, name_or_uri: str) -> str:
 
 # ──────────────────────────── add ────────────────────────────────────────────
 
+
 def add_concept(
     taxonomy: Taxonomy,
     uri: str,
@@ -84,11 +86,11 @@ def add_concept(
             concept.broader.append(parent_uri)
     else:
         # No parent: add as top concept of the primary scheme
-        scheme = taxonomy.primary_scheme()
-        if scheme:
-            if uri not in scheme.top_concepts:
-                scheme.top_concepts.append(uri)
-            concept.top_concept_of = scheme.uri
+        maybe_scheme = taxonomy.primary_scheme()
+        if maybe_scheme:
+            if uri not in maybe_scheme.top_concepts:
+                maybe_scheme.top_concepts.append(uri)
+            concept.top_concept_of = maybe_scheme.uri
 
     taxonomy.concepts[uri] = concept
 
@@ -102,9 +104,8 @@ def add_concept(
 
 # ──────────────────────────── remove ─────────────────────────────────────────
 
-def remove_concept(
-    taxonomy: Taxonomy, uri: str, *, cascade: bool = False
-) -> set[str]:
+
+def remove_concept(taxonomy: Taxonomy, uri: str, *, cascade: bool = False) -> set[str]:
     """Remove a concept. Returns set of removed URIs.
 
     Raises HasChildrenError if concept has children and cascade=False.
@@ -141,7 +142,7 @@ def remove_concept(
     # (handles inconsistent data or multi-broader scenarios)
     for c in taxonomy.concepts.values():
         c.narrower = [u for u in c.narrower if u not in to_remove]
-        c.broader  = [u for u in c.broader  if u not in to_remove]
+        c.broader = [u for u in c.broader if u not in to_remove]
     for scheme in taxonomy.schemes.values():
         scheme.top_concepts = [u for u in scheme.top_concepts if u not in to_remove]
 
@@ -152,21 +153,27 @@ def remove_concept(
 
 # ──────────────────────────── move ───────────────────────────────────────────
 
-def move_concept(
-    taxonomy: Taxonomy, uri: str, new_parent_uri: str | None
-) -> None:
+
+def move_concept(taxonomy: Taxonomy, uri: str, new_parent_uri: str | None) -> None:
     """Move a concept to a new parent (or to top level if new_parent_uri is None)."""
     concept = taxonomy.concepts.get(uri)
     if concept is None:
         raise ConceptNotFoundError(uri)
 
-    if new_parent_uri and new_parent_uri not in taxonomy.concepts and new_parent_uri not in taxonomy.schemes:
+    if (
+        new_parent_uri
+        and new_parent_uri not in taxonomy.concepts
+        and new_parent_uri not in taxonomy.schemes
+    ):
         raise ConceptNotFoundError(new_parent_uri)
 
     # Guard against circular hierarchy
-    if new_parent_uri and new_parent_uri in taxonomy.concepts:
-        if _is_ancestor(taxonomy, uri, new_parent_uri):
-            raise CircularHierarchyError(uri, new_parent_uri)
+    if (
+        new_parent_uri
+        and new_parent_uri in taxonomy.concepts
+        and _is_ancestor(taxonomy, uri, new_parent_uri)
+    ):
+        raise CircularHierarchyError(uri, new_parent_uri)
 
     # Detach from current parents
     for old_parent_uri in list(concept.broader):
@@ -181,10 +188,10 @@ def move_concept(
 
     # Attach to new parent
     if new_parent_uri is None:
-        scheme = taxonomy.primary_scheme()
-        if scheme:
-            scheme.top_concepts.append(uri)
-            concept.top_concept_of = scheme.uri
+        maybe_scheme = taxonomy.primary_scheme()
+        if maybe_scheme:
+            maybe_scheme.top_concepts.append(uri)
+            concept.top_concept_of = maybe_scheme.uri
     elif new_parent_uri in taxonomy.schemes:
         scheme = taxonomy.schemes[new_parent_uri]
         scheme.top_concepts.append(uri)
@@ -198,9 +205,8 @@ def move_concept(
 
 # ──────────────────────────── add broader link ───────────────────────────────
 
-def add_broader_link(
-    taxonomy: Taxonomy, uri: str, new_parent_uri: str
-) -> None:
+
+def add_broader_link(taxonomy: Taxonomy, uri: str, new_parent_uri: str) -> None:
     """Add an additional skos:broader link without removing existing ones.
 
     The concept keeps all its current parents; new_parent_uri is added as an
@@ -226,6 +232,7 @@ def add_broader_link(
 
 # ──────────────────────────── labels ─────────────────────────────────────────
 
+
 def set_label(
     taxonomy: Taxonomy,
     uri: str,
@@ -240,8 +247,7 @@ def set_label(
     if label_type == LabelType.PREF:
         # Replace existing pref label for this language
         concept.labels = [
-            lbl for lbl in concept.labels
-            if not (lbl.type == LabelType.PREF and lbl.lang == lang)
+            lbl for lbl in concept.labels if not (lbl.type == LabelType.PREF and lbl.lang == lang)
         ]
     concept.labels.append(Label(lang=lang, value=value, type=label_type))
 
@@ -257,12 +263,14 @@ def remove_label(
     if concept is None:
         raise ConceptNotFoundError(uri)
     concept.labels = [
-        lbl for lbl in concept.labels
+        lbl
+        for lbl in concept.labels
         if not (lbl.type == label_type and lbl.lang == lang and lbl.value == value)
     ]
 
 
 # ──────────────────────────── definitions ────────────────────────────────────
+
 
 def set_definition(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
     concept = taxonomy.concepts.get(uri)
@@ -273,6 +281,7 @@ def set_definition(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
 
 
 # ──────────────────────────── relations ──────────────────────────────────────
+
 
 def add_related(taxonomy: Taxonomy, uri_a: str, uri_b: str) -> None:
     for uri in (uri_a, uri_b):
@@ -297,6 +306,7 @@ def remove_related(taxonomy: Taxonomy, uri_a: str, uri_b: str) -> None:
 
 
 # ──────────────────────────── rename URI ─────────────────────────────────────
+
 
 def rename_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
     """Change the URI of a concept, updating all cross-references."""
@@ -326,6 +336,7 @@ def rename_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
 
 # ──────────────────────────── create scheme ──────────────────────────────────
 
+
 def create_scheme(
     taxonomy: Taxonomy,
     uri: str,
@@ -339,7 +350,9 @@ def create_scheme(
     scheme = ConceptScheme(
         uri=uri,
         labels=[Label(lang=lang, value=val) for lang, val in labels.items()],
-        descriptions=[Definition(lang=lang, value=val) for lang, val in (descriptions or {}).items()],
+        descriptions=[
+            Definition(lang=lang, value=val) for lang, val in (descriptions or {}).items()
+        ],
         creator=creator,
         created=created,
         languages=languages or list(labels.keys()),
@@ -351,6 +364,7 @@ def create_scheme(
 
 
 # ──────────────────────────── internal helpers ───────────────────────────────
+
 
 def _subtree_uris(taxonomy: Taxonomy, root_uri: str) -> set[str]:
     """Return all URIs in the subtree rooted at root_uri (inclusive)."""

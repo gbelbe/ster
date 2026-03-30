@@ -1,9 +1,13 @@
 """Shared fixtures for all test modules."""
+
 from __future__ import annotations
-import pytest
+
 from pathlib import Path
-from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
+
+import pytest
+
 from ster import store
+from ster.model import Concept, ConceptScheme, Definition, Label, Taxonomy
 
 BASE = "https://example.org/test/"
 
@@ -101,5 +105,6 @@ def simple_taxonomy() -> Taxonomy:
     for c in (top, child1, child2, grandchild):
         t.concepts[c.uri] = c
     from ster.handles import assign_handles
+
     assign_handles(t)
     return t
