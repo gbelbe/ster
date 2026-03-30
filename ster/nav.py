@@ -24,6 +24,26 @@ from . import operations, store
 from .display import console, render_concept_detail, render_tree
 from .exceptions import SkostaxError
 from .model import Definition, Label, LabelType, Taxonomy
+from .nav_state import (
+    ConfirmDeleteState,
+    CreateState,
+    DetailState,
+    EditState,
+    LangPickState,
+    MapConceptPickState,
+    MapSchemePickState,
+    MovePickState,
+    SchemeCreateState,
+    SearchState,
+    TreeState,
+    ViewerState,
+    WelcomeState,
+    clamp_scroll,
+    navigate_detail,
+    navigate_tree,
+    search_update,
+    update_search_results,
+)
 from .nav_logic import (  # noqa: F401
     _ACTION_ADD_SCHEME,
     _FILE_URI_PREFIX,
@@ -414,19 +434,6 @@ def render_tree_col(
 class TaxonomyViewer:
     """Full-screen curses TUI for taxonomy navigation and inline editing."""
 
-    _TREE = "tree"
-    _DETAIL = "detail"
-    _EDIT = "edit"
-    _WELCOME = "welcome"
-    _CREATE = "create"
-    _CONFIRM_DELETE = "confirm_delete"
-    _MOVE_PICK = "move_pick"
-    _LINK_PICK = "link_pick"
-    _LANG_PICK = "lang_pick"
-    _SCHEME_CREATE = "scheme_create"
-    _MAP_SCHEME_PICK = "map_scheme_pick"
-    _MAP_CONCEPT_PICK = "map_concept_pick"
-
     # Minimum terminal width for side-by-side tree + detail
     _SPLIT_MIN_COLS = 120
 
@@ -451,6 +458,7 @@ class TaxonomyViewer:
         self.lang = _load_lang_pref(file_path) or lang
         self._git_manager = git_manager
 
+        # ── persistent tree/detail backing (available across all modes) ───────
         self._flat: list[TreeLine] = []
         self._cursor = 0
         self._tree_scroll = 0
@@ -460,58 +468,22 @@ class TaxonomyViewer:
         self._field_cursor = 0
         self._detail_scroll = 0
 
-        self._edit_value = ""
-        self._edit_pos = 0
-
-        self._mode = self._TREE if _load_prefs().get("help_seen") else self._WELCOME
-        self._history: list[dict] = []
-        self._status = ""
-
-        # ── search ────────────────────────────────────────────────────────────
+        # ── search (backed in tree attrs, bridged to SearchState) ─────────────
         self._search_query = ""
         self._search_active = False  # True while typing in the search bar
         self._search_matches: list[int] = []  # indices into self._flat
         self._search_idx = 0  # which match the cursor is on
         self._search_pattern: re.Pattern | None = None
 
-        self._edit_return_mode: str = self._DETAIL
-        self._edit_field: DetailField | None = None
+        # ── typed mode state ──────────────────────────────────────────────────
+        # self._state identifies the current mode and carries mode-specific data.
+        # Tree/detail persistent attrs (above) are accessible from all modes for
+        # split-view rendering; all other modal data lives inside self._state.
+        prefs = _load_prefs()
+        self._state: ViewerState = WelcomeState() if not prefs.get("help_seen") else TreeState()
 
-        self._create_parent_uri: str | None = None
-        self._create_fields: list[DetailField] = []
-        self._create_cursor = 0
-        self._create_scroll = 0
-        self._create_error = ""
-        self._create_return_mode: str = self._DETAIL  # where Esc goes from CREATE/SCHEME_CREATE
-
-        self._scheme_create_fields: list[DetailField] = []
-        self._scheme_create_cursor = 0
-        self._scheme_create_scroll = 0
-        self._scheme_create_error = ""
-
-        self._move_source_uri = ""
-        self._move_candidates: list[tuple[str, str]] = []
-        self._move_filter = ""
-        self._move_cursor = 0
-        self._move_scroll = 0
-
-        self._link_source_uri = ""
-
-        self._map_source_uri = ""
-        self._map_type = ""  # "broadMatch" | "narrowMatch" | …
-        self._map_scheme_cands: list[tuple[str, str]] = []
-        self._map_scheme_cursor = 0
-        self._map_scheme_scroll = 0
-        self._map_concept_cands: list[tuple[str, str]] = []
-        self._map_concept_cursor = 0
-        self._map_concept_scroll = 0
-        self._map_concept_filter = ""
-        self._map_target_scheme = ""
-
-        self._lang_options: list[str] = []
-        self._lang_cursor = 0
-        self._lang_scroll = 0
-
+        self._history: list[dict] = []
+        self._status = ""
         self._folded: set[str] = set()
 
         self._rebuild()
@@ -549,10 +521,39 @@ class TaxonomyViewer:
             show_mappings=self._workspace.multiple_schemes(),
         )
 
+    # ── tree-state bridge (scattered attrs ↔ TreeState for pure functions) ────
+
+    def _as_tree_state(self) -> TreeState:
+        """Snapshot current tree attrs into a TreeState for pure-function calls."""
+        return TreeState(
+            flat=self._flat,
+            cursor=self._cursor,
+            scroll=self._tree_scroll,
+            folded=self._folded,
+            search=SearchState(
+                query=self._search_query,
+                active=self._search_active,
+                matches=self._search_matches,
+                current_idx=self._search_idx,
+                pattern=self._search_pattern,
+            ),
+        )
+
+    def _sync_tree_state(self, ts: TreeState) -> None:
+        """Write a TreeState back into the scattered tree attrs."""
+        self._flat = ts.flat
+        self._cursor = ts.cursor
+        self._tree_scroll = ts.scroll
+        self._folded = ts.folded
+        self._search_query = ts.search.query
+        self._search_active = ts.search.active
+        self._search_matches = ts.search.matches
+        self._search_idx = ts.search.current_idx
+        self._search_pattern = ts.search.pattern
+
     def _push(self) -> None:
         self._history.append(
             {
-                "mode": self._mode,
                 "cursor": self._cursor,
                 "tree_scroll": self._tree_scroll,
                 "detail_uri": self._detail_uri,
@@ -565,7 +566,6 @@ class TaxonomyViewer:
         if not self._history:
             return False
         s = self._history.pop()
-        self._mode = s["mode"]
         self._cursor = s["cursor"]
         self._tree_scroll = s["tree_scroll"]
         self._detail_uri = s["detail_uri"]
@@ -578,6 +578,9 @@ class TaxonomyViewer:
                 )
             else:
                 self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
+        else:
+            self._state = TreeState()
         return True
 
     def _individual_taxonomy_for(self, uri: str | None) -> tuple[Taxonomy, Path]:
@@ -632,11 +635,11 @@ class TaxonomyViewer:
         else:
             self._detail_fields = self._bdf(self._detail_uri)
         self._reset_detail_cursor()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     def _back(self) -> None:
         if not self._pop():
-            self._mode = self._TREE
+            self._state = TreeState()
 
     # ── entry point ───────────────────────────────────────────────────────────
 
@@ -657,17 +660,17 @@ class TaxonomyViewer:
         while True:
             rows, cols = stdscr.getmaxyx()
 
-            if self._mode == self._WELCOME:
+            if isinstance(self._state, WelcomeState):
                 self._draw_welcome(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
                     curses.update_lines_cols()
                     continue
                 _save_prefs({"help_seen": True})
-                self._mode = self._TREE
+                self._state = TreeState()
                 continue
 
-            if self._mode == self._TREE:
+            if isinstance(self._state, TreeState):
                 self._draw_tree(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -676,7 +679,7 @@ class TaxonomyViewer:
                 if self._on_tree(key, rows):
                     break
 
-            elif self._mode == self._DETAIL:
+            elif isinstance(self._state, DetailState):
                 self._draw_split(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -685,10 +688,11 @@ class TaxonomyViewer:
                 if self._on_detail(key, rows):
                     break
 
-            elif self._mode == self._EDIT:
-                if self._edit_return_mode == self._CREATE:
+            elif isinstance(self._state, EditState):
+                es = self._state
+                if isinstance(es.return_to, CreateState):
                     self._draw_create(stdscr, rows, cols)
-                elif self._edit_return_mode == self._SCHEME_CREATE:
+                elif isinstance(es.return_to, SchemeCreateState):
                     self._draw_scheme_create(stdscr, rows, cols)
                 else:
                     self._draw_split(stdscr, rows, cols)
@@ -699,7 +703,7 @@ class TaxonomyViewer:
                     continue
                 self._on_edit(action)
 
-            elif self._mode == self._CREATE:
+            elif isinstance(self._state, CreateState):
                 self._draw_create(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -707,7 +711,7 @@ class TaxonomyViewer:
                     continue
                 self._on_create(key, rows)
 
-            elif self._mode == self._CONFIRM_DELETE:
+            elif isinstance(self._state, ConfirmDeleteState):
                 self._draw_confirm(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -715,23 +719,24 @@ class TaxonomyViewer:
                     continue
                 self._on_confirm_delete(key)
 
-            elif self._mode == self._MOVE_PICK:
-                self._draw_move(stdscr, rows, cols)
-                key = stdscr.getch()
-                if key == curses.KEY_RESIZE:
-                    curses.update_lines_cols()
-                    continue
-                self._on_move_pick(key, rows)
+            elif isinstance(self._state, MovePickState):
+                ms = self._state
+                if ms.is_link:
+                    self._draw_move(stdscr, rows, cols, title=" ↗ Link to broader — pick new parent ")
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_link_pick(key, rows)
+                else:
+                    self._draw_move(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_move_pick(key, rows)
 
-            elif self._mode == self._LINK_PICK:
-                self._draw_move(stdscr, rows, cols, title=" ↗ Link to broader — pick new parent ")
-                key = stdscr.getch()
-                if key == curses.KEY_RESIZE:
-                    curses.update_lines_cols()
-                    continue
-                self._on_link_pick(key, rows)
-
-            elif self._mode == self._LANG_PICK:
+            elif isinstance(self._state, LangPickState):
                 self._draw_lang_pick(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -739,7 +744,7 @@ class TaxonomyViewer:
                     continue
                 self._on_lang_pick(key, rows)
 
-            elif self._mode == self._SCHEME_CREATE:
+            elif isinstance(self._state, SchemeCreateState):
                 self._draw_scheme_create(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -747,7 +752,7 @@ class TaxonomyViewer:
                     continue
                 self._on_scheme_create(key, rows)
 
-            elif self._mode == self._MAP_SCHEME_PICK:
+            elif isinstance(self._state, MapSchemePickState):
                 self._draw_map_scheme_pick(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -755,7 +760,7 @@ class TaxonomyViewer:
                     continue
                 self._on_map_scheme_pick(key)
 
-            elif self._mode == self._MAP_CONCEPT_PICK:
+            elif isinstance(self._state, MapConceptPickState):
                 self._draw_map_concept_pick(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -1089,27 +1094,22 @@ class TaxonomyViewer:
         n = len(self._flat)
         list_h = rows - 2
 
-        # ── search: typing mode ───────────────────────────────────────────────
+        # ── search: typing mode — delegate to search_update() ─────────────────
         if self._search_active:
-            if key == 27:  # Esc — clear search
-                self._search_active = False
-                self._search_query = ""
-                self._search_matches = []
-                self._search_pattern = None
-            elif key in (curses.KEY_BACKSPACE, 127, 8):
-                if self._search_query:
-                    self._search_query = self._search_query[:-1]
-                    self._update_search()
-            elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-                self._search_active = False  # commit, keep highlights
+            ts = self._as_tree_state()
+            if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                # Commit: deactivate search, then open detail
+                new_ts = search_update(ts, key)
+                self._sync_tree_state(new_ts)
                 self._open_detail()
-            elif key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
-                self._search_jump(+1)
-            elif key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev
-                self._search_jump(-1)
-            elif 32 <= key < 256:
-                self._search_query += chr(key)
+                return False
+            new_ts = search_update(ts, key)
+            if new_ts.search.query != ts.search.query:
+                # Query changed — recompute matches
+                self._sync_tree_state(new_ts)
                 self._update_search()
+            else:
+                self._sync_tree_state(new_ts)
             return False
 
         # ── search: results-visible, navigate matches ─────────────────────────
@@ -1141,32 +1141,15 @@ class TaxonomyViewer:
             self._search_idx = 0
             return False
 
-        # ── standard navigation ───────────────────────────────────────────────
-        if key in (curses.KEY_UP, ord("k")):
-            self._cursor = max(0, self._cursor - 1)
+        # ── standard navigation — delegate to navigate_tree() ────────────────
+        ts = self._as_tree_state()
+        new_ts = navigate_tree(ts, key, list_h)
+        if new_ts is not ts:
+            self._sync_tree_state(new_ts)
+            return False
 
-        elif key in (curses.KEY_DOWN, ord("j")):
-            self._cursor = min(n - 1, self._cursor + 1)
-
-        elif key in (curses.KEY_HOME, ord("g")):
-            self._cursor = 0
-
-        elif key in (curses.KEY_END, ord("G")):
-            self._cursor = n - 1
-
-        elif key == curses.KEY_PPAGE:
-            self._cursor = max(0, self._cursor - list_h)
-
-        elif key == curses.KEY_NPAGE:
-            self._cursor = min(n - 1, self._cursor + list_h)
-
-        elif key == 4:  # Ctrl+D — half-page down
-            self._cursor = min(n - 1, self._cursor + list_h // 2)
-
-        elif key == 21:  # Ctrl+U — half-page up
-            self._cursor = max(0, self._cursor - list_h // 2)
-
-        elif key == ord(" "):
+        # ── unhandled by navigate_tree — action keys ──────────────────────────
+        if key == ord(" "):
             if 0 <= self._cursor < n:
                 uri = self._flat[self._cursor].uri
                 line = self._flat[self._cursor]
@@ -1225,7 +1208,7 @@ class TaxonomyViewer:
                             break
 
         elif key == ord("?"):
-            self._mode = self._WELCOME
+            self._state = WelcomeState()
 
         elif key in (ord("q"), ord("Q"), 27):
             return True
@@ -1282,7 +1265,8 @@ class TaxonomyViewer:
             handle = self.taxonomy.uri_to_handle(self._detail_uri) if self._detail_uri else "?"
             label = concept.pref_label(self.lang) or self._detail_uri or ""
         n_fields = len(self._detail_fields)
-        if self._mode == self._EDIT:
+        _in_edit = isinstance(self._state, EditState)
+        if _in_edit:
             title_bar = (
                 " ^A:start  ^E:end  ^W:del-word  ^K:kill-end"
                 "  Alt+←→/^←→:word-jump  Enter:save  Esc:cancel "
@@ -1293,7 +1277,7 @@ class TaxonomyViewer:
         else:
             counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
             title_bar = f" [{handle}]  {label}{counter} "
-        _draw_bar(stdscr, 0, x0, width, title_bar, dim=(self._mode == self._EDIT))
+        _draw_bar(stdscr, 0, x0, width, title_bar, dim=_in_edit)
 
         list_h = rows - 2
         n_fields = len(self._detail_fields)
@@ -1400,7 +1384,7 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        if self._mode != self._EDIT:
+        if not isinstance(self._state, EditState):
             _draw_bar(stdscr, rows - 1, x0, width, self._detail_footer(), dim=True)
 
     # ─────────────────────────── DETAIL events ───────────────────────────────
@@ -1456,39 +1440,26 @@ class TaxonomyViewer:
         n = len(self._detail_fields)
         list_h = rows - 2
 
-        if key in (curses.KEY_UP, ord("k")):
-            self._field_cursor = max(0, self._field_cursor - 1)
-            self._skip_sep(-1)
+        # ── cursor movement — delegate to navigate_detail() ───────────────────
+        ds = DetailState(
+            uri=self._detail_uri or "",
+            fields=self._detail_fields,
+            field_cursor=self._field_cursor,
+            scroll=self._detail_scroll,
+        )
+        new_ds = navigate_detail(ds, key, list_h)
+        if new_ds is not ds:
+            self._field_cursor = new_ds.field_cursor
+            self._detail_scroll = new_ds.scroll
+            # Preserve skip-separator logic after cursor move
+            if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, 21):
+                self._skip_sep(-1)
+            else:
+                self._skip_sep(+1)
+            return False
 
-        elif key in (curses.KEY_DOWN, ord("j")):
-            self._field_cursor = min(n - 1, self._field_cursor + 1)
-            self._skip_sep(+1)
-
-        elif key in (curses.KEY_HOME, ord("g")):
-            self._field_cursor = 0
-            self._skip_sep(+1)
-
-        elif key in (curses.KEY_END, ord("G")):
-            self._field_cursor = n - 1
-            self._skip_sep(-1)
-
-        elif key == curses.KEY_PPAGE:
-            self._field_cursor = max(0, self._field_cursor - list_h)
-            self._skip_sep(-1)
-
-        elif key == curses.KEY_NPAGE:
-            self._field_cursor = min(n - 1, self._field_cursor + list_h)
-            self._skip_sep(+1)
-
-        elif key == 4:  # Ctrl+D — half-page down
-            self._field_cursor = min(n - 1, self._field_cursor + list_h // 2)
-            self._skip_sep(+1)
-
-        elif key == 21:  # Ctrl+U — half-page up
-            self._field_cursor = max(0, self._field_cursor - list_h // 2)
-            self._skip_sep(-1)
-
-        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r"), ord("i"), ord("e")):
+        # ── action keys ───────────────────────────────────────────────────────
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r"), ord("i"), ord("e")):
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
                 if f.meta.get("type") == "action":
@@ -1496,11 +1467,12 @@ class TaxonomyViewer:
                 elif f.meta.get("type") == "mapping_remove":
                     self._remove_mapping_field(f)
                 elif f.editable:
-                    self._edit_field = f
-                    self._edit_value = f.value
-                    self._edit_pos = len(f.value)
-                    self._edit_return_mode = self._DETAIL
-                    self._mode = self._EDIT
+                    self._state = EditState(
+                        buffer=f.value,
+                        pos=len(f.value),
+                        field=f,
+                        return_to=None,  # return to detail mode
+                    )
                 elif f.meta.get("nav"):
                     # broader / narrower / related — navigate to that concept
                     dest_uri = f.meta["uri"]
@@ -1530,7 +1502,7 @@ class TaxonomyViewer:
             self._trigger_action("link_broader")
 
         elif key == ord("?"):
-            self._mode = self._WELCOME
+            self._state = WelcomeState()
 
         elif key in (curses.KEY_LEFT, ord("h"), 27):
             self._back()
@@ -1540,12 +1512,13 @@ class TaxonomyViewer:
     # ─────────────────────────── EDIT drawing ────────────────────────────────
 
     def _draw_edit_bar(self, stdscr: curses.window, rows: int, cols: int) -> None:
-        if self._edit_field is None:
+        if not isinstance(self._state, EditState) or self._state.field is None:
             return
-        f = self._edit_field
+        es = self._state
+        f = es.field
         prompt = f" {f.display}: "
-        before = self._edit_value[: self._edit_pos]
-        after = self._edit_value[self._edit_pos :]
+        before = es.buffer[: es.pos]
+        after = es.buffer[es.pos :]
         bar = f"{prompt}{before}▌{after}"
         try:
             stdscr.addstr(
@@ -1581,80 +1554,95 @@ class TaxonomyViewer:
         return i
 
     def _on_edit(self, key: int | str) -> None:
-        v, p = self._edit_value, self._edit_pos
+        if not isinstance(self._state, EditState):
+            return
+        es = self._state
+        v, p = es.buffer, es.pos
+
+        def _return_to_prev() -> None:
+            ret = es.return_to
+            if isinstance(ret, (CreateState, SchemeCreateState)):
+                self._state = ret
+            else:
+                self._state = DetailState()
 
         if key == 27:  # Esc — cancel
-            self._mode = self._edit_return_mode
+            _return_to_prev()
 
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             self._commit_edit()
-            self._mode = self._edit_return_mode
+            _return_to_prev()
 
         elif key == 1:  # Ctrl+A — go to start
-            self._edit_pos = 0
+            es.pos = 0
 
         elif key == 5:  # Ctrl+E — go to end
-            self._edit_pos = len(v)
+            es.pos = len(v)
 
         elif key == 11:  # Ctrl+K — kill to end of line
-            self._edit_value = v[:p]
+            es.buffer = v[:p]
 
         elif key == 23:  # Ctrl+W — delete word backward
             i = self._word_start_left(v, p)
-            self._edit_value = v[:i] + v[p:]
-            self._edit_pos = i
+            es.buffer = v[:i] + v[p:]
+            es.pos = i
 
         elif key == "word_left":  # Alt+b / Ctrl+Left
-            self._edit_pos = self._word_start_left(v, p)
+            es.pos = self._word_start_left(v, p)
 
         elif key == "word_right":  # Alt+f / Ctrl+Right
-            self._edit_pos = self._word_start_right(v, p)
+            es.pos = self._word_start_right(v, p)
 
         elif key in (curses.KEY_BACKSPACE, 127):
             if p > 0:
-                self._edit_value = v[: p - 1] + v[p:]
-                self._edit_pos = p - 1
+                es.buffer = v[: p - 1] + v[p:]
+                es.pos = p - 1
 
         elif key == curses.KEY_DC:
             if p < len(v):
-                self._edit_value = v[:p] + v[p + 1 :]
+                es.buffer = v[:p] + v[p + 1 :]
 
         elif key == curses.KEY_LEFT:
-            self._edit_pos = max(0, p - 1)
+            es.pos = max(0, p - 1)
 
         elif key == curses.KEY_RIGHT:
-            self._edit_pos = min(len(v), p + 1)
+            es.pos = min(len(v), p + 1)
 
         elif key in (curses.KEY_HOME,):
-            self._edit_pos = 0
+            es.pos = 0
 
         elif key in (curses.KEY_END,):
-            self._edit_pos = len(v)
+            es.pos = len(v)
 
         elif isinstance(key, int) and 32 <= key < 256:
             ch = chr(key)
-            self._edit_value = v[:p] + ch + v[p:]
-            self._edit_pos = p + 1
+            es.buffer = v[:p] + ch + v[p:]
+            es.pos = p + 1
 
     def _commit_edit(self) -> None:
-        if self._edit_return_mode == self._CREATE:
-            if 0 <= self._create_cursor < len(self._create_fields):
-                f = self._create_fields[self._create_cursor]
-                if f.editable:
-                    f.value = self._edit_value
+        if not isinstance(self._state, EditState):
             return
-        if self._edit_return_mode == self._SCHEME_CREATE:
-            if 0 <= self._scheme_create_cursor < len(self._scheme_create_fields):
-                f = self._scheme_create_fields[self._scheme_create_cursor]
+        es = self._state
+        ret = es.return_to
+        if isinstance(ret, CreateState):
+            if 0 <= ret.cursor < len(ret.fields):
+                f = ret.fields[ret.cursor]
                 if f.editable:
-                    f.value = self._edit_value
+                    f.value = es.buffer
             return
+        if isinstance(ret, SchemeCreateState):
+            if 0 <= ret.cursor < len(ret.fields):
+                f = ret.fields[ret.cursor]
+                if f.editable:
+                    f.value = es.buffer
+            return
+        # return_to is None → editing from detail mode
         if not self._detail_uri:
             return
         if not (0 <= self._field_cursor < len(self._detail_fields)):
             return
         f = self._detail_fields[self._field_cursor]
-        new_value = self._edit_value.strip()
+        new_value = es.buffer.strip()
         if not f.editable:
             return
 
@@ -1794,33 +1782,33 @@ class TaxonomyViewer:
     # ─────────────────────────── action dispatch ─────────────────────────────
 
     def _trigger_action(self, action: str) -> None:
-        # Record where to return on cancel — if called from tree, return to tree
-        self._create_return_mode = (
-            self._TREE if self._mode in (self._TREE, self._WELCOME) else self._DETAIL
-        )
+        _came_from_tree = isinstance(self._state, (TreeState, WelcomeState))
         if action in ("add_narrower", "add_top_concept"):
             # add_narrower: parent is the current concept.
             # add_top_concept: parent is the scheme URI — add_concept treats a
             #   scheme URI as "add as top concept of that scheme".
-            self._create_parent_uri = self._detail_uri
-            self._create_fields = self._build_create_fields()
-            self._create_cursor = 0
-            self._create_scroll = 0
-            self._create_error = ""
-            self._mode = self._CREATE
+            self._state = CreateState(
+                parent_uri=self._detail_uri,
+                fields=self._build_create_fields(),
+                cursor=0,
+                scroll=0,
+                error="",
+                came_from_tree=_came_from_tree,
+            )
         elif action == "delete":
-            self._mode = self._CONFIRM_DELETE
+            self._state = ConfirmDeleteState(uri=self._detail_uri or "")
         elif action == "move":
             if self._detail_uri:
-                self._move_source_uri = self._detail_uri
-                self._move_candidates = self._build_move_candidates(self._detail_uri)
-                self._move_filter = ""
-                self._move_cursor = 0
-                self._move_scroll = 0
-                self._mode = self._MOVE_PICK
+                self._state = MovePickState(
+                    source_uri=self._detail_uri,
+                    is_link=False,
+                    candidates=self._build_move_candidates(self._detail_uri),
+                    filter_text="",
+                    cursor=0,
+                    scroll=0,
+                )
         elif action == "link_broader":
             if self._detail_uri:
-                self._link_source_uri = self._detail_uri
                 # Candidates: all concepts except the concept itself, its subtree,
                 # and concepts already in its broader list (already linked)
                 concept = self.taxonomy.concepts.get(self._detail_uri)
@@ -1838,44 +1826,46 @@ class TaxonomyViewer:
                         label = c.pref_label(self.lang) or line.uri
                         indent = "  " * line.depth
                         candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
-                self._move_candidates = candidates
-                self._move_filter = ""
-                self._move_cursor = 0
-                self._move_scroll = 0
-                self._mode = self._LINK_PICK
+                self._state = MovePickState(
+                    source_uri=self._detail_uri,
+                    is_link=True,
+                    candidates=candidates,
+                    filter_text="",
+                    cursor=0,
+                    scroll=0,
+                )
 
         elif action == "add_scheme":
-            self._scheme_create_fields = self._build_scheme_create_fields()
-            self._scheme_create_cursor = 0
-            self._scheme_create_scroll = 0
-            self._scheme_create_error = ""
-            self._mode = self._SCHEME_CREATE
+            self._state = SchemeCreateState(
+                fields=self._build_scheme_create_fields(),
+                cursor=0,
+                scroll=0,
+                error="",
+                came_from_tree=_came_from_tree,
+            )
 
         elif action == "pick_lang":
-            options = _available_langs(self.taxonomy)
-            if not options:
-                options = ["en", "fr", "de", "es"]
-            self._lang_options = options
-            # Pre-select current language
+            options = _available_langs(self.taxonomy) or ["en", "fr", "de", "es"]
             try:
-                self._lang_cursor = options.index(self.lang)
+                cursor = options.index(self.lang)
             except ValueError:
-                self._lang_cursor = 0
-            self._lang_scroll = 0
-            self._mode = self._LANG_PICK
+                cursor = 0
+            self._state = LangPickState(options=options, cursor=cursor, scroll=0)
 
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
             if self._detail_uri:
-                self._map_source_uri = self._detail_uri
-                self._map_type = mapping_type
-                self._map_scheme_cands = self._build_map_scheme_candidates()
-                self._map_scheme_cursor = 0
-                self._map_scheme_scroll = 0
-                if not self._map_scheme_cands:
+                cands = self._build_map_scheme_candidates(self._detail_uri)
+                if not cands:
                     self._status = "No other scheme available for mapping"
                 else:
-                    self._mode = self._MAP_SCHEME_PICK
+                    self._state = MapSchemePickState(
+                        source_uri=self._detail_uri,
+                        map_type=mapping_type,
+                        candidates=cands,
+                        cursor=0,
+                        scroll=0,
+                    )
 
     # ─────────────────────────── CREATE mode ─────────────────────────────────
 
@@ -1969,7 +1959,16 @@ class TaxonomyViewer:
         stdscr.refresh()
 
     def _render_create_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
-        if self._mode == self._EDIT:
+        # Access CreateState from self._state directly, or from EditState.return_to
+        if isinstance(self._state, CreateState):
+            cs = self._state
+            _in_edit = False
+        elif isinstance(self._state, EditState) and isinstance(self._state.return_to, CreateState):
+            cs = self._state.return_to
+            _in_edit = True
+        else:
+            return
+        if _in_edit:
             _draw_bar(
                 stdscr,
                 0,
@@ -1980,38 +1979,38 @@ class TaxonomyViewer:
                 dim=True,
             )
         else:
-            if self._create_parent_uri in self.taxonomy.schemes:
-                scheme = self.taxonomy.schemes[self._create_parent_uri]
-                scheme_lbl = scheme.title(self.lang) or self._create_parent_uri
+            if cs.parent_uri in self.taxonomy.schemes:
+                scheme = self.taxonomy.schemes[cs.parent_uri]
+                scheme_lbl = scheme.title(self.lang) or cs.parent_uri
                 bar_title = f" New top concept in «{scheme_lbl}» "
-            elif self._create_parent_uri:
-                ph = self.taxonomy.uri_to_handle(self._create_parent_uri) or "?"
+            elif cs.parent_uri:
+                ph = self.taxonomy.uri_to_handle(cs.parent_uri) or "?"
                 bar_title = f" New concept under [{ph}] "
             else:
                 bar_title = " New top concept "
             _draw_bar(stdscr, 0, x0, width, bar_title, dim=False)
 
         list_h = rows - 2
-        n = len(self._create_fields)
+        n = len(cs.fields)
 
-        if self._create_cursor < self._create_scroll:
-            self._create_scroll = self._create_cursor
-        elif self._create_cursor >= self._create_scroll + list_h:
-            self._create_scroll = self._create_cursor - list_h + 1
+        if cs.cursor < cs.scroll:
+            cs.scroll = cs.cursor
+        elif cs.cursor >= cs.scroll + list_h:
+            cs.scroll = cs.cursor - list_h + 1
 
         lbl_w = 18
         # Use the target scheme's base_uri when creating a top concept
-        if self._create_parent_uri and self._create_parent_uri in self.taxonomy.schemes:
-            s = self.taxonomy.schemes[self._create_parent_uri]
+        if cs.parent_uri and cs.parent_uri in self.taxonomy.schemes:
+            s = self.taxonomy.schemes[cs.parent_uri]
             base = s.base_uri or self.taxonomy.base_uri()
         else:
             base = self.taxonomy.base_uri()
         for row in range(list_h):
-            idx = self._create_scroll + row
+            idx = cs.scroll + row
             if idx >= n:
                 break
-            f = self._create_fields[idx]
-            sel = idx == self._create_cursor
+            f = cs.fields[idx]
+            sel = idx == cs.cursor
             fl = f.display[:lbl_w].ljust(lbl_w)
             fv = f.value
             if f.meta.get("field") == "name":
@@ -2052,11 +2051,11 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        if self._create_error and self._mode != self._EDIT:
-            _draw_bar(stdscr, rows - 1, x0, width, f" ⚠  {self._create_error} ", dim=False)
+        if cs.error and not _in_edit:
+            _draw_bar(stdscr, rows - 1, x0, width, f" ⚠  {cs.error} ", dim=False)
         else:
-            n_fields = len(self._create_fields)
-            pos = f"[{self._create_cursor + 1}/{n_fields}]"
+            n_fields = len(cs.fields)
+            pos = f"[{cs.cursor + 1}/{n_fields}]"
             _draw_bar(
                 stdscr,
                 rows - 1,
@@ -2067,48 +2066,55 @@ class TaxonomyViewer:
             )
 
     def _on_create(self, key: int, rows: int) -> None:
-        n = len(self._create_fields)
+        if not isinstance(self._state, CreateState):
+            return
+        cs = self._state
+        n = len(cs.fields)
         list_h = rows - 2
-        self._create_error = ""
+        cs.error = ""
 
         if key in (curses.KEY_UP, ord("k")):
-            self._create_cursor = max(0, self._create_cursor - 1)
+            cs.cursor = max(0, cs.cursor - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
-            self._create_cursor = min(n - 1, self._create_cursor + 1)
+            cs.cursor = min(n - 1, cs.cursor + 1)
         elif key in (curses.KEY_HOME, ord("g")):
-            self._create_cursor = 0
+            cs.cursor = 0
         elif key in (curses.KEY_END, ord("G")):
-            self._create_cursor = n - 1
+            cs.cursor = n - 1
         elif key == 4:
-            self._create_cursor = min(n - 1, self._create_cursor + list_h // 2)
+            cs.cursor = min(n - 1, cs.cursor + list_h // 2)
         elif key == 21:
-            self._create_cursor = max(0, self._create_cursor - list_h // 2)
+            cs.cursor = max(0, cs.cursor - list_h // 2)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._create_cursor < n:
-                f = self._create_fields[self._create_cursor]
+            if 0 <= cs.cursor < n:
+                f = cs.fields[cs.cursor]
                 if f.editable:
-                    self._edit_field = f
-                    self._edit_value = f.value
-                    self._edit_pos = len(f.value)
-                    self._edit_return_mode = self._CREATE
-                    self._mode = self._EDIT
+                    self._state = EditState(
+                        buffer=f.value,
+                        pos=len(f.value),
+                        field=f,
+                        return_to=cs,  # save CreateState as return_to
+                    )
                 elif f.meta.get("type") == "form_action":
                     act = f.meta.get("action")
                     if act == "submit":
                         self._submit_create()
                     elif act == "cancel":
-                        self._mode = self._create_return_mode
+                        self._state = TreeState() if cs.came_from_tree else DetailState()
         elif key == 27:  # Esc — cancel
-            self._mode = self._create_return_mode
+            self._state = TreeState() if cs.came_from_tree else DetailState()
 
     def _submit_create(self) -> None:
         import re
 
+        if not isinstance(self._state, CreateState):
+            return
+        cs = self._state
         name = ""
         pref_labels: dict[str, str] = {}
         definitions: dict[str, str] = {}
 
-        for f in self._create_fields:
+        for f in cs.fields:
             fld = f.meta.get("field")
             if fld == "name":
                 name = f.value.strip()
@@ -2118,20 +2124,20 @@ class TaxonomyViewer:
                 definitions[f.meta["lang"]] = f.value.strip()
 
         if not name:
-            self._create_error = "Concept name is required"
+            cs.error = "Concept name is required"
             return
 
-        target_tax, target_path = self._individual_taxonomy_for(self._create_parent_uri)
+        target_tax, target_path = self._individual_taxonomy_for(cs.parent_uri)
 
-        if self._create_parent_uri and self._create_parent_uri in target_tax.schemes:
-            s = target_tax.schemes[self._create_parent_uri]
+        if cs.parent_uri and cs.parent_uri in target_tax.schemes:
+            s = target_tax.schemes[cs.parent_uri]
             base = s.base_uri or target_tax.base_uri()
         else:
             base = target_tax.base_uri()
         new_uri = base + name
 
         if new_uri in target_tax.concepts:
-            self._create_error = f"'{name}' already exists"
+            cs.error = f"'{name}' already exists"
             return
 
         if not pref_labels:
@@ -2139,9 +2145,9 @@ class TaxonomyViewer:
             pref_labels[self.lang] = label
 
         parent_handle = None
-        if self._create_parent_uri:
+        if cs.parent_uri:
             parent_handle = (
-                target_tax.uri_to_handle(self._create_parent_uri) or self._create_parent_uri
+                target_tax.uri_to_handle(cs.parent_uri) or cs.parent_uri
             )
 
         try:
@@ -2153,7 +2159,7 @@ class TaxonomyViewer:
                 definitions=definitions if definitions else None,
             )
         except SkostaxError as exc:
-            self._create_error = str(exc)
+            cs.error = str(exc)
             return
 
         self._rebuild()
@@ -2169,7 +2175,7 @@ class TaxonomyViewer:
         self._field_cursor = 0
         self._detail_scroll = 0
         self._history.clear()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     # ─────────────────────────── SCHEME CREATE mode ──────────────────────────
 
@@ -2234,7 +2240,16 @@ class TaxonomyViewer:
     def _render_scheme_create_col(
         self, stdscr: curses.window, rows: int, x0: int, width: int
     ) -> None:
-        if self._mode == self._EDIT:
+        # Access SchemeCreateState from self._state or from EditState.return_to
+        if isinstance(self._state, SchemeCreateState):
+            scs = self._state
+            _in_edit = False
+        elif isinstance(self._state, EditState) and isinstance(self._state.return_to, SchemeCreateState):
+            scs = self._state.return_to
+            _in_edit = True
+        else:
+            return
+        if _in_edit:
             _draw_bar(
                 stdscr,
                 0,
@@ -2247,20 +2262,20 @@ class TaxonomyViewer:
             _draw_bar(stdscr, 0, x0, width, " ◉ New Concept Scheme ", dim=False)
 
         list_h = rows - 2
-        n = len(self._scheme_create_fields)
+        n = len(scs.fields)
 
-        if self._scheme_create_cursor < self._scheme_create_scroll:
-            self._scheme_create_scroll = self._scheme_create_cursor
-        elif self._scheme_create_cursor >= self._scheme_create_scroll + list_h:
-            self._scheme_create_scroll = self._scheme_create_cursor - list_h + 1
+        if scs.cursor < scs.scroll:
+            scs.scroll = scs.cursor
+        elif scs.cursor >= scs.scroll + list_h:
+            scs.scroll = scs.cursor - list_h + 1
 
         lbl_w = 18
         for row in range(list_h):
-            idx = self._scheme_create_scroll + row
+            idx = scs.scroll + row
             if idx >= n:
                 break
-            f = self._scheme_create_fields[idx]
-            sel = idx == self._scheme_create_cursor
+            f = scs.fields[idx]
+            sel = idx == scs.cursor
             fl = f.display[:lbl_w].ljust(lbl_w)
             fv = f.value
             ftype = f.meta.get("type")
@@ -2290,10 +2305,10 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        if self._scheme_create_error and self._mode != self._EDIT:
-            _draw_bar(stdscr, rows - 1, x0, width, f" ⚠  {self._scheme_create_error} ", dim=False)
+        if scs.error and not _in_edit:
+            _draw_bar(stdscr, rows - 1, x0, width, f" ⚠  {scs.error} ", dim=False)
         else:
-            pos = f"[{self._scheme_create_cursor + 1}/{n}]"
+            pos = f"[{scs.cursor + 1}/{n}]"
             _draw_bar(
                 stdscr,
                 rows - 1,
@@ -2304,46 +2319,53 @@ class TaxonomyViewer:
             )
 
     def _on_scheme_create(self, key: int, rows: int) -> None:
-        n = len(self._scheme_create_fields)
+        if not isinstance(self._state, SchemeCreateState):
+            return
+        scs = self._state
+        n = len(scs.fields)
         list_h = rows - 2
-        self._scheme_create_error = ""
+        scs.error = ""
 
         if key in (curses.KEY_UP, ord("k")):
-            self._scheme_create_cursor = max(0, self._scheme_create_cursor - 1)
+            scs.cursor = max(0, scs.cursor - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
-            self._scheme_create_cursor = min(n - 1, self._scheme_create_cursor + 1)
+            scs.cursor = min(n - 1, scs.cursor + 1)
         elif key in (curses.KEY_HOME, ord("g")):
-            self._scheme_create_cursor = 0
+            scs.cursor = 0
         elif key in (curses.KEY_END, ord("G")):
-            self._scheme_create_cursor = n - 1
+            scs.cursor = n - 1
         elif key == 4:
-            self._scheme_create_cursor = min(n - 1, self._scheme_create_cursor + list_h // 2)
+            scs.cursor = min(n - 1, scs.cursor + list_h // 2)
         elif key == 21:
-            self._scheme_create_cursor = max(0, self._scheme_create_cursor - list_h // 2)
+            scs.cursor = max(0, scs.cursor - list_h // 2)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._scheme_create_cursor < n:
-                f = self._scheme_create_fields[self._scheme_create_cursor]
+            if 0 <= scs.cursor < n:
+                f = scs.fields[scs.cursor]
                 if f.editable:
-                    self._edit_field = f
-                    self._edit_value = f.value
-                    self._edit_pos = len(f.value)
-                    self._edit_return_mode = self._SCHEME_CREATE
-                    self._mode = self._EDIT
+                    self._state = EditState(
+                        buffer=f.value,
+                        pos=len(f.value),
+                        field=f,
+                        return_to=scs,  # save SchemeCreateState as return_to
+                    )
                 elif f.meta.get("type") == "form_action":
                     act = f.meta.get("action")
                     if act == "submit_scheme":
                         self._submit_scheme_create()
                     elif act == "cancel":
-                        self._mode = self._create_return_mode
+                        self._state = TreeState() if scs.came_from_tree else DetailState()
         elif key == 27:  # Esc — cancel
-            self._mode = self._create_return_mode
+            self._state = TreeState() if scs.came_from_tree else DetailState()
 
     def _submit_scheme_create(self) -> None:
+        if not isinstance(self._state, SchemeCreateState):
+            return
+        scs = self._state
         title = ""
         uri = ""
         base_uri = ""
 
-        for f in self._scheme_create_fields:
+        for f in scs.fields:
             fld = f.meta.get("field")
             if fld == "title":
                 title = f.value.strip()
@@ -2353,17 +2375,17 @@ class TaxonomyViewer:
                 base_uri = f.value.strip()
 
         if not title:
-            self._scheme_create_error = "Title is required"
+            scs.error = "Title is required"
             return
         if not uri:
-            self._scheme_create_error = "URI is required"
+            scs.error = "URI is required"
             return
         if "://" not in uri:
-            self._scheme_create_error = "URI must be a full URL (e.g. https://…)"
+            scs.error = "URI must be a full URL (e.g. https://…)"
             return
         prim_tax = self._workspace.taxonomies.get(self.file_path, self.taxonomy)
         if uri in prim_tax.schemes:
-            self._scheme_create_error = "Scheme URI already exists"
+            scs.error = "Scheme URI already exists"
             return
 
         if base_uri and not base_uri.endswith(("/", "#")):
@@ -2378,7 +2400,7 @@ class TaxonomyViewer:
                 languages=[self.lang],
             )
         except SkostaxError as exc:
-            self._scheme_create_error = str(exc)
+            scs.error = str(exc)
             return
 
         self._rebuild()
@@ -2394,7 +2416,7 @@ class TaxonomyViewer:
         self._field_cursor = 0
         self._detail_scroll = 0
         self._history.clear()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     # ─────────────────────────── CONFIRM DELETE mode ─────────────────────────
 
@@ -2497,15 +2519,15 @@ class TaxonomyViewer:
                 operations.remove_concept(target_tax, self._detail_uri or "", cascade=has_children)
             except SkostaxError as exc:
                 self._status = str(exc)
-                self._mode = self._DETAIL
+                self._state = DetailState()
                 return
             self._save_file(path=target_path)
             self._rebuild()
             self._history.clear()
             self._cursor = min(self._cursor, max(0, len(self._flat) - 1))
-            self._mode = self._TREE
+            self._state = TreeState()
         elif key in (ord("n"), 27):
-            self._mode = self._DETAIL
+            self._state = DetailState()
 
     # ─────────────────────────── MOVE PICK mode ──────────────────────────────
 
@@ -2523,8 +2545,11 @@ class TaxonomyViewer:
         return candidates
 
     def _filtered_move_candidates(self) -> list[tuple[str, str]]:
-        flt = self._move_filter.lower()
-        return [(u, d) for u, d in self._move_candidates if not flt or flt in d.lower()]
+        ms = self._state
+        if not isinstance(ms, MovePickState):
+            return []
+        flt = ms.filter_text.lower()
+        return [(u, d) for u, d in ms.candidates if not flt or flt in d.lower()]
 
     def _draw_move(
         self,
@@ -2538,7 +2563,8 @@ class TaxonomyViewer:
         tree_w = cols // 3 if wide else 0
         detail_x0 = tree_w
         detail_w = cols - tree_w
-        highlight = self._move_source_uri or self._link_source_uri
+        ms = self._state if isinstance(self._state, MovePickState) else None
+        highlight = ms.source_uri if ms else ""
         if wide:
             if highlight:
                 for i, line in enumerate(self._flat):
@@ -2570,14 +2596,16 @@ class TaxonomyViewer:
         width: int,
         title: str = "",
     ) -> None:
-        source_uri = self._move_source_uri or self._link_source_uri
+        ms = self._state if isinstance(self._state, MovePickState) else None
+        source_uri = ms.source_uri if ms else ""
         source_handle = self.taxonomy.uri_to_handle(source_uri) or "?"
         if not title:
             title = f" ↷ Move [{source_handle}] — select new parent "
         _draw_bar(stdscr, 0, x0, width, title, dim=False)
 
         # Filter bar at row 1
-        filter_prompt = f" Filter: {self._move_filter}▌"
+        filter_text = ms.filter_text if ms else ""
+        filter_prompt = f" Filter: {filter_text}▌"
         try:
             stdscr.addstr(
                 1,
@@ -2590,21 +2618,27 @@ class TaxonomyViewer:
 
         filtered = self._filtered_move_candidates()
         list_h = rows - 3  # title + filter + footer
+        cursor = ms.cursor if ms else 0
+        scroll = ms.scroll if ms else 0
 
         # Clamp + scroll
-        if filtered:
-            self._move_cursor = min(self._move_cursor, len(filtered) - 1)
-        if self._move_cursor < self._move_scroll:
-            self._move_scroll = self._move_cursor
-        elif self._move_cursor >= self._move_scroll + list_h:
-            self._move_scroll = self._move_cursor - list_h + 1
+        if ms and filtered:
+            ms.cursor = min(ms.cursor, len(filtered) - 1)
+            cursor = ms.cursor
+        if ms:
+            if cursor < ms.scroll:
+                ms.scroll = cursor
+                scroll = cursor
+            elif cursor >= ms.scroll + list_h:
+                ms.scroll = cursor - list_h + 1
+                scroll = ms.scroll
 
         for row in range(list_h):
-            idx = self._move_scroll + row
+            idx = scroll + row
             if idx >= len(filtered):
                 break
             uri, display = filtered[idx]
-            sel = idx == self._move_cursor
+            sel = idx == cursor
             text = f"  {display}"
             y = row + 2
             try:
@@ -2624,8 +2658,7 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        is_link = bool(self._link_source_uri) and self._mode == self._LINK_PICK
-        source_uri = self._link_source_uri if is_link else self._move_source_uri
+        is_link = ms.is_link if ms else False
         source = self.taxonomy.concepts.get(source_uri)
         if not is_link and source and source.narrower:
             total = len(operations._subtree_uris(self.taxonomy, source_uri))
@@ -2643,101 +2676,110 @@ class TaxonomyViewer:
         )
 
     def _on_move_pick(self, key: int, rows: int) -> None:
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
         filtered = self._filtered_move_candidates()
         n = len(filtered)
         list_h = rows - 3
 
         if key == curses.KEY_UP:
-            self._move_cursor = max(0, self._move_cursor - 1)
+            ms.cursor = max(0, ms.cursor - 1)
         elif key == curses.KEY_DOWN:
-            self._move_cursor = min(n - 1, self._move_cursor + 1)
+            ms.cursor = min(n - 1, ms.cursor + 1)
         elif key == curses.KEY_PPAGE:
-            self._move_cursor = max(0, self._move_cursor - list_h)
+            ms.cursor = max(0, ms.cursor - list_h)
         elif key == curses.KEY_NPAGE:
-            self._move_cursor = min(n - 1, self._move_cursor + list_h)
+            ms.cursor = min(n - 1, ms.cursor + list_h)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._move_cursor < n:
-                uri, _ = filtered[self._move_cursor]
+            if 0 <= ms.cursor < n:
+                uri, _ = filtered[ms.cursor]
                 self._confirm_move(None if uri == "__TOP__" else uri)
         elif key == 27:  # Esc
-            self._mode = self._DETAIL
-            self._detail_uri = self._move_source_uri
+            self._detail_uri = ms.source_uri
             self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
         elif key in (curses.KEY_BACKSPACE, 127, 8):
-            if self._move_filter:
-                self._move_filter = self._move_filter[:-1]
-                self._move_cursor = 0
-                self._move_scroll = 0
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
         elif 32 <= key < 256:
-            self._move_filter += chr(key)
-            self._move_cursor = 0
-            self._move_scroll = 0
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
 
     def _confirm_move(self, target_uri: str | None) -> None:
+        if not isinstance(self._state, MovePickState):
+            return
+        source_uri = self._state.source_uri
         try:
-            operations.move_concept(self.taxonomy, self._move_source_uri, target_uri)
+            operations.move_concept(self.taxonomy, source_uri, target_uri)
         except SkostaxError as exc:
             self._status = str(exc)
-            self._mode = self._DETAIL
-            self._detail_uri = self._move_source_uri
+            self._detail_uri = source_uri
             self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
             return
         self._rebuild()
         self._save_file()
         for i, line in enumerate(self._flat):
-            if line.uri == self._move_source_uri:
+            if line.uri == source_uri:
                 self._cursor = i
                 break
-        self._detail_uri = self._move_source_uri
-        self._detail_fields = self._bdf(self._move_source_uri)
+        self._detail_uri = source_uri
+        self._detail_fields = self._bdf(source_uri)
         self._field_cursor = 0
         self._history.clear()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     def _on_link_pick(self, key: int, rows: int) -> None:
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
         filtered = self._filtered_move_candidates()
         n = len(filtered)
         list_h = rows - 3
 
         if key == curses.KEY_UP:
-            self._move_cursor = max(0, self._move_cursor - 1)
+            ms.cursor = max(0, ms.cursor - 1)
         elif key == curses.KEY_DOWN:
-            self._move_cursor = min(n - 1, self._move_cursor + 1)
+            ms.cursor = min(n - 1, ms.cursor + 1)
         elif key == curses.KEY_PPAGE:
-            self._move_cursor = max(0, self._move_cursor - list_h)
+            ms.cursor = max(0, ms.cursor - list_h)
         elif key == curses.KEY_NPAGE:
-            self._move_cursor = min(n - 1, self._move_cursor + list_h)
+            ms.cursor = min(n - 1, ms.cursor + list_h)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._move_cursor < n:
-                uri, _ = filtered[self._move_cursor]
+            if 0 <= ms.cursor < n:
+                uri, _ = filtered[ms.cursor]
                 self._confirm_link(uri)
         elif key == 27:  # Esc
-            back_uri = self._link_source_uri or self._detail_uri
-            self._link_source_uri = ""
-            self._mode = self._DETAIL
+            back_uri = ms.source_uri or self._detail_uri
             self._detail_uri = back_uri
             if self._detail_uri:
                 self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
         elif key in (curses.KEY_BACKSPACE, 127, 8):
-            if self._move_filter:
-                self._move_filter = self._move_filter[:-1]
-                self._move_cursor = 0
-                self._move_scroll = 0
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
         elif 32 <= key < 256:
-            self._move_filter += chr(key)
-            self._move_cursor = 0
-            self._move_scroll = 0
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
 
     def _confirm_link(self, target_uri: str) -> None:
-        src = self._link_source_uri
-        self._link_source_uri = ""
+        if not isinstance(self._state, MovePickState):
+            return
+        src = self._state.source_uri
         try:
             operations.add_broader_link(self.taxonomy, src, target_uri)
         except SkostaxError as exc:
             self._status = str(exc)
-            self._mode = self._DETAIL
             self._detail_uri = src
             self._detail_fields = self._bdf(src)
+            self._state = DetailState()
             return
         self._rebuild()
         self._save_file()
@@ -2749,7 +2791,7 @@ class TaxonomyViewer:
         self._detail_fields = self._bdf(src)
         self._field_cursor = 0
         self._history.clear()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     # ─────────────────── MAPPING (cross-scheme) pickers ─────────────────────
 
@@ -2761,9 +2803,9 @@ class TaxonomyViewer:
         "relatedMatch": "↔ relatedMatch",
     }
 
-    def _build_map_scheme_candidates(self) -> list[tuple[str, str]]:
+    def _build_map_scheme_candidates(self, source_uri: str = "") -> list[tuple[str, str]]:
         """All schemes in the workspace except the one owning the source concept."""
-        src_scheme = self._workspace.concept_scheme_uri(self._map_source_uri)
+        src_scheme = self._workspace.concept_scheme_uri(source_uri)
         result: list[tuple[str, str]] = []
         for path, t in self._workspace.taxonomies.items():
             for s_uri, scheme in t.schemes.items():
@@ -2809,10 +2851,12 @@ class TaxonomyViewer:
         tree_w = cols // 3 if wide else 0
         detail_x = tree_w
         detail_w = cols - tree_w
+        msp = self._state if isinstance(self._state, MapSchemePickState) else None
+        source_uri = msp.source_uri if msp else ""
         if wide:
-            if self._map_source_uri:
+            if source_uri:
                 for i, line in enumerate(self._flat):
-                    if line.uri == self._map_source_uri:
+                    if line.uri == source_uri:
                         self._cursor = i
                         break
             self._adjust_tree_scroll(rows)
@@ -2822,7 +2866,7 @@ class TaxonomyViewer:
                 0,
                 tree_w,
                 cursor_idx=self._cursor,
-                highlight_uri=self._map_source_uri,
+                highlight_uri=source_uri,
             )
             for y in range(rows):
                 try:
@@ -2830,8 +2874,9 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
 
-        src_handle = self.taxonomy.uri_to_handle(self._map_source_uri) or "?"
-        type_label = self._MAP_TYPE_LABELS.get(self._map_type, self._map_type)
+        src_handle = self.taxonomy.uri_to_handle(source_uri) or "?"
+        map_type = msp.map_type if msp else ""
+        type_label = self._MAP_TYPE_LABELS.get(map_type, map_type)
         _draw_bar(
             stdscr,
             0,
@@ -2840,21 +2885,24 @@ class TaxonomyViewer:
             f" {type_label} for [{src_handle}] — pick target scheme ",
         )
 
-        cands = self._map_scheme_cands
+        cands = msp.candidates if msp else []
         list_h = rows - 2
-        if cands:
-            self._map_scheme_cursor = min(self._map_scheme_cursor, len(cands) - 1)
-        if self._map_scheme_cursor < self._map_scheme_scroll:
-            self._map_scheme_scroll = self._map_scheme_cursor
-        elif self._map_scheme_cursor >= self._map_scheme_scroll + list_h:
-            self._map_scheme_scroll = self._map_scheme_cursor - list_h + 1
+        if msp and cands:
+            msp.cursor = min(msp.cursor, len(cands) - 1)
+        if msp:
+            if msp.cursor < msp.scroll:
+                msp.scroll = msp.cursor
+            elif msp.cursor >= msp.scroll + list_h:
+                msp.scroll = msp.cursor - list_h + 1
+        cursor = msp.cursor if msp else 0
+        scroll = msp.scroll if msp else 0
 
         for row in range(list_h):
-            idx = self._map_scheme_scroll + row
+            idx = scroll + row
             if idx >= len(cands):
                 break
             _, display = cands[idx]
-            sel = idx == self._map_scheme_cursor
+            sel = idx == cursor
             text = f"  ◉  {display}"
             y = row + 1
             try:
@@ -2883,33 +2931,43 @@ class TaxonomyViewer:
         stdscr.refresh()
 
     def _on_map_scheme_pick(self, key: int) -> None:
-        n = len(self._map_scheme_cands)
+        if not isinstance(self._state, MapSchemePickState):
+            return
+        msp = self._state
+        n = len(msp.candidates)
         if key == curses.KEY_UP:
-            self._map_scheme_cursor = max(0, self._map_scheme_cursor - 1)
+            msp.cursor = max(0, msp.cursor - 1)
         elif key == curses.KEY_DOWN:
-            self._map_scheme_cursor = min(n - 1, self._map_scheme_cursor + 1)
+            msp.cursor = min(n - 1, msp.cursor + 1)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._map_scheme_cursor < n:
-                chosen_scheme, _ = self._map_scheme_cands[self._map_scheme_cursor]
-                self._map_target_scheme = chosen_scheme
-                self._map_concept_cands = self._build_map_concept_candidates(chosen_scheme)
-                if not self._map_concept_cands:
+            if 0 <= msp.cursor < n:
+                chosen_scheme, _ = msp.candidates[msp.cursor]
+                concept_cands = self._build_map_concept_candidates(chosen_scheme)
+                if not concept_cands:
                     self._status = "This scheme has no concepts to map to"
                 else:
-                    self._map_concept_cursor = 0
-                    self._map_concept_scroll = 0
-                    self._map_concept_filter = ""
-                    self._mode = self._MAP_CONCEPT_PICK
+                    self._state = MapConceptPickState(
+                        source_uri=msp.source_uri,
+                        map_type=msp.map_type,
+                        target_scheme=chosen_scheme,
+                        candidates=concept_cands,
+                        filter_text="",
+                        cursor=0,
+                        scroll=0,
+                    )
         elif key == 27:  # Esc
-            self._mode = self._DETAIL
-            self._detail_uri = self._map_source_uri
-            self._detail_fields = self._bdf(self._map_source_uri)
+            self._detail_uri = msp.source_uri
+            self._detail_fields = self._bdf(msp.source_uri)
+            self._state = DetailState()
 
     # ── Step 2: concept picker inside chosen scheme ───────────────────────────
 
     def _filtered_map_concept_cands(self) -> list[tuple[str, str]]:
-        flt = self._map_concept_filter.lower()
-        return [(u, d) for u, d in self._map_concept_cands if not flt or flt in d.lower()]
+        mcp = self._state if isinstance(self._state, MapConceptPickState) else None
+        if not mcp:
+            return []
+        flt = mcp.filter_text.lower()
+        return [(u, d) for u, d in mcp.candidates if not flt or flt in d.lower()]
 
     def _draw_map_concept_pick(self, stdscr: curses.window, rows: int, cols: int) -> None:
         stdscr.erase()
@@ -2917,10 +2975,12 @@ class TaxonomyViewer:
         tree_w = cols // 3 if wide else 0
         detail_x = tree_w
         detail_w = cols - tree_w
+        mcp = self._state if isinstance(self._state, MapConceptPickState) else None
+        source_uri = mcp.source_uri if mcp else ""
         if wide:
-            if self._map_source_uri:
+            if source_uri:
                 for i, line in enumerate(self._flat):
-                    if line.uri == self._map_source_uri:
+                    if line.uri == source_uri:
                         self._cursor = i
                         break
             self._adjust_tree_scroll(rows)
@@ -2930,7 +2990,7 @@ class TaxonomyViewer:
                 0,
                 tree_w,
                 cursor_idx=self._cursor,
-                highlight_uri=self._map_source_uri,
+                highlight_uri=source_uri,
             )
             for y in range(rows):
                 try:
@@ -2938,11 +2998,13 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
 
-        src_handle = self.taxonomy.uri_to_handle(self._map_source_uri) or "?"
-        type_label = self._MAP_TYPE_LABELS.get(self._map_type, self._map_type)
-        t = self._workspace.taxonomy_for_uri(self._map_target_scheme)
-        scheme_obj = t.schemes.get(self._map_target_scheme) if t else None
-        scheme_title = scheme_obj.title(self.lang) if scheme_obj else self._map_target_scheme
+        src_handle = self.taxonomy.uri_to_handle(source_uri) or "?"
+        map_type = mcp.map_type if mcp else ""
+        type_label = self._MAP_TYPE_LABELS.get(map_type, map_type)
+        target_scheme = mcp.target_scheme if mcp else ""
+        t = self._workspace.taxonomy_for_uri(target_scheme)
+        scheme_obj = t.schemes.get(target_scheme) if t else None
+        scheme_title = scheme_obj.title(self.lang) if scheme_obj else target_scheme
         _draw_bar(
             stdscr,
             0,
@@ -2952,7 +3014,8 @@ class TaxonomyViewer:
         )
 
         # Filter bar
-        filter_prompt = f" Filter: {self._map_concept_filter}▌"
+        filter_text = mcp.filter_text if mcp else ""
+        filter_prompt = f" Filter: {filter_text}▌"
         try:
             stdscr.addstr(
                 1,
@@ -2965,19 +3028,25 @@ class TaxonomyViewer:
 
         filtered = self._filtered_map_concept_cands()
         list_h = rows - 3
-        if filtered:
-            self._map_concept_cursor = min(self._map_concept_cursor, len(filtered) - 1)
-        if self._map_concept_cursor < self._map_concept_scroll:
-            self._map_concept_scroll = self._map_concept_cursor
-        elif self._map_concept_cursor >= self._map_concept_scroll + list_h:
-            self._map_concept_scroll = self._map_concept_cursor - list_h + 1
+        cursor = mcp.cursor if mcp else 0
+        scroll = mcp.scroll if mcp else 0
+        if mcp and filtered:
+            mcp.cursor = min(mcp.cursor, len(filtered) - 1)
+            cursor = mcp.cursor
+        if mcp:
+            if cursor < mcp.scroll:
+                mcp.scroll = cursor
+                scroll = cursor
+            elif cursor >= mcp.scroll + list_h:
+                mcp.scroll = cursor - list_h + 1
+                scroll = mcp.scroll
 
         for row in range(list_h):
-            idx = self._map_concept_scroll + row
+            idx = scroll + row
             if idx >= len(filtered):
                 break
             _, display = filtered[idx]
-            sel = idx == self._map_concept_cursor
+            sel = idx == cursor
             text = f"  {display}"
             y = row + 2
             try:
@@ -3004,50 +3073,63 @@ class TaxonomyViewer:
         stdscr.refresh()
 
     def _on_map_concept_pick(self, key: int, rows: int) -> None:
+        if not isinstance(self._state, MapConceptPickState):
+            return
+        mcp = self._state
         filtered = self._filtered_map_concept_cands()
         n = len(filtered)
         list_h = rows - 3
 
         if key == curses.KEY_UP:
-            self._map_concept_cursor = max(0, self._map_concept_cursor - 1)
+            mcp.cursor = max(0, mcp.cursor - 1)
         elif key == curses.KEY_DOWN:
-            self._map_concept_cursor = min(n - 1, self._map_concept_cursor + 1)
+            mcp.cursor = min(n - 1, mcp.cursor + 1)
         elif key == curses.KEY_PPAGE:
-            self._map_concept_cursor = max(0, self._map_concept_cursor - list_h)
+            mcp.cursor = max(0, mcp.cursor - list_h)
         elif key == curses.KEY_NPAGE:
-            self._map_concept_cursor = min(n - 1, self._map_concept_cursor + list_h)
+            mcp.cursor = min(n - 1, mcp.cursor + list_h)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= self._map_concept_cursor < n:
-                target_uri, _ = filtered[self._map_concept_cursor]
+            if 0 <= mcp.cursor < n:
+                target_uri, _ = filtered[mcp.cursor]
                 self._confirm_mapping(target_uri)
         elif key == 27:  # Esc → back to scheme picker
-            self._mode = self._MAP_SCHEME_PICK
+            scheme_cands = self._build_map_scheme_candidates(mcp.source_uri)
+            self._state = MapSchemePickState(
+                source_uri=mcp.source_uri,
+                map_type=mcp.map_type,
+                candidates=scheme_cands,
+                cursor=0,
+                scroll=0,
+            )
         elif key in (curses.KEY_BACKSPACE, 127, 8):
-            if self._map_concept_filter:
-                self._map_concept_filter = self._map_concept_filter[:-1]
-                self._map_concept_cursor = 0
-                self._map_concept_scroll = 0
+            if mcp.filter_text:
+                mcp.filter_text = mcp.filter_text[:-1]
+                mcp.cursor = 0
+                mcp.scroll = 0
         elif 32 <= key < 256:
-            self._map_concept_filter += chr(key)
-            self._map_concept_cursor = 0
-            self._map_concept_scroll = 0
+            mcp.filter_text += chr(key)
+            mcp.cursor = 0
+            mcp.scroll = 0
 
     def _confirm_mapping(self, target_uri: str) -> None:
         from .workspace_ops import add_mapping
 
-        src = self._map_source_uri
+        if not isinstance(self._state, MapConceptPickState):
+            return
+        src = self._state.source_uri
+        map_type = self._state.map_type
         try:
             src_file, tgt_file = add_mapping(
                 self._workspace,
                 src,
                 target_uri,
-                self._map_type,  # type: ignore[arg-type]
+                map_type,  # type: ignore[arg-type]
             )
         except Exception as exc:
             self._status = str(exc)
-            self._mode = self._DETAIL
             self._detail_uri = src
             self._detail_fields = self._bdf(src)
+            self._state = DetailState()
             return
         # Save both affected files and stage them in git
         self._workspace.save_file(src_file)
@@ -3057,7 +3139,7 @@ class TaxonomyViewer:
             if tgt_file != src_file:
                 self._git_manager.stage_path(tgt_file)  # type: ignore[attr-defined]
         self._status = (
-            f"Added {self._map_type}: {self.taxonomy.uri_to_handle(src) or src}"
+            f"Added {map_type}: {self.taxonomy.uri_to_handle(src) or src}"
             f" → {self.taxonomy.uri_to_handle(target_uri) or target_uri}"
         )
         self._rebuild()
@@ -3069,7 +3151,7 @@ class TaxonomyViewer:
         self._detail_fields = self._bdf(src)
         self._field_cursor = 0
         self._history.clear()
-        self._mode = self._DETAIL
+        self._state = DetailState()
 
     # ─────────────────────────── LANG PICK mode ──────────────────────────────
 
@@ -3079,24 +3161,28 @@ class TaxonomyViewer:
         stdscr.refresh()
 
     def _render_lang_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
-        options = self._lang_options
+        lp = self._state if isinstance(self._state, LangPickState) else None
+        options = lp.options if lp else []
         n = len(options)
         list_h = rows - 2
 
         _draw_bar(stdscr, 0, x0, width, " Select display language ", dim=False)
 
         # Scroll so cursor stays visible
-        if self._lang_cursor < self._lang_scroll:
-            self._lang_scroll = self._lang_cursor
-        elif self._lang_cursor >= self._lang_scroll + list_h:
-            self._lang_scroll = self._lang_cursor - list_h + 1
+        if lp:
+            if lp.cursor < lp.scroll:
+                lp.scroll = lp.cursor
+            elif lp.cursor >= lp.scroll + list_h:
+                lp.scroll = lp.cursor - list_h + 1
+        cursor = lp.cursor if lp else 0
+        scroll = lp.scroll if lp else 0
 
         for row in range(list_h):
-            idx = self._lang_scroll + row
+            idx = scroll + row
             if idx >= n:
                 break
             code = options[idx]
-            sel = idx == self._lang_cursor
+            sel = idx == cursor
             is_current = code == self.lang
             marker = " ✓" if is_current else "  "
             text = f"  {marker}  {code}"
@@ -3117,28 +3203,31 @@ class TaxonomyViewer:
             rows - 1,
             x0,
             width,
-            f" [{self._lang_cursor + 1}/{n}]  ↑↓: move  Enter: select  Esc: cancel ",
+            f" [{cursor + 1}/{n}]  ↑↓: move  Enter: select  Esc: cancel ",
             dim=True,
         )
 
     def _on_lang_pick(self, key: int, rows: int) -> None:
-        n = len(self._lang_options)
+        if not isinstance(self._state, LangPickState):
+            return
+        lp = self._state
+        n = len(lp.options)
         list_h = rows - 2
 
         if key in (curses.KEY_UP, ord("k")):
-            self._lang_cursor = max(0, self._lang_cursor - 1)
+            lp.cursor = max(0, lp.cursor - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
-            self._lang_cursor = min(n - 1, self._lang_cursor + 1)
+            lp.cursor = min(n - 1, lp.cursor + 1)
         elif key in (curses.KEY_HOME, ord("g")):
-            self._lang_cursor = 0
+            lp.cursor = 0
         elif key in (curses.KEY_END, ord("G")):
-            self._lang_cursor = n - 1
+            lp.cursor = n - 1
         elif key == 4:  # Ctrl+D
-            self._lang_cursor = min(n - 1, self._lang_cursor + list_h // 2)
+            lp.cursor = min(n - 1, lp.cursor + list_h // 2)
         elif key == 21:  # Ctrl+U
-            self._lang_cursor = max(0, self._lang_cursor - list_h // 2)
+            lp.cursor = max(0, lp.cursor - list_h // 2)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            chosen = self._lang_options[self._lang_cursor]
+            chosen = lp.options[lp.cursor]
             self.lang = chosen
             _save_lang_pref(self.file_path, chosen)
             self._rebuild()
@@ -3147,9 +3236,9 @@ class TaxonomyViewer:
             if self._detail_uri and self._detail_uri in self.taxonomy.schemes:
                 self._detail_fields = build_scheme_fields(self.taxonomy, self.lang)
                 self._field_cursor = 0
-            self._mode = self._DETAIL
+            self._state = DetailState()
         elif key in (27, ord("q")):
-            self._mode = self._DETAIL
+            self._state = DetailState()
 
 
 # ──────────────────────────── TaxonomyShell (REPL) ───────────────────────────

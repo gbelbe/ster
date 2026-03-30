@@ -17,6 +17,14 @@ from ster.nav import (
     build_scheme_fields,
     flatten_tree,
 )
+from ster.nav_state import (
+    CreateState,
+    DetailState,
+    EditState,
+    SchemeCreateState,
+    TreeState,
+    WelcomeState,
+)
 
 BASE = "https://example.org/test/"
 
@@ -251,24 +259,24 @@ def test_build_detail_fields_narrower_read_only(simple_taxonomy):
 def test_viewer_initial_cursor(viewer):
     assert viewer._cursor == 0
     # Viewer starts in WELCOME mode (splash screen); transitions to TREE on any key
-    assert viewer._mode == TaxonomyViewer._WELCOME
+    assert isinstance(viewer._state, WelcomeState)
 
 
 def test_viewer_open_detail(viewer, simple_taxonomy):
     # flat[0] is now the action row; use flat[1] (scheme row) instead
     viewer._cursor = 1
     viewer._open_detail()
-    assert viewer._mode == TaxonomyViewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
     assert viewer._detail_uri == viewer._flat[1].uri
     assert len(viewer._detail_fields) > 0
 
 
 def test_viewer_back_from_detail(viewer):
-    viewer._mode = TaxonomyViewer._TREE  # skip welcome for this test
+    viewer._state = TreeState()  # skip welcome for this test
     viewer._cursor = 1  # skip action row at index 0
     viewer._open_detail()
     viewer._back()
-    assert viewer._mode == TaxonomyViewer._TREE
+    assert isinstance(viewer._state, TreeState)
 
 
 def test_viewer_history_preserves_cursor(viewer):
@@ -285,8 +293,7 @@ def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
     fields = viewer._detail_fields
     pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
     viewer._field_cursor = pref_idx
-    viewer._edit_value = "Updated Top"
-    viewer._edit_pos = len("Updated Top")
+    viewer._state = EditState(buffer="Updated Top", pos=len("Updated Top"), field=fields[pref_idx], return_to=None)
     viewer._commit_edit()
     assert simple_taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
 
@@ -387,7 +394,7 @@ def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
     """Opening the scheme row (index 1, after action row at 0) loads scheme fields."""
     viewer._cursor = 1  # scheme row (action row is at index 0)
     viewer._open_detail()
-    assert viewer._mode == TaxonomyViewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
     assert viewer._detail_uri == BASE + "Scheme"
     assert any(f.key == "display_lang" for f in viewer._detail_fields)
 
@@ -400,7 +407,8 @@ def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
         i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "scheme_title"
     )
     viewer._field_cursor = title_idx
-    viewer._edit_value = "Renamed Taxonomy"
+    viewer._state = EditState(buffer="Renamed Taxonomy", pos=len("Renamed Taxonomy"),
+                              field=viewer._detail_fields[title_idx], return_to=None)
     viewer._commit_edit()
     scheme = simple_taxonomy.schemes[BASE + "Scheme"]
     assert any(lbl.value == "Renamed Taxonomy" for lbl in scheme.labels)
@@ -409,8 +417,8 @@ def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
 def test_viewer_add_scheme_trigger(viewer):
     """Triggering add_scheme action switches to SCHEME_CREATE mode."""
     viewer._trigger_action("add_scheme")
-    assert viewer._mode == TaxonomyViewer._SCHEME_CREATE
-    assert len(viewer._scheme_create_fields) > 0
+    assert isinstance(viewer._state, SchemeCreateState)
+    assert len(viewer._state.fields) > 0
 
 
 # ── scheme detail: add top concept ────────────────────────────────────────────
@@ -446,9 +454,9 @@ def test_add_top_concept_action_enters_create_mode(viewer, simple_taxonomy):
     viewer._open_detail()
     assert viewer._detail_uri == scheme_uri
     viewer._trigger_action("add_top_concept")
-    assert viewer._mode == TaxonomyViewer._CREATE
-    assert viewer._create_parent_uri == scheme_uri
-    assert len(viewer._create_fields) > 0
+    assert isinstance(viewer._state, CreateState)
+    assert viewer._state.parent_uri == scheme_uri
+    assert len(viewer._state.fields) > 0
 
 
 def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
@@ -459,7 +467,8 @@ def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
-    for f in viewer._create_fields:
+    assert isinstance(viewer._state, CreateState)
+    for f in viewer._state.fields:
         if f.meta.get("field") == "name":
             f.value = "BrandNew"
 
@@ -485,7 +494,8 @@ def test_add_top_concept_uses_scheme_base_uri(viewer, simple_taxonomy):
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
-    for f in viewer._create_fields:
+    assert isinstance(viewer._state, CreateState)
+    for f in viewer._state.fields:
         if f.meta.get("field") == "name":
             f.value = "AlphaTest"
 
@@ -511,78 +521,86 @@ def test_build_scheme_create_fields(viewer):
 
 def test_submit_scheme_create_missing_title(viewer):
     """Missing title shows an error and does not create a scheme."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    # Leave title empty
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "uri":
             f.value = "https://example.org/new"
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
-    assert viewer._scheme_create_error != ""
+    assert isinstance(viewer._state, SchemeCreateState)
+    assert viewer._state.error != ""
     assert "https://example.org/new" not in viewer.taxonomy.schemes
 
 
 def test_submit_scheme_create_missing_uri(viewer):
     """Missing URI shows an error."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "title":
             f.value = "New Scheme"
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
-    assert "required" in viewer._scheme_create_error.lower() or viewer._scheme_create_error != ""
+    assert isinstance(viewer._state, SchemeCreateState)
+    assert viewer._state.error != ""
 
 
 def test_submit_scheme_create_invalid_uri(viewer):
     """Non-URL URI (no ://) shows an error."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "title":
             f.value = "New Scheme"
         elif f.meta.get("field") == "uri":
             f.value = "not-a-url"
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
-    assert viewer._scheme_create_error != ""
+    assert isinstance(viewer._state, SchemeCreateState)
+    assert viewer._state.error != ""
 
 
 def test_submit_scheme_create_success(viewer, simple_taxonomy):
     """Valid inputs create the scheme and navigate to its detail."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
     new_uri = BASE + "NewScheme"
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "title":
             f.value = "New Scheme"
         elif f.meta.get("field") == "uri":
             f.value = new_uri
         elif f.meta.get("field") == "base_uri":
             f.value = BASE + "new/"
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
-    assert viewer._scheme_create_error == ""
     assert new_uri in viewer.taxonomy.schemes
-    assert viewer._mode == TaxonomyViewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
     assert viewer._detail_uri == new_uri
 
 
 def test_submit_scheme_create_duplicate_uri(viewer, simple_taxonomy):
     """Creating a scheme with an already-existing URI shows an error."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "title":
             f.value = "Duplicate"
         elif f.meta.get("field") == "uri":
             f.value = BASE + "Scheme"  # already exists
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
-    assert viewer._scheme_create_error != ""
+    assert isinstance(viewer._state, SchemeCreateState)
+    assert viewer._state.error != ""
 
 
 def test_submit_scheme_create_base_uri_gets_trailing_slash(viewer, simple_taxonomy):
     """base_uri without trailing / or # gets a / appended."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    for f in viewer._scheme_create_fields:
+    fields = viewer._build_scheme_create_fields()
+    for f in fields:
         if f.meta.get("field") == "title":
             f.value = "Slash Test"
         elif f.meta.get("field") == "uri":
             f.value = BASE + "SlashScheme"
         elif f.meta.get("field") == "base_uri":
             f.value = "https://example.org/slash"  # no trailing slash
+    viewer._state = SchemeCreateState(fields=fields)
     viewer._submit_scheme_create()
     scheme = viewer.taxonomy.schemes.get(BASE + "SlashScheme")
     assert scheme is not None
@@ -591,12 +609,12 @@ def test_submit_scheme_create_base_uri_gets_trailing_slash(viewer, simple_taxono
 
 def test_scheme_create_commit_edit_updates_field(viewer):
     """_commit_edit in SCHEME_CREATE mode writes value into form field."""
-    viewer._scheme_create_fields = viewer._build_scheme_create_fields()
-    viewer._scheme_create_cursor = 0  # title field
-    viewer._edit_return_mode = TaxonomyViewer._SCHEME_CREATE
-    viewer._edit_value = "Draft Title"
+    fields = viewer._build_scheme_create_fields()
+    scs = SchemeCreateState(fields=fields, cursor=0)
+    viewer._state = EditState(buffer="Draft Title", pos=len("Draft Title"),
+                              field=fields[0], return_to=scs)
     viewer._commit_edit()
-    assert viewer._scheme_create_fields[0].value == "Draft Title"
+    assert scs.fields[0].value == "Draft Title"
 
 
 # ── fold / unfold ─────────────────────────────────────────────────────────────
@@ -749,7 +767,7 @@ def test_enter_on_narrower_navigates(viewer, simple_taxonomy):
     """Pressing Enter on a narrower field opens the child concept's detail."""
     viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
     viewer._open_detail()
-    assert viewer._mode == TaxonomyViewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
 
     narrower_idx = next(
         i
@@ -829,14 +847,14 @@ def test_enter_on_action_row_triggers_scheme_create(viewer):
     """Pressing Enter on action row (cursor=0) launches SCHEME_CREATE mode."""
     viewer._cursor = 0
     viewer._on_tree(ord("\n"), 24)
-    assert viewer._mode == TaxonomyViewer._SCHEME_CREATE
+    assert isinstance(viewer._state, SchemeCreateState)
 
 
 def test_plus_on_action_row_triggers_scheme_create(viewer):
     """Pressing + on action row launches SCHEME_CREATE mode."""
     viewer._cursor = 0
     viewer._on_tree(ord("+"), 24)
-    assert viewer._mode == TaxonomyViewer._SCHEME_CREATE
+    assert isinstance(viewer._state, SchemeCreateState)
 
 
 def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
@@ -844,8 +862,8 @@ def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
     scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.is_scheme)
     viewer._cursor = scheme_idx
     viewer._on_tree(ord("+"), 24)
-    assert viewer._mode == TaxonomyViewer._CREATE
-    assert viewer._create_parent_uri == BASE + "Scheme"
+    assert isinstance(viewer._state, CreateState)
+    assert viewer._state.parent_uri == BASE + "Scheme"
 
 
 def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
@@ -853,8 +871,8 @@ def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
     concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
-    assert viewer._mode == TaxonomyViewer._CREATE
-    assert viewer._create_parent_uri == viewer._flat[concept_idx].uri
+    assert isinstance(viewer._state, CreateState)
+    assert viewer._state.parent_uri == viewer._flat[concept_idx].uri
 
 
 # ── scheme URI and base URI editability ───────────────────────────────────────
@@ -881,7 +899,8 @@ def test_commit_scheme_base_uri_edit(viewer, simple_taxonomy):
     viewer._open_detail()
     base_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "base_uri")
     viewer._field_cursor = base_idx
-    viewer._edit_value = "https://example.org/new/"
+    viewer._state = EditState(buffer="https://example.org/new/", pos=len("https://example.org/new/"),
+                              field=viewer._detail_fields[base_idx], return_to=None)
     viewer._commit_edit()
     scheme = simple_taxonomy.schemes[BASE + "Scheme"]
     assert scheme.base_uri == "https://example.org/new/"
@@ -901,24 +920,24 @@ def test_cancel_create_from_tree_returns_to_tree(viewer, simple_taxonomy):
     """Esc from CREATE mode entered via '+' from the tree returns to TREE, not DETAIL."""
     # Navigate to a concept row and press +
     concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
-    viewer._mode = viewer._TREE
+    viewer._state = TreeState()
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
-    assert viewer._mode == viewer._CREATE
+    assert isinstance(viewer._state, CreateState)
     # Esc should go back to TREE, not DETAIL
     viewer._on_create(27, 24)
-    assert viewer._mode == viewer._TREE
+    assert isinstance(viewer._state, TreeState)
 
 
 def test_cancel_scheme_create_from_tree_returns_to_tree(viewer):
     """Esc from SCHEME_CREATE entered via action row returns to TREE, not DETAIL."""
-    viewer._mode = viewer._TREE
+    viewer._state = TreeState()
     viewer._cursor = 0  # action row
     viewer._on_tree(ord("\n"), 24)
-    assert viewer._mode == viewer._SCHEME_CREATE
+    assert isinstance(viewer._state, SchemeCreateState)
     # Esc should go back to TREE
     viewer._on_scheme_create(27, 24)
-    assert viewer._mode == viewer._TREE
+    assert isinstance(viewer._state, TreeState)
 
 
 def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
@@ -926,11 +945,11 @@ def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
     scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.is_scheme)
     viewer._cursor = scheme_idx
     viewer._open_detail()
-    assert viewer._mode == viewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
     viewer._trigger_action("add_top_concept")
-    assert viewer._mode == viewer._CREATE
+    assert isinstance(viewer._state, CreateState)
     viewer._on_create(27, 24)
-    assert viewer._mode == viewer._DETAIL
+    assert isinstance(viewer._state, DetailState)
 
 
 # ── regression: scheme URI is read-only (rename would break top_concept_of) ───
@@ -943,4 +962,4 @@ def test_scheme_uri_not_editable_in_detail(viewer, simple_taxonomy):
     uri_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "scheme_uri")
     viewer._field_cursor = uri_idx
     viewer._on_detail(ord("\n"), 24)
-    assert viewer._mode == viewer._DETAIL  # not EDIT
+    assert isinstance(viewer._state, DetailState)  # not EDIT

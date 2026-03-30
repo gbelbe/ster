@@ -49,20 +49,13 @@ class DetailState:
 
 
 @dataclass
-class EditState:
-    buffer: str = ""
-    pos: int = 0
-    field: DetailField | None = None
-    return_to: DetailState = dc_field(default_factory=DetailState)
-
-
-@dataclass
 class CreateState:
     parent_uri: str | None = None
     fields: list[DetailField] = dc_field(default_factory=list)
     cursor: int = 0
     scroll: int = 0
     error: str = ""
+    came_from_tree: bool = False  # True when triggered from tree mode (cancel → tree)
 
 
 @dataclass
@@ -71,6 +64,16 @@ class SchemeCreateState:
     cursor: int = 0
     scroll: int = 0
     error: str = ""
+    came_from_tree: bool = False  # True when triggered from tree mode (cancel → tree)
+
+
+@dataclass
+class EditState:
+    buffer: str = ""
+    pos: int = 0
+    field: DetailField | None = None
+    # None → return to detail; CreateState/SchemeCreateState → return to that form
+    return_to: CreateState | SchemeCreateState | None = None
 
 
 @dataclass
