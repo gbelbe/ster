@@ -20,7 +20,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from . import operations, store
+from . import analysis_cache, operations, store
 from .display import console, render_concept_detail, render_tree
 from .exceptions import SkostaxError
 from .model import Definition, Label, LabelType, Taxonomy
@@ -39,6 +39,7 @@ from .nav_logic import (  # noqa: F401
     _parent_uri,
     _sep,
     build_detail_fields,
+    build_scheme_dashboard_fields,
     build_scheme_fields,
     flatten_tree,
 )
@@ -60,6 +61,7 @@ from .nav_state import (
     navigate_tree,
     search_update,
 )
+from .taxonomy_analysis import SchemeAnalysis
 from .workspace import TaxonomyWorkspace
 
 err = Console(stderr=True)
@@ -483,6 +485,8 @@ class TaxonomyViewer:
         self._history: list[dict] = []
         self._status = ""
         self._folded: set[str] = set()
+        # scheme_uri → SchemeAnalysis; populated on first run() call
+        self._analysis: dict[str, SchemeAnalysis] | None = None
 
         self._rebuild()
 
@@ -518,6 +522,31 @@ class TaxonomyViewer:
             self.lang,
             show_mappings=self._workspace.multiple_schemes(),
         )
+
+    def _bsf(self, scheme_uri: str) -> list[DetailField]:
+        """Build scheme dashboard fields (settings + stats + issues)."""
+        return build_scheme_dashboard_fields(self.taxonomy, self._analysis, scheme_uri, self.lang)
+
+    def _load_analysis(self) -> None:
+        """Load analysis from cache (or compute and cache) for all workspace files."""
+        if self._analysis is None:
+            self._analysis = {}
+        for path, tax in self._workspace.taxonomies.items():
+            by_scheme = analysis_cache.get_or_compute(tax, path)
+            self._analysis.update(by_scheme)
+
+    def _refresh_analysis(self, file_path: Path | None = None) -> None:
+        """Invalidate cache for *file_path* and recompute. Call after every save."""
+        path = file_path or self.file_path
+        analysis_cache.invalidate(path)
+        tax = self._workspace.taxonomies.get(path, self.taxonomy)
+        by_scheme = analysis_cache.get_or_compute(tax, path)
+        if self._analysis is None:
+            self._analysis = {}
+        self._analysis.update(by_scheme)
+        # Refresh fields if the scheme detail panel is currently open
+        if self._detail_uri and self._detail_uri in self.taxonomy.schemes:
+            self._detail_fields = self._bsf(self._detail_uri)
 
     # ── tree-state bridge (scattered attrs ↔ TreeState for pure functions) ────
 
@@ -571,9 +600,7 @@ class TaxonomyViewer:
         self._detail_scroll = s["detail_scroll"]
         if self._detail_uri:
             if self._detail_uri in self.taxonomy.schemes:
-                self._detail_fields = build_scheme_fields(
-                    self.taxonomy, self.lang, scheme_uri=self._detail_uri
-                )
+                self._detail_fields = self._bsf(self._detail_uri)
             else:
                 self._detail_fields = self._bdf(self._detail_uri)
             self._state = DetailState()
@@ -608,6 +635,7 @@ class TaxonomyViewer:
             self._status = f"Saved  {target_path.name}"
             if self._git_manager:
                 self._git_manager.stage_file()  # type: ignore[attr-defined]
+            self._refresh_analysis(target_path)
         except Exception as exc:
             self._status = f"Error saving: {exc}"
 
@@ -629,7 +657,7 @@ class TaxonomyViewer:
         self._push()
         self._detail_uri = line.uri
         if line.is_scheme:
-            self._detail_fields = build_scheme_fields(self.taxonomy, self.lang, scheme_uri=line.uri)
+            self._detail_fields = self._bsf(line.uri)
         else:
             self._detail_fields = self._bdf(self._detail_uri)
         self._reset_detail_cursor()
@@ -645,6 +673,11 @@ class TaxonomyViewer:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             console.print(render_tree(self.taxonomy, lang=self.lang))
             return
+        if self._analysis is None:
+            msg = " Analysing taxonomy…"
+            print(msg, end="\r", flush=True)
+            self._load_analysis()
+            print(" " * len(msg), end="\r", flush=True)
         try:
             curses.wrapper(self._loop)
         except KeyboardInterrupt:
@@ -1375,6 +1408,35 @@ class TaxonomyViewer:
                         fv[: width - lbl_w - 5],
                         curses.color_pair(_C_FIELD_VAL),
                     )
+                elif f.meta.get("type") == "stat":
+                    # Read-only stat row: dim label, bold value
+                    stdscr.addstr(y, x0, "  ")
+                    stdscr.addstr(y, x0 + 2, fl[:lbl_w].ljust(lbl_w), curses.color_pair(_C_DIM))
+                    if fv:
+                        stdscr.addstr(
+                            y,
+                            x0 + 2 + lbl_w + 2,
+                            fv[: width - lbl_w - 5],
+                            curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD,
+                        )
+                elif f.meta.get("type") == "issue_nav":
+                    # Colour-coded by severity; clickable when concept_uri present
+                    sev = f.meta.get("severity", "info")
+                    if sev == "error":
+                        label_attr = curses.color_pair(_C_DIFF_DEL) | curses.A_BOLD
+                    elif sev == "warning":
+                        label_attr = curses.color_pair(_C_DIFF_CHG) | curses.A_BOLD
+                    else:
+                        label_attr = curses.color_pair(_C_DIM)
+                    stdscr.addstr(y, x0, "  ")
+                    stdscr.addstr(y, x0 + 2, fl[:lbl_w].ljust(lbl_w), label_attr)
+                    if fv:
+                        stdscr.addstr(
+                            y,
+                            x0 + 2 + lbl_w + 2,
+                            fv[: width - lbl_w - 5],
+                            curses.color_pair(_C_DIM),
+                        )
                 else:
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_DIM) | curses.A_DIM)
@@ -1409,6 +1471,10 @@ class TaxonomyViewer:
                 edit_hint = "Enter: open concept"
             elif f.meta.get("type") == "separator":
                 edit_hint = ""
+            elif f.meta.get("type") == "issue_nav" and f.meta.get("uri"):
+                edit_hint = "Enter: jump to concept"
+            elif f.meta.get("type") in ("stat", "issue_nav"):
+                edit_hint = "(read-only)"
             else:
                 edit_hint = "(read-only)"
         else:
@@ -1473,6 +1539,14 @@ class TaxonomyViewer:
                         field=f,
                         return_to=None,  # return to detail mode
                     )
+                elif f.meta.get("type") == "issue_nav" and f.meta.get("uri"):
+                    # Quality issue pointing to a concept — navigate there
+                    dest_uri = f.meta["uri"]
+                    if dest_uri in self.taxonomy.concepts:
+                        self._push()
+                        self._detail_uri = dest_uri
+                        self._detail_fields = self._bdf(dest_uri)
+                        self._reset_detail_cursor()
                 elif f.meta.get("nav"):
                     # broader / narrower / related — navigate to that concept
                     dest_uri = f.meta["uri"]

@@ -7,6 +7,7 @@ from dataclasses import field as dc_field
 from pathlib import Path
 
 from .model import LabelType, Taxonomy
+from .taxonomy_analysis import ISSUE_DISPLAY_NAMES, SchemeAnalysis
 from .workspace import TaxonomyWorkspace
 
 # ──────────────────────────── tree helpers ────────────────────────────────────
@@ -570,6 +571,233 @@ def build_scheme_fields(
     )
 
     # Action: add a new scheme
+    fields.append(
+        DetailField(
+            "action:add_scheme",
+            "➕ Add new scheme",
+            "",
+            editable=False,
+            meta={"type": "action", "action": "add_scheme"},
+        )
+    )
+
+    return fields
+
+
+# ──────────────────────────── scheme dashboard ────────────────────────────────
+
+_SEVERITY_ICONS = {"error": "⊘", "warning": "⚠", "info": "ℹ"}
+
+
+def _pct_bar(pct: int, width: int = 8) -> str:
+    """Return a compact block progress-bar string, e.g. '████░░░░'."""
+    filled = round(pct * width / 100)
+    return "█" * filled + "░" * (width - filled)
+
+
+def build_scheme_dashboard_fields(
+    taxonomy: Taxonomy,
+    analysis: dict[str, SchemeAnalysis] | None,
+    scheme_uri: str,
+    lang: str,
+) -> list[DetailField]:
+    """Build DetailField list for the scheme detail panel.
+
+    Combines editable scheme settings (metadata), read-only statistics
+    (overview + per-property completion), and quality issues (actionable —
+    pressing Enter on an issue with a concept_uri navigates to that concept).
+    """
+    fields: list[DetailField] = []
+    scheme = taxonomy.schemes.get(scheme_uri)
+    if not scheme:
+        return fields
+
+    # ── 1. Settings ───────────────────────────────────────────────────────────
+    fields.append(_sep("Settings"))
+    fields.append(
+        DetailField(
+            "display_lang",
+            "display language",
+            lang,
+            editable=False,
+            meta={"type": "action", "action": "pick_lang"},
+        )
+    )
+    fields.append(
+        DetailField("scheme_uri", "URI", scheme.uri, editable=False, meta={"type": "scheme_uri"})
+    )
+    fields.append(
+        DetailField(
+            "base_uri",
+            "base URI",
+            scheme.base_uri or "",
+            editable=True,
+            meta={"type": "scheme_base_uri"},
+        )
+    )
+    pref_titles = {lbl.lang: lbl.value for lbl in scheme.labels if lbl.type == LabelType.PREF}
+    for lg, val in sorted(pref_titles.items()):
+        fields.append(
+            DetailField(
+                f"title:{lg}",
+                f"title [{lg}]",
+                val,
+                editable=True,
+                meta={"type": "scheme_title", "lang": lg},
+            )
+        )
+    for desc in sorted(scheme.descriptions, key=lambda d: d.lang):
+        fields.append(
+            DetailField(
+                f"desc:{desc.lang}",
+                f"description [{desc.lang}]",
+                desc.value,
+                editable=True,
+                meta={"type": "scheme_desc", "lang": desc.lang},
+            )
+        )
+    fields.append(
+        DetailField(
+            "creator", "creator", scheme.creator, editable=True, meta={"type": "scheme_creator"}
+        )
+    )
+    fields.append(
+        DetailField(
+            "created", "created", scheme.created, editable=True, meta={"type": "scheme_created"}
+        )
+    )
+    fields.append(
+        DetailField(
+            "languages",
+            "declared langs",
+            ", ".join(scheme.languages),
+            editable=True,
+            meta={"type": "scheme_languages"},
+        )
+    )
+
+    # ── 2. Overview stats ────────────────────────────────────────────────────
+    scheme_analysis: SchemeAnalysis | None = (analysis or {}).get(scheme_uri)
+
+    fields.append(_sep("Overview"))
+    if scheme_analysis:
+        st = scheme_analysis.stats
+        fields.append(
+            DetailField(
+                "stat:total",
+                "total concepts",
+                str(st.total_concepts),
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+        fields.append(
+            DetailField(
+                "stat:top",
+                "top-level",
+                str(st.top_level_concepts),
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+        fields.append(
+            DetailField(
+                "stat:depth_max",
+                "max depth",
+                str(st.max_depth),
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+        fields.append(
+            DetailField(
+                "stat:depth_avg",
+                "avg depth",
+                f"{st.avg_depth:.1f}",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+        fields.append(
+            DetailField(
+                "stat:langs",
+                "languages",
+                ", ".join(st.languages) if st.languages else "—",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+    else:
+        fields.append(
+            DetailField(
+                "stat:pending", "analysis", "pending…", editable=False, meta={"type": "stat"}
+            )
+        )
+
+    # ── 3. Property completion (one section per property) ─────────────────────
+    if scheme_analysis and scheme_analysis.completions:
+        for comp in scheme_analysis.completions:
+            fields.append(_sep(f"Completion — {comp.display_name}"))
+            for lg, count in sorted(comp.by_language.items()):
+                pct = int(count * 100 / comp.total) if comp.total else 0
+                bar = _pct_bar(pct)
+                fields.append(
+                    DetailField(
+                        f"comp:{comp.property_key}:{lg}",
+                        f"[{lg}]",
+                        f"{count}/{comp.total}  {bar}  ({pct}%)",
+                        editable=False,
+                        meta={"type": "stat"},
+                    )
+                )
+
+    # ── 4. Issues ─────────────────────────────────────────────────────────────
+    if scheme_analysis:
+        issues = scheme_analysis.issues
+        n_err = sum(1 for i in issues if i.severity == "error")
+        n_warn = sum(1 for i in issues if i.severity == "warning")
+        n_info = sum(1 for i in issues if i.severity == "info")
+        summary_parts = []
+        if n_err:
+            summary_parts.append(f"{n_err} error{'s' if n_err > 1 else ''}")
+        if n_warn:
+            summary_parts.append(f"{n_warn} warning{'s' if n_warn > 1 else ''}")
+        if n_info:
+            summary_parts.append(f"{n_info} info")
+        sep_label = "Issues — " + ", ".join(summary_parts) if summary_parts else "Issues"
+        fields.append(_sep(sep_label))
+        if not issues:
+            fields.append(
+                DetailField("issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"})
+            )
+        else:
+            for idx, issue in enumerate(issues):
+                icon = _SEVERITY_ICONS.get(issue.severity, "·")
+                name = ISSUE_DISPLAY_NAMES.get(issue.issue_key, issue.issue_key)
+                meta: dict = {"type": "issue_nav", "severity": issue.severity}
+                if issue.concept_uri:
+                    meta["uri"] = issue.concept_uri
+                fields.append(
+                    DetailField(
+                        f"issue:{idx}",
+                        f"{icon} {name}",
+                        issue.message,
+                        editable=False,
+                        meta=meta,
+                    )
+                )
+
+    # ── 5. Actions ────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    fields.append(
+        DetailField(
+            "action:add_top_concept",
+            "➕ Add top concept",
+            "",
+            editable=False,
+            meta={"type": "action", "action": "add_top_concept"},
+        )
+    )
     fields.append(
         DetailField(
             "action:add_scheme",
