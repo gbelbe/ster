@@ -29,7 +29,6 @@ from pathlib import Path
 
 from . import prompts as _P
 
-
 # ── Config helpers ─────────────────────────────────────────────────────────────
 
 _CONFIG_PATH = Path.home() / ".config" / "ster" / "ai.json"
@@ -225,7 +224,7 @@ def discover_models() -> tuple[list[ProviderEntry], list[ProviderEntry]]:
 
     try:
         import llm
-        llm._loaded = False
+        llm._loaded = False  # type: ignore[attr-defined]
         for m in llm.get_models():
             module = type(m).__module__.split(".")[0]
             needs_key = bool(getattr(m, "needs_key", False))
@@ -322,9 +321,7 @@ def _is_label(line: str) -> bool:
         return False
     if len(s) > 80:
         return False
-    if _PREAMBLE_RE.match(s):
-        return False
-    return True
+    return not _PREAMBLE_RE.match(s)
 
 
 @contextmanager

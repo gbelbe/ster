@@ -65,7 +65,6 @@ from .nav_state import (
     TreeState,
     ViewerState,
     WelcomeState,
-    clamp_scroll,
     navigate_detail,
     navigate_tree,
     search_update,
@@ -428,7 +427,7 @@ def render_tree_col(
 
 
 def _draw_text_input(
-    stdscr: "curses.window",
+    stdscr: curses.window,
     rows: int,
     cols: int,
     prompt: str,
@@ -1992,6 +1991,7 @@ class TaxonomyViewer:
         elif ftype == "scheme_languages":
             scheme.languages = [lg.strip() for lg in new_value.split(",") if lg.strip()]
 
+        assert self._detail_uri is not None
         self._detail_fields = self._bsf(self._detail_uri)
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
         self._save_file()
@@ -2176,7 +2176,7 @@ class TaxonomyViewer:
             if self._detail_uri:
                 concept = self.taxonomy.concepts.get(self._detail_uri)
                 already_related = set(concept.related) if concept else set()
-                candidates: list[tuple[str, str]] = []
+                candidates: list[tuple[str, str]] = []  # type: ignore[no-redef]
                 for line in self._flat:
                     if line.is_scheme or line.is_action or line.is_file:
                         continue
@@ -2338,7 +2338,7 @@ class TaxonomyViewer:
 
     # ── Add-concept AI helpers ────────────────────────────────────────────────
 
-    def _build_ai_context(self, cs: "CreateState") -> "tuple[str, str, str | None]":
+    def _build_ai_context(self, cs: CreateState) -> tuple[str, str, str | None]:
         """Return (taxonomy_name, taxonomy_description, parent_label).
 
         parent_label is None when the parent is a scheme (top-concept context).
@@ -2355,7 +2355,7 @@ class TaxonomyViewer:
             if not taxonomy_description and scheme.descriptions:
                 taxonomy_description = scheme.descriptions[0].value
 
-        parent_label: "str | None" = None
+        parent_label: str | None = None
         if cs.parent_uri and cs.parent_uri not in self.taxonomy.schemes:
             parent_concept = self.taxonomy.concepts.get(cs.parent_uri)
             if parent_concept:
@@ -2363,7 +2363,7 @@ class TaxonomyViewer:
 
         return taxonomy_name, taxonomy_description, parent_label
 
-    def _run_generate(self, stdscr: "curses.window", fn) -> None:
+    def _run_generate(self, stdscr: curses.window, fn) -> None:
         """Run an AI generate function, suspending curses first in copypaste mode."""
         from . import ai as _ai
         if _ai.is_copypaste():
@@ -2401,7 +2401,7 @@ class TaxonomyViewer:
 
     # ── Add-concept step drawing ──────────────────────────────────────────────
 
-    def _draw_create_choose(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+    def _draw_create_choose(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
         """Render the 'choose input method' screen."""
         if cs.parent_uri and cs.parent_uri in self.taxonomy.schemes:
             scheme = self.taxonomy.schemes[cs.parent_uri]
@@ -2434,7 +2434,7 @@ class TaxonomyViewer:
                 pass
         _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓/jk: navigate   Enter: select   Esc: cancel  ", dim=True)
 
-    def _draw_create_prompt_review(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+    def _draw_create_prompt_review(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
         """Render the prompt-review panel."""
         _draw_bar(stdscr, 0, x0, width, " Review AI prompt — Enter: generate   Esc: back ", dim=False)
         text_lines = cs.ai_prompt_preview.splitlines()
@@ -2449,7 +2449,7 @@ class TaxonomyViewer:
                 pass
         _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: generate   Esc: back  ", dim=True)
 
-    def _draw_create_ai_pick(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+    def _draw_create_ai_pick(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
         """Render the AI suggestion pick list."""
         _draw_bar(stdscr, 0, x0, width, " AI suggestions — pick a name ", dim=False)
 
@@ -2494,7 +2494,7 @@ class TaxonomyViewer:
 
     # ── Add-concept step input handlers ──────────────────────────────────────
 
-    def _on_create_choose(self, key: int, cs: "CreateState") -> None:
+    def _on_create_choose(self, key: int, cs: CreateState) -> None:
         KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
         n = 2  # two options
         if key in (KEY_UP, ord("k")):
@@ -2528,7 +2528,7 @@ class TaxonomyViewer:
         elif key == 27:
             self._state = TreeState() if cs.came_from_tree else DetailState()
 
-    def _on_create_prompt_review(self, key: int, cs: "CreateState") -> None:
+    def _on_create_prompt_review(self, key: int, cs: CreateState) -> None:
         KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
         max_scroll = max(0, len(cs.ai_prompt_preview.splitlines()) - 3)
         if key in (KEY_UP, ord("k")):
@@ -2542,7 +2542,7 @@ class TaxonomyViewer:
             cs.step = "choose"
             cs.ai_cursor = 1
 
-    def _on_create_ai_pick(self, key: int, rows: int, cs: "CreateState") -> None:
+    def _on_create_ai_pick(self, key: int, rows: int, cs: CreateState) -> None:
         if cs.ai_generating:
             return
         KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
@@ -3920,7 +3920,7 @@ class TaxonomyViewer:
 
     _SPINNER = "|/-\\"
 
-    def _draw_ai_install(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw_ai_install(self, stdscr: curses.window, rows: int, cols: int) -> None:
         """Install confirmation / progress overlay."""
         if not isinstance(self._state, AiInstallState):
             return
@@ -4106,7 +4106,7 @@ class TaxonomyViewer:
 
     # ──────────────────────────── AI setup wizard ─────────────────────────────────
 
-    def _draw_ai_setup(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+    def _draw_ai_setup(self, stdscr: curses.window, rows: int, cols: int) -> None:
         """Guided AI model setup: mode → provider → model → key? → done."""
         if not isinstance(self._state, AiSetupState):
             return
