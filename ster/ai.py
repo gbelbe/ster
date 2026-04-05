@@ -124,8 +124,11 @@ def _copypaste_interact(prompt_text: str) -> str:
     con = Console()
 
     copied = _try_copy_to_clipboard(prompt_text)
-    title = "[bold cyan]PROMPT — copied to clipboard[/bold cyan]" if copied \
+    title = (
+        "[bold cyan]PROMPT — copied to clipboard[/bold cyan]"
+        if copied
         else "[bold cyan]PROMPT[/bold cyan]"
+    )
 
     con.print()
     con.print(Panel(prompt_text, title=title, border_style="cyan", padding=(1, 2)))
@@ -155,6 +158,7 @@ def is_available() -> bool:
     """True if the `llm` package is installed."""
     try:
         import llm  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -168,46 +172,44 @@ def is_configured() -> bool:
 # ── Model discovery ────────────────────────────────────────────────────────────
 
 _MODULE_DISPLAY: dict[str, str] = {
-    "llm":             "OpenAI",
-    "llm_anthropic":   "Anthropic  (Claude)",
-    "llm_gemini":      "Google  (Gemini)",
-    "llm_mistral":     "Mistral AI",
-    "llm_groq":        "Groq",
-    "llm_ollama":      "Ollama  (local)",
-    "llm_gpt4all":     "GPT4All  (local)",
-    "llm_llamafile":   "llamafile  (local)",
-    "llm_mlx":         "MLX  (Apple Silicon)",
-    "llm_bedrock":     "Amazon Bedrock",
-    "llm_vertex":      "Google Vertex AI",
-    "llm_cohere":      "Cohere",
-    "llm_together":    "Together AI",
-    "llm_replicate":   "Replicate",
-    "llm_openrouter":  "OpenRouter",
+    "llm": "OpenAI",
+    "llm_anthropic": "Anthropic  (Claude)",
+    "llm_gemini": "Google  (Gemini)",
+    "llm_mistral": "Mistral AI",
+    "llm_groq": "Groq",
+    "llm_ollama": "Ollama  (local)",
+    "llm_gpt4all": "GPT4All  (local)",
+    "llm_llamafile": "llamafile  (local)",
+    "llm_mlx": "MLX  (Apple Silicon)",
+    "llm_bedrock": "Amazon Bedrock",
+    "llm_vertex": "Google Vertex AI",
+    "llm_cohere": "Cohere",
+    "llm_together": "Together AI",
+    "llm_replicate": "Replicate",
+    "llm_openrouter": "OpenRouter",
 }
 
 _KNOWN_PLUGIN_DEFS: list[tuple[str, str, str]] = [
-    ("llm_anthropic",  "Anthropic  (Claude)",    "llm-anthropic"),
-    ("llm_gemini",     "Google  (Gemini)",        "llm-gemini"),
-    ("llm_mistral",    "Mistral AI",              "llm-mistral"),
-    ("llm_groq",       "Groq",                    "llm-groq"),
-    ("llm_cohere",     "Cohere",                  "llm-cohere"),
-    ("llm_together",   "Together AI",             "llm-together"),
-    ("llm_openrouter", "OpenRouter",              "llm-openrouter"),
-    ("llm_bedrock",    "Amazon Bedrock",          "llm-bedrock"),
-    ("llm_vertex",     "Google Vertex AI",        "llm-vertex"),
-    ("llm_ollama",     "Ollama  (local)",         "llm-ollama"),
-    ("llm_gpt4all",    "GPT4All  (local)",        "llm-gpt4all"),
-    ("llm_llamafile",  "llamafile  (local)",      "llm-llamafile"),
-    ("llm_mlx",        "MLX  (Apple Silicon)",    "llm-mlx"),
+    ("llm_anthropic", "Anthropic  (Claude)", "llm-anthropic"),
+    ("llm_gemini", "Google  (Gemini)", "llm-gemini"),
+    ("llm_mistral", "Mistral AI", "llm-mistral"),
+    ("llm_groq", "Groq", "llm-groq"),
+    ("llm_cohere", "Cohere", "llm-cohere"),
+    ("llm_together", "Together AI", "llm-together"),
+    ("llm_openrouter", "OpenRouter", "llm-openrouter"),
+    ("llm_bedrock", "Amazon Bedrock", "llm-bedrock"),
+    ("llm_vertex", "Google Vertex AI", "llm-vertex"),
+    ("llm_ollama", "Ollama  (local)", "llm-ollama"),
+    ("llm_gpt4all", "GPT4All  (local)", "llm-gpt4all"),
+    ("llm_llamafile", "llamafile  (local)", "llm-llamafile"),
+    ("llm_mlx", "MLX  (Apple Silicon)", "llm-mlx"),
 ]
 
 
 def available_plugins(installed_module_ids: set[str]) -> list[tuple[str, str, str]]:
     """Return (module_id, display_name, pip_package) for known plugins not yet installed."""
     return [
-        (mid, lbl, pkg)
-        for mid, lbl, pkg in _KNOWN_PLUGIN_DEFS
-        if mid not in installed_module_ids
+        (mid, lbl, pkg) for mid, lbl, pkg in _KNOWN_PLUGIN_DEFS if mid not in installed_module_ids
     ]
 
 
@@ -224,6 +226,7 @@ def discover_models() -> tuple[list[ProviderEntry], list[ProviderEntry]]:
 
     try:
         import llm
+
         llm._loaded = False  # type: ignore[attr-defined]
         for m in llm.get_models():
             module = type(m).__module__.split(".")[0]
@@ -251,6 +254,7 @@ def model_needs_key(model_id: str) -> str | None:
         return None
     try:
         import llm
+
         model = llm.get_model(model_id)
         if getattr(model, "needs_key", False):
             return getattr(model, "key", None) or model_id
@@ -263,6 +267,7 @@ def save_key(key_name: str, key_value: str) -> None:
     """Persist an API key into llm's key store."""
     try:
         import llm
+
         keys_path = llm.user_dir() / "keys.json"
         try:
             current: dict = json.loads(keys_path.read_text())
@@ -292,6 +297,7 @@ def get_model_for(task: str):
     if not model_id:
         raise RuntimeError("No LLM model configured. Press 'L' in detail view to set one up.")
     import llm
+
     try:
         return llm.get_model(model_id)
     except Exception as exc:
@@ -365,9 +371,7 @@ def _build_concept_names_prompt(
     """Return the rendered prompt for suggest_concept_names without calling the LLM."""
     ex = exclude or []
     ex_hint = (
-        f"Do NOT repeat any of these already-proposed labels: "
-        f"{', '.join(ex[:60])}"
-        if ex else ""
+        f"Do NOT repeat any of these already-proposed labels: {', '.join(ex[:60])}" if ex else ""
     )
     desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
     if parent_label:
@@ -429,9 +433,7 @@ def suggest_concept_names(
         return _NUMBERING_RE.sub("", ln.strip()).strip().strip('"').strip("'")
 
     results = [
-        _clean(ln)
-        for ln in text.splitlines()
-        if _is_label(_NUMBERING_RE.sub("", ln.strip()))
+        _clean(ln) for ln in text.splitlines() if _is_label(_NUMBERING_RE.sub("", ln.strip()))
     ]
     seen_set = {e.lower() for e in ex}
     return [r for r in results if r.lower() not in seen_set][:n]

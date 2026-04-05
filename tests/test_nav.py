@@ -893,7 +893,6 @@ def test_tree_footer_add_hint(viewer):
     assert "+: add" in footer or "+:" in footer
 
 
-
 def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
     """Pressing + on a scheme row launches CREATE mode for a top concept."""
     scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.is_scheme)
@@ -1044,7 +1043,10 @@ def test_build_concept_detail_overview_languages(simple_taxonomy):
 def test_build_concept_detail_has_scope_note_if_present(simple_taxonomy):
     """scopeNote rows appear if the concept has scope_notes."""
     from ster.model import Definition
-    simple_taxonomy.concepts[BASE + "Top"].scope_notes.append(Definition(lang="en", value="A scope note."))
+
+    simple_taxonomy.concepts[BASE + "Top"].scope_notes.append(
+        Definition(lang="en", value="A scope note.")
+    )
     fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
     keys = [f.key for f in fields]
     assert "scope:en" in keys
@@ -1081,6 +1083,7 @@ def test_build_scheme_detail_top_concept_of_is_navigable(simple_taxonomy):
 def test_ai_is_available_returns_bool():
     """ai.is_available() always returns a bool (True if llm is installed)."""
     from ster import ai
+
     result = ai.is_available()
     assert isinstance(result, bool)
 
@@ -1088,6 +1091,7 @@ def test_ai_is_available_returns_bool():
 def test_ai_is_configured_false_without_config(tmp_path, monkeypatch):
     """ai.is_configured() returns False when no model has been saved."""
     from ster import ai
+
     monkeypatch.setattr(ai, "_CONFIG_PATH", tmp_path / "ai.json")
     assert ai.is_configured() is False
 
@@ -1095,6 +1099,7 @@ def test_ai_is_configured_false_without_config(tmp_path, monkeypatch):
 def test_ai_get_saved_model_none_without_config(tmp_path, monkeypatch):
     """ai.get_saved_model() returns None when config file is absent."""
     from ster import ai
+
     monkeypatch.setattr(ai, "_CONFIG_PATH", tmp_path / "nonexistent.json")
     assert ai.get_saved_model() is None
 
@@ -1102,6 +1107,7 @@ def test_ai_get_saved_model_none_without_config(tmp_path, monkeypatch):
 def test_ai_save_and_load_model(tmp_path, monkeypatch):
     """Saving a model ID persists it and get_saved_model returns it."""
     from ster import ai
+
     config_path = tmp_path / "ai.json"
     monkeypatch.setattr(ai, "_CONFIG_PATH", config_path)
     ai.save_model("gpt-4o")
@@ -1112,6 +1118,7 @@ def test_ai_save_and_load_model(tmp_path, monkeypatch):
 def test_ai_discover_models_returns_tuple():
     """ai.discover_models() always returns (list, list) even if llm not installed."""
     from ster import ai
+
     online, offline = ai.discover_models()
     assert isinstance(online, list)
     assert isinstance(offline, list)

@@ -134,9 +134,10 @@ class MapConceptPickState:
 @dataclass
 class AiInstallState:
     """Confirmation overlay: install the llm package, then resume an action."""
-    pending_action: str = ""   # action to trigger after successful install
-    installing: bool = False   # True while pip is running
-    done: bool = False         # True after successful install
+
+    pending_action: str = ""  # action to trigger after successful install
+    installing: bool = False  # True while pip is running
+    done: bool = False  # True after successful install
     lines: list[str] = dc_field(default_factory=list)  # pip output lines
     error: str = ""
 
@@ -149,8 +150,11 @@ class AiSetupState:
     via ai.discover_models() and stored here so navigation is instant.
     Each entry: (provider_id, display_label, [(model_id, display_label)]).
     """
-    step: str = "mode"             # "mode" | "provider" | "model" | "key" | "done"  (mode "copypaste" → skips to done)
-    mode: str = ""                 # "online" | "offline"
+
+    step: str = (
+        "mode"  # "mode" | "provider" | "model" | "key" | "done"  (mode "copypaste" → skips to done)
+    )
+    mode: str = ""  # "online" | "offline"
     # Pre-fetched provider + model data (populated at wizard open time)
     online_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
     offline_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
@@ -167,7 +171,7 @@ class AiSetupState:
     buffer: str = ""
     pos: int = 0
     error: str = ""
-    pending_action: str = ""       # action to resume after setup completes
+    pending_action: str = ""  # action to resume after setup completes
     # Plugin install sub-step (used when step == "install_plugin")
     available_plugins: list[tuple[str, str, str]] = dc_field(default_factory=list)
     plugin_cursor: int = 0
