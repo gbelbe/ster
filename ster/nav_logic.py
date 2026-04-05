@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
@@ -776,7 +775,6 @@ def build_global_fields(
 
     Sections: Setup (language), Shortcuts, Overview stats, Completeness, Quality.
     """
-    from .taxonomy_analysis import PropertyCompletion  # local to avoid circular
 
     fields: list[DetailField] = []
 

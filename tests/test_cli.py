@@ -356,7 +356,6 @@ def test_multi_file_picker_flushes_stdin_before_reading(tmp_path, monkeypatch):
     _QUIT_SENTINEL — terminating the program instead of opening the tree view.
     """
     import sys
-    import io
 
     termios = pytest.importorskip("termios")
     pytest.importorskip("tty")  # skip on Windows
