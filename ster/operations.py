@@ -280,6 +280,14 @@ def set_definition(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
     concept.definitions.append(Definition(lang=lang, value=value))
 
 
+def set_scope_note(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    concept = taxonomy.concepts.get(uri)
+    if concept is None:
+        raise ConceptNotFoundError(uri)
+    concept.scope_notes = [sn for sn in concept.scope_notes if sn.lang != lang]
+    concept.scope_notes.append(Definition(lang=lang, value=value))
+
+
 # ──────────────────────────── relations ──────────────────────────────────────
 
 

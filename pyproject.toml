@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ster"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interactive terminal editor for SKOS taxonomy files"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,6 +39,9 @@ dependencies = [
 html = [
     "pylode>=3.0",
 ]
+ai = [
+    "llm>=0.19",
+]
 dev = [
     # Testing
     "pytest>=8.0",
@@ -54,6 +57,7 @@ dev = [
 ]
 all = [
     "ster[html]",
+    "ster[ai]",
     "ster[dev]",
 ]
 

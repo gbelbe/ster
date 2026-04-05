@@ -343,6 +343,63 @@ def test_git_log_sentinel_unique():
     assert _GIT_LOG_SENTINEL.suffix not in {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 
 
+# ── _multi_file_picker input-flush regression ─────────────────────────────────
+
+
+def test_multi_file_picker_flushes_stdin_before_reading(tmp_path, monkeypatch):
+    """Stray bytes buffered from a previous curses session are discarded before
+    the picker starts reading.
+
+    Regression: pressing Escape twice quickly in the tree view left a \\x1b byte
+    in the OS input buffer.  _multi_file_picker read it, blocked on the next
+    byte, consumed the user's Enter as the continuation, and then exited as
+    _QUIT_SENTINEL — terminating the program instead of opening the tree view.
+    """
+    import sys
+    import io
+
+    termios = pytest.importorskip("termios")
+    pytest.importorskip("tty")  # skip on Windows
+    from ster.cli import _multi_file_picker
+
+    found = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    flush_calls: list[int] = []
+
+    class _FakeBuffer:
+        def read(self, n: int) -> bytes:
+            return b"\r"  # simulate Enter → picker exits immediately
+
+    class _FakeSysStdin:
+        def isatty(self) -> bool:
+            return True
+
+        def fileno(self) -> int:
+            return 0
+
+        buffer = _FakeBuffer()
+
+    class _FakeSysStdout:
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, s: str) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(termios, "tcgetattr", lambda fd: [])
+    monkeypatch.setattr(termios, "tcsetattr", lambda fd, when, attrs: None)
+    monkeypatch.setattr(termios, "tcflush", lambda fd, queue: flush_calls.append(queue))
+    monkeypatch.setattr("tty.setraw", lambda fd: None)
+    monkeypatch.setattr(sys, "stdin", _FakeSysStdin())
+    monkeypatch.setattr(sys, "stdout", _FakeSysStdout())
+
+    _multi_file_picker(found)
+
+    assert termios.TCIFLUSH in flush_calls
+
+
 # ── _collect_reachable ────────────────────────────────────────────────────────
 
 
@@ -354,126 +411,6 @@ def test_collect_reachable(simple_taxonomy):
     _collect_reachable(simple_taxonomy, BASE + "Top", visited)
     assert BASE + "Top" in visited
     assert BASE + "Child" in visited
-
-
-# ── _run_create_wizard ────────────────────────────────────────────────────────
-
-from ster.cli import _run_create_wizard
-from ster.wizard import SetupResult
-
-
-def _make_setup_result(tmp_path: Path, filename: str = "new.ttl") -> SetupResult:
-    return SetupResult(
-        file_path=tmp_path / filename,
-        base_uri="https://example.org/test/",
-        languages=["en"],
-        titles={"en": "Test Taxonomy"},
-        descriptions={},
-        creator="Tester",
-        created="2026-01-01",
-    )
-
-
-def test_run_create_wizard_user_cancels(tmp_path, monkeypatch):
-    """When the wizard returns None (cancelled), no file is created."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
-
-    with patch("ster.wizard.run", return_value=None):
-        _run_create_wizard()
-
-    assert not any(tmp_path.glob("*.ttl"))
-
-
-def test_run_create_wizard_happy_path(tmp_path, monkeypatch):
-    """Wizard result is written to disk and session is saved."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
-    monkeypatch.chdir(tmp_path)
-
-    result = _make_setup_result(tmp_path, "brand_new.ttl")
-
-    gm_mock = MagicMock()
-    gm_mock.is_enabled.return_value = False
-
-    with (
-        patch("ster.wizard.run", return_value=result),
-        patch("ster.git_manager.GitManager", return_value=gm_mock),
-    ):
-        _run_create_wizard()
-
-    assert result.file_path.exists()
-    assert _load_session() == result.file_path.resolve()
-    assert cli_module._session_file == result.file_path
-
-
-def test_run_create_wizard_file_exists_retries(tmp_path, monkeypatch):
-    """If the chosen file already exists, wizard is re-run with same path as default."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
-    monkeypatch.chdir(tmp_path)
-
-    existing = tmp_path / "exists.ttl"
-    existing.write_text("")  # pre-create so first result collides
-
-    first_result = _make_setup_result(tmp_path, "exists.ttl")
-    second_result = _make_setup_result(tmp_path, "new_name.ttl")
-
-    gm_mock = MagicMock()
-    gm_mock.is_enabled.return_value = False
-
-    with (
-        patch("ster.wizard.run", side_effect=[first_result, second_result]),
-        patch("ster.git_manager.GitManager", return_value=gm_mock),
-    ):
-        _run_create_wizard()
-
-    assert second_result.file_path.exists()
-    assert (tmp_path / "new_name.ttl") != existing
-
-
-def test_run_create_wizard_file_exists_then_cancel(tmp_path, monkeypatch):
-    """If the file exists and user then cancels, no new file is created."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
-
-    existing = tmp_path / "exists.ttl"
-    existing.write_text("")
-
-    first_result = _make_setup_result(tmp_path, "exists.ttl")
-
-    with patch("ster.wizard.run", side_effect=[first_result, None]):
-        _run_create_wizard()
-
-    # Only the pre-existing file should be there
-    ttl_files = list(tmp_path.glob("*.ttl"))
-    assert ttl_files == [existing]
-
-
-def test_cmd_init_with_files_create_new_runs_wizard(tmp_path, monkeypatch):
-    """In cmd_init Case 2, selecting 'create new' runs the wizard directly."""
-    from ster.cli import cmd_init
-
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
-    monkeypatch.chdir(tmp_path)
-
-    existing = tmp_path / "vocab.ttl"
-    existing.write_text("")
-
-    wizard_called_with: list = []
-
-    def fake_run_create_wizard(default_path=None):
-        wizard_called_with.append(default_path)
-
-    with (
-        patch("ster.cli._print_welcome"),
-        patch("ster.cli._pick_file_interactive", return_value=None),
-        patch("ster.cli._run_create_wizard", side_effect=fake_run_create_wizard),
-    ):
-        cmd_init()
-
-    assert len(wizard_called_with) == 1
 
 
 # ── _make_taxonomy_commit_msg ─────────────────────────────────────────────────

@@ -59,6 +59,15 @@ class CreateState:
     scroll: int = 0
     error: str = ""
     came_from_tree: bool = False  # True when triggered from tree mode (cancel → tree)
+    # Add-concept step: "choose" | "prompt_review" | "ai_pick" | "form"
+    # Default "form" keeps all existing call-sites unchanged.
+    step: str = "form"
+    ai_candidates: list[str] = dc_field(default_factory=list)
+    ai_seen: list[str] = dc_field(default_factory=list)
+    ai_generating: bool = False
+    ai_cursor: int = 0
+    ai_scroll: int = 0
+    ai_prompt_preview: str = ""
 
 
 @dataclass
@@ -87,7 +96,8 @@ class ConfirmDeleteState:
 @dataclass
 class MovePickState:
     source_uri: str = ""
-    is_link: bool = False  # True when picking for "link to broader"
+    is_link: bool = False  # kept for compat; prefer pick_type
+    pick_type: str = "move"  # "move" | "link_broader" | "add_related"
     candidates: list[tuple[str, str]] = dc_field(default_factory=list)  # (uri, label)
     filter_text: str = ""
     cursor: int = 0
@@ -121,6 +131,55 @@ class MapConceptPickState:
     scroll: int = 0
 
 
+@dataclass
+class AiInstallState:
+    """Confirmation overlay: install the llm package, then resume an action."""
+    pending_action: str = ""   # action to trigger after successful install
+    installing: bool = False   # True while pip is running
+    done: bool = False         # True after successful install
+    lines: list[str] = dc_field(default_factory=list)  # pip output lines
+    error: str = ""
+
+
+@dataclass
+class AiSetupState:
+    """Guided model setup wizard: mode → provider → model → key? → done.
+
+    online_providers / offline_providers are fetched once when the wizard opens
+    via ai.discover_models() and stored here so navigation is instant.
+    Each entry: (provider_id, display_label, [(model_id, display_label)]).
+    """
+    step: str = "mode"             # "mode" | "provider" | "model" | "key" | "done"  (mode "copypaste" → skips to done)
+    mode: str = ""                 # "online" | "offline"
+    # Pre-fetched provider + model data (populated at wizard open time)
+    online_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
+    offline_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
+    # Navigation
+    provider_cursor: int = 0
+    provider_scroll: int = 0
+    model_cursor: int = 0
+    model_scroll: int = 0
+    # Selections
+    selected_provider_id: str = ""
+    selected_model_id: str = ""
+    key_name: str = ""
+    # API key text input
+    buffer: str = ""
+    pos: int = 0
+    error: str = ""
+    pending_action: str = ""       # action to resume after setup completes
+    # Plugin install sub-step (used when step == "install_plugin")
+    available_plugins: list[tuple[str, str, str]] = dc_field(default_factory=list)
+    plugin_cursor: int = 0
+    plugin_scroll: int = 0
+    plugin_installing: bool = False
+    plugin_done: bool = False
+    plugin_error: str = ""
+    plugin_lines: list[str] = dc_field(default_factory=list)
+    selected_plugin_pkg: str = ""
+    selected_plugin_label: str = ""
+
+
 ViewerState = (
     TreeState
     | WelcomeState
@@ -133,6 +192,8 @@ ViewerState = (
     | LangPickState
     | MapSchemePickState
     | MapConceptPickState
+    | AiInstallState
+    | AiSetupState
 )
 
 
