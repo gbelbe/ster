@@ -2,28 +2,24 @@
 
 from __future__ import annotations
 
-import pytest
-
 from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 from ster.taxonomy_analysis import (
     SEVERITY_ERROR,
     SEVERITY_INFO,
     SEVERITY_WARNING,
-    PropertyCompletion,
     SchemeAnalysis,
     SchemeStats,
-    TaxonomyIssue,
     _compute_completions,
     _compute_stats,
     _detect_alt_same_as_pref,
     _detect_broken_broader,
     _detect_broken_mappings,
     _detect_broken_narrower,
-    _detect_missing_in_scheme,
     _detect_broken_top_concepts,
     _detect_circular_hierarchy,
     _detect_duplicate_pref_label,
     _detect_missing_definition,
+    _detect_missing_in_scheme,
     _detect_missing_pref_label,
     _detect_missing_pref_label_lang,
     analyze_scheme,
@@ -417,7 +413,7 @@ def test_round_trip_serialisation():
     assert restored.stats.total_concepts == analysis.stats.total_concepts
     assert len(restored.completions) == len(analysis.completions)
     assert len(restored.issues) == len(analysis.issues)
-    for orig, rest in zip(analysis.issues, restored.issues):
+    for orig, rest in zip(analysis.issues, restored.issues, strict=False):
         assert rest.issue_key == orig.issue_key
         assert rest.severity == orig.severity
         assert rest.concept_uri == orig.concept_uri
