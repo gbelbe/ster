@@ -695,12 +695,14 @@ def _launch_ai_config(found: list[Path]) -> None:
         workspace = TaxonomyWorkspace.from_files([])
 
     from .model import Taxonomy
+
     if found and found[0] in workspace.taxonomies:
         taxonomy = workspace.taxonomies[found[0]]
     else:
         taxonomy = Taxonomy()
 
     from .git_manager import GitManager
+
     gm = GitManager(primary)
 
     viewer = TaxonomyViewer(

@@ -257,14 +257,24 @@ def _stat(key: str, label: str, value: str) -> DetailField:
 
 def _add_action_field(key: str, label: str, action: str, **extra_meta) -> DetailField:
     """Helper for action rows."""
-    return DetailField(key, label, "", editable=False, meta={"type": "action", "action": action, **extra_meta})
+    return DetailField(
+        key, label, "", editable=False, meta={"type": "action", "action": action, **extra_meta}
+    )
 
 
-def _section_pref_labels(labels: list, id_prefix: str, display_name: str, meta_type: str) -> list[DetailField]:
+def _section_pref_labels(
+    labels: list, id_prefix: str, display_name: str, meta_type: str
+) -> list[DetailField]:
     """Shared: emit prefLabel rows sorted by language (no alt labels)."""
     pref = {lbl.lang: lbl.value for lbl in labels if lbl.type == LabelType.PREF}
     return [
-        DetailField(f"{id_prefix}:{lg}", f"{display_name} [{lg}]", val, editable=True, meta={"type": meta_type, "lang": lg})
+        DetailField(
+            f"{id_prefix}:{lg}",
+            f"{display_name} [{lg}]",
+            val,
+            editable=True,
+            meta={"type": meta_type, "lang": lg},
+        )
         for lg, val in sorted(pref.items())
     ]
 
@@ -278,12 +288,26 @@ def _section_alt_labels(labels: list, id_prefix: str, meta_type: str) -> list[De
     fields = []
     for lg, vals in sorted(alt.items()):
         for idx, val in enumerate(vals):
-            fields.append(DetailField(f"{id_prefix}:{lg}:{idx}", f"altLabel [{lg}]", val, editable=True, meta={"type": meta_type, "lang": lg, "idx": idx}))
+            fields.append(
+                DetailField(
+                    f"{id_prefix}:{lg}:{idx}",
+                    f"altLabel [{lg}]",
+                    val,
+                    editable=True,
+                    meta={"type": meta_type, "lang": lg, "idx": idx},
+                )
+            )
     return fields
 
 
-def _section_labels_grouped(labels: list, pref_prefix: str, alt_prefix: str,
-                             pref_display: str, pref_meta: str, alt_meta: str) -> list[DetailField]:
+def _section_labels_grouped(
+    labels: list,
+    pref_prefix: str,
+    alt_prefix: str,
+    pref_display: str,
+    pref_meta: str,
+    alt_meta: str,
+) -> list[DetailField]:
     """Emit prefLabel rows each followed immediately by their language's altLabels.
 
     Languages that have only altLabels (no pref) are appended at the end.
@@ -301,22 +325,40 @@ def _section_labels_grouped(labels: list, pref_prefix: str, alt_prefix: str,
     fields: list[DetailField] = []
     for lg in all_langs:
         if lg in pref:
-            fields.append(DetailField(
-                f"{pref_prefix}:{lg}", f"{pref_display} [{lg}]", pref[lg],
-                editable=True, meta={"type": pref_meta, "lang": lg},
-            ))
+            fields.append(
+                DetailField(
+                    f"{pref_prefix}:{lg}",
+                    f"{pref_display} [{lg}]",
+                    pref[lg],
+                    editable=True,
+                    meta={"type": pref_meta, "lang": lg},
+                )
+            )
         for idx, val in enumerate(alt.get(lg, [])):
-            fields.append(DetailField(
-                f"{alt_prefix}:{lg}:{idx}", f"  altLabel [{lg}]", val,
-                editable=True, meta={"type": alt_meta, "lang": lg, "idx": idx},
-            ))
+            fields.append(
+                DetailField(
+                    f"{alt_prefix}:{lg}:{idx}",
+                    f"  altLabel [{lg}]",
+                    val,
+                    editable=True,
+                    meta={"type": alt_meta, "lang": lg, "idx": idx},
+                )
+            )
     return fields
 
 
-def _section_text_list(items: list, id_prefix: str, display_name: str, meta_type: str) -> list[DetailField]:
+def _section_text_list(
+    items: list, id_prefix: str, display_name: str, meta_type: str
+) -> list[DetailField]:
     """Shared: emit rows for list[Definition]-typed properties (definitions, descriptions, scope_notes)."""
     return [
-        DetailField(f"{id_prefix}:{item.lang}", f"{display_name} [{item.lang}]", item.value, editable=True, meta={"type": meta_type, "lang": item.lang})
+        DetailField(
+            f"{id_prefix}:{item.lang}",
+            f"{display_name} [{item.lang}]",
+            item.value,
+            editable=True,
+            meta={"type": meta_type, "lang": item.lang},
+        )
         for item in sorted(items, key=lambda d: d.lang)
     ]
 
@@ -330,8 +372,15 @@ def _concept_identity_fields(taxonomy: Taxonomy, uri: str, concept, lang: str) -
     if concept.top_concept_of:
         scheme = taxonomy.schemes.get(concept.top_concept_of)
         scheme_label = scheme.title(lang) if scheme else concept.top_concept_of
-        fields.append(DetailField("top_concept_of", "◈ scheme", scheme_label, editable=False,
-            meta={"type": "top_concept_of", "uri": concept.top_concept_of, "nav": True}))
+        fields.append(
+            DetailField(
+                "top_concept_of",
+                "◈ scheme",
+                scheme_label,
+                editable=False,
+                meta={"type": "top_concept_of", "uri": concept.top_concept_of, "nav": True},
+            )
+        )
     return fields
 
 
@@ -342,20 +391,41 @@ def _concept_hierarchy_fields(taxonomy: Taxonomy, concept, lang: str) -> list[De
         h = taxonomy.uri_to_handle(child_uri) or "?"
         child = taxonomy.concepts.get(child_uri)
         label_str = child.pref_label(lang) if child else child_uri
-        fields.append(DetailField(f"narrower:{child_uri}", "↓ narrower", f"{label_str}  [{h}]", editable=False,
-            meta={"type": "relation", "uri": child_uri, "nav": True}))
+        fields.append(
+            DetailField(
+                f"narrower:{child_uri}",
+                "↓ narrower",
+                f"{label_str}  [{h}]",
+                editable=False,
+                meta={"type": "relation", "uri": child_uri, "nav": True},
+            )
+        )
     for p_uri in concept.broader:
         h = taxonomy.uri_to_handle(p_uri) or "?"
         parent = taxonomy.concepts.get(p_uri)
         label_str = parent.pref_label(lang) if parent else p_uri
-        fields.append(DetailField(f"broader:{p_uri}", "↑ broader", f"{label_str}  [{h}]", editable=False,
-            meta={"type": "relation", "uri": p_uri, "nav": True}))
+        fields.append(
+            DetailField(
+                f"broader:{p_uri}",
+                "↑ broader",
+                f"{label_str}  [{h}]",
+                editable=False,
+                meta={"type": "relation", "uri": p_uri, "nav": True},
+            )
+        )
     for r_uri in concept.related:
         h = taxonomy.uri_to_handle(r_uri) or "?"
         rel = taxonomy.concepts.get(r_uri)
         label_str = rel.pref_label(lang) if rel else r_uri
-        fields.append(DetailField(f"related:{r_uri}", "~ related", f"{label_str}  [{h}]", editable=False,
-            meta={"type": "relation", "uri": r_uri, "nav": True}))
+        fields.append(
+            DetailField(
+                f"related:{r_uri}",
+                "~ related",
+                f"{label_str}  [{h}]",
+                editable=False,
+                meta={"type": "relation", "uri": r_uri, "nav": True},
+            )
+        )
     return fields
 
 
@@ -409,13 +479,15 @@ def _concept_completion_fields(taxonomy: Taxonomy, uri: str) -> list[DetailField
         for lg, count in sorted(comp.by_language.items()):
             pct = int(count * 100 / comp.total) if comp.total else 0
             bar = _pct_bar(pct)
-            fields.append(DetailField(
-                f"ccomp:{comp.property_key}:{lg}",
-                f"[{lg}]",
-                f"{count}/{comp.total}  {bar}  ({pct}%)",
-                editable=False,
-                meta={"type": "stat"},
-            ))
+            fields.append(
+                DetailField(
+                    f"ccomp:{comp.property_key}:{lg}",
+                    f"[{lg}]",
+                    f"{count}/{comp.total}  {bar}  ({pct}%)",
+                    editable=False,
+                    meta={"type": "stat"},
+                )
+            )
     return fields
 
 
@@ -434,10 +506,24 @@ def _concept_mappings_fields(taxonomy: Taxonomy, concept, lang: str) -> list[Det
             mapped = taxonomy.concepts.get(m_uri)
             label_str = mapped.pref_label(lang) if mapped else m_uri
             h = taxonomy.uri_to_handle(m_uri) or "?"
-            fields.append(DetailField(f"{attr}:{m_uri}", display, f"{label_str}  [{h}]", editable=False,
-                meta={"type": "mapping", "uri": m_uri, "nav": bool(mapped), "attr": attr}))
-            fields.append(DetailField(f"rm_map:{attr}:{m_uri}", "   ✗ Remove link", "", editable=False,
-                meta={"type": "mapping_remove", "uri": m_uri, "attr": attr}))
+            fields.append(
+                DetailField(
+                    f"{attr}:{m_uri}",
+                    display,
+                    f"{label_str}  [{h}]",
+                    editable=False,
+                    meta={"type": "mapping", "uri": m_uri, "nav": bool(mapped), "attr": attr},
+                )
+            )
+            fields.append(
+                DetailField(
+                    f"rm_map:{attr}:{m_uri}",
+                    "   ✗ Remove link",
+                    "",
+                    editable=False,
+                    meta={"type": "mapping_remove", "uri": m_uri, "attr": attr},
+                )
+            )
     return fields
 
 
@@ -449,15 +535,33 @@ def _concept_action_fields(lang: str, concept, show_mappings: bool) -> list[Deta
     def_langs = {d.lang for d in concept.definitions}
     scope_langs = {d.lang for d in concept.scope_notes}
     if lang not in pref_langs:
-        fields.append(_add_action_field(f"action:add_pref:{lang}", f"+ Add prefLabel [{lang}]", "add_pref_label", lang=lang))
-    fields.append(_add_action_field(f"action:add_alt:{lang}", f"+ Add altLabel [{lang}]", "add_alt_label", lang=lang))
+        fields.append(
+            _add_action_field(
+                f"action:add_pref:{lang}", f"+ Add prefLabel [{lang}]", "add_pref_label", lang=lang
+            )
+        )
+    fields.append(
+        _add_action_field(
+            f"action:add_alt:{lang}", f"+ Add altLabel [{lang}]", "add_alt_label", lang=lang
+        )
+    )
     if lang not in def_langs:
-        fields.append(_add_action_field(f"action:add_def:{lang}", f"+ Add definition [{lang}]", "add_def", lang=lang))
+        fields.append(
+            _add_action_field(
+                f"action:add_def:{lang}", f"+ Add definition [{lang}]", "add_def", lang=lang
+            )
+        )
     if lang not in scope_langs:
-        fields.append(_add_action_field(f"action:add_scope:{lang}", f"+ Add scopeNote [{lang}]", "add_scope_note", lang=lang))
+        fields.append(
+            _add_action_field(
+                f"action:add_scope:{lang}", f"+ Add scopeNote [{lang}]", "add_scope_note", lang=lang
+            )
+        )
     # Structural actions
     fields.append(_add_action_field("action:add_child", "+ Add narrower concept", "add_narrower"))
-    fields.append(_add_action_field("action:link_broader", "↑ Link to broader concept", "link_broader"))
+    fields.append(
+        _add_action_field("action:link_broader", "↑ Link to broader concept", "link_broader")
+    )
     fields.append(_add_action_field("action:add_related", "~ Add related concept", "add_related"))
     fields.append(_add_action_field("action:move", "↷ Move under different parent", "move"))
     fields.append(_add_action_field("action:delete", "⊘ Delete this concept", "delete"))
@@ -482,15 +586,31 @@ def _scheme_settings_fields(scheme, lang: str) -> list[DetailField]:
     """URI and base URI for a scheme."""
     return [
         DetailField("scheme_uri", "URI", scheme.uri, editable=False, meta={"type": "scheme_uri"}),
-        DetailField("base_uri", "base URI", scheme.base_uri or "", editable=True, meta={"type": "scheme_base_uri"}),
+        DetailField(
+            "base_uri",
+            "base URI",
+            scheme.base_uri or "",
+            editable=True,
+            meta={"type": "scheme_base_uri"},
+        ),
     ]
 
 
 def _scheme_metadata_fields(scheme) -> list[DetailField]:
     return [
-        DetailField("creator", "creator", scheme.creator, editable=True, meta={"type": "scheme_creator"}),
-        DetailField("created", "created", scheme.created, editable=True, meta={"type": "scheme_created"}),
-        DetailField("languages", "declared langs", ", ".join(scheme.languages), editable=True, meta={"type": "scheme_languages"}),
+        DetailField(
+            "creator", "creator", scheme.creator, editable=True, meta={"type": "scheme_creator"}
+        ),
+        DetailField(
+            "created", "created", scheme.created, editable=True, meta={"type": "scheme_created"}
+        ),
+        DetailField(
+            "languages",
+            "declared langs",
+            ", ".join(scheme.languages),
+            editable=True,
+            meta={"type": "scheme_languages"},
+        ),
     ]
 
 
@@ -505,8 +625,15 @@ def _scheme_top_concept_fields(taxonomy: Taxonomy, scheme, lang: str) -> list[De
         label = concept.pref_label(lang)
         n_narrower = len(concept.narrower)
         suffix = f"  ({n_narrower})" if n_narrower else ""
-        fields.append(DetailField(f"tc:{tc_uri}", "◈ top concept", f"{label}  [{h}]{suffix}", editable=False,
-            meta={"type": "relation", "uri": tc_uri, "nav": True}))
+        fields.append(
+            DetailField(
+                f"tc:{tc_uri}",
+                "◈ top concept",
+                f"{label}  [{h}]{suffix}",
+                editable=False,
+                meta={"type": "relation", "uri": tc_uri, "nav": True},
+            )
+        )
     return fields
 
 
@@ -532,7 +659,15 @@ def _scheme_completion_fields(scheme_analysis) -> list[DetailField]:
         for lg, count in sorted(comp.by_language.items()):
             pct = int(count * 100 / comp.total) if comp.total else 0
             bar = _pct_bar(pct)
-            fields.append(DetailField(f"comp:{comp.property_key}:{lg}", f"[{lg}]", f"{count}/{comp.total}  {bar}  ({pct}%)", editable=False, meta={"type": "stat"}))
+            fields.append(
+                DetailField(
+                    f"comp:{comp.property_key}:{lg}",
+                    f"[{lg}]",
+                    f"{count}/{comp.total}  {bar}  ({pct}%)",
+                    editable=False,
+                    meta={"type": "stat"},
+                )
+            )
     return fields
 
 
@@ -549,11 +684,25 @@ def _scheme_issues_fields(scheme_analysis) -> list[DetailField]:
         meta: dict = {"type": "issue_nav", "severity": issue.severity}
         if issue.concept_uri:
             meta["uri"] = issue.concept_uri
-        fields.append(DetailField(f"issue:{idx}", f"{icon} {name}", issue.message, editable=False, meta=meta))
+        fields.append(
+            DetailField(f"issue:{idx}", f"{icon} {name}", issue.message, editable=False, meta=meta)
+        )
         if issue.extra.get("attr") and issue.extra.get("target_uri") and issue.concept_uri:
             target_uri = issue.extra["target_uri"]
-            fields.append(DetailField(f"repair:{idx}", "  ↳ remove link", target_uri, editable=False,
-                meta={"type": "repair_mapping", "source_uri": issue.concept_uri, "attr": issue.extra["attr"], "target_uri": target_uri}))
+            fields.append(
+                DetailField(
+                    f"repair:{idx}",
+                    "  ↳ remove link",
+                    target_uri,
+                    editable=False,
+                    meta={
+                        "type": "repair_mapping",
+                        "source_uri": issue.concept_uri,
+                        "attr": issue.extra["attr"],
+                        "target_uri": target_uri,
+                    },
+                )
+            )
     return fields
 
 
@@ -585,9 +734,9 @@ def build_concept_detail(
 
     # ── Labels ──────────────────────────────────────────────────────────────
     fields.append(_sep("Labels"))
-    fields.extend(_section_labels_grouped(
-        concept.labels, "pref", "alt", "prefLabel", "pref", "alt"
-    ))
+    fields.extend(
+        _section_labels_grouped(concept.labels, "pref", "alt", "prefLabel", "pref", "alt")
+    )
 
     # ── Notes ───────────────────────────────────────────────────────────────
     has_notes = bool(concept.definitions or concept.scope_notes)
@@ -603,7 +752,13 @@ def build_concept_detail(
         fields.extend(_concept_hierarchy_fields(taxonomy, concept, lang))
 
     # ── Mappings ─────────────────────────────────────────────────────────────
-    has_mappings = bool(concept.exact_match or concept.close_match or concept.broad_match or concept.narrow_match or concept.related_match)
+    has_mappings = bool(
+        concept.exact_match
+        or concept.close_match
+        or concept.broad_match
+        or concept.narrow_match
+        or concept.related_match
+    )
     if has_mappings:
         fields.append(_sep("Mappings"))
         fields.extend(_concept_mappings_fields(taxonomy, concept, lang))
@@ -635,7 +790,15 @@ def build_scheme_detail(
     fields: list[DetailField] = []
 
     # display_lang first (no separator before it — tests rely on fields[0])
-    fields.append(DetailField("display_lang", "display language", lang, editable=False, meta={"type": "action", "action": "pick_lang"}))
+    fields.append(
+        DetailField(
+            "display_lang",
+            "display language",
+            lang,
+            editable=False,
+            meta={"type": "action", "action": "pick_lang"},
+        )
+    )
 
     # ── Settings ─────────────────────────────────────────────────────────────
     fields.append(_sep("Settings"))
@@ -677,9 +840,12 @@ def build_scheme_detail(
         n_warn = sum(1 for i in issues if i.severity == "warning")
         n_info = sum(1 for i in issues if i.severity == "info")
         summary_parts = []
-        if n_err: summary_parts.append(f"{n_err} error{'s' if n_err > 1 else ''}")
-        if n_warn: summary_parts.append(f"{n_warn} warning{'s' if n_warn > 1 else ''}")
-        if n_info: summary_parts.append(f"{n_info} info")
+        if n_err:
+            summary_parts.append(f"{n_err} error{'s' if n_err > 1 else ''}")
+        if n_warn:
+            summary_parts.append(f"{n_warn} warning{'s' if n_warn > 1 else ''}")
+        if n_info:
+            summary_parts.append(f"{n_info} info")
         sep_label = "Issues — " + ", ".join(summary_parts) if summary_parts else "Issues"
         fields.append(_sep(sep_label))
         fields.extend(_scheme_issues_fields(scheme_analysis))
@@ -861,7 +1027,9 @@ def build_global_fields(
                 if total == 0:
                     continue
                 # Best completion across languages (highest %)
-                best_lang, best_cnt = max(by_lang.items(), key=lambda kv: kv[1]) if by_lang else ("—", 0)
+                best_lang, best_cnt = (
+                    max(by_lang.items(), key=lambda kv: kv[1]) if by_lang else ("—", 0)
+                )
                 best_pct = int(best_cnt * 100 / total) if total else 0
                 bar = _pct_bar(best_pct)
                 lang_parts = []
@@ -889,9 +1057,7 @@ def build_global_fields(
         fields.append(_sep("Quality"))
         if total_errors == 0 and total_warnings == 0:
             fields.append(
-                DetailField(
-                    "g:issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"}
-                )
+                DetailField("g:issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"})
             )
         else:
             if total_errors:
@@ -917,9 +1083,7 @@ def build_global_fields(
     else:
         fields.append(_sep("Completeness & Quality"))
         fields.append(
-            DetailField(
-                "g:pending", "analysis", "loading…", editable=False, meta={"type": "stat"}
-            )
+            DetailField("g:pending", "analysis", "loading…", editable=False, meta={"type": "stat"})
         )
 
     return fields

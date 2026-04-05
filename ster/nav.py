@@ -439,22 +439,20 @@ def _draw_text_input(
     """Draw a simple centred text-input widget."""
     try:
         row = rows // 2 - 2
-        stdscr.addstr(row, 2, prompt[:cols - 3], curses.A_BOLD)
+        stdscr.addstr(row, 2, prompt[: cols - 3], curses.A_BOLD)
         row += 2
         before = buffer[:pos]
         after = buffer[pos:]
         line = f"  {before}▌{after}"
-        stdscr.addstr(row, 0, line[:cols - 1], curses.color_pair(_C_SEL) | curses.A_BOLD)
+        stdscr.addstr(row, 0, line[: cols - 1], curses.color_pair(_C_SEL) | curses.A_BOLD)
         row += 1
         if error:
-            stdscr.addstr(row + 1, 2, error[:cols - 3], curses.color_pair(_C_SEL) | curses.A_BOLD)
+            stdscr.addstr(row + 1, 2, error[: cols - 3], curses.color_pair(_C_SEL) | curses.A_BOLD)
         if hint:
             _draw_bar(stdscr, rows - 1, 0, cols, hint, dim=True)
     except curses.error:
         pass
     stdscr.refresh()
-
-
 
 
 # ──────────────────────────── TaxonomyViewer ─────────────────────────────────
@@ -517,11 +515,11 @@ class TaxonomyViewer:
         # scheme_uri → SchemeAnalysis; populated on first run() call
         self._analysis: dict[str, SchemeAnalysis] | None = None
         # AI install threading state
-        self._install_thread: object = None   # threading.Thread | None
+        self._install_thread: object = None  # threading.Thread | None
         self._install_output: list[str] = []  # thread appends here (GIL-safe)
         self._install_returncode: int | None = None
         self._install_spinner: int = 0
-        self._install_package: str = "llm"    # package passed to pip install
+        self._install_package: str = "llm"  # package passed to pip install
 
         self._rebuild()
         # Start with the global overview panel; cursor moves will update to item-specific detail
@@ -606,7 +604,7 @@ class TaxonomyViewer:
         elif self._detail_uri and self._detail_uri in self.taxonomy.schemes:
             self._detail_fields = self._bsf(self._detail_uri)
         elif self._detail_uri and self._detail_uri.startswith(_FILE_URI_PREFIX):
-            fp_str = self._detail_uri[len(_FILE_URI_PREFIX):]
+            fp_str = self._detail_uri[len(_FILE_URI_PREFIX) :]
             self._detail_fields = self._bff(Path(fp_str))
 
     # ── tree-state bridge (scattered attrs ↔ TreeState for pure functions) ────
@@ -737,6 +735,7 @@ class TaxonomyViewer:
         def _flush_stdin() -> None:
             try:
                 import termios
+
                 termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
             except Exception:
                 pass
@@ -944,7 +943,6 @@ class TaxonomyViewer:
                     self._on_ai_setup(key)
                     if not _had_pending and not isinstance(self._state, AiSetupState):
                         break
-
 
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
@@ -1442,21 +1440,19 @@ class TaxonomyViewer:
         self._render_detail_col(stdscr, rows, detail_x0, detail_w)
         stdscr.refresh()
 
-    def _render_detail_col(self, stdscr: curses.window, rows: int, x0: int, width: int, show_footer: bool = True) -> None:
+    def _render_detail_col(
+        self, stdscr: curses.window, rows: int, x0: int, width: int, show_footer: bool = True
+    ) -> None:
         is_global_detail = self._detail_uri == _GLOBAL_URI
-        is_file_detail = bool(
-            self._detail_uri and self._detail_uri.startswith(_FILE_URI_PREFIX)
-        )
-        is_scheme_detail = bool(
-            self._detail_uri and self._detail_uri in self.taxonomy.schemes
-        )
+        is_file_detail = bool(self._detail_uri and self._detail_uri.startswith(_FILE_URI_PREFIX))
+        is_scheme_detail = bool(self._detail_uri and self._detail_uri in self.taxonomy.schemes)
 
         if is_global_detail:
             label = "Global Ster View"
             handle = None
         elif is_file_detail:
             # Derive file path from the sentinel URI
-            fp_str = self._detail_uri[len(_FILE_URI_PREFIX):]  # type: ignore[index]
+            fp_str = self._detail_uri[len(_FILE_URI_PREFIX) :]  # type: ignore[index]
             label = Path(fp_str).name
             handle = None
         elif is_scheme_detail:
@@ -1601,7 +1597,10 @@ class TaxonomyViewer:
                     # Dim red "remove broken link" repair row
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(
-                        y, x0 + 2, fl[:lbl_w].ljust(lbl_w), curses.color_pair(_C_DIFF_DEL) | curses.A_DIM
+                        y,
+                        x0 + 2,
+                        fl[:lbl_w].ljust(lbl_w),
+                        curses.color_pair(_C_DIFF_DEL) | curses.A_DIM,
                     )
                     if fv:
                         stdscr.addstr(
@@ -2012,7 +2011,11 @@ class TaxonomyViewer:
             elif ftype == "scope_note":
                 concept = self.taxonomy.concepts.get(self._detail_uri)
                 if concept:
-                    concept.scope_notes = [sn for sn in concept.scope_notes if not (sn.lang == lang and sn.value == f.value)]
+                    concept.scope_notes = [
+                        sn
+                        for sn in concept.scope_notes
+                        if not (sn.lang == lang and sn.value == f.value)
+                    ]
         except SkostaxError:
             return
         self._detail_fields = self._bdf(self._detail_uri)
@@ -2110,7 +2113,7 @@ class TaxonomyViewer:
             #   scheme URI as "add as top concept of that scheme".
             self._state = CreateState(
                 parent_uri=self._detail_uri,
-                fields=[],           # built when user picks "manual" in choose step
+                fields=[],  # built when user picks "manual" in choose step
                 cursor=0,
                 scroll=0,
                 error="",
@@ -2167,8 +2170,11 @@ class TaxonomyViewer:
             }
             ftype, display_name = _FTYPE[action]
             synthetic = DetailField(
-                f"add:{ftype}:{lang}", f"{display_name} [{lang}]", "",
-                editable=True, meta={"type": ftype, "lang": lang},
+                f"add:{ftype}:{lang}",
+                f"{display_name} [{lang}]",
+                "",
+                editable=True,
+                meta={"type": ftype, "lang": lang},
             )
             self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
@@ -2217,6 +2223,7 @@ class TaxonomyViewer:
 
         elif action == "open_ai_config":
             from . import ai
+
             if not ai.is_available():
                 self._state = AiInstallState(pending_action="open_ai_config")
             else:
@@ -2243,7 +2250,6 @@ class TaxonomyViewer:
                         cursor=0,
                         scroll=0,
                     )
-
 
     def _build_create_fields(self) -> list[DetailField]:
         # Gather all languages currently used in the taxonomy
@@ -2366,6 +2372,7 @@ class TaxonomyViewer:
     def _run_generate(self, stdscr: curses.window, fn) -> None:
         """Run an AI generate function, suspending curses first in copypaste mode."""
         from . import ai as _ai
+
         if _ai.is_copypaste():
             curses.endwin()
         try:
@@ -2377,6 +2384,7 @@ class TaxonomyViewer:
     def _create_ai_generate(self) -> None:
         """Called from main loop when CreateState.ai_generating is True."""
         from . import ai as _ai
+
         if not isinstance(self._state, CreateState):
             return
         cs = self._state
@@ -2401,7 +2409,9 @@ class TaxonomyViewer:
 
     # ── Add-concept step drawing ──────────────────────────────────────────────
 
-    def _draw_create_choose(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
+    def _draw_create_choose(
+        self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
+    ) -> None:
         """Render the 'choose input method' screen."""
         if cs.parent_uri and cs.parent_uri in self.taxonomy.schemes:
             scheme = self.taxonomy.schemes[cs.parent_uri]
@@ -2421,7 +2431,11 @@ class TaxonomyViewer:
             sel = i == cs.ai_cursor
             y = 2 + i
             try:
-                attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else curses.color_pair(_C_FIELD_LABEL)
+                attr = (
+                    curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                    if sel
+                    else curses.color_pair(_C_FIELD_LABEL)
+                )
                 prefix = "▶ " if sel else "  "
                 stdscr.addstr(y, x0, (prefix + label).ljust(width - 1)[: width - 1], attr)
             except curses.error:
@@ -2429,14 +2443,30 @@ class TaxonomyViewer:
 
         if cs.error:
             try:
-                stdscr.addstr(rows - 2, x0 + 1, f"Error: {cs.error}"[: width - 2], curses.color_pair(_C_DIFF_DEL))
+                stdscr.addstr(
+                    rows - 2,
+                    x0 + 1,
+                    f"Error: {cs.error}"[: width - 2],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
             except curses.error:
                 pass
-        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓/jk: navigate   Enter: select   Esc: cancel  ", dim=True)
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  ↑↓/jk: navigate   Enter: select   Esc: cancel  ",
+            dim=True,
+        )
 
-    def _draw_create_prompt_review(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
+    def _draw_create_prompt_review(
+        self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
+    ) -> None:
         """Render the prompt-review panel."""
-        _draw_bar(stdscr, 0, x0, width, " Review AI prompt — Enter: generate   Esc: back ", dim=False)
+        _draw_bar(
+            stdscr, 0, x0, width, " Review AI prompt — Enter: generate   Esc: back ", dim=False
+        )
         text_lines = cs.ai_prompt_preview.splitlines()
         list_h = rows - 2
         for i in range(list_h):
@@ -2447,9 +2477,13 @@ class TaxonomyViewer:
                 stdscr.addstr(y, x0 + 1, line.ljust(width - 2)[: width - 2])
             except curses.error:
                 pass
-        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: generate   Esc: back  ", dim=True)
+        _draw_bar(
+            stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: generate   Esc: back  ", dim=True
+        )
 
-    def _draw_create_ai_pick(self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState) -> None:
+    def _draw_create_ai_pick(
+        self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
+    ) -> None:
         """Render the AI suggestion pick list."""
         _draw_bar(stdscr, 0, x0, width, " AI suggestions — pick a name ", dim=False)
 
@@ -2511,6 +2545,7 @@ class TaxonomyViewer:
                 # AI suggest — render prompt and show for review
                 try:
                     from . import ai as _ai
+
                     taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context(cs)
                     preview = _ai.render_suggest_concept_names_prompt(
                         taxonomy_name=taxonomy_name,
@@ -3950,7 +3985,7 @@ class TaxonomyViewer:
             a = attr | (curses.A_BOLD if bold else 0)
             pad = max(0, (box_w - len(text)) // 2)
             try:
-                stdscr.addstr(y0 + row, x0 + pad, text[: box_w], a)
+                stdscr.addstr(y0 + row, x0 + pad, text[:box_w], a)
             except curses.error:
                 pass
 
@@ -3991,6 +4026,7 @@ class TaxonomyViewer:
         if st.done:
             # Proceed to model setup — discover models fresh after install
             from . import ai
+
             pending = st.pending_action
             online, offline = ai.discover_models()
             self._state = AiSetupState(
@@ -4016,6 +4052,7 @@ class TaxonomyViewer:
     def _ai_install_worker(self) -> None:
         """Daemon thread: runs pip install and collects output."""
         import subprocess
+
         proc = subprocess.Popen(
             [sys.executable, "-m", "pip", "install", "--no-color", self._install_package],
             stdout=subprocess.PIPE,
@@ -4033,6 +4070,7 @@ class TaxonomyViewer:
     def _ai_install_poll(self) -> None:
         """Called each loop iteration while installing. Starts thread, polls result."""
         import threading
+
         if not isinstance(self._state, AiInstallState):
             return
         st = self._state
@@ -4075,6 +4113,7 @@ class TaxonomyViewer:
         """Called each loop iteration while a plugin is installing."""
         import dataclasses
         import threading
+
         if not isinstance(self._state, AiSetupState):
             return
         st = self._state
@@ -4094,12 +4133,18 @@ class TaxonomyViewer:
             self._install_thread = None
             if self._install_returncode == 0:
                 self._state = dataclasses.replace(
-                    st, plugin_installing=False, plugin_done=True, plugin_lines=current_lines,
+                    st,
+                    plugin_installing=False,
+                    plugin_done=True,
+                    plugin_lines=current_lines,
                 )
             else:
                 err = current_lines[-1] if current_lines else "Installation failed"
                 self._state = dataclasses.replace(
-                    st, plugin_installing=False, plugin_error=err, plugin_lines=current_lines,
+                    st,
+                    plugin_installing=False,
+                    plugin_error=err,
+                    plugin_lines=current_lines,
                 )
         else:
             self._state = dataclasses.replace(st, plugin_lines=current_lines)
@@ -4125,7 +4170,11 @@ class TaxonomyViewer:
                 pass
 
         def _put(row: int, text: str, bold: bool = False, hl: bool = False) -> None:
-            a = (curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD) if hl else (attr | (curses.A_BOLD if bold else 0))
+            a = (
+                (curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD)
+                if hl
+                else (attr | (curses.A_BOLD if bold else 0))
+            )
             try:
                 stdscr.addstr(y0 + row, x0 + 2, text[: box_w - 4], a)
             except curses.error:
@@ -4135,11 +4184,13 @@ class TaxonomyViewer:
             a = attr | (curses.A_BOLD if bold else 0)
             pad = max(0, (box_w - len(text)) // 2)
             try:
-                stdscr.addstr(y0 + row, x0 + pad, text[: box_w], a)
+                stdscr.addstr(y0 + row, x0 + pad, text[:box_w], a)
             except curses.error:
                 pass
 
-        def _draw_list(items: list[tuple[str, str]], cursor: int, scroll: int, row_start: int) -> None:
+        def _draw_list(
+            items: list[tuple[str, str]], cursor: int, scroll: int, row_start: int
+        ) -> None:
             for i in range(list_h):
                 idx = scroll + i
                 if idx >= len(items) or row_start + i >= box_h - 2:
@@ -4167,15 +4218,24 @@ class TaxonomyViewer:
                 _put(7, "  pip install llm-gemini      # Gemini")
             else:
                 for i, lbl in enumerate(modes):
-                    _put(4 + i, ("▶ " if i == st.provider_cursor else "  ") + lbl,
-                         hl=(i == st.provider_cursor))
+                    _put(
+                        4 + i,
+                        ("▶ " if i == st.provider_cursor else "  ") + lbl,
+                        hl=(i == st.provider_cursor),
+                    )
             _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] cancel")
 
         elif st.step == "provider":
-            mode_label = "Online providers  (API key required)" if st.mode == "online" else "Local / offline providers"
+            mode_label = (
+                "Online providers  (API key required)"
+                if st.mode == "online"
+                else "Local / offline providers"
+            )
             _center(0, f" {mode_label} ", bold=True)
             # Build items: providers + install entry
-            items = [(p[0], p[1]) for p in providers] + [("__install__", "+ Install more providers…")]
+            items = [(p[0], p[1]) for p in providers] + [
+                ("__install__", "+ Install more providers…")
+            ]
             _draw_list(items, st.provider_cursor, st.provider_scroll, 2)
             if st.error:
                 _put(box_h - 3, st.error)
@@ -4185,7 +4245,7 @@ class TaxonomyViewer:
             if st.plugin_installing:
                 spinner = self._SPINNER[self._install_spinner % 4]
                 _center(0, f" {spinner}  Installing {st.selected_plugin_label}… ", bold=True)
-                recent = st.plugin_lines[-(list_h - 4):]
+                recent = st.plugin_lines[-(list_h - 4) :]
                 for i, line in enumerate(recent):
                     _put(2 + i, line)
                 bar_w = box_w - 6
@@ -4198,13 +4258,15 @@ class TaxonomyViewer:
                 _center(box_h - 2, "[Enter / Esc] back to provider list")
             elif st.plugin_error:
                 _center(0, " Installation failed ", bold=True)
-                _put(2, st.plugin_error[:box_w - 4])
+                _put(2, st.plugin_error[: box_w - 4])
                 _center(box_h - 2, "[Esc] back")
             else:
                 _center(0, " Install a provider plugin ", bold=True)
                 plugins = st.available_plugins
                 if plugins:
-                    _draw_list([(p[0], p[1]) for p in plugins], st.plugin_cursor, st.plugin_scroll, 2)
+                    _draw_list(
+                        [(p[0], p[1]) for p in plugins], st.plugin_cursor, st.plugin_scroll, 2
+                    )
                 else:
                     _put(3, "All known providers are already installed.")
                 _center(box_h - 2, "[↑↓] choose    [Enter] install    [Esc] back")
@@ -4248,6 +4310,7 @@ class TaxonomyViewer:
 
     def _on_ai_setup(self, key: int) -> None:  # noqa: C901
         from . import ai as _ai
+
         if not isinstance(self._state, AiSetupState):
             return
         st = self._state
@@ -4255,19 +4318,27 @@ class TaxonomyViewer:
 
         def _s(**kw: object) -> AiSetupState:
             d = {
-                "step": st.step, "mode": st.mode,
+                "step": st.step,
+                "mode": st.mode,
                 "online_providers": st.online_providers,
                 "offline_providers": st.offline_providers,
-                "provider_cursor": st.provider_cursor, "provider_scroll": st.provider_scroll,
-                "model_cursor": st.model_cursor, "model_scroll": st.model_scroll,
+                "provider_cursor": st.provider_cursor,
+                "provider_scroll": st.provider_scroll,
+                "model_cursor": st.model_cursor,
+                "model_scroll": st.model_scroll,
                 "selected_provider_id": st.selected_provider_id,
                 "selected_model_id": st.selected_model_id,
-                "key_name": st.key_name, "buffer": st.buffer, "pos": st.pos,
-                "error": st.error, "pending_action": st.pending_action,
+                "key_name": st.key_name,
+                "buffer": st.buffer,
+                "pos": st.pos,
+                "error": st.error,
+                "pending_action": st.pending_action,
                 "available_plugins": st.available_plugins,
-                "plugin_cursor": st.plugin_cursor, "plugin_scroll": st.plugin_scroll,
+                "plugin_cursor": st.plugin_cursor,
+                "plugin_scroll": st.plugin_scroll,
                 "plugin_installing": st.plugin_installing,
-                "plugin_done": st.plugin_done, "plugin_error": st.plugin_error,
+                "plugin_done": st.plugin_done,
+                "plugin_error": st.plugin_error,
                 "plugin_lines": st.plugin_lines,
                 "selected_plugin_pkg": st.selected_plugin_pkg,
                 "selected_plugin_label": st.selected_plugin_label,
@@ -4299,7 +4370,9 @@ class TaxonomyViewer:
                     self._state = _s(step="done", mode="copypaste")
                 else:
                     _ai.save_copypaste(False)
-                    self._state = _s(step="provider", mode=mode, provider_cursor=0, provider_scroll=0)
+                    self._state = _s(
+                        step="provider", mode=mode, provider_cursor=0, provider_scroll=0
+                    )
 
         elif st.step == "provider":
             # Items = providers + install entry
@@ -4316,35 +4389,55 @@ class TaxonomyViewer:
             elif key in (ord("\n"), ord("\r"), 343):
                 if st.provider_cursor == install_idx:
                     from . import ai as _ai_mod
+
                     installed = {p[0] for p in st.online_providers + st.offline_providers}
                     plugins = _ai_mod.available_plugins(installed)
-                    self._state = _s(step="install_plugin", available_plugins=plugins,
-                                     plugin_cursor=0, plugin_scroll=0,
-                                     plugin_installing=False, plugin_done=False,
-                                     plugin_error="", plugin_lines=[],
-                                     selected_plugin_pkg="", selected_plugin_label="")
+                    self._state = _s(
+                        step="install_plugin",
+                        available_plugins=plugins,
+                        plugin_cursor=0,
+                        plugin_scroll=0,
+                        plugin_installing=False,
+                        plugin_done=False,
+                        plugin_error="",
+                        plugin_lines=[],
+                        selected_plugin_pkg="",
+                        selected_plugin_label="",
+                    )
                 else:
                     pid, _, _ = providers[st.provider_cursor]
-                    self._state = _s(step="model", selected_provider_id=pid,
-                        model_cursor=0, model_scroll=0, error="")
+                    self._state = _s(
+                        step="model",
+                        selected_provider_id=pid,
+                        model_cursor=0,
+                        model_scroll=0,
+                        error="",
+                    )
 
         elif st.step == "install_plugin":
             if st.plugin_done:
                 if key in (27, ord("\n"), ord("\r"), 343):
                     from . import ai as _ai_mod
+
                     online, offline = _ai_mod.discover_models()
                     self._state = _s(
                         step="provider",
-                        online_providers=online, offline_providers=offline,
-                        provider_cursor=0, provider_scroll=0,
-                        plugin_installing=False, plugin_done=False,
-                        plugin_error="", plugin_lines=[],
-                        selected_plugin_pkg="", selected_plugin_label="",
+                        online_providers=online,
+                        offline_providers=offline,
+                        provider_cursor=0,
+                        provider_scroll=0,
+                        plugin_installing=False,
+                        plugin_done=False,
+                        plugin_error="",
+                        plugin_lines=[],
+                        selected_plugin_pkg="",
+                        selected_plugin_label="",
                     )
             elif st.plugin_error:
                 if key == 27:
-                    self._state = _s(plugin_error="",
-                                     selected_plugin_pkg="", selected_plugin_label="")
+                    self._state = _s(
+                        plugin_error="", selected_plugin_pkg="", selected_plugin_label=""
+                    )
             elif not st.plugin_installing:
                 plugins = st.available_plugins
                 n = len(plugins)
@@ -4363,9 +4456,12 @@ class TaxonomyViewer:
                     self._install_returncode = None
                     self._install_spinner = 0
                     self._install_thread = None
-                    self._state = _s(plugin_installing=True,
-                                     selected_plugin_pkg=pkg, selected_plugin_label=lbl,
-                                     plugin_lines=[])
+                    self._state = _s(
+                        plugin_installing=True,
+                        selected_plugin_pkg=pkg,
+                        selected_plugin_label=lbl,
+                        plugin_lines=[],
+                    )
 
         elif st.step == "model":
             provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
@@ -4383,8 +4479,14 @@ class TaxonomyViewer:
                 mid = models[st.model_cursor][0]
                 key_name = _ai.model_needs_key(mid)
                 if key_name:
-                    self._state = _s(step="key", selected_model_id=mid,
-                        key_name=key_name, buffer="", pos=0, error="")
+                    self._state = _s(
+                        step="key",
+                        selected_model_id=mid,
+                        key_name=key_name,
+                        buffer="",
+                        pos=0,
+                        error="",
+                    )
                 else:
                     _ai.save_model(mid)
                     self._state = _s(step="done", selected_model_id=mid)
