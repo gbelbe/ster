@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .model import LabelType, Taxonomy
 
@@ -44,6 +44,12 @@ ISSUE_DISPLAY_NAMES: dict[str, str] = {
     "circular_hierarchy": "Circular hierarchy",
     "alt_same_as_pref": "altLabel=prefLabel",
     "duplicate_pref_label": "Duplicate label",
+    "missing_in_scheme": "Not in any scheme",
+    "broken_exact_match": "Broken exactMatch",
+    "broken_broad_match": "Broken broadMatch",
+    "broken_narrow_match": "Broken narrowMatch",
+    "broken_related_match": "Broken relatedMatch",
+    "broken_close_match": "Broken closeMatch",
 }
 
 
@@ -79,6 +85,7 @@ class TaxonomyIssue:
     severity: str  # SEVERITY_ERROR | SEVERITY_WARNING | SEVERITY_INFO
     concept_uri: str | None  # None for scheme-level issues
     message: str  # human-readable description (shown in the detail panel)
+    extra: dict = field(default_factory=dict)  # e.g. {"attr": "exact_match", "target_uri": "..."}
 
 
 @dataclass
@@ -209,6 +216,11 @@ def _compute_completions(taxonomy: Taxonomy, concept_uris: list[str]) -> list[Pr
     if scope_by_lang:
         result.append(PropertyCompletion("scope_note", "scopeNote", total, scope_by_lang))
     return result
+
+
+def compute_completions(taxonomy: Taxonomy, concept_uris: list[str]) -> list[PropertyCompletion]:
+    """Public alias for _compute_completions."""
+    return _compute_completions(taxonomy, concept_uris)
 
 
 # ── Issue detectors ───────────────────────────────────────────────────────────
@@ -433,19 +445,74 @@ def _detect_duplicate_pref_label(
     return issues
 
 
+def _detect_missing_in_scheme(
+    taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
+) -> list[TaxonomyIssue]:
+    """Flag concepts that are not reachable from any scheme (truly orphaned).
+
+    Runs only for the first scheme to avoid duplicate reporting across schemes.
+    """
+    all_scheme_uris = list(taxonomy.schemes.keys())
+    if not all_scheme_uris or all_scheme_uris[0] != scheme_uri:
+        return []
+    reachable: set[str] = set()
+    for s_uri in taxonomy.schemes:
+        reachable.update(get_scheme_concepts(taxonomy, s_uri))
+    issues = []
+    for uri, concept in taxonomy.concepts.items():
+        if uri not in reachable:
+            h = taxonomy.uri_to_handle(uri) or concept.local_name
+            issues.append(
+                TaxonomyIssue("missing_in_scheme", SEVERITY_ERROR, uri, f"Not in any scheme  [{h}]")
+            )
+    return issues
+
+
+_MAPPING_ATTRS: list[tuple[str, str, str]] = [
+    ("exact_match", "exactMatch", "broken_exact_match"),
+    ("broad_match", "broadMatch", "broken_broad_match"),
+    ("narrow_match", "narrowMatch", "broken_narrow_match"),
+    ("related_match", "relatedMatch", "broken_related_match"),
+    ("close_match", "closeMatch", "broken_close_match"),
+]
+
+
+def _detect_broken_mappings(
+    taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
+) -> list[TaxonomyIssue]:
+    """Warn when a mapping property points to a URI not present in the merged taxonomy."""
+    issues = []
+    for uri in concept_uris:
+        c = taxonomy.concepts.get(uri)
+        if not c:
+            continue
+        h = taxonomy.uri_to_handle(uri) or c.local_name
+        for attr, display, issue_key in _MAPPING_ATTRS:
+            for target_uri in getattr(c, attr, []):
+                if target_uri not in taxonomy.concepts:
+                    issues.append(
+                        TaxonomyIssue(
+                            issue_key=issue_key,
+                            severity=SEVERITY_WARNING,
+                            concept_uri=uri,
+                            message=f"Broken {display}  [{h}]",
+                            extra={"attr": attr, "target_uri": target_uri},
+                        )
+                    )
+    return issues
+
+
 # ── Registry — add new detectors here only ────────────────────────────────────
 
 ISSUE_DETECTORS: list[IssueDetector] = [
-    _detect_broken_top_concepts,  # ERROR — structural integrity
-    _detect_broken_broader,  # ERROR — structural integrity
-    _detect_circular_hierarchy,  # ERROR — structural integrity
-    _detect_alt_same_as_pref,  # ERROR — SKOS spec violation
+    _detect_broken_top_concepts,  # ERROR — missing/broken hasTopConcept
+    _detect_missing_in_scheme,  # ERROR — concept not reachable from any scheme
+    _detect_broken_broader,  # ERROR — broken skos:broader link
+    _detect_circular_hierarchy,  # ERROR — skos:narrower cycle
     _detect_missing_pref_label,  # ERROR — mandatory SKOS property
-    _detect_broken_narrower,  # WARNING — data quality
-    _detect_duplicate_pref_label,  # WARNING — ambiguity
-    _detect_missing_pref_label_lang,  # WARNING — multilingual completeness
-    _detect_missing_definition,  # INFO — documentation
-    _detect_missing_scope_note,  # INFO — documentation
+    _detect_broken_narrower,  # WARNING — broken skos:narrower link
+    _detect_broken_mappings,  # WARNING — broken cross-scheme mapping links
+    _detect_duplicate_pref_label,  # WARNING — duplicate prefLabel same language
 ]
 
 
@@ -505,6 +572,7 @@ def scheme_analysis_to_dict(a: SchemeAnalysis) -> dict:
                 "severity": i.severity,
                 "concept_uri": i.concept_uri,
                 "message": i.message,
+                "extra": i.extra,
             }
             for i in a.issues
         ],
@@ -537,6 +605,7 @@ def scheme_analysis_from_dict(d: dict) -> SchemeAnalysis:
                 severity=i["severity"],
                 concept_uri=i.get("concept_uri"),
                 message=i["message"],
+                extra=i.get("extra", {}),
             )
             for i in d.get("issues", [])
         ],

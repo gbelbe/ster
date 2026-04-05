@@ -39,6 +39,19 @@ Browse, create, and edit concepts in a full-screen TUI — no GUI, no database, 
 - Detail panel: view and edit all SKOS fields (labels, definitions, scope notes, related links…)
 - Fold / unfold subtrees; shows hidden-concept count
 - Visual `⇔` indicator for concepts that carry cross-scheme mapping links
+- Scheme dashboard: completion rates, quality issues, and concept counts at a glance
+
+### AI-assisted concept creation
+When adding a concept (`+` key), choose between entering a name manually or letting AI suggest up to 20 ordered concept names:
+
+- **AI Auto Suggest** — the AI acts as a professional taxonomist who knows your domain.
+  It proposes names ranked by relevance, you pick one (or ask for more), and the form is pre-filled.
+- Before generating, ster shows you the exact prompt so you can review and adjust it.
+- Supports any LLM via the [`llm`](https://llm.datasette.io/) library (online or local/offline models).
+- **Copy-paste mode** — no local LLM needed: ster displays the prompt, copies it to the clipboard,
+  and you paste the model's response from any web AI (ChatGPT, Claude, Gemini…).
+
+Configure AI from the **⚙ Configure AI** menu entry (sets model, provider, and copy-paste mode).
 
 ### Multi-file workspace
 - Open several `.ttl` files at once and see a merged taxonomy view
@@ -60,7 +73,6 @@ Browse, create, and edit concepts in a full-screen TUI — no GUI, no database, 
 - Available from the main menu or `ster export`
 
 ### Other
-- Step-by-step **init wizard** (`ster init`)
 - Auto-detection of taxonomy files in the current directory
 - Round-trip safe: reads and writes `.ttl`, `.rdf`, `.jsonld`
 - SKOS integrity validation
@@ -75,6 +87,15 @@ Browse, create, and edit concepts in a full-screen TUI — no GUI, no database, 
 pip install ster
 ```
 
+### With AI features
+
+```bash
+pip install "ster[ai]"
+```
+
+Then configure your model from the main menu: **⚙ Configure AI**.
+No model needed if you use copy-paste mode.
+
 ### With HTML export
 
 ```bash
@@ -86,9 +107,10 @@ pip install "ster[html]"
 ```bash
 git clone https://github.com/gbelbe/ster.git
 cd ster
-pip install -e .          # core only
-pip install -e ".[html]"  # with HTML export
-pip install -e ".[dev]"   # with test suite
+pip install -e .           # core only
+pip install -e ".[ai]"     # with AI features
+pip install -e ".[html]"   # with HTML export
+pip install -e ".[dev]"    # with test suite
 ```
 
 ---
@@ -100,11 +122,12 @@ pip install -e ".[dev]"   # with test suite
 | core | `rdflib>=7.0` | RDF parsing and serialisation |
 | core | `typer[all]>=0.12` | CLI framework |
 | core | `rich>=13.0` | Terminal rendering, prompts, tables |
+| `[ai]` | `llm>=0.19` | LLM abstraction layer (online & offline models) |
 | `[html]` | `pylode>=3.0` | HTML generation from SKOS (VocPub profile) |
 | `[dev]` | `pytest>=8.0` | Test suite |
 | `[dev]` | `pytest-cov>=5.0` | Coverage reporting |
 
-pyLODE is **not** installed by default. When you trigger an HTML export, ster will offer to install it automatically.
+Both `llm` and `pylode` are **not** installed by default. When you trigger a feature that needs them, ster will offer to install the package automatically.
 
 ---
 
@@ -116,18 +139,18 @@ pyLODE is **not** installed by default. When you trigger an HTML export, ster wi
 ster
 ```
 
-The home screen lists all taxonomy files in the current directory. Use arrow keys to check files, then press **Enter** to open them.
+The home screen lists all taxonomy files in the current directory as a read-only ✓ display.
+Use arrow keys to navigate the action menu, then press **Enter** to confirm.
 
 ```
-  ┌─────────────────────────────────────────────────────┐
-  │  [ ] equipement.ttl          7 concepts             │
-  │  [x] windvane-taxonomy.ttl  23 concepts             │
-  └─────────────────────────────────────────────────────┘
-  ↵  Open checked files
-  ⎇  Browse git history
-  🌐 Generate webpage
-  +  Create new taxonomy
-  ✕  Quit
+       ✓  equipement.ttl
+       ✓  windvane-taxonomy.ttl
+
+ ▶  1  ↵  Open Tree View
+    2  ⎇  Browse git history
+    3  🌐 Generate webpage
+    4  ⚙  Configure AI
+    5  ✕  Quit
 ```
 
 ### Keyboard shortcuts (TUI)
@@ -136,8 +159,7 @@ The home screen lists all taxonomy files in the current directory. Use arrow key
 |---|---|
 | `↑` `↓` | Navigate tree / fields |
 | `Enter` | Expand/collapse node or open detail |
-| `a` | Add a child concept |
-| `A` | Add a top-level concept |
+| `+` | Add concept — opens a menu: enter name manually or use AI Auto Suggest |
 | `d` | Delete selected concept |
 | `e` | Edit selected field in detail panel |
 | `m` | Add a mapping link to another concept |
@@ -145,13 +167,16 @@ The home screen lists all taxonomy files in the current directory. Use arrow key
 | `?` | Help screen |
 | `q` / `Esc` | Back / quit |
 
-### Create a new taxonomy
+### AI Auto Suggest
 
-```bash
-ster init my-taxonomy.ttl
-```
+Press `+` on any concept or scheme, then select **✦ AI Auto Suggest**:
 
-The wizard walks you through name, description, base URI, languages, and author.
+1. ster renders the prompt and shows it for review — edit `prompts.py` to customise the wording
+2. Press **Enter** to generate; the AI suggests up to 20 concept names ranked by relevance
+3. Navigate the list and press **Enter** to pick a name (pre-fills the creation form)
+4. Select **Suggest more** to get a fresh batch with deduplication
+
+In copy-paste mode the prompt is displayed and copied to the clipboard; paste the model's response back and press **Enter** on an empty line.
 
 ### Export to HTML
 
@@ -181,16 +206,20 @@ ster/
 ├── workspace.py     — Multi-file workspace: merged view + per-file saves
 ├── workspace_ops.py — Cross-file mapping operations
 ├── nav.py           — Full-screen TUI (curses): tree, detail, inline edit
-├── cli.py           — Typer entry-points (ster, ster init, ster export…)
+├── nav_state.py     — Typed state machine: one dataclass per viewer mode
+├── nav_logic.py     — Pure functions: tree flattening, field builders
+├── cli.py           — Typer entry-points (ster, ster export…)
+├── ai.py            — LLM abstraction: model routing, copy-paste mode
+├── prompts.py       — All AI prompt templates (string.Template)
 ├── html_export.py   — HTML generation via pyLODE VocPub
 ├── git_manager.py   — Git staging, commit, push
 ├── git_log.py       — Git history browser (TUI)
-├── wizard.py        — Init wizard
 ├── handles.py       — Short handle generation from camelCase URIs
 └── validator.py     — SKOS integrity checks
 ```
 
 Each layer depends only on the layers below it, keeping every module independently testable.
+AI prompts live in `prompts.py` as plain `string.Template` objects — edit them freely without touching any logic.
 
 ---
 

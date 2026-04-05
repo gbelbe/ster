@@ -13,7 +13,9 @@ from ster.nav import (
     _children,
     _count_descendants,
     _parent_uri,
+    build_concept_detail,
     build_detail_fields,
+    build_scheme_detail,
     build_scheme_fields,
     flatten_tree,
 )
@@ -251,7 +253,7 @@ def test_build_detail_fields_includes_definition(simple_taxonomy):
 
 def test_build_detail_fields_narrower_read_only(simple_taxonomy):
     fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
-    narrower_fields = [f for f in fields if "narrower" in f.key]
+    narrower_fields = [f for f in fields if f.key.startswith("narrower:")]
     assert len(narrower_fields) == 2
     assert all(not f.editable for f in narrower_fields)
 
@@ -262,33 +264,78 @@ def test_viewer_initial_cursor(viewer):
     assert isinstance(viewer._state, WelcomeState)
 
 
+def test_run_flushes_stdin_before_and_after_curses(viewer, monkeypatch):
+    """stdin is flushed both before curses starts and after it exits.
+
+    Regression: pressing Escape twice quickly in the tree view caused the second
+    Escape to survive into the next viewer launch and exit it immediately.
+
+    The fix requires two flushes:
+    - Before curses: discards stale bytes left by the home-screen picker.
+    - After curses (in finally): discards bytes that ncurses pushes back to the
+      OS input queue when endwin() is called on exit.
+    """
+    termios = pytest.importorskip("termios")
+    import ster.nav as nav_mod
+
+    class _FakeTTY:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 0
+
+    monkeypatch.setattr(nav_mod.sys, "stdin", _FakeTTY())
+    monkeypatch.setattr(nav_mod.sys, "stdout", _FakeTTY())
+
+    flush_calls: list[int] = []
+    wrapper_call_count: list[int] = [0]
+
+    def _fake_wrapper(fn):
+        wrapper_call_count[0] += 1
+        # Record how many flushes happened before curses
+        flush_calls.append("curses_ran")
+
+    monkeypatch.setattr(termios, "tcflush", lambda fd, queue: flush_calls.append(queue))
+    monkeypatch.setattr(nav_mod.curses, "wrapper", _fake_wrapper)
+
+    viewer.run()
+
+    # At least one TCIFLUSH before curses and one after
+    curses_idx = flush_calls.index("curses_ran")
+    before = flush_calls[:curses_idx]
+    after = flush_calls[curses_idx + 1 :]
+    assert termios.TCIFLUSH in before, "stdin must be flushed before curses starts"
+    assert termios.TCIFLUSH in after, "stdin must be flushed after curses exits (endwin regression)"
+
+
 def test_viewer_open_detail(viewer, simple_taxonomy):
-    # flat[0] is now the action row; use flat[1] (scheme row) instead
-    viewer._cursor = 1
+    # flat[0] is the scheme row
+    viewer._cursor = 0
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
-    assert viewer._detail_uri == viewer._flat[1].uri
+    assert viewer._detail_uri == viewer._flat[0].uri
     assert len(viewer._detail_fields) > 0
 
 
 def test_viewer_back_from_detail(viewer):
     viewer._state = TreeState()  # skip welcome for this test
-    viewer._cursor = 1  # skip action row at index 0
+    viewer._cursor = 0  # scheme row
     viewer._open_detail()
     viewer._back()
     assert isinstance(viewer._state, TreeState)
 
 
 def test_viewer_history_preserves_cursor(viewer):
-    viewer._cursor = 2
+    viewer._cursor = 1
     viewer._open_detail()
     viewer._back()
-    assert viewer._cursor == 2
+    assert viewer._cursor == 1
 
 
 def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
-    # Position on Top concept's pref:en field (cursor=2: action at 0, scheme at 1, Top at 2)
-    viewer._cursor = 2
+    # Position on Top concept's pref:en field (scheme at 0, Top at 1)
+    viewer._cursor = 1
     viewer._open_detail()
     fields = viewer._detail_fields
     pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
@@ -376,13 +423,6 @@ def test_build_scheme_fields_bad_uri(simple_taxonomy):
     assert fields == []
 
 
-def test_build_scheme_fields_has_add_scheme_action(simple_taxonomy):
-    """The 'Add new scheme' action field is present."""
-    fields = build_scheme_fields(simple_taxonomy, "en")
-    actions = [f for f in fields if f.meta.get("action") == "add_scheme"]
-    assert len(actions) == 1
-
-
 def test_build_scheme_fields_display_lang_is_first(simple_taxonomy):
     """display_lang is the very first field."""
     fields = build_scheme_fields(simple_taxonomy, "en")
@@ -393,8 +433,8 @@ def test_build_scheme_fields_display_lang_is_first(simple_taxonomy):
 
 
 def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
-    """Opening the scheme row (index 1, after action row at 0) loads scheme fields."""
-    viewer._cursor = 1  # scheme row (action row is at index 0)
+    """Opening the scheme row (index 0) loads scheme fields."""
+    viewer._cursor = 0  # scheme row
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
     assert viewer._detail_uri == BASE + "Scheme"
@@ -403,7 +443,7 @@ def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
 
 def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
     """Editing a scheme_title field updates the scheme label."""
-    viewer._cursor = 1  # scheme row (action row is at index 0)
+    viewer._cursor = 0  # scheme row
     viewer._open_detail()
     title_idx = next(
         i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "scheme_title"
@@ -453,7 +493,7 @@ def test_build_scheme_fields_uri_type(simple_taxonomy):
 
 
 def test_add_top_concept_action_enters_create_mode(viewer, simple_taxonomy):
-    """add_top_concept action from scheme detail enters CREATE mode."""
+    """add_top_concept action from scheme detail enters CREATE mode (choose step)."""
     scheme_uri = BASE + "Scheme"
     scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == scheme_uri)
     viewer._cursor = scheme_idx
@@ -462,7 +502,7 @@ def test_add_top_concept_action_enters_create_mode(viewer, simple_taxonomy):
     viewer._trigger_action("add_top_concept")
     assert isinstance(viewer._state, CreateState)
     assert viewer._state.parent_uri == scheme_uri
-    assert len(viewer._state.fields) > 0
+    assert viewer._state.step == "choose"
 
 
 def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
@@ -473,8 +513,14 @@ def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
-    assert isinstance(viewer._state, CreateState)
-    for f in viewer._state.fields:
+    # Simulate user choosing "manual entry"
+    cs = viewer._state
+    cs.ai_cursor = 0
+    viewer._on_create_choose(ord("\n"), cs)
+    assert cs.step == "form"
+    assert len(cs.fields) > 0
+
+    for f in cs.fields:
         if f.meta.get("field") == "name":
             f.value = "BrandNew"
 
@@ -500,8 +546,13 @@ def test_add_top_concept_uses_scheme_base_uri(viewer, simple_taxonomy):
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
-    assert isinstance(viewer._state, CreateState)
-    for f in viewer._state.fields:
+    # Simulate user choosing "manual entry"
+    cs = viewer._state
+    cs.ai_cursor = 0
+    viewer._on_create_choose(ord("\n"), cs)
+    assert cs.step == "form"
+
+    for f in cs.fields:
         if f.meta.get("field") == "name":
             f.value = "AlphaTest"
 
@@ -831,17 +882,9 @@ def test_tree_footer_contains_space_fold_hint(viewer, simple_taxonomy):
 # ── action row (➕ Add new scheme) in tree ────────────────────────────────────
 
 
-def test_flat_first_row_is_action(viewer):
-    """After _rebuild(), flat[0] is the '➕ Add new scheme' action row."""
-    from ster.nav import _ACTION_ADD_SCHEME
-
-    assert viewer._flat[0].is_action
-    assert viewer._flat[0].uri == _ACTION_ADD_SCHEME
-
-
-def test_flat_second_row_is_scheme(viewer, simple_taxonomy):
-    """After _rebuild(), flat[1] is the scheme row (not action)."""
-    assert viewer._flat[1].is_scheme
+def test_flat_first_row_is_scheme(viewer, simple_taxonomy):
+    """After _rebuild(), flat[0] is the scheme row."""
+    assert viewer._flat[0].is_scheme
 
 
 def test_tree_footer_add_hint(viewer):
@@ -849,19 +892,6 @@ def test_tree_footer_add_hint(viewer):
     footer = viewer._tree_footer(24)
     assert "+: add" in footer or "+:" in footer
 
-
-def test_enter_on_action_row_triggers_scheme_create(viewer):
-    """Pressing Enter on action row (cursor=0) launches SCHEME_CREATE mode."""
-    viewer._cursor = 0
-    viewer._on_tree(ord("\n"), 24)
-    assert isinstance(viewer._state, SchemeCreateState)
-
-
-def test_plus_on_action_row_triggers_scheme_create(viewer):
-    """Pressing + on action row launches SCHEME_CREATE mode."""
-    viewer._cursor = 0
-    viewer._on_tree(ord("+"), 24)
-    assert isinstance(viewer._state, SchemeCreateState)
 
 
 def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
@@ -875,7 +905,7 @@ def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
 
 def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
     """Pressing + on a concept row launches CREATE mode for a narrower concept."""
-    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
+    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_file)
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
     assert isinstance(viewer._state, CreateState)
@@ -902,7 +932,7 @@ def test_scheme_base_uri_field_editable(simple_taxonomy):
 
 def test_commit_scheme_base_uri_edit(viewer, simple_taxonomy):
     """Editing base_uri field updates scheme.base_uri."""
-    viewer._cursor = 1  # scheme row
+    viewer._cursor = 0  # scheme row
     viewer._open_detail()
     base_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "base_uri")
     viewer._field_cursor = base_idx
@@ -930,7 +960,7 @@ def test_add_top_concept_display_uses_emoji(simple_taxonomy):
 def test_cancel_create_from_tree_returns_to_tree(viewer, simple_taxonomy):
     """Esc from CREATE mode entered via '+' from the tree returns to TREE, not DETAIL."""
     # Navigate to a concept row and press +
-    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_action)
+    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_file)
     viewer._state = TreeState()
     viewer._cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
@@ -941,10 +971,9 @@ def test_cancel_create_from_tree_returns_to_tree(viewer, simple_taxonomy):
 
 
 def test_cancel_scheme_create_from_tree_returns_to_tree(viewer):
-    """Esc from SCHEME_CREATE entered via action row returns to TREE, not DETAIL."""
+    """Esc from SCHEME_CREATE entered from tree returns to TREE, not DETAIL."""
     viewer._state = TreeState()
-    viewer._cursor = 0  # action row
-    viewer._on_tree(ord("\n"), 24)
+    viewer._trigger_action("add_scheme")
     assert isinstance(viewer._state, SchemeCreateState)
     # Esc should go back to TREE
     viewer._on_scheme_create(27, 24)
@@ -968,9 +997,121 @@ def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
 
 def test_scheme_uri_not_editable_in_detail(viewer, simple_taxonomy):
     """Pressing Enter on the URI field in scheme detail must not enter EDIT mode."""
-    viewer._cursor = 1  # scheme row
+    viewer._cursor = 0  # scheme row
     viewer._open_detail()
     uri_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "scheme_uri")
     viewer._field_cursor = uri_idx
     viewer._on_detail(ord("\n"), 24)
     assert isinstance(viewer._state, DetailState)  # not EDIT
+
+
+# ── new build_concept_detail / build_scheme_detail tests ──────────────────────
+
+
+def test_build_concept_detail_has_stats_for_concept_with_narrowers(simple_taxonomy):
+    """Stats section appears when concept has narrowers."""
+    fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert "stat:direct_narrower" in keys
+    assert "stat:total_descendants" in keys
+
+
+def test_build_concept_detail_no_stats_for_leaf(simple_taxonomy):
+    """Overview/Completion sections absent for leaf concepts."""
+    fields = build_concept_detail(simple_taxonomy, BASE + "Child2", "en")
+    keys = [f.key for f in fields]
+    assert "stat:direct_narrower" not in keys
+    assert not any(k.startswith("ccomp:") for k in keys)
+
+
+def test_build_concept_detail_completion_for_concept_with_narrowers(simple_taxonomy):
+    """Completion bars appear for concepts that have narrowers."""
+    # Top has Child1 (with Grandchild) and Child2, all have prefLabel en + fr
+    fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert any(k.startswith("ccomp:pref_label:") for k in keys)
+
+
+def test_build_concept_detail_overview_languages(simple_taxonomy):
+    """Overview section lists languages found in subtree prefLabels."""
+    fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
+    lang_field = next((f for f in fields if f.key == "stat:subtree_langs"), None)
+    assert lang_field is not None
+    assert "en" in lang_field.value
+    assert "fr" in lang_field.value
+
+
+def test_build_concept_detail_has_scope_note_if_present(simple_taxonomy):
+    """scopeNote rows appear if the concept has scope_notes."""
+    from ster.model import Definition
+    simple_taxonomy.concepts[BASE + "Top"].scope_notes.append(Definition(lang="en", value="A scope note."))
+    fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
+    keys = [f.key for f in fields]
+    assert "scope:en" in keys
+
+
+def test_build_concept_detail_add_related_action_present(simple_taxonomy):
+    """Action to add related concept is always present in Actions section."""
+    fields = build_concept_detail(simple_taxonomy, BASE + "Top", "en")
+    actions = [f.meta.get("action") for f in fields]
+    assert "add_related" in actions
+
+
+def test_build_scheme_detail_has_top_concepts(simple_taxonomy):
+    """Scheme detail shows top concepts as navigable rows."""
+    scheme_uri = BASE + "Scheme"
+    fields = build_scheme_detail(simple_taxonomy, scheme_uri, "en")
+    tc_fields = [f for f in fields if f.key.startswith("tc:")]
+    assert len(tc_fields) > 0
+    assert all(f.meta.get("nav") for f in tc_fields)
+
+
+def test_build_scheme_detail_top_concept_of_is_navigable(simple_taxonomy):
+    """topConceptOf field on a concept is navigable (→ scheme detail)."""
+    top_uri = BASE + "Top"
+    fields = build_concept_detail(simple_taxonomy, top_uri, "en")
+    tco = next((f for f in fields if f.key == "top_concept_of"), None)
+    assert tco is not None
+    assert tco.meta.get("nav") is True
+
+
+# ── AI feature ────────────────────────────────────────────────────────────────
+
+
+def test_ai_is_available_returns_bool():
+    """ai.is_available() always returns a bool (True if llm is installed)."""
+    from ster import ai
+    result = ai.is_available()
+    assert isinstance(result, bool)
+
+
+def test_ai_is_configured_false_without_config(tmp_path, monkeypatch):
+    """ai.is_configured() returns False when no model has been saved."""
+    from ster import ai
+    monkeypatch.setattr(ai, "_CONFIG_PATH", tmp_path / "ai.json")
+    assert ai.is_configured() is False
+
+
+def test_ai_get_saved_model_none_without_config(tmp_path, monkeypatch):
+    """ai.get_saved_model() returns None when config file is absent."""
+    from ster import ai
+    monkeypatch.setattr(ai, "_CONFIG_PATH", tmp_path / "nonexistent.json")
+    assert ai.get_saved_model() is None
+
+
+def test_ai_save_and_load_model(tmp_path, monkeypatch):
+    """Saving a model ID persists it and get_saved_model returns it."""
+    from ster import ai
+    config_path = tmp_path / "ai.json"
+    monkeypatch.setattr(ai, "_CONFIG_PATH", config_path)
+    ai.save_model("gpt-4o")
+    assert ai.get_saved_model() == "gpt-4o"
+    assert config_path.exists()
+
+
+def test_ai_discover_models_returns_tuple():
+    """ai.discover_models() always returns (list, list) even if llm not installed."""
+    from ster import ai
+    online, offline = ai.discover_models()
+    assert isinstance(online, list)
+    assert isinstance(offline, list)

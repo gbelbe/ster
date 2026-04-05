@@ -14,6 +14,7 @@ import curses
 import json
 import re
 import sys
+import traceback
 from cmd import Cmd
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from .model import Definition, Label, LabelType, Taxonomy
 from .nav_logic import (  # noqa: F401
     _ACTION_ADD_SCHEME,
     _FILE_URI_PREFIX,
+    _GLOBAL_URI,
     DetailField,
     TreeLine,
     _available_langs,
@@ -38,12 +40,18 @@ from .nav_logic import (  # noqa: F401
     _flatten_workspace,
     _parent_uri,
     _sep,
+    build_concept_detail,
     build_detail_fields,
+    build_file_fields,
+    build_global_fields,
     build_scheme_dashboard_fields,
+    build_scheme_detail,
     build_scheme_fields,
     flatten_tree,
 )
 from .nav_state import (
+    AiInstallState,
+    AiSetupState,
     ConfirmDeleteState,
     CreateState,
     DetailState,
@@ -57,6 +65,7 @@ from .nav_state import (
     TreeState,
     ViewerState,
     WelcomeState,
+    clamp_scroll,
     navigate_detail,
     navigate_tree,
     search_update,
@@ -288,19 +297,6 @@ def render_tree_col(
                 pass
             continue
 
-        # ── action row (e.g. "➕ Add new scheme") ─────────────────────────
-        if line.is_action:
-            text = "  ➕ Add new scheme"
-            if is_cursor:
-                base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
-            else:
-                base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
-            try:
-                stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
-            except curses.error:
-                pass
-            continue
-
         # ── scheme header row ─────────────────────────────────────────────
         if line.is_scheme:
             s = taxonomy.schemes.get(line.uri)
@@ -428,6 +424,40 @@ def render_tree_col(
                     pass
 
 
+# ──────────────────────────── AI taxonomy wizard helpers ─────────────────────
+
+
+def _draw_text_input(
+    stdscr: "curses.window",
+    rows: int,
+    cols: int,
+    prompt: str,
+    buffer: str,
+    pos: int,
+    error: str = "",
+    hint: str = "",
+) -> None:
+    """Draw a simple centred text-input widget."""
+    try:
+        row = rows // 2 - 2
+        stdscr.addstr(row, 2, prompt[:cols - 3], curses.A_BOLD)
+        row += 2
+        before = buffer[:pos]
+        after = buffer[pos:]
+        line = f"  {before}▌{after}"
+        stdscr.addstr(row, 0, line[:cols - 1], curses.color_pair(_C_SEL) | curses.A_BOLD)
+        row += 1
+        if error:
+            stdscr.addstr(row + 1, 2, error[:cols - 3], curses.color_pair(_C_SEL) | curses.A_BOLD)
+        if hint:
+            _draw_bar(stdscr, rows - 1, 0, cols, hint, dim=True)
+    except curses.error:
+        pass
+    stdscr.refresh()
+
+
+
+
 # ──────────────────────────── TaxonomyViewer ─────────────────────────────────
 
 
@@ -487,23 +517,22 @@ class TaxonomyViewer:
         self._folded: set[str] = set()
         # scheme_uri → SchemeAnalysis; populated on first run() call
         self._analysis: dict[str, SchemeAnalysis] | None = None
+        # AI install threading state
+        self._install_thread: object = None   # threading.Thread | None
+        self._install_output: list[str] = []  # thread appends here (GIL-safe)
+        self._install_returncode: int | None = None
+        self._install_spinner: int = 0
+        self._install_package: str = "llm"    # package passed to pip install
 
         self._rebuild()
+        # Start with the global overview panel; cursor moves will update to item-specific detail
+        self._detail_uri = _GLOBAL_URI
+        self._detail_fields = self._bgf()
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _rebuild(self) -> None:
         self._flat = flatten_tree(self._workspace, folded=self._folded)
-        # Prepend the synthetic "Add new scheme" action row at position 0
-        self._flat.insert(
-            0,
-            TreeLine(
-                uri=_ACTION_ADD_SCHEME,
-                depth=0,
-                prefix="",
-                is_action=True,
-            ),
-        )
         # Always keep self.taxonomy in sync with the workspace so mutations
         # made on workspace taxonomy objects are immediately reflected.
         if self._workspace.multiple_schemes() or len(self._workspace.taxonomies) > 1:
@@ -513,6 +542,25 @@ class TaxonomyViewer:
             prim = self._workspace.taxonomies.get(self.file_path)
             if prim is not None:
                 self.taxonomy = prim
+
+    def _update_tree_preview(self) -> None:
+        """Sync detail preview to the current tree cursor (called on every cursor move)."""
+        if not (0 <= self._cursor < len(self._flat)):
+            return  # keep current panel (global or last item)
+        line = self._flat[self._cursor]
+        if line.is_action:
+            return  # keep current panel
+        uri = line.uri
+        if uri == self._detail_uri:
+            return  # already previewing this concept
+        self._detail_uri = uri
+        if line.is_file and line.file_path:
+            self._detail_fields = self._bff(line.file_path)
+        elif line.is_scheme:
+            self._detail_fields = self._bsf(uri)
+        else:
+            self._detail_fields = self._bdf(uri)
+        self._reset_detail_cursor()
 
     def _bdf(self, uri: str) -> list[DetailField]:
         """Build detail fields, enabling mapping actions when multiple schemes open."""
@@ -526,6 +574,15 @@ class TaxonomyViewer:
     def _bsf(self, scheme_uri: str) -> list[DetailField]:
         """Build scheme dashboard fields (settings + stats + issues)."""
         return build_scheme_dashboard_fields(self.taxonomy, self._analysis, scheme_uri, self.lang)
+
+    def _bff(self, file_path: Path) -> list[DetailField]:
+        """Build file dashboard fields (overview + per-scheme stats + actions)."""
+        tax = self._workspace.taxonomies.get(file_path, self.taxonomy)
+        return build_file_fields(tax, file_path, self._analysis, self.lang)
+
+    def _bgf(self) -> list[DetailField]:
+        """Build global overview fields (setup + shortcuts + stats + quality)."""
+        return build_global_fields(self._workspace, self._analysis, self.lang)
 
     def _load_analysis(self) -> None:
         """Load analysis from cache (or compute and cache) for all workspace files."""
@@ -544,9 +601,14 @@ class TaxonomyViewer:
         if self._analysis is None:
             self._analysis = {}
         self._analysis.update(by_scheme)
-        # Refresh fields if the scheme detail panel is currently open
-        if self._detail_uri and self._detail_uri in self.taxonomy.schemes:
+        # Refresh whichever detail panel is currently open
+        if self._detail_uri == _GLOBAL_URI:
+            self._detail_fields = self._bgf()
+        elif self._detail_uri and self._detail_uri in self.taxonomy.schemes:
             self._detail_fields = self._bsf(self._detail_uri)
+        elif self._detail_uri and self._detail_uri.startswith(_FILE_URI_PREFIX):
+            fp_str = self._detail_uri[len(_FILE_URI_PREFIX):]
+            self._detail_fields = self._bff(Path(fp_str))
 
     # ── tree-state bridge (scattered attrs ↔ TreeState for pure functions) ────
 
@@ -586,6 +648,7 @@ class TaxonomyViewer:
                 "detail_uri": self._detail_uri,
                 "field_cursor": self._field_cursor,
                 "detail_scroll": self._detail_scroll,
+                "was_tree_state": isinstance(self._state, TreeState),
             }
         )
 
@@ -598,7 +661,11 @@ class TaxonomyViewer:
         self._detail_uri = s["detail_uri"]
         self._field_cursor = s["field_cursor"]
         self._detail_scroll = s["detail_scroll"]
-        if self._detail_uri:
+        if s.get("was_tree_state", False):
+            # Came from tree preview — restore tree state and refresh preview
+            self._state = TreeState()
+            self._update_tree_preview()
+        elif self._detail_uri:
             if self._detail_uri in self.taxonomy.schemes:
                 self._detail_fields = self._bsf(self._detail_uri)
             else:
@@ -643,24 +710,16 @@ class TaxonomyViewer:
         if not (0 <= self._cursor < len(self._flat)):
             return
         line = self._flat[self._cursor]
-        if line.is_action:
-            self._trigger_action("add_scheme")
-            return
-        if line.is_file:
-            # Toggle fold on Enter for file nodes
-            if line.uri in self._folded:
-                self._folded.discard(line.uri)
-            else:
-                self._folded.add(line.uri)
-            self._rebuild()
-            return
         self._push()
-        self._detail_uri = line.uri
-        if line.is_scheme:
-            self._detail_fields = self._bsf(line.uri)
-        else:
-            self._detail_fields = self._bdf(self._detail_uri)
-        self._reset_detail_cursor()
+        if self._detail_uri != line.uri:
+            self._detail_uri = line.uri
+            if line.is_file and line.file_path:
+                self._detail_fields = self._bff(line.file_path)
+            elif line.is_scheme:
+                self._detail_fields = self._bsf(line.uri)
+            else:
+                self._detail_fields = self._bdf(line.uri)
+            self._reset_detail_cursor()
         self._state = DetailState()
 
     def _back(self) -> None:
@@ -673,20 +732,56 @@ class TaxonomyViewer:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             console.print(render_tree(self.taxonomy, lang=self.lang))
             return
-        if self._analysis is None:
-            msg = " Analysing taxonomy…"
-            print(msg, end="\r", flush=True)
-            self._load_analysis()
-            print(" " * len(msg), end="\r", flush=True)
+
+        import os as _os
+
+        def _flush_stdin() -> None:
+            try:
+                import termios
+                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+            except Exception:
+                pass
+
+        # Recognise lone Escape quickly so it doesn't linger in ncurses'
+        # internal buffer and leak into the next session.
+        _os.environ.setdefault("ESCDELAY", "25")
+
+        # Discard stale input from the picker before curses starts.
+        _flush_stdin()
         try:
             curses.wrapper(self._loop)
         except KeyboardInterrupt:
             pass
+        except Exception:
+            log = Path.home() / ".cache" / "ster" / "crash.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as f:
+                f.write(f"\n{'=' * 60}\n")
+                traceback.print_exc(file=f)
+            raise
+        finally:
+            # ncurses calls endwin() on exit, which may push any internally
+            # buffered bytes (e.g. a second Escape) back to the OS input queue.
+            # Flush them now, before control returns to the home-screen picker.
+            _flush_stdin()
 
     def _loop(self, stdscr: curses.window) -> None:
-        curses.curs_set(0)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         _init_colors()
         stdscr.keypad(True)
+
+        if self._analysis is None:
+            rows, cols = stdscr.getmaxyx()
+            stdscr.erase()
+            _draw_bar(stdscr, rows // 2, 0, cols, " Analysing taxonomy… ", dim=True)
+            stdscr.refresh()
+            self._load_analysis()
+            # Refresh global panel now that analysis is available
+            if self._detail_uri == _GLOBAL_URI:
+                self._detail_fields = self._bgf()
 
         while True:
             rows, cols = stdscr.getmaxyx()
@@ -702,7 +797,10 @@ class TaxonomyViewer:
                 continue
 
             if isinstance(self._state, TreeState):
-                self._draw_tree(stdscr, rows, cols)
+                if cols >= self._SPLIT_MIN_COLS and self._detail_uri is not None:
+                    self._draw_tree_preview(stdscr, rows, cols)
+                else:
+                    self._draw_tree(stdscr, rows, cols)
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
                     curses.update_lines_cols()
@@ -735,12 +833,16 @@ class TaxonomyViewer:
                 self._on_edit(action)
 
             elif isinstance(self._state, CreateState):
-                self._draw_create(stdscr, rows, cols)
-                key = stdscr.getch()
-                if key == curses.KEY_RESIZE:
-                    curses.update_lines_cols()
-                    continue
-                self._on_create(key, rows)
+                if self._state.ai_generating:
+                    self._draw_create(stdscr, rows, cols)
+                    self._run_generate(stdscr, self._create_ai_generate)
+                else:
+                    self._draw_create(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_create(key, rows)
 
             elif isinstance(self._state, ConfirmDeleteState):
                 self._draw_confirm(stdscr, rows, cols)
@@ -752,7 +854,14 @@ class TaxonomyViewer:
 
             elif isinstance(self._state, MovePickState):
                 ms = self._state
-                if ms.is_link:
+                if ms.pick_type == "add_related":
+                    self._draw_move(stdscr, rows, cols, title=" ~ Add related concept ")
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_related_pick(key, rows)
+                elif ms.is_link:
                     self._draw_move(
                         stdscr, rows, cols, title=" ↗ Link to broader — pick new parent "
                     )
@@ -800,6 +909,43 @@ class TaxonomyViewer:
                     curses.update_lines_cols()
                     continue
                 self._on_map_concept_pick(key, rows)
+
+            elif isinstance(self._state, AiInstallState):
+                if self._state.installing:
+                    self._draw_ai_install(stdscr, rows, cols)
+                    self._ai_install_poll()
+                    curses.napms(120)  # short sleep so we animate without spinning 100% CPU
+                elif self._state.done:
+                    self._draw_ai_install(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_ai_install(key)
+                else:
+                    self._draw_ai_install(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_ai_install(key)
+
+            elif isinstance(self._state, AiSetupState):
+                _had_pending = bool(self._state.pending_action)
+                if self._state.step == "install_plugin" and self._state.plugin_installing:
+                    self._draw_ai_setup(stdscr, rows, cols)
+                    self._ai_plugin_poll()
+                    curses.napms(120)
+                else:
+                    self._draw_ai_setup(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_ai_setup(key)
+                    if not _had_pending and not isinstance(self._state, AiSetupState):
+                        break
+
 
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
@@ -1011,32 +1157,29 @@ class TaxonomyViewer:
         elif self._cursor >= self._tree_scroll + list_h:
             self._tree_scroll = self._cursor - list_h + 1
 
-    def _tree_footer(self, rows: int) -> str:
+    def _tree_footer(self, rows: int, preview: bool = False) -> str:
         n = len(self._flat)
         pos = f"[{self._cursor + 1}/{n}]" if n else "[0/0]"
         has_children = False
-        is_action_row = False
         if 0 <= self._cursor < n:
             line = self._flat[self._cursor]
-            if line.is_action:
-                is_action_row = True
-            elif line.is_file:
-                enter_hint = "→/Enter: fold/unfold file"
+            if line.is_file:
                 # Return early — simplified footer for file nodes
                 at_top = self._cursor == 0
                 at_bottom = self._cursor == n - 1
                 jump_hint = (
                     "G: last" if at_top else ("g: first" if at_bottom else "g/G: first/last")
                 )
+                enter_hint = "Enter: focus detail" if preview else "Enter: detail"
                 return (
                     f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}"
-                    f"   Space bar: fold/unfold  {jump_hint}  q: quit "
+                    f"   Space: fold/unfold  {jump_hint}  q: quit "
                 )
             else:
                 concept = self.taxonomy.concepts.get(line.uri)
                 has_children = bool(concept and concept.narrower)
-        if is_action_row:
-            enter_hint = "→/Enter: create scheme"
+        if preview:
+            enter_hint = "Enter: focus detail"
         elif has_children:
             enter_hint = "→/Enter: expand"
         else:
@@ -1054,6 +1197,37 @@ class TaxonomyViewer:
             f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
             f"   Space bar: fold/unfold  +: add  ^D/^U: ½-page  {jump_hint}  /: search  ◉: scheme  q: quit "
         )
+
+    def _draw_tree_preview(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        """Wide-terminal tree view: tree on left, read-only detail preview on right."""
+        stdscr.erase()
+        tree_w = cols // 3
+        detail_x0 = tree_w
+        detail_w = cols - tree_w
+
+        self._adjust_tree_scroll(rows)
+        self._render_tree_col(stdscr, rows, 0, tree_w, self._cursor, highlight_uri=self._detail_uri)
+
+        # Vertical separator
+        for y in range(rows):
+            try:
+                stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+            except curses.error:
+                pass
+
+        # Detail preview (no footer — we draw the tree footer below)
+        if self._detail_uri:
+            self._render_detail_col(stdscr, rows, detail_x0, detail_w, show_footer=False)
+
+        # Tree footer across full width
+        if self._status:
+            _draw_bar(stdscr, rows - 1, 0, cols, f" {self._status} ", dim=False)
+            self._status = ""
+        elif self._search_active:
+            self._draw_search_bar(stdscr, rows - 1, 0, cols)
+        else:
+            _draw_bar(stdscr, rows - 1, 0, cols, self._tree_footer(rows, preview=True), dim=True)
+        stdscr.refresh()
 
     def _draw_tree(self, stdscr: curses.window, rows: int, cols: int) -> None:
         stdscr.erase()
@@ -1096,15 +1270,6 @@ class TaxonomyViewer:
         highlight_uri: str | None,
     ) -> None:
         """Render the tree list into column [x0, x0+width)."""
-        scheme = self.taxonomy.primary_scheme()
-        title = ""
-        if scheme:
-            for lbl in scheme.labels:
-                if lbl.lang == self.lang:
-                    title = lbl.value
-                    break
-            if not title and scheme.labels:
-                title = scheme.labels[0].value
         render_tree_col(
             stdscr,
             self._flat,
@@ -1115,7 +1280,7 @@ class TaxonomyViewer:
             width,
             self._tree_scroll,
             cursor_idx,
-            header_title=title,
+            header_title="Global Ster View",
             highlight_uri=highlight_uri,
             search_pattern=self._search_pattern,
             search_matches=self._search_matches,
@@ -1179,6 +1344,7 @@ class TaxonomyViewer:
         new_ts = navigate_tree(ts, key, list_h)
         if new_ts is not ts:
             self._sync_tree_state(new_ts)
+            self._update_tree_preview()
             return False
 
         # ── unhandled by navigate_tree — action keys ──────────────────────────
@@ -1206,30 +1372,23 @@ class TaxonomyViewer:
                         if tl.uri == uri:
                             self._cursor = i
                             break
+                    self._update_tree_preview()
 
         elif key == ord("+"):
-            # + on action row → add scheme; on scheme row → add top concept;
-            # on concept row → add narrower concept
+            # + on scheme row → add top concept; on concept row → add narrower concept
             if 0 <= self._cursor < n:
                 line = self._flat[self._cursor]
-                if line.is_action:
-                    self._trigger_action("add_scheme")
-                elif line.is_scheme:
+                if line.is_scheme:
                     self._detail_uri = line.uri
-                    self._detail_fields = build_scheme_fields(
-                        self.taxonomy, self.lang, scheme_uri=line.uri
-                    )
+                    self._detail_fields = self._bsf(line.uri)
                     self._trigger_action("add_top_concept")
-                else:
+                elif not line.is_file and not line.is_action:
                     self._detail_uri = line.uri
                     self._detail_fields = self._bdf(line.uri)
                     self._trigger_action("add_narrower")
 
         elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
-            if 0 <= self._cursor < n and self._flat[self._cursor].is_action:
-                self._trigger_action("add_scheme")
-            else:
-                self._open_detail()
+            self._open_detail()
 
         elif key in (curses.KEY_LEFT, ord("h")):
             if 0 <= self._cursor < n:
@@ -1284,10 +1443,24 @@ class TaxonomyViewer:
         self._render_detail_col(stdscr, rows, detail_x0, detail_w)
         stdscr.refresh()
 
-    def _render_detail_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
-        is_scheme_detail = bool(self._detail_uri and self._detail_uri in self.taxonomy.schemes)
+    def _render_detail_col(self, stdscr: curses.window, rows: int, x0: int, width: int, show_footer: bool = True) -> None:
+        is_global_detail = self._detail_uri == _GLOBAL_URI
+        is_file_detail = bool(
+            self._detail_uri and self._detail_uri.startswith(_FILE_URI_PREFIX)
+        )
+        is_scheme_detail = bool(
+            self._detail_uri and self._detail_uri in self.taxonomy.schemes
+        )
 
-        if is_scheme_detail:
+        if is_global_detail:
+            label = "Global Ster View"
+            handle = None
+        elif is_file_detail:
+            # Derive file path from the sentinel URI
+            fp_str = self._detail_uri[len(_FILE_URI_PREFIX):]  # type: ignore[index]
+            label = Path(fp_str).name
+            handle = None
+        elif is_scheme_detail:
             scheme = self.taxonomy.schemes[self._detail_uri]  # type: ignore[index]
             label = scheme.title(self.lang)
             handle = None
@@ -1304,6 +1477,12 @@ class TaxonomyViewer:
                 " ^A:start  ^E:end  ^W:del-word  ^K:kill-end"
                 "  Alt+←→/^←→:word-jump  Enter:save  Esc:cancel "
             )
+        elif is_global_detail:
+            counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
+            title_bar = f" ★ Global Ster View{counter} "
+        elif is_file_detail:
+            counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
+            title_bar = f" 📄 {label}{counter} "
         elif is_scheme_detail:
             counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
             title_bar = f" ◉ {label}  [scheme settings]{counter} "
@@ -1419,6 +1598,19 @@ class TaxonomyViewer:
                             fv[: width - lbl_w - 5],
                             curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD,
                         )
+                elif f.meta.get("type") == "repair_mapping":
+                    # Dim red "remove broken link" repair row
+                    stdscr.addstr(y, x0, "  ")
+                    stdscr.addstr(
+                        y, x0 + 2, fl[:lbl_w].ljust(lbl_w), curses.color_pair(_C_DIFF_DEL) | curses.A_DIM
+                    )
+                    if fv:
+                        stdscr.addstr(
+                            y,
+                            x0 + 2 + lbl_w + 2,
+                            fv[: width - lbl_w - 5],
+                            curses.color_pair(_C_DIM) | curses.A_DIM,
+                        )
                 elif f.meta.get("type") == "issue_nav":
                     # Colour-coded by severity; clickable when concept_uri present
                     sev = f.meta.get("severity", "info")
@@ -1446,8 +1638,12 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        if not isinstance(self._state, EditState):
-            _draw_bar(stdscr, rows - 1, x0, width, self._detail_footer(), dim=True)
+        if show_footer and not isinstance(self._state, EditState):
+            if self._status:
+                _draw_bar(stdscr, rows - 1, x0, width, f" {self._status} ", dim=False)
+                self._status = ""
+            else:
+                _draw_bar(stdscr, rows - 1, x0, width, self._detail_footer(), dim=True)
 
     # ─────────────────────────── DETAIL events ───────────────────────────────
 
@@ -1467,6 +1663,8 @@ class TaxonomyViewer:
                 edit_hint = "Enter: open"
             elif f.meta.get("type") in ("mapping", "mapping_remove"):
                 edit_hint = "Enter/-: remove link"
+            elif f.meta.get("type") == "repair_mapping":
+                edit_hint = "Enter/-: remove broken link"
             elif f.meta.get("nav"):
                 edit_hint = "Enter: open concept"
             elif f.meta.get("type") == "separator":
@@ -1529,7 +1727,9 @@ class TaxonomyViewer:
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
                 if f.meta.get("type") == "action":
-                    self._trigger_action(f.meta.get("action", ""))
+                    self._trigger_action(f.meta.get("action", ""), f.meta)
+                elif f.meta.get("type") == "repair_mapping":
+                    self._repair_mapping_field(f)
                 elif f.meta.get("type") == "mapping_remove":
                     self._remove_mapping_field(f)
                 elif f.editable:
@@ -1548,19 +1748,26 @@ class TaxonomyViewer:
                         self._detail_fields = self._bdf(dest_uri)
                         self._reset_detail_cursor()
                 elif f.meta.get("nav"):
-                    # broader / narrower / related — navigate to that concept
+                    # broader / narrower / related / top_concept_of — navigate
                     dest_uri = f.meta["uri"]
                     if dest_uri in self.taxonomy.concepts:
                         self._push()
                         self._detail_uri = dest_uri
                         self._detail_fields = self._bdf(dest_uri)
                         self._reset_detail_cursor()
+                    elif dest_uri in self.taxonomy.schemes:
+                        self._push()
+                        self._detail_uri = dest_uri
+                        self._detail_fields = self._bsf(dest_uri)
+                        self._reset_detail_cursor()
 
         elif key == ord("-"):
             # Remove mapping link, delete field value, or delete concept.
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
-                if f.meta.get("type") in ("mapping", "mapping_remove"):
+                if f.meta.get("type") == "repair_mapping":
+                    self._repair_mapping_field(f)
+                elif f.meta.get("type") in ("mapping", "mapping_remove"):
                     self._remove_mapping_field(f)
                 elif f.editable:
                     self._delete_field(f)
@@ -1743,6 +1950,11 @@ class TaxonomyViewer:
                 )
             elif ftype == "def":
                 operations.set_definition(self.taxonomy, self._detail_uri, lang, new_value)
+            elif ftype == "scope_note":
+                concept = self.taxonomy.concepts.get(self._detail_uri)
+                if concept:
+                    concept.scope_notes = [sn for sn in concept.scope_notes if sn.lang != lang]
+                    concept.scope_notes.append(Definition(lang=lang, value=new_value))
         except SkostaxError:
             return
         self._detail_fields = self._bdf(self._detail_uri)
@@ -1780,9 +1992,7 @@ class TaxonomyViewer:
         elif ftype == "scheme_languages":
             scheme.languages = [lg.strip() for lg in new_value.split(",") if lg.strip()]
 
-        self._detail_fields = build_scheme_fields(
-            self.taxonomy, self.lang, scheme_uri=self._detail_uri
-        )
+        self._detail_fields = self._bsf(self._detail_uri)
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
         self._save_file()
 
@@ -1799,6 +2009,10 @@ class TaxonomyViewer:
                 concept = self.taxonomy.concepts.get(self._detail_uri)
                 if concept:
                     concept.definitions = [d for d in concept.definitions if d.lang != lang]
+            elif ftype == "scope_note":
+                concept = self.taxonomy.concepts.get(self._detail_uri)
+                if concept:
+                    concept.scope_notes = [sn for sn in concept.scope_notes if not (sn.lang == lang and sn.value == f.value)]
         except SkostaxError:
             return
         self._detail_fields = self._bdf(self._detail_uri)
@@ -1855,9 +2069,40 @@ class TaxonomyViewer:
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
         self._skip_sep(-1)
 
+    def _repair_mapping_field(self, f: DetailField) -> None:
+        """Remove a broken cross-scheme mapping link from the scheme dashboard."""
+        src_uri = f.meta.get("source_uri", "")
+        attr = f.meta.get("attr", "")
+        tgt_uri = f.meta.get("target_uri", "")
+        skos_type = self._ATTR_TO_SKOS.get(attr)
+        if not skos_type or not src_uri or not tgt_uri:
+            return
+
+        src_tax, src_path = self._individual_taxonomy_for(src_uri)
+        src_concept = src_tax.concepts.get(src_uri)
+        if not src_concept:
+            return
+
+        src_list: list = getattr(src_concept, attr)
+        if tgt_uri in src_list:
+            src_list.remove(tgt_uri)
+
+        self._workspace.save_file(src_path)
+        if self._git_manager:
+            self._git_manager.stage_path(src_path)  # type: ignore[attr-defined]
+        src_h = self.taxonomy.uri_to_handle(src_uri) or src_uri
+        self._status = f"Removed broken {skos_type}: {src_h} → {tgt_uri}"
+        self._rebuild()
+        self._refresh_analysis(src_path)
+        # Rebuild the scheme dashboard (detail_uri is still the scheme)
+        if self._detail_uri:
+            self._detail_fields = self._bsf(self._detail_uri)
+            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+            self._skip_sep(-1)
+
     # ─────────────────────────── action dispatch ─────────────────────────────
 
-    def _trigger_action(self, action: str) -> None:
+    def _trigger_action(self, action: str, meta: dict | None = None) -> None:
         _came_from_tree = isinstance(self._state, (TreeState, WelcomeState))
         if action in ("add_narrower", "add_top_concept"):
             # add_narrower: parent is the current concept.
@@ -1865,11 +2110,12 @@ class TaxonomyViewer:
             #   scheme URI as "add as top concept of that scheme".
             self._state = CreateState(
                 parent_uri=self._detail_uri,
-                fields=self._build_create_fields(),
+                fields=[],           # built when user picks "manual" in choose step
                 cursor=0,
                 scroll=0,
                 error="",
                 came_from_tree=_came_from_tree,
+                step="choose",
             )
         elif action == "delete":
             self._state = ConfirmDeleteState(uri=self._detail_uri or "")
@@ -1911,6 +2157,47 @@ class TaxonomyViewer:
                     scroll=0,
                 )
 
+        elif action in ("add_pref_label", "add_alt_label", "add_def", "add_scope_note"):
+            lang = (meta or {}).get("lang", self.lang)
+            _FTYPE = {
+                "add_pref_label": ("pref", "pref"),
+                "add_alt_label": ("alt", "alt"),
+                "add_def": ("def", "def"),
+                "add_scope_note": ("scope_note", "scopeNote"),
+            }
+            ftype, display_name = _FTYPE[action]
+            synthetic = DetailField(
+                f"add:{ftype}:{lang}", f"{display_name} [{lang}]", "",
+                editable=True, meta={"type": ftype, "lang": lang},
+            )
+            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
+
+        elif action == "add_related":
+            if self._detail_uri:
+                concept = self.taxonomy.concepts.get(self._detail_uri)
+                already_related = set(concept.related) if concept else set()
+                candidates: list[tuple[str, str]] = []
+                for line in self._flat:
+                    if line.is_scheme or line.is_action or line.is_file:
+                        continue
+                    if line.uri == self._detail_uri or line.uri in already_related:
+                        continue
+                    c = self.taxonomy.concepts.get(line.uri)
+                    if c:
+                        handle = self.taxonomy.uri_to_handle(line.uri) or "?"
+                        label = c.pref_label(self.lang) or line.uri
+                        indent = "  " * line.depth
+                        candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
+                self._state = MovePickState(
+                    source_uri=self._detail_uri,
+                    is_link=False,
+                    pick_type="add_related",
+                    candidates=candidates,
+                    filter_text="",
+                    cursor=0,
+                    scroll=0,
+                )
+
         elif action == "add_scheme":
             self._state = SchemeCreateState(
                 fields=self._build_scheme_create_fields(),
@@ -1928,6 +2215,20 @@ class TaxonomyViewer:
                 cursor = 0
             self._state = LangPickState(options=options, cursor=cursor, scroll=0)
 
+        elif action == "open_ai_config":
+            from . import ai
+            if not ai.is_available():
+                self._state = AiInstallState(pending_action="open_ai_config")
+            else:
+                online, offline = ai.discover_models()
+                cp_idx = (1 if online else 0) + (1 if offline else 0)
+                self._state = AiSetupState(
+                    online_providers=online,
+                    offline_providers=offline,
+                    provider_cursor=cp_idx if ai.is_copypaste() else 0,
+                    pending_action="",  # no follow-up action after config
+                )
+
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
             if self._detail_uri:
@@ -1943,7 +2244,6 @@ class TaxonomyViewer:
                         scroll=0,
                     )
 
-    # ─────────────────────────── CREATE mode ─────────────────────────────────
 
     def _build_create_fields(self) -> list[DetailField]:
         # Gather all languages currently used in the taxonomy
@@ -2036,6 +2336,249 @@ class TaxonomyViewer:
         self._render_create_col(stdscr, rows, detail_x0, detail_w)
         stdscr.refresh()
 
+    # ── Add-concept AI helpers ────────────────────────────────────────────────
+
+    def _build_ai_context(self, cs: "CreateState") -> "tuple[str, str, str | None]":
+        """Return (taxonomy_name, taxonomy_description, parent_label).
+
+        parent_label is None when the parent is a scheme (top-concept context).
+        """
+        scheme = self.taxonomy.primary_scheme()
+        taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
+
+        taxonomy_description = ""
+        if scheme and scheme.descriptions:
+            for defn in scheme.descriptions:
+                if defn.lang == self.lang:
+                    taxonomy_description = defn.value
+                    break
+            if not taxonomy_description and scheme.descriptions:
+                taxonomy_description = scheme.descriptions[0].value
+
+        parent_label: "str | None" = None
+        if cs.parent_uri and cs.parent_uri not in self.taxonomy.schemes:
+            parent_concept = self.taxonomy.concepts.get(cs.parent_uri)
+            if parent_concept:
+                parent_label = parent_concept.pref_label(self.lang)
+
+        return taxonomy_name, taxonomy_description, parent_label
+
+    def _run_generate(self, stdscr: "curses.window", fn) -> None:
+        """Run an AI generate function, suspending curses first in copypaste mode."""
+        from . import ai as _ai
+        if _ai.is_copypaste():
+            curses.endwin()
+        try:
+            fn()
+        finally:
+            if _ai.is_copypaste():
+                stdscr.refresh()
+
+    def _create_ai_generate(self) -> None:
+        """Called from main loop when CreateState.ai_generating is True."""
+        from . import ai as _ai
+        if not isinstance(self._state, CreateState):
+            return
+        cs = self._state
+        taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context(cs)
+        try:
+            candidates = _ai.suggest_concept_names(
+                taxonomy_name=taxonomy_name,
+                taxonomy_description=taxonomy_desc,
+                parent_label=parent_label,
+                lang=self.lang,
+                n=20,
+                exclude=cs.ai_seen,
+            )
+        except Exception as exc:
+            cs.error = str(exc)[:80]
+            candidates = []
+        cs.ai_candidates = candidates
+        cs.ai_seen = cs.ai_seen + candidates
+        cs.ai_generating = False
+        cs.ai_cursor = 0
+        cs.ai_scroll = 0
+
+    # ── Add-concept step drawing ──────────────────────────────────────────────
+
+    def _draw_create_choose(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+        """Render the 'choose input method' screen."""
+        if cs.parent_uri and cs.parent_uri in self.taxonomy.schemes:
+            scheme = self.taxonomy.schemes[cs.parent_uri]
+            bar_title = f" Add concept to «{scheme.title(self.lang) or cs.parent_uri}» "
+        elif cs.parent_uri:
+            ph = self.taxonomy.uri_to_handle(cs.parent_uri) or "?"
+            bar_title = f" Add concept under [{ph}] "
+        else:
+            bar_title = " Add concept "
+        _draw_bar(stdscr, 0, x0, width, bar_title, dim=False)
+
+        options = [
+            "  ✏   Enter name manually",
+            "  ✦   AI Auto Suggest",
+        ]
+        for i, label in enumerate(options):
+            sel = i == cs.ai_cursor
+            y = 2 + i
+            try:
+                attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else curses.color_pair(_C_FIELD_LABEL)
+                prefix = "▶ " if sel else "  "
+                stdscr.addstr(y, x0, (prefix + label).ljust(width - 1)[: width - 1], attr)
+            except curses.error:
+                pass
+
+        if cs.error:
+            try:
+                stdscr.addstr(rows - 2, x0 + 1, f"Error: {cs.error}"[: width - 2], curses.color_pair(_C_DIFF_DEL))
+            except curses.error:
+                pass
+        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓/jk: navigate   Enter: select   Esc: cancel  ", dim=True)
+
+    def _draw_create_prompt_review(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+        """Render the prompt-review panel."""
+        _draw_bar(stdscr, 0, x0, width, " Review AI prompt — Enter: generate   Esc: back ", dim=False)
+        text_lines = cs.ai_prompt_preview.splitlines()
+        list_h = rows - 2
+        for i in range(list_h):
+            idx = cs.ai_scroll + i
+            y = 1 + i
+            line = text_lines[idx][: width - 2] if idx < len(text_lines) else ""
+            try:
+                stdscr.addstr(y, x0 + 1, line.ljust(width - 2)[: width - 2])
+            except curses.error:
+                pass
+        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: generate   Esc: back  ", dim=True)
+
+    def _draw_create_ai_pick(self, stdscr: "curses.window", rows: int, x0: int, width: int, cs: "CreateState") -> None:
+        """Render the AI suggestion pick list."""
+        _draw_bar(stdscr, 0, x0, width, " AI suggestions — pick a name ", dim=False)
+
+        if cs.ai_generating:
+            spinner = self._SPINNER[self._install_spinner % 4]
+            try:
+                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating suggestions…"[: width - 2])
+            except curses.error:
+                pass
+            _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
+            return
+
+        if cs.error:
+            try:
+                stdscr.addstr(2, x0 + 2, f"Error: {cs.error}"[: width - 4])
+            except curses.error:
+                pass
+
+        candidates = cs.ai_candidates
+        actions = ["▶  Suggest more", "←  Back"]
+        total = len(candidates) + len(actions)
+        list_h = rows - 2
+
+        for i in range(list_h):
+            idx = cs.ai_scroll + i
+            if idx >= total:
+                break
+            y = 1 + i
+            sel = idx == cs.ai_cursor
+            attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else 0
+            prefix = "▶ " if sel else "  "
+            if idx < len(candidates):
+                label = candidates[idx]
+            else:
+                label = actions[idx - len(candidates)]
+            try:
+                stdscr.addstr(y, x0, (prefix + label).ljust(width - 1)[: width - 1], attr)
+            except curses.error:
+                pass
+
+        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓/jk: navigate   Enter: select  ", dim=True)
+
+    # ── Add-concept step input handlers ──────────────────────────────────────
+
+    def _on_create_choose(self, key: int, cs: "CreateState") -> None:
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+        n = 2  # two options
+        if key in (KEY_UP, ord("k")):
+            cs.ai_cursor = (cs.ai_cursor - 1) % n
+        elif key in (KEY_DOWN, ord("j")):
+            cs.ai_cursor = (cs.ai_cursor + 1) % n
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if cs.ai_cursor == 0:
+                # Manual entry
+                cs.fields = self._build_create_fields()
+                cs.step = "form"
+                cs.cursor = 0
+            else:
+                # AI suggest — render prompt and show for review
+                try:
+                    from . import ai as _ai
+                    taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context(cs)
+                    preview = _ai.render_suggest_concept_names_prompt(
+                        taxonomy_name=taxonomy_name,
+                        taxonomy_description=taxonomy_desc,
+                        parent_label=parent_label,
+                        lang=self.lang,
+                        n=20,
+                        exclude=cs.ai_seen,
+                    )
+                    cs.ai_prompt_preview = preview
+                    cs.ai_scroll = 0
+                    cs.step = "prompt_review"
+                except Exception as exc:
+                    cs.error = str(exc)[:120]
+        elif key == 27:
+            self._state = TreeState() if cs.came_from_tree else DetailState()
+
+    def _on_create_prompt_review(self, key: int, cs: "CreateState") -> None:
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+        max_scroll = max(0, len(cs.ai_prompt_preview.splitlines()) - 3)
+        if key in (KEY_UP, ord("k")):
+            cs.ai_scroll = max(0, cs.ai_scroll - 1)
+        elif key in (KEY_DOWN, ord("j")):
+            cs.ai_scroll = min(max_scroll, cs.ai_scroll + 1)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            cs.ai_generating = True
+            cs.step = "ai_pick"
+        elif key == 27:
+            cs.step = "choose"
+            cs.ai_cursor = 1
+
+    def _on_create_ai_pick(self, key: int, rows: int, cs: "CreateState") -> None:
+        if cs.ai_generating:
+            return
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+        candidates = cs.ai_candidates
+        n_actions = 2
+        total = len(candidates) + n_actions
+        suggest_more_idx = len(candidates)
+        back_idx = len(candidates) + 1
+        list_h = rows - 2
+
+        if key in (KEY_UP, ord("k")):
+            cs.ai_cursor = max(0, cs.ai_cursor - 1)
+            cs.ai_scroll = min(cs.ai_scroll, cs.ai_cursor)
+        elif key in (KEY_DOWN, ord("j")):
+            cs.ai_cursor = min(total - 1, cs.ai_cursor + 1)
+            if cs.ai_cursor >= cs.ai_scroll + list_h:
+                cs.ai_scroll = cs.ai_cursor - list_h + 1
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if cs.ai_cursor == suggest_more_idx:
+                cs.ai_generating = True
+            elif cs.ai_cursor == back_idx:
+                cs.step = "choose"
+                cs.ai_cursor = 1
+            elif 0 <= cs.ai_cursor < len(candidates):
+                chosen = candidates[cs.ai_cursor]
+                cs.fields = self._build_create_fields()
+                for f in cs.fields:
+                    if f.meta.get("field") == "name":
+                        f.value = chosen
+                        break
+                cs.step = "form"
+                cs.cursor = 0
+        elif key == 27:
+            cs.step = "choose"
+            cs.ai_cursor = 1
+
     def _render_create_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
         # Access CreateState from self._state directly, or from EditState.return_to
         if isinstance(self._state, CreateState):
@@ -2046,6 +2589,19 @@ class TaxonomyViewer:
             _in_edit = True
         else:
             return
+
+        # Dispatch non-form steps (not applicable when in edit mode)
+        if not _in_edit:
+            if cs.step == "choose":
+                self._draw_create_choose(stdscr, rows, x0, width, cs)
+                return
+            elif cs.step == "prompt_review":
+                self._draw_create_prompt_review(stdscr, rows, x0, width, cs)
+                return
+            elif cs.step == "ai_pick":
+                self._draw_create_ai_pick(stdscr, rows, x0, width, cs)
+                return
+
         if _in_edit:
             _draw_bar(
                 stdscr,
@@ -2147,9 +2703,23 @@ class TaxonomyViewer:
         if not isinstance(self._state, CreateState):
             return
         cs = self._state
+
+        if cs.step == "choose":
+            cs.error = ""
+            self._on_create_choose(key, cs)
+            return
+        elif cs.step == "prompt_review":
+            self._on_create_prompt_review(key, cs)
+            return
+        elif cs.step == "ai_pick":
+            self._on_create_ai_pick(key, rows, cs)
+            return
+
+        cs.error = ""
+
+        # step == "form" — existing logic below
         n = len(cs.fields)
         list_h = rows - 2
-        cs.error = ""
 
         if key in (curses.KEY_UP, ord("k")):
             cs.cursor = max(0, cs.cursor - 1)
@@ -2847,6 +3417,67 @@ class TaxonomyViewer:
             ms.cursor = 0
             ms.scroll = 0
 
+    def _on_related_pick(self, key: int, rows: int) -> None:
+        """Handle keypresses in the 'add related' picker."""
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
+        filtered = self._filtered_move_candidates()
+        n = len(filtered)
+        list_h = rows - 3
+
+        if key == curses.KEY_UP:
+            ms.cursor = max(0, ms.cursor - 1)
+        elif key == curses.KEY_DOWN:
+            ms.cursor = min(n - 1, ms.cursor + 1)
+        elif key == curses.KEY_PPAGE:
+            ms.cursor = max(0, ms.cursor - list_h)
+        elif key == curses.KEY_NPAGE:
+            ms.cursor = min(n - 1, ms.cursor + list_h)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= ms.cursor < n:
+                uri, _ = filtered[ms.cursor]
+                self._confirm_related(uri)
+        elif key == 27:  # Esc
+            back_uri = ms.source_uri or self._detail_uri
+            self._detail_uri = back_uri
+            if self._detail_uri:
+                self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
+        elif 32 <= key < 256:
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
+
+    def _confirm_related(self, target_uri: str) -> None:
+        if not isinstance(self._state, MovePickState):
+            return
+        src = self._state.source_uri
+        try:
+            operations.add_related(self.taxonomy, src, target_uri)
+        except SkostaxError as exc:
+            self._status = str(exc)
+            self._detail_uri = src
+            self._detail_fields = self._bdf(self._detail_uri)
+            self._state = DetailState()
+            return
+        self._rebuild()
+        self._save_file()
+        for i, line in enumerate(self._flat):
+            if line.uri == src:
+                self._cursor = i
+                break
+        self._detail_uri = src
+        self._detail_fields = self._bdf(src)
+        self._field_cursor = 0
+        self._history.clear()
+        self._state = DetailState()
+
     def _confirm_link(self, target_uri: str) -> None:
         if not isinstance(self._state, MovePickState):
             return
@@ -3284,6 +3915,503 @@ class TaxonomyViewer:
             f" [{cursor + 1}/{n}]  ↑↓: move  Enter: select  Esc: cancel ",
             dim=True,
         )
+
+    # ──────────────────────────── AI install overlay ─────────────────────────────
+
+    _SPINNER = "|/-\\"
+
+    def _draw_ai_install(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+        """Install confirmation / progress overlay."""
+        if not isinstance(self._state, AiInstallState):
+            return
+        st = self._state
+        stdscr.erase()
+        box_w = min(72, cols - 4)
+        # height: title + blank + body lines + blank + progress bar + blank + hint
+        body_lines = 3  # output lines shown during install
+        box_h = body_lines + 6
+        y0 = max(0, (rows - box_h) // 2)
+        x0 = max(0, (cols - box_w) // 2)
+        attr = curses.color_pair(_C_SEL)
+        for i in range(box_h):
+            try:
+                stdscr.addstr(y0 + i, x0, " " * box_w, attr)
+            except curses.error:
+                pass
+
+        def _put(row: int, text: str, bold: bool = False) -> None:
+            a = attr | (curses.A_BOLD if bold else 0)
+            try:
+                stdscr.addstr(y0 + row, x0 + 2, text[: box_w - 4], a)
+            except curses.error:
+                pass
+
+        def _center(row: int, text: str, bold: bool = False) -> None:
+            a = attr | (curses.A_BOLD if bold else 0)
+            pad = max(0, (box_w - len(text)) // 2)
+            try:
+                stdscr.addstr(y0 + row, x0 + pad, text[: box_w], a)
+            except curses.error:
+                pass
+
+        if st.done:
+            _center(0, " ✓  AI dependency installed ", bold=True)
+            _center(2, "llm is ready to use.")
+            _center(box_h - 2, "[Enter] continue to model setup    [Esc] cancel")
+        elif st.error:
+            _center(0, " Installation failed ", bold=True)
+            _put(2, st.error)
+            _center(box_h - 2, "[Esc] close")
+        elif st.installing:
+            spinner = self._SPINNER[self._install_spinner % 4]
+            _center(0, f" {spinner}  Installing llm… ", bold=True)
+            # Show last `body_lines` output lines
+            recent = st.lines[-(body_lines):]
+            for i, line in enumerate(recent):
+                _put(2 + i, line)
+            # Progress bar: pulse based on number of lines received
+            bar_w = box_w - 6
+            pos = (len(st.lines) * 4) % (bar_w * 2)
+            filled = min(pos, bar_w - pos) if pos > bar_w else pos
+            filled = max(2, filled)
+            bar = "█" * filled + "░" * (bar_w - filled)
+            _put(2 + body_lines + 1, f"[{bar}]")
+            _center(box_h - 1, "")
+        else:
+            _center(0, " Install AI dependency ", bold=True)
+            _center(2, "The 'llm' package is required for AI features.")
+            _center(4, "It will be installed into the current Python environment.")
+            _center(box_h - 2, "[Enter] install now    [Esc] cancel")
+        stdscr.refresh()
+
+    def _on_ai_install(self, key: int) -> None:
+        if not isinstance(self._state, AiInstallState):
+            return
+        st = self._state
+        if st.done:
+            # Proceed to model setup — discover models fresh after install
+            from . import ai
+            pending = st.pending_action
+            online, offline = ai.discover_models()
+            self._state = AiSetupState(
+                online_providers=online,
+                offline_providers=offline,
+                pending_action=pending,
+            )
+        elif st.error:
+            if key == 27:
+                self._state = TreeState()
+        elif key == 27:
+            self._state = TreeState()
+        elif key in (ord("\n"), ord("\r"), 343):
+            self._install_thread = None
+            self._install_output = []
+            self._install_returncode = None
+            self._install_spinner = 0
+            self._state = AiInstallState(
+                pending_action=st.pending_action,
+                installing=True,
+            )
+
+    def _ai_install_worker(self) -> None:
+        """Daemon thread: runs pip install and collects output."""
+        import subprocess
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pip", "install", "--no-color", self._install_package],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = raw.rstrip()
+            if line:
+                self._install_output.append(line)
+        proc.wait()
+        self._install_returncode = proc.returncode
+
+    def _ai_install_poll(self) -> None:
+        """Called each loop iteration while installing. Starts thread, polls result."""
+        import threading
+        if not isinstance(self._state, AiInstallState):
+            return
+        st = self._state
+        self._install_spinner += 1
+
+        # Start thread once
+        if self._install_thread is None:
+            t = threading.Thread(target=self._ai_install_worker, daemon=True)
+            self._install_thread = t
+            t.start()
+
+        # Snapshot output for display
+        current_lines = list(self._install_output)
+
+        # Check completion
+        if self._install_returncode is not None:
+            self._install_thread = None
+            if self._install_returncode == 0:
+                self._state = AiInstallState(
+                    pending_action=st.pending_action,
+                    done=True,
+                    lines=current_lines,
+                )
+            else:
+                err = current_lines[-1] if current_lines else "Installation failed"
+                self._state = AiInstallState(
+                    pending_action=st.pending_action,
+                    error=err,
+                    lines=current_lines,
+                )
+            return
+
+        self._state = AiInstallState(
+            pending_action=st.pending_action,
+            installing=True,
+            lines=current_lines,
+        )
+
+    def _ai_plugin_poll(self) -> None:
+        """Called each loop iteration while a plugin is installing."""
+        import dataclasses
+        import threading
+        if not isinstance(self._state, AiSetupState):
+            return
+        st = self._state
+        if st.step != "install_plugin" or not st.plugin_installing:
+            return
+
+        self._install_spinner += 1
+
+        if self._install_thread is None:
+            t = threading.Thread(target=self._ai_install_worker, daemon=True)
+            self._install_thread = t
+            t.start()
+
+        current_lines = list(self._install_output)
+
+        if self._install_returncode is not None:
+            self._install_thread = None
+            if self._install_returncode == 0:
+                self._state = dataclasses.replace(
+                    st, plugin_installing=False, plugin_done=True, plugin_lines=current_lines,
+                )
+            else:
+                err = current_lines[-1] if current_lines else "Installation failed"
+                self._state = dataclasses.replace(
+                    st, plugin_installing=False, plugin_error=err, plugin_lines=current_lines,
+                )
+        else:
+            self._state = dataclasses.replace(st, plugin_lines=current_lines)
+
+    # ──────────────────────────── AI setup wizard ─────────────────────────────────
+
+    def _draw_ai_setup(self, stdscr: "curses.window", rows: int, cols: int) -> None:
+        """Guided AI model setup: mode → provider → model → key? → done."""
+        if not isinstance(self._state, AiSetupState):
+            return
+        st = self._state
+        stdscr.erase()
+        box_w = min(72, cols - 4)
+        list_h = max(4, rows - 10)
+        box_h = min(rows - 2, list_h + 8)
+        y0 = max(0, (rows - box_h) // 2)
+        x0 = max(0, (cols - box_w) // 2)
+        attr = curses.color_pair(_C_SEL)
+        for i in range(box_h):
+            try:
+                stdscr.addstr(y0 + i, x0, " " * box_w, attr)
+            except curses.error:
+                pass
+
+        def _put(row: int, text: str, bold: bool = False, hl: bool = False) -> None:
+            a = (curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD) if hl else (attr | (curses.A_BOLD if bold else 0))
+            try:
+                stdscr.addstr(y0 + row, x0 + 2, text[: box_w - 4], a)
+            except curses.error:
+                pass
+
+        def _center(row: int, text: str, bold: bool = False) -> None:
+            a = attr | (curses.A_BOLD if bold else 0)
+            pad = max(0, (box_w - len(text)) // 2)
+            try:
+                stdscr.addstr(y0 + row, x0 + pad, text[: box_w], a)
+            except curses.error:
+                pass
+
+        def _draw_list(items: list[tuple[str, str]], cursor: int, scroll: int, row_start: int) -> None:
+            for i in range(list_h):
+                idx = scroll + i
+                if idx >= len(items) or row_start + i >= box_h - 2:
+                    break
+                _, lbl = items[idx]
+                _put(row_start + i, ("▶ " if idx == cursor else "  ") + lbl, hl=(idx == cursor))
+
+        providers = st.online_providers if st.mode == "online" else st.offline_providers
+
+        if st.step == "mode":
+            _center(0, " Configure AI model ", bold=True)
+            _put(2, "How do you want to run the AI?")
+            has_online = bool(st.online_providers)
+            has_offline = bool(st.offline_providers)
+            modes = []
+            if has_online:
+                modes.append("☁  Online  — cloud API (requires an API key)")
+            if has_offline:
+                modes.append("⬛  Offline — local model (no key, runs on your machine)")
+            modes.append("📋  Copy-paste — display prompt, paste response from any web AI")
+            if not modes:
+                _put(4, "No models found. Install llm plugins first:")
+                _put(5, "  pip install llm-anthropic   # Claude")
+                _put(6, "  pip install llm-ollama      # Ollama (local)")
+                _put(7, "  pip install llm-gemini      # Gemini")
+            else:
+                for i, lbl in enumerate(modes):
+                    _put(4 + i, ("▶ " if i == st.provider_cursor else "  ") + lbl,
+                         hl=(i == st.provider_cursor))
+            _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] cancel")
+
+        elif st.step == "provider":
+            mode_label = "Online providers  (API key required)" if st.mode == "online" else "Local / offline providers"
+            _center(0, f" {mode_label} ", bold=True)
+            # Build items: providers + install entry
+            items = [(p[0], p[1]) for p in providers] + [("__install__", "+ Install more providers…")]
+            _draw_list(items, st.provider_cursor, st.provider_scroll, 2)
+            if st.error:
+                _put(box_h - 3, st.error)
+            _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] back")
+
+        elif st.step == "install_plugin":
+            if st.plugin_installing:
+                spinner = self._SPINNER[self._install_spinner % 4]
+                _center(0, f" {spinner}  Installing {st.selected_plugin_label}… ", bold=True)
+                recent = st.plugin_lines[-(list_h - 4):]
+                for i, line in enumerate(recent):
+                    _put(2 + i, line)
+                bar_w = box_w - 6
+                pos = (len(st.plugin_lines) * 4) % (bar_w * 2)
+                filled = min(pos, bar_w - pos) if pos > bar_w else pos
+                bar = "█" * max(2, filled) + "░" * (bar_w - max(2, filled))
+                _put(min(box_h - 3, 2 + len(recent) + 1), f"[{bar}]")
+            elif st.plugin_done:
+                _center(0, f" ✓  {st.selected_plugin_label} installed ", bold=True)
+                _center(box_h - 2, "[Enter / Esc] back to provider list")
+            elif st.plugin_error:
+                _center(0, " Installation failed ", bold=True)
+                _put(2, st.plugin_error[:box_w - 4])
+                _center(box_h - 2, "[Esc] back")
+            else:
+                _center(0, " Install a provider plugin ", bold=True)
+                plugins = st.available_plugins
+                if plugins:
+                    _draw_list([(p[0], p[1]) for p in plugins], st.plugin_cursor, st.plugin_scroll, 2)
+                else:
+                    _put(3, "All known providers are already installed.")
+                _center(box_h - 2, "[↑↓] choose    [Enter] install    [Esc] back")
+
+        elif st.step == "model":
+            provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
+            pname = provider[1].split("  ")[0] if provider else st.selected_provider_id
+            _center(0, f" {pname} — choose a model ", bold=True)
+            models = provider[2] if provider else []
+            if models:
+                _draw_list(models, st.model_cursor, st.model_scroll, 2)
+            else:
+                _put(3, "No models detected for this provider.")
+            if st.error:
+                _put(box_h - 3, st.error)
+            _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] back")
+
+        elif st.step == "key":
+            _center(0, f" API key for '{st.selected_model_id}' ", bold=True)
+            _put(2, f"This model requires an API key  (key name: '{st.key_name}').")
+            _put(3, "Get your key from the provider's website or developer console.")
+            _put(5, f"Key: {'*' * len(st.buffer)}█")
+            if st.error:
+                _put(7, st.error)
+            _center(box_h - 2, "[Enter] save & continue    [Esc] skip (configure later)")
+
+        elif st.step == "done":
+            if st.mode == "copypaste":
+                _center(0, " ✓  Copy-paste mode enabled ", bold=True)
+                _center(2, "Prompts will be shown and copied to your clipboard.")
+                _center(3, "Paste the model response back to continue.")
+            else:
+                _center(0, " ✓  AI model configured ", bold=True)
+                _center(2, f"Model: {st.selected_model_id}")
+            if st.pending_action:
+                _center(box_h - 2, "[Enter] start wizard    [Esc] close")
+            else:
+                _center(box_h - 2, "[Enter / Esc] close")
+
+        stdscr.refresh()
+
+    def _on_ai_setup(self, key: int) -> None:  # noqa: C901
+        from . import ai as _ai
+        if not isinstance(self._state, AiSetupState):
+            return
+        st = self._state
+        KEY_UP, KEY_DOWN = 259, 258
+
+        def _s(**kw: object) -> AiSetupState:
+            d = {
+                "step": st.step, "mode": st.mode,
+                "online_providers": st.online_providers,
+                "offline_providers": st.offline_providers,
+                "provider_cursor": st.provider_cursor, "provider_scroll": st.provider_scroll,
+                "model_cursor": st.model_cursor, "model_scroll": st.model_scroll,
+                "selected_provider_id": st.selected_provider_id,
+                "selected_model_id": st.selected_model_id,
+                "key_name": st.key_name, "buffer": st.buffer, "pos": st.pos,
+                "error": st.error, "pending_action": st.pending_action,
+                "available_plugins": st.available_plugins,
+                "plugin_cursor": st.plugin_cursor, "plugin_scroll": st.plugin_scroll,
+                "plugin_installing": st.plugin_installing,
+                "plugin_done": st.plugin_done, "plugin_error": st.plugin_error,
+                "plugin_lines": st.plugin_lines,
+                "selected_plugin_pkg": st.selected_plugin_pkg,
+                "selected_plugin_label": st.selected_plugin_label,
+            }
+            d.update(kw)
+            return AiSetupState(**d)  # type: ignore[arg-type]
+
+        providers = st.online_providers if st.mode == "online" else st.offline_providers
+
+        if st.step == "mode":
+            # Build available mode list same as draw
+            avail = []
+            if st.online_providers:
+                avail.append("online")
+            if st.offline_providers:
+                avail.append("offline")
+            avail.append("copypaste")
+            n = len(avail)
+            if key == 27:
+                self._state = TreeState()
+            elif n > 0 and key in (KEY_UP, ord("k")):
+                self._state = _s(provider_cursor=(st.provider_cursor - 1) % n)
+            elif n > 0 and key in (KEY_DOWN, ord("j")):
+                self._state = _s(provider_cursor=(st.provider_cursor + 1) % n)
+            elif n > 0 and key in (ord("\n"), ord("\r"), 343):
+                mode = avail[st.provider_cursor]
+                if mode == "copypaste":
+                    _ai.save_copypaste(True)
+                    self._state = _s(step="done", mode="copypaste")
+                else:
+                    _ai.save_copypaste(False)
+                    self._state = _s(step="provider", mode=mode, provider_cursor=0, provider_scroll=0)
+
+        elif st.step == "provider":
+            # Items = providers + install entry
+            n = len(providers) + 1
+            install_idx = len(providers)
+            if key == 27:
+                self._state = _s(step="mode", provider_cursor=0)
+            elif key in (KEY_UP, ord("k")):
+                c = max(0, st.provider_cursor - 1)
+                self._state = _s(provider_cursor=c, provider_scroll=min(st.provider_scroll, c))
+            elif key in (KEY_DOWN, ord("j")):
+                c = min(n - 1, st.provider_cursor + 1)
+                self._state = _s(provider_cursor=c, provider_scroll=max(st.provider_scroll, c - 3))
+            elif key in (ord("\n"), ord("\r"), 343):
+                if st.provider_cursor == install_idx:
+                    from . import ai as _ai_mod
+                    installed = {p[0] for p in st.online_providers + st.offline_providers}
+                    plugins = _ai_mod.available_plugins(installed)
+                    self._state = _s(step="install_plugin", available_plugins=plugins,
+                                     plugin_cursor=0, plugin_scroll=0,
+                                     plugin_installing=False, plugin_done=False,
+                                     plugin_error="", plugin_lines=[],
+                                     selected_plugin_pkg="", selected_plugin_label="")
+                else:
+                    pid, _, _ = providers[st.provider_cursor]
+                    self._state = _s(step="model", selected_provider_id=pid,
+                        model_cursor=0, model_scroll=0, error="")
+
+        elif st.step == "install_plugin":
+            if st.plugin_done:
+                if key in (27, ord("\n"), ord("\r"), 343):
+                    from . import ai as _ai_mod
+                    online, offline = _ai_mod.discover_models()
+                    self._state = _s(
+                        step="provider",
+                        online_providers=online, offline_providers=offline,
+                        provider_cursor=0, provider_scroll=0,
+                        plugin_installing=False, plugin_done=False,
+                        plugin_error="", plugin_lines=[],
+                        selected_plugin_pkg="", selected_plugin_label="",
+                    )
+            elif st.plugin_error:
+                if key == 27:
+                    self._state = _s(plugin_error="",
+                                     selected_plugin_pkg="", selected_plugin_label="")
+            elif not st.plugin_installing:
+                plugins = st.available_plugins
+                n = len(plugins)
+                if key == 27:
+                    self._state = _s(step="provider", provider_cursor=0, provider_scroll=0)
+                elif n > 0 and key in (KEY_UP, ord("k")):
+                    c = max(0, st.plugin_cursor - 1)
+                    self._state = _s(plugin_cursor=c, plugin_scroll=min(st.plugin_scroll, c))
+                elif n > 0 and key in (KEY_DOWN, ord("j")):
+                    c = min(n - 1, st.plugin_cursor + 1)
+                    self._state = _s(plugin_cursor=c, plugin_scroll=max(st.plugin_scroll, c - 3))
+                elif n > 0 and key in (ord("\n"), ord("\r"), 343):
+                    _, lbl, pkg = plugins[st.plugin_cursor]
+                    self._install_package = pkg
+                    self._install_output = []
+                    self._install_returncode = None
+                    self._install_spinner = 0
+                    self._install_thread = None
+                    self._state = _s(plugin_installing=True,
+                                     selected_plugin_pkg=pkg, selected_plugin_label=lbl,
+                                     plugin_lines=[])
+
+        elif st.step == "model":
+            provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
+            models = provider[2] if provider else []
+            n = len(models)
+            if key == 27:
+                self._state = _s(step="provider", error="")
+            elif n > 0 and key in (KEY_UP, ord("k")):
+                c = max(0, st.model_cursor - 1)
+                self._state = _s(model_cursor=c, model_scroll=min(st.model_scroll, c))
+            elif n > 0 and key in (KEY_DOWN, ord("j")):
+                c = min(n - 1, st.model_cursor + 1)
+                self._state = _s(model_cursor=c, model_scroll=max(st.model_scroll, c - 3))
+            elif n > 0 and key in (ord("\n"), ord("\r"), 343):
+                mid = models[st.model_cursor][0]
+                key_name = _ai.model_needs_key(mid)
+                if key_name:
+                    self._state = _s(step="key", selected_model_id=mid,
+                        key_name=key_name, buffer="", pos=0, error="")
+                else:
+                    _ai.save_model(mid)
+                    self._state = _s(step="done", selected_model_id=mid)
+
+        elif st.step == "key":
+            if key == 27:
+                _ai.save_model(st.selected_model_id)
+                self._state = _s(step="done", error="")
+            elif key in (ord("\n"), ord("\r"), 343):
+                if st.buffer.strip():
+                    _ai.save_key(st.key_name, st.buffer.strip())
+                    _ai.save_model(st.selected_model_id)
+                    self._state = _s(step="done", error="")
+                else:
+                    self._state = _s(error="Enter a key value or press Esc to skip")
+            elif key in (263, 127, 8):
+                self._state = _s(buffer=st.buffer[:-1], pos=max(0, st.pos - 1))
+            elif 32 <= key < 256:
+                self._state = _s(buffer=st.buffer + chr(key), pos=st.pos + 1)
+
+        elif st.step == "done":
+            if key in (27, ord("q")):
+                self._state = TreeState()
+            elif key in (ord("\n"), ord("\r"), 343):
+                self._state = TreeState()
+                if st.pending_action:
+                    self._trigger_action(st.pending_action)
 
     def _on_lang_pick(self, key: int, rows: int) -> None:
         if not isinstance(self._state, LangPickState):

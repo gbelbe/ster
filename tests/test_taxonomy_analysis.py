@@ -17,7 +17,9 @@ from ster.taxonomy_analysis import (
     _compute_stats,
     _detect_alt_same_as_pref,
     _detect_broken_broader,
+    _detect_broken_mappings,
     _detect_broken_narrower,
+    _detect_missing_in_scheme,
     _detect_broken_top_concepts,
     _detect_circular_hierarchy,
     _detect_duplicate_pref_label,
@@ -297,6 +299,69 @@ def test_detect_duplicate_pref_label():
     assert all(i.severity == SEVERITY_WARNING for i in issues)
 
 
+def test_detect_missing_in_scheme():
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri = BASE + "A"
+    orphan_uri = BASE + "Orphan"
+    ca = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)])
+    orphan = Concept(uri=orphan_uri, labels=[Label("en", "O", LabelType.PREF)])
+    t.concepts[a_uri] = ca
+    t.concepts[orphan_uri] = orphan
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri])  # orphan not reachable
+    issues = _detect_missing_in_scheme(t, s_uri, [a_uri])
+    assert len(issues) == 1
+    assert issues[0].concept_uri == orphan_uri
+    assert issues[0].severity == SEVERITY_ERROR
+
+
+def test_detect_missing_in_scheme_skips_non_primary():
+    """Only the first scheme runs this detector to avoid duplicate reporting."""
+    t = Taxonomy()
+    s1_uri = BASE + "S1"
+    s2_uri = BASE + "S2"
+    a_uri = BASE + "A"
+    orphan_uri = BASE + "Orphan"
+    t.concepts[a_uri] = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)])
+    t.concepts[orphan_uri] = Concept(uri=orphan_uri, labels=[Label("en", "O", LabelType.PREF)])
+    t.schemes[s1_uri] = ConceptScheme(uri=s1_uri, top_concepts=[a_uri])
+    t.schemes[s2_uri] = ConceptScheme(uri=s2_uri, top_concepts=[a_uri])
+    # Running for s2 (second scheme) should produce no issues
+    assert _detect_missing_in_scheme(t, s2_uri, [a_uri]) == []
+    # Running for s1 (first scheme) should flag the orphan
+    issues = _detect_missing_in_scheme(t, s1_uri, [a_uri])
+    assert len(issues) == 1
+
+
+def test_detect_broken_mappings():
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri = BASE + "A"
+    ghost = BASE + "Ghost"
+    c = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)], exact_match=[ghost])
+    t.concepts[a_uri] = c
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri])
+    issues = _detect_broken_mappings(t, s_uri, [a_uri])
+    assert len(issues) == 1
+    assert issues[0].severity == SEVERITY_WARNING
+    assert issues[0].extra["attr"] == "exact_match"
+    assert issues[0].extra["target_uri"] == ghost
+
+
+def test_detect_broken_mappings_no_issue_when_target_exists():
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri = BASE + "A"
+    b_uri = BASE + "B"
+    ca = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)], exact_match=[b_uri])
+    cb = Concept(uri=b_uri, labels=[Label("en", "B", LabelType.PREF)])
+    t.concepts[a_uri] = ca
+    t.concepts[b_uri] = cb
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri, b_uri])
+    issues = _detect_broken_mappings(t, s_uri, [a_uri, b_uri])
+    assert issues == []
+
+
 # ── analyze_scheme ────────────────────────────────────────────────────────────
 
 
@@ -342,6 +407,8 @@ def test_analyze_taxonomy_all_schemes():
 def test_round_trip_serialisation():
     t, s = _tax_with_concepts([("en", "A")], [("en", "B")])
     t.concepts[BASE + "C0"].definitions.append(Definition("en", "Def"))
+    # Add a broken mapping to exercise extra field serialization
+    t.concepts[BASE + "C0"].exact_match.append(BASE + "Ghost")
     analysis = analyze_scheme(t, s)
     d = scheme_analysis_to_dict(analysis)
     restored = scheme_analysis_from_dict(d)
@@ -354,3 +421,4 @@ def test_round_trip_serialisation():
         assert rest.issue_key == orig.issue_key
         assert rest.severity == orig.severity
         assert rest.concept_uri == orig.concept_uri
+        assert rest.extra == orig.extra

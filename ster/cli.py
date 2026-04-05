@@ -41,14 +41,11 @@ _AUTHOR = "ster contributors"
 def _print_welcome() -> None:
     from rich.panel import Panel
 
-    from .wizard import _ASCII
-
     console.print()
     console.print(
         Panel(
-            _ASCII + f"\n\n"
             f"[bold]SKOS Taxonomy Editor[/bold]  [dim]v{_VERSION}[/dim]\n\n"
-            "[dim]Select a taxonomy file, create a new one, or browse git history.[/dim]\n"
+            "[dim]Select a taxonomy file or browse git history.[/dim]\n"
             "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
             border_style="cyan",
             padding=(1, 4),
@@ -81,6 +78,7 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 # Sentinels returned by _pick_file_interactive for special menu entries
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
+_AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
@@ -460,14 +458,16 @@ def _run(fn, *args, **kwargs):
 
 def _multi_file_picker(
     found: list[Path],
-    preselect: list[Path] | None = None,
 ) -> list[Path] | Path | None:
-    """Checkbox picker for taxonomy files plus action items (git log, new, quit).
+    """File list display + action menu picker.
+
+    Shows all taxonomy files with ✓ checkmarks (read-only display).
+    The navigable cursor is placed directly on the action menu items.
 
     Returns:
-      list[Path]         — files to open (Enter on a file row, or Enter on open action)
+      list[Path]         — all found files (user chose Open Tree View)
       _GIT_LOG_SENTINEL  — user chose Browse git history
-      None               — user chose Create new taxonomy
+      _HTML_SENTINEL     — user chose Generate webpage
       _QUIT_SENTINEL     — user chose Quit
     Ctrl+C / plain Esc also returns _QUIT_SENTINEL.
     Falls back to a plain prompt in non-interactive terminals.
@@ -477,36 +477,28 @@ def _multi_file_picker(
     if not found:
         return []
 
-    # All files pre-checked by default; honour project preselect if provided
-    selected: set[int] = set(range(len(found)))
-    if preselect is not None:
-        override = {i for i, f in enumerate(found) if f in preselect}
-        if override:
-            selected = override
-
-    # Action items appended below the file list (numbered 1-based from 1)
+    # Action items — cursor lives here only
     _ACTIONS: list[tuple[object, str]] = [
-        (True, "↵  Open checked files"),  # True = "open" sentinel
+        (True, "↵  Open Tree View"),  # True = "open" sentinel
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_HTML_SENTINEL, "🌐 Generate webpage"),
-        (None, "+ Create new taxonomy"),
+        (_AI_CONFIG_SENTINEL, "⚙  Configure AI"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
     n_actions = len(_ACTIONS)
-    n_total = n_files + n_actions
 
     # ── Non-TTY fallback ──────────────────────────────────────────────────────
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         for f in found:
             console.print(f"  ✓  {f.name}")
-        console.print("  [cyan] 1[/cyan]  ↵  Open checked files")
+        console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
         console.print("  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
         console.print("  [cyan] 3[/cyan]  [blue]🌐 Generate webpage[/blue]")
-        console.print("  [cyan] 4[/cyan]  [green]+ Create new taxonomy[/green]")
+        console.print("  [cyan] 4[/cyan]  [cyan]⚙  Configure AI[/cyan]")
         console.print("  [cyan] 5[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–5) or filename to toggle", default="1")
+        choice = Prompt.ask("Action (1–5)", default="1")
         s = choice.strip().lower()
         if s == "1" or s == "all":
             return list(found)
@@ -515,10 +507,9 @@ def _multi_file_picker(
         if s == "3":
             return _HTML_SENTINEL  # type: ignore[return-value]
         if s == "4":
-            return None
+            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
         if s == "5":
             return _QUIT_SENTINEL  # type: ignore[return-value]
-        # filename match → toggle and reask (simplified: just open all)
         return list(found)
 
     try:
@@ -539,7 +530,8 @@ def _multi_file_picker(
     CLEAR = "\r\033[2K"
     NL = "\r\n"
 
-    cursor = 0
+    # Cursor operates only on action items (0-based index into _ACTIONS)
+    action_cursor = 0
 
     def _action_colour(sentinel: object) -> str:
         if sentinel == _GIT_LOG_SENTINEL:
@@ -548,42 +540,35 @@ def _multi_file_picker(
             return "\033[34m"  # blue
         if sentinel == _QUIT_SENTINEL:
             return RE
-        if sentinel is True:
-            return CY  # "open checked files"
-        return GR  # create new
+        if sentinel == _AI_CONFIG_SENTINEL:
+            return CY  # cyan
+        return CY  # "open tree view"
 
     def render(first: bool = False) -> None:
         total_lines = n_files + 1 + n_actions + 1  # files + blank sep + actions + hint
         if not first:
             sys.stdout.write(f"\033[{total_lines}A")
 
-        # File rows — checkbox only, no number
-        for i, f in enumerate(found):
-            tick = f"{GR}✓{R}" if i in selected else f"{D}·{R}"
-            if i == cursor:
-                row = f"  {BCY}{INV}   {R}  {tick}  {B}{f.name}{R}"
-            else:
-                row = f"       {tick}  {f.name}"
+        # File rows — static display with ✓, no cursor
+        for f in found:
+            row = f"       {GR}✓{R}  {f.name}"
             sys.stdout.write(f"{CLEAR}{row}{NL}")
 
         # Blank separator line
         sys.stdout.write(f"{CLEAR}{NL}")
 
-        # Action rows — numbered 1…n_actions
+        # Action rows — cursor navigates here
         for j, (sentinel, label) in enumerate(_ACTIONS):
             col = _action_colour(sentinel)
-            idx = n_files + j
             num_s = f"{j + 1:>2}"
-            if idx == cursor:
+            if j == action_cursor:
                 row = f"  {BCY}{INV} {num_s} {R}  {col}{B}{label}{R}"
             else:
                 row = f"    {CY}{num_s}{R}  {col}{label}{R}"
             sys.stdout.write(f"{CLEAR}{row}{NL}")
 
         # Hint line
-        sys.stdout.write(
-            f"{CLEAR}  {D}Space: toggle  a: all  n: none  ↑↓: navigate  Enter/1: open{R}{NL}"
-        )
+        sys.stdout.write(f"{CLEAR}  {D}↑↓ navigate  Enter: select{R}{NL}")
         sys.stdout.flush()
 
     render(first=True)
@@ -593,20 +578,20 @@ def _multi_file_picker(
 
     try:
         tty.setraw(fd)
+        # Discard any bytes left in the OS input buffer from a previous curses
+        # session (e.g. a second Escape pressed quickly while quitting the tree
+        # view). Without this flush the stray \x1b is read here and interpreted
+        # as Quit, causing the picker to exit immediately.
+        termios.tcflush(fd, termios.TCIFLUSH)
         while True:
             ch = sys.stdin.buffer.read(1)
 
             if ch in (b"\r", b"\n"):
-                if cursor < n_files:
-                    # Enter on a file row → open checked files
-                    result = [found[i] for i in sorted(selected)]
+                sentinel, _ = _ACTIONS[action_cursor]
+                if sentinel is True:
+                    result = list(found)
                 else:
-                    sentinel, _ = _ACTIONS[cursor - n_files]
-                    if sentinel is True:
-                        # "Open checked files" action
-                        result = [found[i] for i in sorted(selected)]
-                    else:
-                        result = sentinel  # type: ignore[assignment]
+                    result = sentinel  # type: ignore[assignment]
                 break
 
             elif ch in (b"q", b"Q", b"\x03"):
@@ -618,25 +603,12 @@ def _multi_file_picker(
                 if nxt == b"[":
                     code = sys.stdin.buffer.read(1)
                     if code == b"A":
-                        cursor = (cursor - 1) % n_total
+                        action_cursor = (action_cursor - 1) % n_actions
                     elif code == b"B":
-                        cursor = (cursor + 1) % n_total
+                        action_cursor = (action_cursor + 1) % n_actions
                 else:
                     result = _QUIT_SENTINEL
                     break
-
-            elif ch == b" " and cursor < n_files:
-                if cursor in selected:
-                    selected.discard(cursor)
-                else:
-                    selected.add(cursor)
-
-            elif ch in (b"a", b"A"):
-                selected = set(range(n_files))
-                cursor = 0
-
-            elif ch in (b"n", b"N"):
-                selected.clear()
 
             render()
 
@@ -701,6 +673,44 @@ def _load_workspace(
     workspace = TaxonomyWorkspace.from_files(files)
     _resolve_broken_mappings_at_load(workspace, all_found)
     return workspace
+
+
+# ──────────────────────────── AI config launcher ─────────────────────────────
+
+
+def _launch_ai_config(found: list[Path]) -> None:
+    """Open the TUI with the AI model configuration wizard pre-triggered."""
+    from .nav import TaxonomyViewer
+    from .workspace import TaxonomyWorkspace
+
+    if found:
+        try:
+            workspace = TaxonomyWorkspace.from_files([found[0]])
+            primary = found[0]
+        except Exception:
+            workspace = TaxonomyWorkspace.from_files([])
+            primary = found[0]
+    else:
+        primary = Path.cwd() / "taxonomy.ttl"
+        workspace = TaxonomyWorkspace.from_files([])
+
+    from .model import Taxonomy
+    if found and found[0] in workspace.taxonomies:
+        taxonomy = workspace.taxonomies[found[0]]
+    else:
+        taxonomy = Taxonomy()
+
+    from .git_manager import GitManager
+    gm = GitManager(primary)
+
+    viewer = TaxonomyViewer(
+        taxonomy,
+        primary,
+        workspace=workspace,
+        git_manager=gm,
+    )
+    viewer._trigger_action("open_ai_config")
+    viewer.run()
 
 
 # ──────────────────────────── viewer helper ──────────────────────────────────
@@ -1018,148 +1028,6 @@ def cmd_rename(
     _save(taxonomy, taxonomy_file)
 
 
-# ──────────────────────────── wizard helper ───────────────────────────────────
-
-
-def _run_create_wizard(default_path: Path | None = None) -> None:
-    """Run the creation wizard and create the resulting taxonomy file.
-
-    Loops if the chosen file already exists so the user can pick a different
-    name.  Does nothing (returns silently) if the user cancels.
-    """
-    from . import wizard
-    from .git_manager import GitManager
-
-    console.print("[dim]Running the creation wizard…[/dim]\n")
-
-    while True:
-        try:
-            result = wizard.run(default_path=default_path)
-        except (KeyboardInterrupt, EOFError):
-            console.print()
-            return  # Ctrl+C in wizard → silently return to caller
-        if result is None:
-            return  # user cancelled
-
-        if result.file_path.exists():
-            console.print(
-                f"[yellow]⚠  {result.file_path} already exists.[/yellow]  "
-                "Please choose a different file name."
-            )
-            default_path = result.file_path  # pre-fill so user can edit it
-            continue
-        break
-
-    taxonomy = Taxonomy()
-    _run(
-        operations.create_scheme,
-        taxonomy,
-        result.base_uri + "scheme",
-        result.titles,
-        result.descriptions or None,
-        result.creator,
-        result.created,
-        result.languages,
-        result.base_uri,
-    )
-    result.file_path.parent.mkdir(parents=True, exist_ok=True)
-    _save(taxonomy, result.file_path)
-    _save_session(result.file_path)
-    global _session_file
-    _session_file = result.file_path
-    console.print(
-        "\n[bold green]Taxonomy created![/bold green]  "
-        "Open it with [cyan]ster show[/cyan] or [cyan]ster[/cyan]\n"
-    )
-
-    gm = GitManager(result.file_path)
-    if gm.is_enabled() and not gm.is_configured():
-        try:
-            want_git = Confirm.ask("Add taxonomy to git repository?", default=True)
-        except (KeyboardInterrupt, EOFError):
-            want_git = False
-        if want_git:
-            gm.setup()
-            if gm.is_configured():
-                msg = _make_taxonomy_commit_msg(taxonomy, result.file_path)
-                gm.commit_new_taxonomy(msg)
-
-
-# ──────────────────────────── init (wizard) ──────────────────────────────────
-
-
-@app.command("init")
-def cmd_init(
-    file: Path | None = typer.Argument(
-        None, help="Output file path (.ttl / .rdf / .jsonld). Prompted if omitted."
-    ),
-) -> None:
-    """Set up a taxonomy in the current folder.
-
-    • If no taxonomy files exist: run the creation wizard, then offer git setup.
-    • If files already exist: open one in the interactive viewer; on quit, offer git setup.
-    """
-    from .git_manager import GitManager
-    from .nav import TaxonomyViewer
-
-    _print_welcome()
-
-    # Discover existing taxonomy files
-    found: list[Path] = []
-    for pattern in _TAXONOMY_GLOBS:
-        found.extend(Path.cwd().glob(pattern))
-    found = sorted(set(found))
-
-    # ── Case 1: no files → run creation wizard ────────────────────────────────
-    if not found:
-        console.print("[bold]No taxonomy file found in the current folder.[/bold]")
-        _run_create_wizard(default_path=file)
-        return
-
-    # ── Case 2: files exist → pick one, open viewer, offer git on quit ────────
-    console.print("[bold]Taxonomy files in this folder:[/bold]\n")
-    saved = _load_session()
-
-    picked = _pick_file_interactive(found, preselect=saved)
-    if picked is None:
-        # User chose "Create new taxonomy" → run wizard directly (no recursion)
-        _run_create_wizard()
-        return
-    taxonomy_file = picked
-    _save_session(taxonomy_file)
-    global _session_file
-    _session_file = taxonomy_file
-
-    taxonomy = _load(taxonomy_file)
-
-    gm = GitManager(taxonomy_file)
-    if gm.is_enabled() and gm.is_configured():
-        from .git_manager import render_diff
-
-        diff = gm.pre_edit_check()
-        if diff:
-            console.print("\n[bold]Changes pulled from remote:[/bold]")
-            render_diff(diff)
-            console.print()
-        gm.record_head()
-
-    viewer = TaxonomyViewer(taxonomy, taxonomy_file, git_manager=gm)
-    viewer.run()
-
-    if gm.is_enabled() and gm.is_configured():
-        gm.commit_and_push()
-    elif gm.is_enabled() and not gm.is_configured():
-        try:
-            want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
-        except (KeyboardInterrupt, EOFError):
-            want_git = False
-        if want_git:
-            gm.setup()
-            if gm.is_configured():
-                msg = _make_taxonomy_commit_msg(taxonomy, taxonomy_file)
-                gm.commit_new_taxonomy(msg)
-
-
 # ──────────────────────────── log (git history browser) ─────────────────────
 
 
@@ -1194,6 +1062,9 @@ def cmd_log(
             file = found[0]
 
     launch_git_log(path=file, repo=repo)
+
+
+# ──────────────────────────── ai config ──────────────────────────────────────
 
 
 # ──────────────────────────── nav (bash-like REPL) ───────────────────────────
@@ -1533,20 +1404,18 @@ def main() -> None:
             found.extend(Path.cwd().glob(pattern))
         found = sorted(set(found))
 
-        # ── No files in folder → run creation wizard ──────────────────────────
+        # ── No files in folder → inform user and exit ─────────────────────────
         if not found:
             console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
-            _run_create_wizard()
-            continue
+            break
 
-        # ── Check for existing project (drives preselection) ──────────────────
+        # ── Load project for lang preference ──────────────────────────────────
         project = Project.load(Path.cwd())
-        preselect = project.resolved_files() if project else None
 
         console.print("[bold]Taxonomy files in this folder:[/bold]\n")
 
         try:
-            selected = _multi_file_picker(found, preselect=preselect)
+            selected = _multi_file_picker(found)
         except (KeyboardInterrupt, EOFError):
             console.print()
             break
@@ -1562,9 +1431,11 @@ def main() -> None:
             _run_html_export_interactive(found)
             continue
 
+        if selected is _AI_CONFIG_SENTINEL:
+            _launch_ai_config(found)
+            continue
+
         if not selected:
-            # All files unchecked → create new taxonomy
-            _run_create_wizard()
             continue
 
         # Normalise: _multi_file_picker may return a single Path or list[Path]
