@@ -5105,22 +5105,48 @@ class TaxonomyViewer:
                 _put(2, "No models detected for this provider.")
                 hint_row = 4
                 if st.selected_provider_id == "llm_ollama":
-                    _put(hint_row, "Start the Ollama daemon and pull a model:")
-                    _put(hint_row + 1, "    ollama pull llama3")
-                    hint_row += 3
+                    _put(hint_row, "Make sure Ollama is installed and running:")
+                    _put(hint_row + 1, "    https://ollama.com/download")
+                    _put(hint_row + 2, "Then pull a model in a terminal:")
+                    _put(hint_row + 3, "    ollama pull llama3")
+                    hint_row += 5
                 else:
                     _put(hint_row, "Start the provider service or configure it,")
                     _put(hint_row + 1, "then press [R] to refresh.")
                     hint_row += 3
-                refresh_row = min(hint_row, box_h - 4)
+                action_row = min(hint_row, box_h - 5)
                 _put(
-                    refresh_row,
+                    action_row,
                     ("▶ " if st.model_cursor == 0 else "  ") + "↺  Refresh model list",
                     hl=(st.model_cursor == 0),
                 )
+                _put(
+                    action_row + 1,
+                    ("▶ " if st.model_cursor == 1 else "  ") + "✏  Enter model ID manually",
+                    hl=(st.model_cursor == 1),
+                )
             if st.error:
                 _put(box_h - 3, st.error)
-            _center(box_h - 2, "[↑↓ / R] refresh    [Enter] select    [Esc] back")
+            _center(box_h - 2, "[↑↓] choose    [R] refresh    [Enter] select    [Esc] back")
+
+        elif st.step == "model_input":
+            provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
+            pname = provider[1].split("  ")[0] if provider else st.selected_provider_id
+            _center(0, f" {pname} — enter model ID ", bold=True)
+            _put(2, "Type the model ID exactly as shown by the provider.")
+            if st.selected_provider_id == "llm_ollama":
+                _put(3, "Example:  llama3    mistral    phi3")
+            # Inline edit bar with ▌ cursor
+            buf, pos = st.buffer, st.pos
+            bar_w = box_w - 8
+            offset = max(0, pos - bar_w + 1)
+            visible = buf[offset : offset + bar_w]
+            cursor_rel = pos - offset
+            display = visible[:cursor_rel] + "▌" + visible[cursor_rel:]
+            _put(5, f"Model ID:  {display[: bar_w + 1]}", bold=True)
+            if st.error:
+                _put(7, st.error)
+            _center(box_h - 2, "[Enter] confirm    [Esc] back")
 
         elif st.step == "key":
             _center(0, f" API key for '{st.selected_model_id}' ", bold=True)
@@ -5305,8 +5331,8 @@ class TaxonomyViewer:
             provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
             models = provider[2] if provider else []
             n = len(models)
-            # R or Enter on Refresh row (when no models) → re-discover
-            if key in (ord("r"), ord("R")) or (n == 0 and key in (ord("\n"), ord("\r"), 343)):
+            if key in (ord("r"), ord("R")):
+                # R always refreshes
                 online, offline = _ai.discover_models()
                 self._state = _s(
                     online_providers=online,
@@ -5317,6 +5343,24 @@ class TaxonomyViewer:
                 )
             elif key == 27:
                 self._state = _s(step="provider", error="")
+            elif n == 0 and key in (KEY_UP, ord("k")):
+                self._state = _s(model_cursor=max(0, st.model_cursor - 1))
+            elif n == 0 and key in (KEY_DOWN, ord("j")):
+                self._state = _s(model_cursor=min(1, st.model_cursor + 1))
+            elif n == 0 and key in (ord("\n"), ord("\r"), 343):
+                if st.model_cursor == 0:
+                    # Refresh
+                    online, offline = _ai.discover_models()
+                    self._state = _s(
+                        online_providers=online,
+                        offline_providers=offline,
+                        model_cursor=0,
+                        model_scroll=0,
+                        error="",
+                    )
+                else:
+                    # Enter model ID manually
+                    self._state = _s(step="model_input", buffer="", pos=0, error="")
             elif n > 0 and key in (KEY_UP, ord("k")):
                 c = max(0, st.model_cursor - 1)
                 self._state = _s(model_cursor=c, model_scroll=min(st.model_scroll, c))
@@ -5338,6 +5382,48 @@ class TaxonomyViewer:
                 else:
                     _ai.save_model(mid)
                     self._state = _s(step="done", selected_model_id=mid)
+
+        elif st.step == "model_input":
+            if key == 27:
+                self._state = _s(step="model", model_cursor=1, error="")
+            elif key in (ord("\n"), ord("\r"), 343):
+                mid = st.buffer.strip()
+                if not mid:
+                    self._state = _s(error="Please enter a model ID.")
+                else:
+                    key_name = _ai.model_needs_key(mid)
+                    if key_name:
+                        self._state = _s(
+                            step="key",
+                            selected_model_id=mid,
+                            key_name=key_name,
+                            buffer="",
+                            pos=0,
+                            error="",
+                        )
+                    else:
+                        _ai.save_model(mid)
+                        self._state = _s(step="done", selected_model_id=mid)
+            else:
+                # Text editing — reuse the same logic as key step
+                buf, pos = st.buffer, st.pos
+                KEY_BS = curses.KEY_BACKSPACE
+                if key in (KEY_BS, 127, 8):
+                    buf, pos = buf[: pos - 1] + buf[pos:], max(0, pos - 1)
+                elif key == curses.KEY_LEFT:
+                    pos = max(0, pos - 1)
+                elif key == curses.KEY_RIGHT:
+                    pos = min(len(buf), pos + 1)
+                elif key == 1:  # Ctrl+A
+                    pos = 0
+                elif key == 5:  # Ctrl+E
+                    pos = len(buf)
+                elif key == 11:  # Ctrl+K
+                    buf, pos = buf[:pos], pos
+                elif 32 <= key < 256:
+                    buf = buf[:pos] + chr(key) + buf[pos:]
+                    pos += 1
+                self._state = _s(buffer=buf, pos=pos, error="")
 
         elif st.step == "key":
             if key == 27:
