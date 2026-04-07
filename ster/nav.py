@@ -4912,21 +4912,34 @@ class TaxonomyViewer:
             import pty
 
             master_fd, slave_fd = pty.openpty()
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                close_fds=True,
-            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                )
+            except Exception:
+                os.close(slave_fd)
+                raise
             os.close(slave_fd)
             use_pty = True
+        except FileNotFoundError:
+            self._install_output.append(f"Command not found: {cmd[0]}")
+            self._install_returncode = 127
+            return
         except (ImportError, OSError):
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+            except FileNotFoundError:
+                self._install_output.append(f"Command not found: {cmd[0]}")
+                self._install_returncode = 127
+                return
             use_pty = False
 
         # --- byte-by-byte reader: \r overwrites last line, \n appends ----------
@@ -5554,21 +5567,29 @@ class TaxonomyViewer:
                 if key == 27:
                     self._state = _s(step="model", model_cursor=1, error="")
                 elif key in (ord("\n"), ord("\r"), 343):
+                    import shutil
+
                     model_name = st.buffer.strip()
                     if not model_name:
                         self._state = _s(plugin_error="Please enter a model name.")
                     else:
-                        self._install_command = ["ollama", "pull", model_name]
-                        self._install_output = []
-                        self._install_returncode = None
-                        self._install_spinner = 0
-                        self._install_thread = None
-                        self._state = _s(
-                            plugin_installing=True,
-                            selected_plugin_label=model_name,
-                            plugin_lines=[],
-                            plugin_error="",
-                        )
+                        ollama_path = shutil.which("ollama")
+                        if not ollama_path:
+                            self._state = _s(
+                                plugin_error="'ollama' not found. Install from https://ollama.com/download"
+                            )
+                        else:
+                            self._install_command = [ollama_path, "pull", model_name]
+                            self._install_output = []
+                            self._install_returncode = None
+                            self._install_spinner = 0
+                            self._install_thread = None
+                            self._state = _s(
+                                plugin_installing=True,
+                                selected_plugin_label=model_name,
+                                plugin_lines=[],
+                                plugin_error="",
+                            )
                 else:
                     buf, pos = st.buffer, st.pos
                     KEY_BS = curses.KEY_BACKSPACE
