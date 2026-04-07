@@ -835,8 +835,11 @@ class TaxonomyViewer:
 
             elif isinstance(self._state, CreateState):
                 if self._state.ai_generating:
-                    self._draw_create(stdscr, rows, cols)
-                    self._run_generate(stdscr, self._create_ai_generate)
+                    self._run_generate(
+                        stdscr,
+                        self._create_ai_generate,
+                        lambda r=rows, c=cols: self._draw_create(stdscr, r, c),
+                    )
                 else:
                     self._draw_create(stdscr, rows, cols)
                     key = stdscr.getch()
@@ -849,11 +852,17 @@ class TaxonomyViewer:
                 bcs = self._state
                 draft = bcs.drafts[bcs.current] if bcs.drafts else None
                 if draft and draft.alts_generating:
-                    self._draw_batch(stdscr, rows, cols)
-                    self._run_generate(stdscr, self._batch_generate_alts)
+                    self._run_generate(
+                        stdscr,
+                        self._batch_generate_alts,
+                        lambda r=rows, c=cols: self._draw_batch(stdscr, r, c),
+                    )
                 elif draft and draft.def_generating:
-                    self._draw_batch(stdscr, rows, cols)
-                    self._run_generate(stdscr, self._batch_generate_def)
+                    self._run_generate(
+                        stdscr,
+                        self._batch_generate_def,
+                        lambda r=rows, c=cols: self._draw_batch(stdscr, r, c),
+                    )
                 else:
                     self._draw_batch(stdscr, rows, cols)
                     key = stdscr.getch()
@@ -2393,17 +2402,43 @@ class TaxonomyViewer:
         """Return (taxonomy_name, taxonomy_description, parent_label) from a CreateState."""
         return self._build_ai_context_from_uri(cs.parent_uri)
 
-    def _run_generate(self, stdscr: curses.window, fn) -> None:
-        """Run an AI generate function, suspending curses first in copypaste mode."""
+    def _run_generate(self, stdscr: curses.window, fn, draw_fn=None) -> None:
+        """Run an AI generate function with an animated spinner.
+
+        In copy-paste mode curses is suspended around the interactive prompt.
+        Otherwise the function runs in a background thread while the main loop
+        redraws every 120 ms so the spinner character actually animates.
+        *draw_fn* is called each poll tick; if omitted the last frame is kept.
+        """
+        import threading
+
         from . import ai as _ai
 
         if _ai.is_copypaste():
             curses.endwin()
-        try:
-            fn()
-        finally:
-            if _ai.is_copypaste():
+            try:
+                fn()
+            finally:
                 stdscr.refresh()
+            return
+
+        done: list[bool] = [False]
+
+        def _worker() -> None:
+            try:
+                fn()
+            finally:
+                done[0] = True
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        while not done[0]:
+            self._install_spinner += 1
+            if draw_fn is not None:
+                draw_fn()
+            else:
+                stdscr.refresh()
+            curses.napms(120)
 
     def _create_ai_generate(self) -> None:
         """Called from main loop when CreateState.ai_generating is True."""
