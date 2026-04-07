@@ -522,6 +522,7 @@ class TaxonomyViewer:
         self._install_returncode: int | None = None
         self._install_spinner: int = 0
         self._install_package: str = "llm"  # package passed to pip install
+        self._install_command: list[str] | None = None  # if set, overrides pip install
 
         self._rebuild()
         # Start with the global overview panel; cursor moves will update to item-specific detail
@@ -4873,11 +4874,23 @@ class TaxonomyViewer:
             )
 
     def _ai_install_worker(self) -> None:
-        """Daemon thread: runs pip install and collects output."""
+        """Daemon thread: runs a subprocess command and collects output.
+
+        Uses self._install_command if set, otherwise falls back to
+        ``pip install self._install_package``.
+        """
         import subprocess
 
+        cmd = self._install_command or [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-color",
+            self._install_package,
+        ]
         proc = subprocess.Popen(
-            [sys.executable, "-m", "pip", "install", "--no-color", self._install_package],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -4933,14 +4946,14 @@ class TaxonomyViewer:
         )
 
     def _ai_plugin_poll(self) -> None:
-        """Called each loop iteration while a plugin is installing."""
+        """Called each loop iteration while a plugin is installing or a model is pulling."""
         import dataclasses
         import threading
 
         if not isinstance(self._state, AiSetupState):
             return
         st = self._state
-        if st.step != "install_plugin" or not st.plugin_installing:
+        if st.step not in ("install_plugin", "ollama_pull") or not st.plugin_installing:
             return
 
         self._install_spinner += 1
@@ -4954,6 +4967,7 @@ class TaxonomyViewer:
 
         if self._install_returncode is not None:
             self._install_thread = None
+            self._install_command = None  # reset so next pip install is unaffected
             if self._install_returncode == 0:
                 self._state = dataclasses.replace(
                     st,
@@ -5064,6 +5078,36 @@ class TaxonomyViewer:
                 _put(box_h - 3, st.error)
             _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] back")
 
+        elif st.step == "ollama_pull":
+            if st.plugin_installing:
+                spinner = self._SPINNER[self._install_spinner % 4]
+                _center(0, f" {spinner}  Pulling {st.selected_plugin_label}… ", bold=True)
+                recent = st.plugin_lines[-(list_h - 4) :]
+                for i, line in enumerate(recent):
+                    _put(2 + i, line)
+            elif st.plugin_done:
+                _center(0, f" ✓  {st.selected_plugin_label} pulled ", bold=True)
+                _center(box_h - 2, "[Enter / Esc] continue")
+            elif st.plugin_error:
+                _center(0, " Pull failed ", bold=True)
+                _put(2, st.plugin_error[: box_w - 4])
+                _put(3, "Check that the Ollama daemon is running.")
+                _center(box_h - 2, "[Esc] back")
+            else:
+                # Input step: choose model name to pull
+                _center(0, " Pull an Ollama model ", bold=True)
+                _put(2, "Enter the model name to pull (e.g. llama3, mistral, phi3):")
+                buf, pos = st.buffer, st.pos
+                bar_w = box_w - 8
+                offset = max(0, pos - bar_w + 1)
+                visible = buf[offset : offset + bar_w]
+                cursor_rel = pos - offset
+                display = visible[:cursor_rel] + "▌" + visible[cursor_rel:]
+                _put(4, f"Model:  {display[: bar_w + 1]}", bold=True)
+                if st.plugin_error:
+                    _put(6, st.plugin_error[: box_w - 4])
+                _center(box_h - 2, "[Enter] pull    [Esc] back")
+
         elif st.step == "install_plugin":
             if st.plugin_installing:
                 spinner = self._SPINNER[self._install_spinner % 4]
@@ -5104,27 +5148,28 @@ class TaxonomyViewer:
             else:
                 _put(2, "No models detected for this provider.")
                 hint_row = 4
-                if st.selected_provider_id == "llm_ollama":
-                    _put(hint_row, "Make sure Ollama is installed and running:")
+                is_ollama = st.selected_provider_id == "llm_ollama"
+                if is_ollama:
+                    _put(hint_row, "Ollama must be installed and running:")
                     _put(hint_row + 1, "    https://ollama.com/download")
-                    _put(hint_row + 2, "Then pull a model in a terminal:")
-                    _put(hint_row + 3, "    ollama pull llama3")
-                    hint_row += 5
+                    hint_row += 3
                 else:
                     _put(hint_row, "Start the provider service or configure it,")
                     _put(hint_row + 1, "then press [R] to refresh.")
                     hint_row += 3
                 action_row = min(hint_row, box_h - 5)
-                _put(
-                    action_row,
-                    ("▶ " if st.model_cursor == 0 else "  ") + "↺  Refresh model list",
-                    hl=(st.model_cursor == 0),
+                actions = (
+                    [
+                        "↺  Refresh model list",
+                        "⬇  Pull a model (ollama pull…)",
+                        "✏  Enter model ID manually",
+                    ]
+                    if is_ollama
+                    else ["↺  Refresh model list", "✏  Enter model ID manually"]
                 )
-                _put(
-                    action_row + 1,
-                    ("▶ " if st.model_cursor == 1 else "  ") + "✏  Enter model ID manually",
-                    hl=(st.model_cursor == 1),
-                )
+                for i, action in enumerate(actions):
+                    sel = st.model_cursor == i
+                    _put(action_row + i, ("▶ " if sel else "  ") + action, hl=sel)
             if st.error:
                 _put(box_h - 3, st.error)
             _center(box_h - 2, "[↑↓] choose    [R] refresh    [Enter] select    [Esc] back")
@@ -5344,10 +5389,14 @@ class TaxonomyViewer:
             elif key == 27:
                 self._state = _s(step="provider", error="")
             elif n == 0 and key in (KEY_UP, ord("k")):
+                is_ollama = st.selected_provider_id == "llm_ollama"
                 self._state = _s(model_cursor=max(0, st.model_cursor - 1))
             elif n == 0 and key in (KEY_DOWN, ord("j")):
-                self._state = _s(model_cursor=min(1, st.model_cursor + 1))
+                is_ollama = st.selected_provider_id == "llm_ollama"
+                n_actions = 3 if is_ollama else 2
+                self._state = _s(model_cursor=min(n_actions - 1, st.model_cursor + 1))
             elif n == 0 and key in (ord("\n"), ord("\r"), 343):
+                is_ollama = st.selected_provider_id == "llm_ollama"
                 if st.model_cursor == 0:
                     # Refresh
                     online, offline = _ai.discover_models()
@@ -5357,6 +5406,18 @@ class TaxonomyViewer:
                         model_cursor=0,
                         model_scroll=0,
                         error="",
+                    )
+                elif is_ollama and st.model_cursor == 1:
+                    # Pull a model
+                    self._state = _s(
+                        step="ollama_pull",
+                        buffer="llama3",
+                        pos=len("llama3"),
+                        plugin_installing=False,
+                        plugin_done=False,
+                        plugin_error="",
+                        plugin_lines=[],
+                        selected_plugin_label="",
                     )
                 else:
                     # Enter model ID manually
@@ -5383,9 +5444,78 @@ class TaxonomyViewer:
                     _ai.save_model(mid)
                     self._state = _s(step="done", selected_model_id=mid)
 
+        elif st.step == "ollama_pull":
+            if st.plugin_done:
+                if key in (27, ord("\n"), ord("\r"), 343):
+                    # Done — refresh model list and return to model step
+                    online, offline = _ai.discover_models()
+                    self._state = _s(
+                        step="model",
+                        online_providers=online,
+                        offline_providers=offline,
+                        model_cursor=0,
+                        model_scroll=0,
+                        plugin_installing=False,
+                        plugin_done=False,
+                        plugin_error="",
+                        plugin_lines=[],
+                        error="",
+                    )
+            elif st.plugin_error:
+                if key == 27:
+                    self._state = _s(
+                        plugin_error="",
+                        plugin_installing=False,
+                        plugin_done=False,
+                        plugin_lines=[],
+                        buffer="llama3",
+                        pos=len("llama3"),
+                    )
+            elif st.plugin_installing:
+                pass  # wait for poll to finish
+            else:
+                # Input step: edit model name then confirm
+                if key == 27:
+                    self._state = _s(step="model", model_cursor=1, error="")
+                elif key in (ord("\n"), ord("\r"), 343):
+                    model_name = st.buffer.strip()
+                    if not model_name:
+                        self._state = _s(plugin_error="Please enter a model name.")
+                    else:
+                        self._install_command = ["ollama", "pull", model_name]
+                        self._install_output = []
+                        self._install_returncode = None
+                        self._install_spinner = 0
+                        self._install_thread = None
+                        self._state = _s(
+                            plugin_installing=True,
+                            selected_plugin_label=model_name,
+                            plugin_lines=[],
+                            plugin_error="",
+                        )
+                else:
+                    buf, pos = st.buffer, st.pos
+                    KEY_BS = curses.KEY_BACKSPACE
+                    if key in (KEY_BS, 127, 8):
+                        buf, pos = buf[: pos - 1] + buf[pos:], max(0, pos - 1)
+                    elif key == curses.KEY_LEFT:
+                        pos = max(0, pos - 1)
+                    elif key == curses.KEY_RIGHT:
+                        pos = min(len(buf), pos + 1)
+                    elif key == 1:
+                        pos = 0
+                    elif key == 5:
+                        pos = len(buf)
+                    elif key == 11:
+                        buf, pos = buf[:pos], pos
+                    elif 32 <= key < 256:
+                        buf = buf[:pos] + chr(key) + buf[pos:]
+                        pos += 1
+                    self._state = _s(buffer=buf, pos=pos, plugin_error="")
+
         elif st.step == "model_input":
             if key == 27:
-                self._state = _s(step="model", model_cursor=1, error="")
+                self._state = _s(step="model", model_cursor=2, error="")
             elif key in (ord("\n"), ord("\r"), 343):
                 mid = st.buffer.strip()
                 if not mid:
