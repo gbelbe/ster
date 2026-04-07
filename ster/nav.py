@@ -950,7 +950,10 @@ class TaxonomyViewer:
 
             elif isinstance(self._state, AiSetupState):
                 _had_pending = bool(self._state.pending_action)
-                if self._state.step == "install_plugin" and self._state.plugin_installing:
+                if (
+                    self._state.step in ("install_plugin", "ollama_pull")
+                    and self._state.plugin_installing
+                ):
                     self._draw_ai_setup(stdscr, rows, cols)
                     self._ai_plugin_poll()
                     curses.napms(120)
@@ -4873,12 +4876,26 @@ class TaxonomyViewer:
                 installing=True,
             )
 
+    @staticmethod
+    def _strip_ansi(data: bytes) -> bytes:
+        """Remove ANSI/VT100 escape sequences from a byte string."""
+        import re
+
+        return re.sub(rb"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", b"", data)
+
     def _ai_install_worker(self) -> None:
         """Daemon thread: runs a subprocess command and collects output.
 
         Uses self._install_command if set, otherwise falls back to
         ``pip install self._install_package``.
+
+        Uses a PTY on Unix so the subprocess flushes output immediately
+        (pipe mode causes block-buffering in many programs, e.g. ollama).
+        Falls back to a plain pipe if pty is unavailable (Windows).
+        Handles both \\n-terminated lines (pip) and \\r progress-bar lines
+        (ollama) so the display updates live.
         """
+        import os
         import subprocess
 
         cmd = self._install_command or [
@@ -4889,40 +4906,76 @@ class TaxonomyViewer:
             "--no-color",
             self._install_package,
         ]
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        assert proc.stdout is not None
-        # Read byte-by-byte so we handle both \n (pip) and \r (ollama progress bars).
-        # On \r: overwrite the last output line in-place (live progress effect).
-        # On \n: commit the current line as a new entry.
+
+        # --- open a PTY so the child sees a TTY and flushes promptly ----------
+        try:
+            import pty
+
+            master_fd, slave_fd = pty.openpty()
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            use_pty = True
+        except (ImportError, OSError):
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            use_pty = False
+
+        # --- byte-by-byte reader: \r overwrites last line, \n appends ----------
         buf = b""
-        while True:
-            ch = proc.stdout.read(1)
-            if not ch:
-                break
-            if ch == b"\r":
-                line = buf.decode("utf-8", errors="replace").strip()
-                buf = b""
-                if not line:
-                    continue
+
+        def _flush(sep: bytes) -> None:
+            nonlocal buf
+            raw = self._strip_ansi(buf).decode("utf-8", errors="replace").strip()
+            buf = b""
+            if not raw:
+                return
+            if sep == b"\r":
                 if self._install_output:
-                    self._install_output[-1] = line
+                    self._install_output[-1] = raw
                 else:
-                    self._install_output.append(line)
-            elif ch == b"\n":
-                line = buf.decode("utf-8", errors="replace").strip()
-                buf = b""
-                if line:
-                    self._install_output.append(line)
+                    self._install_output.append(raw)
             else:
-                buf += ch
-        if buf:
-            line = buf.decode("utf-8", errors="replace").strip()
-            if line:
-                self._install_output.append(line)
+                self._install_output.append(raw)
+
+        if use_pty:
+            while True:
+                try:
+                    chunk = os.read(master_fd, 256)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                for byte in chunk:
+                    b = bytes([byte])
+                    if b in (b"\r", b"\n"):
+                        _flush(b)
+                    else:
+                        buf += b
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        else:
+            assert proc.stdout is not None
+            while True:
+                b = proc.stdout.read(1)
+                if not b:
+                    break
+                if b in (b"\r", b"\n"):
+                    _flush(b)
+                else:
+                    buf += b
+
+        _flush(b"\n")  # flush any remaining buffer
         proc.wait()
         self._install_returncode = proc.returncode
 
