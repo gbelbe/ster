@@ -5103,9 +5103,21 @@ class TaxonomyViewer:
                 _draw_list(models, st.model_cursor, st.model_scroll, 2)
             else:
                 _put(3, "No models detected for this provider.")
+                if st.selected_provider_id == "llm_ollama":
+                    _put(5, "Make sure the Ollama daemon is running and you have")
+                    _put(6, "pulled at least one model:")
+                    _put(7, "    ollama pull llama3")
+                    _put(
+                        9,
+                        ("▶ " if st.model_cursor == 0 else "  ") + "↺  Refresh model list",
+                        hl=(st.model_cursor == 0),
+                    )
+                else:
+                    _put(5, "Start the provider service or check your configuration,")
+                    _put(6, "then press [R] to refresh.")
             if st.error:
                 _put(box_h - 3, st.error)
-            _center(box_h - 2, "[↑↓] choose    [Enter] select    [Esc] back")
+            _center(box_h - 2, "[↑↓] choose    [Enter] select    [R] refresh    [Esc] back")
 
         elif st.step == "key":
             _center(0, f" API key for '{st.selected_model_id}' ", bold=True)
@@ -5290,7 +5302,17 @@ class TaxonomyViewer:
             provider = next((p for p in providers if p[0] == st.selected_provider_id), None)
             models = provider[2] if provider else []
             n = len(models)
-            if key == 27:
+            # R or Enter on Refresh row (when no models) → re-discover
+            if key in (ord("r"), ord("R")) or (n == 0 and key in (ord("\n"), ord("\r"), 343)):
+                online, offline = _ai.discover_models()
+                self._state = _s(
+                    online_providers=online,
+                    offline_providers=offline,
+                    model_cursor=0,
+                    model_scroll=0,
+                    error="",
+                )
+            elif key == 27:
                 self._state = _s(step="provider", error="")
             elif n > 0 and key in (KEY_UP, ord("k")):
                 c = max(0, st.model_cursor - 1)

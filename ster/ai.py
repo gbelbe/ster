@@ -217,9 +217,19 @@ ProviderEntry = tuple[str, str, list[tuple[str, str]]]
 
 
 def discover_models() -> tuple[list[ProviderEntry], list[ProviderEntry]]:
-    """Return (online_providers, offline_providers) discovered live from llm.get_models()."""
+    """Return (online_providers, offline_providers) discovered live from llm.get_models().
+
+    Also includes installed plugins that returned no models (e.g. llm-ollama when the
+    Ollama server is not running) so they still appear in the provider list.
+    """
     if not is_available():
         return [], []
+
+    import importlib
+    import importlib.util
+
+    # Make sure a freshly pip-installed package is visible to the current process.
+    importlib.invalidate_caches()
 
     online: dict[str, tuple[str, list[tuple[str, str]]]] = {}
     offline: dict[str, tuple[str, list[tuple[str, str]]]] = {}
@@ -241,6 +251,17 @@ def discover_models() -> tuple[list[ProviderEntry], list[ProviderEntry]]:
             bucket[module][1].append((m.model_id, m.model_id))
     except Exception:
         pass
+
+    # Fallback: include known plugins that are installed but returned no models.
+    # This covers e.g. llm-ollama when the Ollama daemon is not running — the
+    # plugin is importable but its get_models() returns nothing.
+    for module_id, display_label, _pkg in _KNOWN_PLUGIN_DEFS:
+        if (
+            module_id not in online
+            and module_id not in offline
+            and importlib.util.find_spec(module_id) is not None
+        ):
+            offline[module_id] = (display_label, [])
 
     def _to_list(bucket: dict) -> list[ProviderEntry]:
         return [(mid, lbl, models) for mid, (lbl, models) in sorted(bucket.items())]
