@@ -1386,15 +1386,25 @@ def test_on_batch_alt_labels_esc_returns_to_label(simple_taxonomy, tmp_path):
 # ── Batch concept wizard — _on_batch_definition ──────────────────────────────
 
 
-def test_on_batch_definition_enter_advances(simple_taxonomy, tmp_path):
-    """Enter in definition step advances to next concept / recap."""
+def test_on_batch_definition_enter_creates_and_confirms(simple_taxonomy, tmp_path):
+    """Enter in definition step creates the concept and transitions to confirm step."""
     v = _make_viewer(simple_taxonomy, tmp_path)
-    draft = BatchConceptDraft(name="Only", pref_label="Only", definition="A definition.")
-    bcs = BatchCreateState(drafts=[draft], current=0, step="definition")
+    draft = BatchConceptDraft(
+        name="OnlyUnique", pref_label="Only Unique", definition="A definition."
+    )
+    bcs = BatchCreateState(
+        parent_uri=BASE + "Scheme",
+        drafts=[draft],
+        current=0,
+        step="definition",
+    )
     v._state = bcs
     v._on_batch_definition(ord("\n"), 24, bcs)
 
-    assert bcs.step == "recap"
+    assert bcs.step == "confirm"
+    assert bcs.confirm_cursor == 0
+    # Concept was created in the taxonomy
+    assert any("OnlyUnique" in uri for uri in simple_taxonomy.concepts)
 
 
 def test_on_batch_definition_esc_returns_to_alt_labels(simple_taxonomy, tmp_path):
@@ -1422,6 +1432,65 @@ def test_on_batch_definition_edit_updates_definition(simple_taxonomy, tmp_path):
 
     assert draft.definition == "AB"
     assert bcs.def_pos == 2
+
+
+# ── Batch concept wizard — _on_batch_confirm ─────────────────────────────────
+
+
+def test_on_batch_confirm_continue_advances_to_next_label(simple_taxonomy, tmp_path):
+    """Continue in confirm step (not last) advances to label step of next concept."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    drafts = [
+        BatchConceptDraft(name="Alpha", pref_label="Alpha"),
+        BatchConceptDraft(name="Beta", pref_label="Beta"),
+    ]
+    bcs = BatchCreateState(drafts=drafts, current=0, step="confirm", confirm_cursor=0)
+    v._state = bcs
+    v._on_batch_confirm(ord("\n"), 24, bcs)
+
+    assert bcs.current == 1
+    assert bcs.step == "label"
+    assert bcs.label_buffer == "Beta"
+
+
+def test_on_batch_confirm_stop_navigates_away(simple_taxonomy, tmp_path):
+    """Stop (cursor=1) in confirm step navigates back to tree or detail."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    # Pre-create a concept so _navigate_after_batch can find it
+    from ster import operations
+
+    operations.add_concept(
+        simple_taxonomy,
+        BASE + "ConfirmStop",
+        {"en": "Confirm Stop"},
+        parent_handle=None,
+    )
+    v._rebuild()
+    drafts = [BatchConceptDraft(name="ConfirmStop", pref_label="Confirm Stop")]
+    bcs = BatchCreateState(
+        parent_uri=BASE + "Scheme",
+        drafts=drafts,
+        current=0,
+        step="confirm",
+        confirm_cursor=1,
+        came_from_tree=True,
+    )
+    v._state = bcs
+    v._on_batch_confirm(ord("\n"), 24, bcs)
+
+    # Should have navigated to a non-batch state
+    assert not isinstance(v._state, BatchCreateState)
+
+
+def test_on_batch_confirm_last_concept_shows_done_only(simple_taxonomy, tmp_path):
+    """On the last concept, confirm cursor is capped at 0 (only Done action)."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    drafts = [BatchConceptDraft(name="Solo", pref_label="Solo")]
+    bcs = BatchCreateState(drafts=drafts, current=0, step="confirm", confirm_cursor=0)
+    v._state = bcs
+    # Down key should not go past 0 on last concept
+    v._on_batch_confirm(258, 24, bcs)  # 258 = curses.KEY_DOWN
+    assert bcs.confirm_cursor == 0  # stays at 0 — only 1 action ("Done")
 
 
 # ── Batch concept wizard — AI functions ──────────────────────────────────────
