@@ -20,6 +20,8 @@ from ster.nav import (
     flatten_tree,
 )
 from ster.nav_state import (
+    BatchConceptDraft,
+    BatchCreateState,
     CreateState,
     DetailState,
     EditState,
@@ -1122,3 +1124,331 @@ def test_ai_discover_models_returns_tuple():
     online, offline = ai.discover_models()
     assert isinstance(online, list)
     assert isinstance(offline, list)
+
+
+# ── Batch concept wizard — state dataclasses ─────────────────────────────────
+
+
+def test_batch_concept_draft_defaults():
+    """BatchConceptDraft has sensible defaults for all optional fields."""
+    draft = BatchConceptDraft(name="Machine Learning", pref_label="Machine Learning")
+    assert draft.alt_labels == []
+    assert draft.alt_checked == []
+    assert draft.definition == ""
+    assert draft.alts_generating is False
+    assert draft.def_generating is False
+    assert draft.alts_error == ""
+    assert draft.def_error == ""
+
+
+def test_batch_create_state_defaults():
+    """BatchCreateState defaults to 'label' step with empty drafts."""
+    bcs = BatchCreateState()
+    assert bcs.step == "label"
+    assert bcs.drafts == []
+    assert bcs.current == 0
+    assert bcs.label_buffer == ""
+    assert bcs.label_pos == 0
+    assert bcs.error == ""
+
+
+# ── Batch concept wizard — _apply_line_edit ──────────────────────────────────
+
+
+def _make_viewer(taxonomy, tmp_path):
+    """Helper: create a TaxonomyViewer pointing at a temp file."""
+    f = tmp_path / "vocab.ttl"
+    f.write_text("")
+    return TaxonomyViewer(taxonomy, f, lang="en")
+
+
+def test_apply_line_edit_printable(simple_taxonomy, tmp_path):
+    """Printable char inserts at cursor position."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("ab", 1, ord("X"))
+    assert buf == "aXb"
+    assert pos == 2
+
+
+def test_apply_line_edit_backspace(simple_taxonomy, tmp_path):
+    """Backspace removes the char before the cursor."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("abc", 2, 127)
+    assert buf == "ac"
+    assert pos == 1
+
+
+def test_apply_line_edit_ctrl_a(simple_taxonomy, tmp_path):
+    """Ctrl+A moves cursor to start."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("hello", 4, 1)
+    assert buf == "hello"
+    assert pos == 0
+
+
+def test_apply_line_edit_ctrl_e(simple_taxonomy, tmp_path):
+    """Ctrl+E moves cursor to end."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("hello", 2, 5)
+    assert buf == "hello"
+    assert pos == 5
+
+
+def test_apply_line_edit_ctrl_k(simple_taxonomy, tmp_path):
+    """Ctrl+K kills text from cursor to end of line."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("hello world", 5, 11)
+    assert buf == "hello"
+    assert pos == 5
+
+
+def test_apply_line_edit_ctrl_w(simple_taxonomy, tmp_path):
+    """Ctrl+W deletes the word before the cursor."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("foo bar", 7, 23)
+    assert buf == "foo "
+    assert pos == 4
+
+
+def test_apply_line_edit_unknown_key(simple_taxonomy, tmp_path):
+    """Unknown keys leave buffer and position unchanged."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    buf, pos = v._apply_line_edit("abc", 1, 999)
+    assert buf == "abc"
+    assert pos == 1
+
+
+# ── Batch concept wizard — _launch_batch_create ──────────────────────────────
+
+
+def test_launch_batch_create_builds_drafts(simple_taxonomy, tmp_path):
+    """_launch_batch_create builds BatchCreateState from checked candidates."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    cs = CreateState(
+        parent_uri=BASE + "Scheme",
+        ai_candidates=["Alpha", "Beta", "Gamma"],
+        ai_checked=[True, False, True],
+        came_from_tree=True,
+    )
+    v._state = cs
+    v._launch_batch_create(cs)
+
+    bcs = v._state
+    assert isinstance(bcs, BatchCreateState)
+    assert len(bcs.drafts) == 2
+    assert bcs.drafts[0].name == "Alpha"
+    assert bcs.drafts[1].name == "Gamma"
+    assert bcs.drafts[0].alts_generating is True
+    assert bcs.drafts[1].alts_generating is False
+    assert bcs.came_from_tree is True
+    assert bcs.step == "label"
+
+
+# ── Batch concept wizard — _batch_advance_or_recap ───────────────────────────
+
+
+def test_batch_advance_or_recap_next_concept(simple_taxonomy, tmp_path):
+    """Advances to the next concept when not on last draft."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        drafts=[
+            BatchConceptDraft(name="A", pref_label="A"),
+            BatchConceptDraft(name="B", pref_label="B"),
+        ],
+        current=0,
+        step="definition",
+    )
+    v._state = bcs
+    v._batch_advance_or_recap(bcs)
+
+    assert bcs.current == 1
+    assert bcs.step == "label"
+    assert bcs.label_buffer == "B"
+
+
+def test_batch_advance_or_recap_last_goes_to_recap(simple_taxonomy, tmp_path):
+    """Advances to 'recap' step when on the last draft."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        drafts=[BatchConceptDraft(name="Only", pref_label="Only")],
+        current=0,
+        step="definition",
+    )
+    v._state = bcs
+    v._batch_advance_or_recap(bcs)
+
+    assert bcs.step == "recap"
+    assert bcs.recap_cursor == 0
+
+
+# ── Batch concept wizard — _on_batch_label ───────────────────────────────────
+
+
+def test_on_batch_label_enter_advances_to_alt_labels(simple_taxonomy, tmp_path):
+    """Enter on label step confirms the label and moves to alt_labels step."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        drafts=[BatchConceptDraft(name="Alpha", pref_label="Alpha")],
+        current=0,
+        step="label",
+        label_buffer="Machine Learning",
+        label_pos=16,
+    )
+    v._state = bcs
+    v._on_batch_label(ord("\n"), 24, bcs)
+
+    assert bcs.step == "alt_labels"
+    assert bcs.drafts[0].pref_label == "Machine Learning"
+    assert bcs.drafts[0].def_generating is True
+
+
+def test_on_batch_label_esc_cancels_to_tree(simple_taxonomy, tmp_path):
+    """Esc on label step cancels and returns to TreeState (came_from_tree=True)."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        drafts=[BatchConceptDraft(name="Alpha", pref_label="Alpha")],
+        came_from_tree=True,
+        step="label",
+        label_buffer="Alpha",
+    )
+    v._state = bcs
+    v._on_batch_label(27, 24, bcs)
+
+    assert isinstance(v._state, TreeState)
+
+
+def test_on_batch_label_edit_updates_buffer(simple_taxonomy, tmp_path):
+    """Typing in label step appends to the label_buffer."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        drafts=[BatchConceptDraft(name="Alpha", pref_label="Alpha")],
+        step="label",
+        label_buffer="A",
+        label_pos=1,
+    )
+    v._state = bcs
+    v._on_batch_label(ord("I"), 24, bcs)
+
+    assert bcs.label_buffer == "AI"
+    assert bcs.label_pos == 2
+
+
+# ── Batch concept wizard — _on_batch_alt_labels ──────────────────────────────
+
+
+def test_on_batch_alt_labels_space_toggles(simple_taxonomy, tmp_path):
+    """Space toggles a checkbox in alt_labels step."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(
+        name="Alpha",
+        pref_label="Alpha",
+        alt_labels=["ML", "AI"],
+        alt_checked=[True, True],
+    )
+    bcs = BatchCreateState(drafts=[draft], step="alt_labels", alt_cursor=0)
+    v._state = bcs
+    v._on_batch_alt_labels(ord(" "), 24, bcs)
+
+    assert draft.alt_checked[0] is False
+    assert draft.alt_checked[1] is True
+
+
+def test_on_batch_alt_labels_enter_on_done_advances(simple_taxonomy, tmp_path):
+    """Enter on 'Done' row in alt_labels step advances to definition step."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(
+        name="Alpha", pref_label="Alpha", alt_labels=["ML"], alt_checked=[True]
+    )
+    bcs = BatchCreateState(
+        drafts=[draft],
+        step="alt_labels",
+        alt_cursor=1,  # Done row (index = len(alt_labels))
+    )
+    v._state = bcs
+    v._on_batch_alt_labels(ord("\n"), 24, bcs)
+
+    assert bcs.step == "definition"
+
+
+def test_on_batch_alt_labels_esc_returns_to_label(simple_taxonomy, tmp_path):
+    """Esc in alt_labels step goes back to label step."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(
+        name="Alpha", pref_label="Alpha", alt_labels=["ML"], alt_checked=[True]
+    )
+    bcs = BatchCreateState(drafts=[draft], step="alt_labels")
+    v._state = bcs
+    v._on_batch_alt_labels(27, 24, bcs)
+
+    assert bcs.step == "label"
+
+
+# ── Batch concept wizard — _on_batch_definition ──────────────────────────────
+
+
+def test_on_batch_definition_enter_advances(simple_taxonomy, tmp_path):
+    """Enter in definition step advances to next concept / recap."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(name="Only", pref_label="Only", definition="A definition.")
+    bcs = BatchCreateState(drafts=[draft], current=0, step="definition")
+    v._state = bcs
+    v._on_batch_definition(ord("\n"), 24, bcs)
+
+    assert bcs.step == "recap"
+
+
+def test_on_batch_definition_esc_returns_to_alt_labels(simple_taxonomy, tmp_path):
+    """Esc in definition step goes back to alt_labels step."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(
+        name="Only", pref_label="Only", alt_labels=["X", "Y"], alt_checked=[True, False]
+    )
+    bcs = BatchCreateState(drafts=[draft], step="definition")
+    v._state = bcs
+    v._on_batch_definition(27, 24, bcs)
+
+    assert bcs.step == "alt_labels"
+    assert bcs.alt_cursor == len(draft.alt_labels)  # cursor on Done row
+
+
+def test_on_batch_definition_edit_updates_definition(simple_taxonomy, tmp_path):
+    """Typing in definition step appends to draft.definition."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    draft = BatchConceptDraft(name="Only", pref_label="Only", definition="A")
+    bcs = BatchCreateState(drafts=[draft], step="definition")
+    bcs.def_pos = 1
+    v._state = bcs
+    v._on_batch_definition(ord("B"), 24, bcs)
+
+    assert draft.definition == "AB"
+    assert bcs.def_pos == 2
+
+
+# ── Batch concept wizard — AI functions ──────────────────────────────────────
+
+
+def test_suggest_alt_labels_parses_response(tmp_path, monkeypatch):
+    """suggest_alt_labels cleans and returns parsed labels from LLM response."""
+    from ster import ai
+
+    monkeypatch.setattr(ai, "_call", lambda prompt, task: "1. ML\n2. AI\n3. Deep Learning\n")
+    result = ai.suggest_alt_labels("Machine Learning", "Tech taxonomy", "", "en")
+    assert result == ["ML", "AI", "Deep Learning"]
+
+
+def test_suggest_alt_labels_caps_at_five(tmp_path, monkeypatch):
+    """suggest_alt_labels returns at most 5 labels."""
+    from ster import ai
+
+    monkeypatch.setattr(ai, "_call", lambda p, t: "A\nB\nC\nD\nE\nF\nG\n")
+    result = ai.suggest_alt_labels("X", "T", "", "en")
+    assert len(result) <= 5
+
+
+def test_suggest_definition_strips_response(tmp_path, monkeypatch):
+    """suggest_definition returns stripped text from LLM response."""
+    from ster import ai
+
+    monkeypatch.setattr(ai, "_call", lambda p, t: "  A concise definition.  \n")
+    result = ai.suggest_definition("Concept", "Taxonomy", "", None, "en")
+    assert result == "A concise definition."

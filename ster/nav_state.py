@@ -63,6 +63,7 @@ class CreateState:
     # Default "form" keeps all existing call-sites unchanged.
     step: str = "form"
     ai_candidates: list[str] = dc_field(default_factory=list)
+    ai_checked: list[bool] = dc_field(default_factory=list)  # parallel to ai_candidates
     ai_seen: list[str] = dc_field(default_factory=list)
     ai_generating: bool = False
     ai_cursor: int = 0
@@ -184,6 +185,49 @@ class AiSetupState:
     selected_plugin_label: str = ""
 
 
+@dataclass
+class BatchConceptDraft:
+    """Evolving data for one concept being built in the batch creation wizard."""
+
+    name: str  # original AI-suggested name (used as URI slug)
+    pref_label: str  # editable preferred label
+    alt_labels: list[str] = dc_field(default_factory=list)  # AI-suggested alt labels
+    alt_checked: list[bool] = dc_field(default_factory=list)  # True = include in concept
+    definition: str = ""  # AI-suggested / user-edited definition
+    # Per-draft generation flags (polled from the main loop)
+    alts_generating: bool = False
+    def_generating: bool = False
+    alts_error: str = ""
+    def_error: str = ""
+
+
+@dataclass
+class BatchCreateState:
+    """Wizard state for creating multiple AI-selected concepts in one flow.
+
+    Steps per concept: "label" → "alt_labels" → "definition"
+    After all concepts: "recap" → submit
+    """
+
+    parent_uri: str | None = None
+    came_from_tree: bool = False
+    drafts: list[BatchConceptDraft] = dc_field(default_factory=list)
+    current: int = 0  # index of concept currently being edited
+    step: str = "label"  # "label" | "alt_labels" | "definition" | "recap"
+    # label step — inline text buffer
+    label_buffer: str = ""
+    label_pos: int = 0
+    # alt_labels step — cursor over checkbox rows + "Done" action
+    alt_cursor: int = 0
+    alt_scroll: int = 0
+    # definition step — inline text buffer
+    def_pos: int = 0
+    # recap step
+    recap_cursor: int = 0
+    recap_scroll: int = 0
+    error: str = ""
+
+
 ViewerState = (
     TreeState
     | WelcomeState
@@ -191,6 +235,7 @@ ViewerState = (
     | EditState
     | CreateState
     | SchemeCreateState
+    | BatchCreateState
     | ConfirmDeleteState
     | MovePickState
     | LangPickState
