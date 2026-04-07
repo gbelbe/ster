@@ -5102,22 +5102,25 @@ class TaxonomyViewer:
             if models:
                 _draw_list(models, st.model_cursor, st.model_scroll, 2)
             else:
-                _put(3, "No models detected for this provider.")
+                _put(2, "No models detected for this provider.")
+                hint_row = 4
                 if st.selected_provider_id == "llm_ollama":
-                    _put(5, "Make sure the Ollama daemon is running and you have")
-                    _put(6, "pulled at least one model:")
-                    _put(7, "    ollama pull llama3")
-                    _put(
-                        9,
-                        ("▶ " if st.model_cursor == 0 else "  ") + "↺  Refresh model list",
-                        hl=(st.model_cursor == 0),
-                    )
+                    _put(hint_row, "Start the Ollama daemon and pull a model:")
+                    _put(hint_row + 1, "    ollama pull llama3")
+                    hint_row += 3
                 else:
-                    _put(5, "Start the provider service or check your configuration,")
-                    _put(6, "then press [R] to refresh.")
+                    _put(hint_row, "Start the provider service or configure it,")
+                    _put(hint_row + 1, "then press [R] to refresh.")
+                    hint_row += 3
+                refresh_row = min(hint_row, box_h - 4)
+                _put(
+                    refresh_row,
+                    ("▶ " if st.model_cursor == 0 else "  ") + "↺  Refresh model list",
+                    hl=(st.model_cursor == 0),
+                )
             if st.error:
                 _put(box_h - 3, st.error)
-            _center(box_h - 2, "[↑↓] choose    [Enter] select    [R] refresh    [Esc] back")
+            _center(box_h - 2, "[↑↓ / R] refresh    [Enter] select    [Esc] back")
 
         elif st.step == "key":
             _center(0, f" API key for '{st.selected_model_id}' ", bold=True)
