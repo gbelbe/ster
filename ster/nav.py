@@ -4893,11 +4893,34 @@ class TaxonomyViewer:
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
         )
         assert proc.stdout is not None
-        for raw in proc.stdout:
-            line = raw.rstrip()
+        # Read byte-by-byte so we handle both \n (pip) and \r (ollama progress bars).
+        # On \r: overwrite the last output line in-place (live progress effect).
+        # On \n: commit the current line as a new entry.
+        buf = b""
+        while True:
+            ch = proc.stdout.read(1)
+            if not ch:
+                break
+            if ch == b"\r":
+                line = buf.decode("utf-8", errors="replace").strip()
+                buf = b""
+                if not line:
+                    continue
+                if self._install_output:
+                    self._install_output[-1] = line
+                else:
+                    self._install_output.append(line)
+            elif ch == b"\n":
+                line = buf.decode("utf-8", errors="replace").strip()
+                buf = b""
+                if line:
+                    self._install_output.append(line)
+            else:
+                buf += ch
+        if buf:
+            line = buf.decode("utf-8", errors="replace").strip()
             if line:
                 self._install_output.append(line)
         proc.wait()
