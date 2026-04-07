@@ -437,3 +437,56 @@ def suggest_concept_names(
     ]
     seen_set = {e.lower() for e in ex}
     return [r for r in results if r.lower() not in seen_set][:n]
+
+
+# ── Feature: suggest alternative labels ───────────────────────────────────────
+
+
+def suggest_alt_labels(
+    pref_label: str,
+    taxonomy_name: str,
+    taxonomy_description: str,
+    lang: str,
+) -> list[str]:
+    """Return up to 5 alternative-label suggestions for a concept."""
+    desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
+    prompt_text = _P.TMPL_SUGGEST_ALT_LABELS.substitute(
+        taxonomy_name=taxonomy_name,
+        taxonomy_description_line=desc_line,
+        pref_label=pref_label,
+        lang=lang,
+    )
+    text = _call(prompt_text, _P.SUGGEST_ALT_LABELS)
+
+    def _clean(ln: str) -> str:
+        return _NUMBERING_RE.sub("", ln.strip()).strip().strip('"').strip("'")
+
+    return [_clean(ln) for ln in text.splitlines() if _is_label(_NUMBERING_RE.sub("", ln.strip()))][
+        :5
+    ]
+
+
+# ── Feature: suggest definition ───────────────────────────────────────────────
+
+
+def suggest_definition(
+    pref_label: str,
+    taxonomy_name: str,
+    taxonomy_description: str,
+    parent_label: str | None,
+    lang: str,
+) -> str:
+    """Return an AI-suggested skos:definition for a concept."""
+    desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
+    if parent_label:
+        parent_line = f'Parent concept: "{parent_label}"\n'
+    else:
+        parent_line = "Scope: top-level concept\n"
+    prompt_text = _P.TMPL_SUGGEST_DEFINITION.substitute(
+        taxonomy_name=taxonomy_name,
+        taxonomy_description_line=desc_line,
+        parent_line=parent_line,
+        pref_label=pref_label,
+        lang=lang,
+    )
+    return _call(prompt_text, _P.SUGGEST_DEFINITION).strip()

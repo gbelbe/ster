@@ -52,6 +52,8 @@ from .nav_logic import (  # noqa: F401
 from .nav_state import (
     AiInstallState,
     AiSetupState,
+    BatchConceptDraft,
+    BatchCreateState,
     ConfirmDeleteState,
     CreateState,
     DetailState,
@@ -841,6 +843,23 @@ class TaxonomyViewer:
                         curses.update_lines_cols()
                         continue
                     self._on_create(key, rows)
+
+            elif isinstance(self._state, BatchCreateState):
+                bcs = self._state
+                draft = bcs.drafts[bcs.current] if bcs.drafts else None
+                if draft and draft.alts_generating:
+                    self._draw_batch(stdscr, rows, cols)
+                    self._run_generate(stdscr, self._batch_generate_alts)
+                elif draft and draft.def_generating:
+                    self._draw_batch(stdscr, rows, cols)
+                    self._run_generate(stdscr, self._batch_generate_def)
+                else:
+                    self._draw_batch(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_batch(key, rows)
 
             elif isinstance(self._state, ConfirmDeleteState):
                 self._draw_confirm(stdscr, rows, cols)
@@ -2344,11 +2363,8 @@ class TaxonomyViewer:
 
     # ── Add-concept AI helpers ────────────────────────────────────────────────
 
-    def _build_ai_context(self, cs: CreateState) -> tuple[str, str, str | None]:
-        """Return (taxonomy_name, taxonomy_description, parent_label).
-
-        parent_label is None when the parent is a scheme (top-concept context).
-        """
+    def _build_ai_context_from_uri(self, parent_uri: str | None) -> tuple[str, str, str | None]:
+        """Return (taxonomy_name, taxonomy_description, parent_label) from a parent URI."""
         scheme = self.taxonomy.primary_scheme()
         taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
 
@@ -2362,12 +2378,16 @@ class TaxonomyViewer:
                 taxonomy_description = scheme.descriptions[0].value
 
         parent_label: str | None = None
-        if cs.parent_uri and cs.parent_uri not in self.taxonomy.schemes:
-            parent_concept = self.taxonomy.concepts.get(cs.parent_uri)
+        if parent_uri and parent_uri not in self.taxonomy.schemes:
+            parent_concept = self.taxonomy.concepts.get(parent_uri)
             if parent_concept:
                 parent_label = parent_concept.pref_label(self.lang)
 
         return taxonomy_name, taxonomy_description, parent_label
+
+    def _build_ai_context(self, cs: CreateState) -> tuple[str, str, str | None]:
+        """Return (taxonomy_name, taxonomy_description, parent_label) from a CreateState."""
+        return self._build_ai_context_from_uri(cs.parent_uri)
 
     def _run_generate(self, stdscr: curses.window, fn) -> None:
         """Run an AI generate function, suspending curses first in copypaste mode."""
@@ -2402,10 +2422,599 @@ class TaxonomyViewer:
             cs.error = str(exc)[:80]
             candidates = []
         cs.ai_candidates = candidates
+        cs.ai_checked = [False] * len(candidates)
         cs.ai_seen = cs.ai_seen + candidates
         cs.ai_generating = False
         cs.ai_cursor = 0
         cs.ai_scroll = 0
+
+    # ── Batch concept creation wizard ────────────────────────────────────────
+
+    def _launch_batch_create(self, cs: CreateState) -> None:
+        """Build a BatchCreateState from checked candidates and enter the wizard."""
+        selected = [name for name, chk in zip(cs.ai_candidates, cs.ai_checked, strict=False) if chk]
+        drafts = [
+            BatchConceptDraft(
+                name=name,
+                pref_label=name,
+                alts_generating=True,  # fire immediately for first draft
+            )
+            for name in selected
+        ]
+        # Only the first draft fires immediately; the rest fire when we reach them
+        for d in drafts[1:]:
+            d.alts_generating = False
+        if drafts:
+            drafts[0].alts_generating = True
+        self._state = BatchCreateState(
+            parent_uri=cs.parent_uri,
+            came_from_tree=cs.came_from_tree,
+            drafts=drafts,
+            current=0,
+            step="label",
+            label_buffer=drafts[0].pref_label if drafts else "",
+            label_pos=len(drafts[0].pref_label) if drafts else 0,
+        )
+
+    @staticmethod
+    def _apply_line_edit(buffer: str, pos: int, key: int) -> tuple[str, int]:
+        """Apply one keystroke to a (buffer, pos) pair.
+
+        Handles printable chars, backspace, Del, Ctrl+A/E/K/W, arrow keys.
+        Returns unchanged (buffer, pos) for unrecognised keys.
+        """
+        if key == 1:  # Ctrl+A
+            return buffer, 0
+        if key == 5:  # Ctrl+E
+            return buffer, len(buffer)
+        if key == 11:  # Ctrl+K
+            return buffer[:pos], pos
+        if key == 23:  # Ctrl+W — delete word backward
+            i = pos
+            while i > 0 and buffer[i - 1] == " ":
+                i -= 1
+            while i > 0 and buffer[i - 1] != " ":
+                i -= 1
+            return buffer[:i] + buffer[pos:], i
+        if key in (curses.KEY_BACKSPACE, 127):
+            if pos > 0:
+                return buffer[: pos - 1] + buffer[pos:], pos - 1
+            return buffer, pos
+        if key == curses.KEY_DC:
+            if pos < len(buffer):
+                return buffer[:pos] + buffer[pos + 1 :], pos
+            return buffer, pos
+        if key == curses.KEY_LEFT:
+            return buffer, max(0, pos - 1)
+        if key == curses.KEY_RIGHT:
+            return buffer, min(len(buffer), pos + 1)
+        if key == curses.KEY_HOME:
+            return buffer, 0
+        if key == curses.KEY_END:
+            return buffer, len(buffer)
+        if 32 <= key < 256:
+            ch = chr(key)
+            return buffer[:pos] + ch + buffer[pos:], pos + 1
+        return buffer, pos
+
+    def _batch_advance_or_recap(self, bcs: BatchCreateState) -> None:
+        """Advance to the next concept or enter the recap step."""
+        if bcs.current < len(bcs.drafts) - 1:
+            bcs.current += 1
+            draft = bcs.drafts[bcs.current]
+            bcs.step = "label"
+            bcs.label_buffer = draft.pref_label
+            bcs.label_pos = len(draft.pref_label)
+            bcs.alt_cursor = 0
+            bcs.alt_scroll = 0
+            bcs.error = ""
+            if not draft.alt_labels and not draft.alts_generating:
+                draft.alts_generating = True
+        else:
+            bcs.step = "recap"
+            bcs.recap_cursor = 0
+            bcs.recap_scroll = 0
+
+    def _batch_generate_alts(self) -> None:
+        """Called from main loop when draft.alts_generating is True."""
+        from . import ai as _ai
+
+        if not isinstance(self._state, BatchCreateState):
+            return
+        bcs = self._state
+        draft = bcs.drafts[bcs.current]
+        taxonomy_name, taxonomy_desc, _ = self._build_ai_context_from_uri(bcs.parent_uri)
+        try:
+            alts = _ai.suggest_alt_labels(
+                pref_label=draft.pref_label,
+                taxonomy_name=taxonomy_name,
+                taxonomy_description=taxonomy_desc,
+                lang=self.lang,
+            )
+        except Exception as exc:
+            draft.alts_error = str(exc)[:80]
+            alts = []
+        draft.alt_labels = alts
+        draft.alt_checked = [True] * len(alts)
+        draft.alts_generating = False
+
+    def _batch_generate_def(self) -> None:
+        """Called from main loop when draft.def_generating is True."""
+        from . import ai as _ai
+
+        if not isinstance(self._state, BatchCreateState):
+            return
+        bcs = self._state
+        draft = bcs.drafts[bcs.current]
+        taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context_from_uri(bcs.parent_uri)
+        try:
+            defn = _ai.suggest_definition(
+                pref_label=draft.pref_label,
+                taxonomy_name=taxonomy_name,
+                taxonomy_description=taxonomy_desc,
+                parent_label=parent_label,
+                lang=self.lang,
+            )
+        except Exception as exc:
+            draft.def_error = str(exc)[:80]
+            defn = ""
+        draft.definition = defn
+        draft.def_generating = False
+
+    def _draw_batch(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        """Top-level draw dispatcher for the batch creation wizard."""
+        stdscr.erase()
+        wide = cols >= self._SPLIT_MIN_COLS
+        tree_w = cols // 3 if wide else 0
+        detail_x0 = tree_w
+        detail_w = cols - tree_w
+        bcs = self._state
+        assert isinstance(bcs, BatchCreateState)
+        if wide:
+            parent_uri = bcs.parent_uri
+            if parent_uri:
+                for i, line in enumerate(self._flat):
+                    if line.uri == parent_uri:
+                        self._cursor = i
+                        break
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr, rows, 0, tree_w, cursor_idx=self._cursor, highlight_uri=bcs.parent_uri
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+        if bcs.step == "recap":
+            self._draw_batch_recap(stdscr, rows, detail_x0, detail_w, bcs)
+        elif bcs.drafts:
+            draft = bcs.drafts[bcs.current]
+            if bcs.step == "label":
+                self._draw_batch_label(stdscr, rows, detail_x0, detail_w, bcs, draft)
+            elif bcs.step == "alt_labels":
+                self._draw_batch_alt_labels(stdscr, rows, detail_x0, detail_w, bcs, draft)
+            elif bcs.step == "definition":
+                self._draw_batch_definition(stdscr, rows, detail_x0, detail_w, bcs, draft)
+        stdscr.refresh()
+
+    def _batch_header(self, bcs: BatchCreateState, step_title: str) -> str:
+        n = len(bcs.drafts)
+        idx = bcs.current + 1
+        return f" Concept {idx}/{n} — {step_title} "
+
+    def _draw_batch_label(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+        draft: BatchConceptDraft,
+    ) -> None:
+        _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Preferred label"), dim=False)
+        try:
+            orig = f"  AI name: {draft.name}"
+            stdscr.addstr(2, x0, orig[: width - 1], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+        # Inline edit bar for pref label
+        buf, pos = bcs.label_buffer, bcs.label_pos
+        max_w = width - 4
+        offset = max(0, pos - max_w + 1)
+        visible = buf[offset : offset + max_w]
+        cursor_x = x0 + 2 + (pos - offset)
+        try:
+            stdscr.addstr(4, x0 + 1, f" {visible:<{max_w}} ", curses.color_pair(_C_EDIT_BAR))
+            stdscr.move(4, min(cursor_x, x0 + width - 2))
+        except curses.error:
+            pass
+        if draft.alts_generating:
+            spinner = self._SPINNER[self._install_spinner % 4]
+            try:
+                stdscr.addstr(
+                    6,
+                    x0 + 2,
+                    f"{spinner} Generating alt labels…"[: width - 4],
+                    curses.color_pair(_C_DIM),
+                )
+            except curses.error:
+                pass
+        if bcs.error:
+            try:
+                stdscr.addstr(
+                    rows - 2,
+                    x0 + 1,
+                    f"Error: {bcs.error}"[: width - 2],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
+            except curses.error:
+                pass
+        _draw_bar(stdscr, rows - 1, x0, width, "  Enter: confirm label   Esc: cancel  ", dim=True)
+
+    def _draw_batch_alt_labels(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+        draft: BatchConceptDraft,
+    ) -> None:
+        _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Alternative labels"), dim=False)
+        if draft.alts_generating:
+            spinner = self._SPINNER[self._install_spinner % 4]
+            try:
+                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating…"[: width - 2])
+            except curses.error:
+                pass
+            _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
+            return
+        if draft.alts_error:
+            try:
+                stdscr.addstr(
+                    2,
+                    x0 + 2,
+                    f"Error: {draft.alts_error}"[: width - 4],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
+            except curses.error:
+                pass
+        items = draft.alt_labels + ["✓  Done"]
+        list_h = rows - 2
+        for i in range(list_h):
+            idx = bcs.alt_scroll + i
+            if idx >= len(items):
+                break
+            y = 1 + i
+            sel = idx == bcs.alt_cursor
+            attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else 0
+            if idx < len(draft.alt_labels):
+                chk = "[✓]" if (idx < len(draft.alt_checked) and draft.alt_checked[idx]) else "[ ]"
+                label = f"{chk} {draft.alt_labels[idx]}"
+            else:
+                label = items[idx]
+                if not sel:
+                    attr = curses.color_pair(_C_FIELD_LABEL)
+            prefix = "▶ " if sel else "  "
+            try:
+                stdscr.addstr(y, x0, (prefix + label).ljust(width - 1)[: width - 1], attr)
+            except curses.error:
+                pass
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  ↑↓/jk: navigate   Space/Enter: toggle   Enter on Done: confirm  ",
+            dim=True,
+        )
+
+    def _draw_batch_definition(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+        draft: BatchConceptDraft,
+    ) -> None:
+        _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Definition"), dim=False)
+        if draft.def_generating:
+            spinner = self._SPINNER[self._install_spinner % 4]
+            try:
+                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating definition…"[: width - 2])
+            except curses.error:
+                pass
+            _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
+            return
+        if draft.def_error:
+            try:
+                stdscr.addstr(
+                    2,
+                    x0 + 2,
+                    f"Error: {draft.def_error}"[: width - 4],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
+            except curses.error:
+                pass
+        # Wrap and render definition buffer
+        max_w = width - 4
+        text = draft.definition
+        # Show wrapped lines
+        lines: list[str] = []
+        for word_line in (text or "").splitlines() or [""]:
+            if not word_line:
+                lines.append("")
+                continue
+            while len(word_line) > max_w:
+                lines.append(word_line[:max_w])
+                word_line = word_line[max_w:]
+            lines.append(word_line)
+        list_h = rows - 4
+        for i, ln in enumerate(lines[:list_h]):
+            try:
+                stdscr.addstr(
+                    2 + i, x0 + 2, ln.ljust(max_w)[:max_w], curses.color_pair(_C_EDIT_BAR)
+                )
+            except curses.error:
+                pass
+        if bcs.error:
+            try:
+                stdscr.addstr(
+                    rows - 2,
+                    x0 + 1,
+                    f"Error: {bcs.error}"[: width - 2],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
+            except curses.error:
+                pass
+        _draw_bar(stdscr, rows - 1, x0, width, "  Enter: confirm   Esc: back  ", dim=True)
+
+    def _draw_batch_recap(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+    ) -> None:
+        n = len(bcs.drafts)
+        _draw_bar(
+            stdscr,
+            0,
+            x0,
+            width,
+            f" Create {n} concept{'s' if n != 1 else ''} — confirm ",
+            dim=False,
+        )
+        # Build display lines for all drafts
+        lines: list[tuple[str, int]] = []  # (text, attr)
+        for draft in bcs.drafts:
+            lines.append((f"  {draft.pref_label}", curses.A_BOLD))
+            selected_alts = [
+                alt for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False) if chk
+            ]
+            if selected_alts:
+                lines.append((f"    alt: {', '.join(selected_alts)}", curses.color_pair(_C_DIM)))
+            if draft.definition.strip():
+                defn = draft.definition.strip()
+                max_w = width - 6
+                lines.append((f"    def: {defn[:max_w]}", curses.color_pair(_C_DIM)))
+            lines.append(("", 0))
+        action_rows = ["✓  Create all", "←  Back", "✕  Cancel"]
+        list_h = rows - 2
+        total = len(lines) + len(action_rows)
+
+        for i in range(list_h):
+            idx = bcs.recap_scroll + i
+            if idx >= total:
+                break
+            y = 1 + i
+            sel = idx == bcs.recap_cursor
+            if idx < len(lines):
+                text, attr = lines[idx]
+                if sel:
+                    attr = curses.color_pair(_C_SEL)
+                try:
+                    stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], attr)
+                except curses.error:
+                    pass
+            else:
+                action = action_rows[idx - len(lines)]
+                attr = (
+                    curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                    if sel
+                    else curses.color_pair(_C_FIELD_LABEL)
+                )
+                prefix = "▶ " if sel else "  "
+                try:
+                    stdscr.addstr(y, x0, (prefix + action).ljust(width - 1)[: width - 1], attr)
+                except curses.error:
+                    pass
+        if bcs.error:
+            try:
+                stdscr.addstr(
+                    rows - 2,
+                    x0 + 1,
+                    f"Error: {bcs.error}"[: width - 2],
+                    curses.color_pair(_C_DIFF_DEL),
+                )
+            except curses.error:
+                pass
+        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: select  ", dim=True)
+
+    def _on_batch(self, key: int, rows: int) -> None:
+        if not isinstance(self._state, BatchCreateState):
+            return
+        bcs = self._state
+        if bcs.step == "label":
+            self._on_batch_label(key, rows, bcs)
+        elif bcs.step == "alt_labels":
+            self._on_batch_alt_labels(key, rows, bcs)
+        elif bcs.step == "definition":
+            self._on_batch_definition(key, rows, bcs)
+        elif bcs.step == "recap":
+            self._on_batch_recap(key, rows, bcs)
+
+    def _on_batch_label(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
+        draft = bcs.drafts[bcs.current]
+        if draft.alts_generating:
+            return  # wait for generation to finish
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            draft.pref_label = bcs.label_buffer.strip() or draft.name
+            draft.def_generating = True
+            bcs.step = "alt_labels"
+            bcs.alt_cursor = 0
+            bcs.alt_scroll = 0
+        elif key == 27:
+            # Cancel entire batch — return to tree/detail
+            self._state = TreeState() if bcs.came_from_tree else DetailState()
+        else:
+            bcs.label_buffer, bcs.label_pos = self._apply_line_edit(
+                bcs.label_buffer, bcs.label_pos, key
+            )
+
+    def _on_batch_alt_labels(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
+        draft = bcs.drafts[bcs.current]
+        if draft.alts_generating:
+            return
+        items_count = len(draft.alt_labels) + 1  # checkboxes + Done
+        done_idx = len(draft.alt_labels)
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+
+        if key in (KEY_UP, ord("k")):
+            bcs.alt_cursor = max(0, bcs.alt_cursor - 1)
+            bcs.alt_scroll = min(bcs.alt_scroll, bcs.alt_cursor)
+        elif key in (KEY_DOWN, ord("j")):
+            bcs.alt_cursor = min(items_count - 1, bcs.alt_cursor + 1)
+            if bcs.alt_cursor >= bcs.alt_scroll + (rows - 2):
+                bcs.alt_scroll = bcs.alt_cursor - (rows - 2) + 1
+        elif key == ord(" ") and bcs.alt_cursor < len(draft.alt_labels):
+            draft.alt_checked[bcs.alt_cursor] = not draft.alt_checked[bcs.alt_cursor]
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if bcs.alt_cursor == done_idx:
+                bcs.step = "definition"
+            elif bcs.alt_cursor < len(draft.alt_labels):
+                draft.alt_checked[bcs.alt_cursor] = not draft.alt_checked[bcs.alt_cursor]
+        elif key == 27:
+            bcs.step = "label"
+
+    def _on_batch_definition(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
+        draft = bcs.drafts[bcs.current]
+        if draft.def_generating:
+            return
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            self._batch_advance_or_recap(bcs)
+        elif key == 27:
+            bcs.step = "alt_labels"
+            bcs.alt_cursor = len(draft.alt_labels)  # cursor on Done row
+        else:
+            draft.definition, bcs.def_pos = self._apply_line_edit(
+                draft.definition, bcs.def_pos, key
+            )
+
+    def _on_batch_recap(self, key: int, rows: int, bcs: BatchCreateState) -> None:
+        # Build the same line count as _draw_batch_recap
+        lines_count = 0
+        for draft in bcs.drafts:
+            lines_count += 1  # pref label
+            selected_alts = [
+                a for a, c in zip(draft.alt_labels, draft.alt_checked, strict=False) if c
+            ]
+            if selected_alts:
+                lines_count += 1
+            if draft.definition.strip():
+                lines_count += 1
+            lines_count += 1  # blank separator
+        action_rows_count = 3
+        total = lines_count + action_rows_count
+        create_idx = lines_count
+        back_idx = lines_count + 1
+        cancel_idx = lines_count + 2
+        list_h = rows - 2
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+
+        if key in (KEY_UP, ord("k")):
+            bcs.recap_cursor = max(0, bcs.recap_cursor - 1)
+            bcs.recap_scroll = min(bcs.recap_scroll, bcs.recap_cursor)
+        elif key in (KEY_DOWN, ord("j")):
+            bcs.recap_cursor = min(total - 1, bcs.recap_cursor + 1)
+            if bcs.recap_cursor >= bcs.recap_scroll + list_h:
+                bcs.recap_scroll = bcs.recap_cursor - list_h + 1
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if bcs.recap_cursor == create_idx:
+                self._submit_batch_create(bcs)
+            elif bcs.recap_cursor == back_idx:
+                # Go back to definition step of last concept
+                bcs.step = "definition"
+                bcs.current = len(bcs.drafts) - 1
+            elif bcs.recap_cursor == cancel_idx:
+                self._state = TreeState() if bcs.came_from_tree else DetailState()
+        elif key == 27:
+            self._state = TreeState() if bcs.came_from_tree else DetailState()
+
+    def _submit_batch_create(self, bcs: BatchCreateState) -> None:
+        """Create all confirmed concepts from the batch wizard."""
+        import re
+
+        target_tax, _target_path = self._individual_taxonomy_for(bcs.parent_uri)
+
+        if bcs.parent_uri and bcs.parent_uri in target_tax.schemes:
+            s = target_tax.schemes[bcs.parent_uri]
+            base = s.base_uri or target_tax.base_uri()
+        else:
+            base = target_tax.base_uri()
+
+        parent_handle = None
+        if bcs.parent_uri:
+            parent_handle = target_tax.uri_to_handle(bcs.parent_uri) or bcs.parent_uri
+
+        last_uri: str | None = None
+        for draft in bcs.drafts:
+            slug = re.sub(r"[^A-Za-z0-9_-]", "", draft.name.replace(" ", ""))
+            new_uri = base + (slug or draft.name)
+            if new_uri in target_tax.concepts:
+                bcs.error = f"'{draft.name}' already exists — skipped"
+                continue
+            pref_label = draft.pref_label.strip() or draft.name
+            definitions = (
+                {self.lang: draft.definition.strip()} if draft.definition.strip() else None
+            )
+            try:
+                operations.add_concept(
+                    target_tax,
+                    new_uri,
+                    {self.lang: pref_label},
+                    parent_handle=parent_handle,
+                    definitions=definitions,
+                )
+            except SkostaxError as exc:
+                bcs.error = str(exc)
+                continue
+            # Add selected alt labels
+            for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False):
+                if chk and alt.strip():
+                    operations.set_label(target_tax, new_uri, self.lang, alt.strip(), LabelType.ALT)
+            last_uri = new_uri
+
+        self._rebuild()
+        self._save_file(uri=last_uri or bcs.parent_uri)
+
+        # Navigate to the last created concept (or back to tree/detail)
+        if last_uri and last_uri in target_tax.concepts:
+            for i, line in enumerate(self._flat):
+                if line.uri == last_uri:
+                    self._cursor = i
+                    break
+            self._detail_uri = last_uri
+            self._detail_fields = self._bdf(last_uri)
+            self._field_cursor = 0
+            self._detail_scroll = 0
+            self._history.clear()
+            self._state = DetailState()
+        else:
+            self._state = TreeState() if bcs.came_from_tree else DetailState()
 
     # ── Add-concept step drawing ──────────────────────────────────────────────
 
@@ -2484,8 +3093,8 @@ class TaxonomyViewer:
     def _draw_create_ai_pick(
         self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
     ) -> None:
-        """Render the AI suggestion pick list."""
-        _draw_bar(stdscr, 0, x0, width, " AI suggestions — pick a name ", dim=False)
+        """Render the AI suggestion pick list with multi-select checkboxes."""
+        _draw_bar(stdscr, 0, x0, width, " AI suggestions — select concepts ", dim=False)
 
         if cs.ai_generating:
             spinner = self._SPINNER[self._install_spinner % 4]
@@ -2503,7 +3112,10 @@ class TaxonomyViewer:
                 pass
 
         candidates = cs.ai_candidates
-        actions = ["▶  Suggest more", "←  Back"]
+        checked = cs.ai_checked
+        n_checked = sum(checked) if checked else 0
+        create_label = f"✓  Create selected ({n_checked})"
+        actions = ["▶  Suggest more", create_label, "←  Back"]
         total = len(candidates) + len(actions)
         list_h = rows - 2
 
@@ -2513,18 +3125,35 @@ class TaxonomyViewer:
                 break
             y = 1 + i
             sel = idx == cs.ai_cursor
-            attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else 0
-            prefix = "▶ " if sel else "  "
             if idx < len(candidates):
-                label = candidates[idx]
+                is_checked = checked[idx] if idx < len(checked) else False
+                box = "[✓]" if is_checked else "[ ]"
+                label = f"{box} {candidates[idx]}"
+                attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else 0
             else:
-                label = actions[idx - len(candidates)]
+                action = actions[idx - len(candidates)]
+                label = action
+                is_create = idx - len(candidates) == 1
+                if is_create and n_checked == 0:
+                    attr = curses.color_pair(_C_DIM)
+                elif sel:
+                    attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                else:
+                    attr = curses.color_pair(_C_FIELD_LABEL)
+            prefix = "▶ " if sel else "  "
             try:
                 stdscr.addstr(y, x0, (prefix + label).ljust(width - 1)[: width - 1], attr)
             except curses.error:
                 pass
 
-        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓/jk: navigate   Enter: select  ", dim=True)
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  ↑↓/jk: navigate   Space: toggle   Enter: confirm  ",
+            dim=True,
+        )
 
     # ── Add-concept step input handlers ──────────────────────────────────────
 
@@ -2582,11 +3211,13 @@ class TaxonomyViewer:
             return
         KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
         candidates = cs.ai_candidates
-        n_actions = 2
-        total = len(candidates) + n_actions
+        # Action indices: suggest_more | create_selected | back
         suggest_more_idx = len(candidates)
-        back_idx = len(candidates) + 1
+        create_selected_idx = len(candidates) + 1
+        back_idx = len(candidates) + 2
+        total = len(candidates) + 3
         list_h = rows - 2
+        n_checked = sum(cs.ai_checked) if cs.ai_checked else 0
 
         if key in (KEY_UP, ord("k")):
             cs.ai_cursor = max(0, cs.ai_cursor - 1)
@@ -2595,21 +3226,33 @@ class TaxonomyViewer:
             cs.ai_cursor = min(total - 1, cs.ai_cursor + 1)
             if cs.ai_cursor >= cs.ai_scroll + list_h:
                 cs.ai_scroll = cs.ai_cursor - list_h + 1
+        elif key == ord(" ") and 0 <= cs.ai_cursor < len(candidates):
+            # Spacebar toggles checkbox
+            if cs.ai_cursor < len(cs.ai_checked):
+                cs.ai_checked[cs.ai_cursor] = not cs.ai_checked[cs.ai_cursor]
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if cs.ai_cursor == suggest_more_idx:
                 cs.ai_generating = True
+            elif cs.ai_cursor == create_selected_idx and n_checked > 0:
+                self._launch_batch_create(cs)
             elif cs.ai_cursor == back_idx:
                 cs.step = "choose"
                 cs.ai_cursor = 1
             elif 0 <= cs.ai_cursor < len(candidates):
-                chosen = candidates[cs.ai_cursor]
-                cs.fields = self._build_create_fields()
-                for f in cs.fields:
-                    if f.meta.get("field") == "name":
-                        f.value = chosen
-                        break
-                cs.step = "form"
-                cs.cursor = 0
+                if n_checked == 0:
+                    # No checkboxes checked: single-pick → go straight to form
+                    chosen = candidates[cs.ai_cursor]
+                    cs.fields = self._build_create_fields()
+                    for f in cs.fields:
+                        if f.meta.get("field") == "name":
+                            f.value = chosen
+                            break
+                    cs.step = "form"
+                    cs.cursor = 0
+                else:
+                    # Other items already checked: toggle this one
+                    if cs.ai_cursor < len(cs.ai_checked):
+                        cs.ai_checked[cs.ai_cursor] = not cs.ai_checked[cs.ai_cursor]
         elif key == 27:
             cs.step = "choose"
             cs.ai_cursor = 1
