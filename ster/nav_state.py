@@ -205,15 +205,15 @@ class BatchConceptDraft:
 class BatchCreateState:
     """Wizard state for creating multiple AI-selected concepts in one flow.
 
-    Steps per concept: "label" → "alt_labels" → "definition"
-    After all concepts: "recap" → submit
+    Steps per concept: "label" → "alt_labels" → "definition" → "confirm"
+    After all concepts: recap → done
     """
 
     parent_uri: str | None = None
     came_from_tree: bool = False
     drafts: list[BatchConceptDraft] = dc_field(default_factory=list)
     current: int = 0  # index of concept currently being edited
-    step: str = "label"  # "label" | "alt_labels" | "definition" | "recap"
+    step: str = "label"  # "label" | "alt_labels" | "definition" | "confirm" | "recap"
     # label step — inline text buffer
     label_buffer: str = ""
     label_pos: int = 0
@@ -222,6 +222,8 @@ class BatchCreateState:
     alt_scroll: int = 0
     # definition step — inline text buffer
     def_pos: int = 0
+    # confirm step — shown after each concept is created
+    confirm_cursor: int = 0  # 0 = Continue, 1 = Stop
     # recap step
     recap_cursor: int = 0
     recap_scroll: int = 0

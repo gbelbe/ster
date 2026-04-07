@@ -2588,6 +2588,9 @@ class TaxonomyViewer:
                     pass
         if bcs.step == "recap":
             self._draw_batch_recap(stdscr, rows, detail_x0, detail_w, bcs)
+        elif bcs.step == "confirm" and bcs.drafts:
+            draft = bcs.drafts[bcs.current]
+            self._draw_batch_confirm(stdscr, rows, detail_x0, detail_w, bcs, draft)
         elif bcs.drafts:
             draft = bcs.drafts[bcs.current]
             if bcs.step == "label":
@@ -2738,12 +2741,14 @@ class TaxonomyViewer:
                 )
             except curses.error:
                 pass
-        # Wrap and render definition buffer
+        # Wrap and render definition buffer with a visible ▌ cursor
         max_w = width - 4
         text = draft.definition
-        # Show wrapped lines
+        pos = bcs.def_pos
+        # Insert cursor marker into a copy of the text for wrapping
+        text_with_cursor = text[:pos] + "▌" + text[pos:]
         lines: list[str] = []
-        for word_line in (text or "").splitlines() or [""]:
+        for word_line in (text_with_cursor or "").splitlines() or [""]:
             if not word_line:
                 lines.append("")
                 continue
@@ -2770,6 +2775,68 @@ class TaxonomyViewer:
             except curses.error:
                 pass
         _draw_bar(stdscr, rows - 1, x0, width, "  Enter: confirm   Esc: back  ", dim=True)
+
+    def _draw_batch_confirm(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+        draft: BatchConceptDraft,
+    ) -> None:
+        """Render the per-concept confirmation screen (shown after each concept is created)."""
+        is_last = bcs.current >= len(bcs.drafts) - 1
+        _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Created ✓"), dim=False)
+
+        y = 2
+        max_w = width - 4
+
+        def _row(text: str, attr: int = 0) -> None:
+            nonlocal y
+            try:
+                stdscr.addstr(y, x0 + 2, text[:max_w], attr)
+            except curses.error:
+                pass
+            y += 1
+
+        selected_alts = [
+            alt for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False) if chk
+        ]
+        _row(f'"{draft.pref_label}"', curses.A_BOLD)
+        y += 1
+        if selected_alts:
+            _row(f"Alt labels:  {', '.join(selected_alts)}", curses.color_pair(_C_DIM))
+        if draft.definition.strip():
+            # Wrap long definition
+            defn = draft.definition.strip()
+            while defn:
+                _row(f"Definition:  {defn[: max_w - 12]}", curses.color_pair(_C_DIM))
+                defn = defn[max_w - 12 :]
+                if defn:
+                    _row(f"             {defn[: max_w - 13]}", curses.color_pair(_C_DIM))
+                    defn = ""
+        if bcs.error:
+            y += 1
+            _row(f"Warning: {bcs.error}", curses.color_pair(_C_DIFF_DEL))
+
+        # Action rows
+        actions = ["→  Continue to next concept", "■  Stop here"] if not is_last else ["■  Done"]
+        y = max(y + 1, rows - len(actions) - 2)
+        for i, action in enumerate(actions):
+            sel = i == bcs.confirm_cursor
+            attr = (
+                curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                if sel
+                else curses.color_pair(_C_FIELD_LABEL)
+            )
+            prefix = "▶ " if sel else "  "
+            try:
+                stdscr.addstr(y + i, x0, (prefix + action).ljust(width - 1)[: width - 1], attr)
+            except curses.error:
+                pass
+
+        _draw_bar(stdscr, rows - 1, x0, width, "  ↑↓: select   Enter: confirm  ", dim=True)
 
     def _draw_batch_recap(
         self,
@@ -2854,6 +2921,8 @@ class TaxonomyViewer:
             self._on_batch_alt_labels(key, rows, bcs)
         elif bcs.step == "definition":
             self._on_batch_definition(key, rows, bcs)
+        elif bcs.step == "confirm":
+            self._on_batch_confirm(key, rows, bcs)
         elif bcs.step == "recap":
             self._on_batch_recap(key, rows, bcs)
 
@@ -2905,7 +2974,7 @@ class TaxonomyViewer:
         if draft.def_generating:
             return
         if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            self._batch_advance_or_recap(bcs)
+            self._batch_create_current_and_confirm(bcs)
         elif key == 27:
             bcs.step = "alt_labels"
             bcs.alt_cursor = len(draft.alt_labels)  # cursor on Done row
@@ -2913,6 +2982,117 @@ class TaxonomyViewer:
             draft.definition, bcs.def_pos = self._apply_line_edit(
                 draft.definition, bcs.def_pos, key
             )
+
+    def _batch_create_current_and_confirm(self, bcs: BatchCreateState) -> None:
+        """Create the concept at bcs.current, then transition to the confirm step."""
+        import re
+
+        draft = bcs.drafts[bcs.current]
+        target_tax, _target_path = self._individual_taxonomy_for(bcs.parent_uri)
+
+        if bcs.parent_uri and bcs.parent_uri in target_tax.schemes:
+            s = target_tax.schemes[bcs.parent_uri]
+            base = s.base_uri or target_tax.base_uri()
+        else:
+            base = target_tax.base_uri()
+
+        parent_handle = None
+        if bcs.parent_uri:
+            parent_handle = target_tax.uri_to_handle(bcs.parent_uri) or bcs.parent_uri
+
+        slug = re.sub(r"[^A-Za-z0-9_-]", "", draft.name.replace(" ", ""))
+        new_uri = base + (slug or draft.name)
+        if new_uri in target_tax.concepts:
+            bcs.error = f"'{draft.name}' already exists — skipped"
+            bcs.step = "confirm"
+            bcs.confirm_cursor = 0
+            return
+
+        pref_label = draft.pref_label.strip() or draft.name
+        definitions = {self.lang: draft.definition.strip()} if draft.definition.strip() else None
+        try:
+            operations.add_concept(
+                target_tax,
+                new_uri,
+                {self.lang: pref_label},
+                parent_handle=parent_handle,
+                definitions=definitions,
+            )
+        except SkostaxError as exc:
+            bcs.error = str(exc)
+            bcs.step = "confirm"
+            bcs.confirm_cursor = 0
+            return
+
+        for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False):
+            if chk and alt.strip():
+                operations.set_label(target_tax, new_uri, self.lang, alt.strip(), LabelType.ALT)
+
+        self._rebuild()
+        self._save_file(uri=new_uri)
+        bcs.error = ""
+        bcs.step = "confirm"
+        bcs.confirm_cursor = 0
+
+    def _on_batch_confirm(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
+        """Handle key events on the per-concept confirmation screen."""
+        is_last = bcs.current >= len(bcs.drafts) - 1
+        n_actions = 1 if is_last else 2
+        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
+
+        if key in (KEY_UP, ord("k")):
+            bcs.confirm_cursor = max(0, bcs.confirm_cursor - 1)
+        elif key in (KEY_DOWN, ord("j")):
+            bcs.confirm_cursor = min(n_actions - 1, bcs.confirm_cursor + 1)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if is_last or bcs.confirm_cursor == 1:
+                # Stop / Done — navigate to last created concept or back
+                self._navigate_after_batch(bcs)
+            else:
+                # Continue — advance to next concept
+                next_idx = bcs.current + 1
+                bcs.current = next_idx
+                draft = bcs.drafts[bcs.current]
+                bcs.step = "label"
+                bcs.label_buffer = draft.pref_label
+                bcs.label_pos = len(draft.pref_label)
+                bcs.alt_cursor = 0
+                bcs.alt_scroll = 0
+                bcs.def_pos = 0
+                bcs.error = ""
+                if not draft.alt_labels and not draft.alts_generating:
+                    draft.alts_generating = True
+        elif key == 27 and is_last:
+            self._navigate_after_batch(bcs)
+
+    def _navigate_after_batch(self, bcs: BatchCreateState) -> None:
+        """Navigate to the last created concept (or back to tree/detail)."""
+        target_tax, _target_path = self._individual_taxonomy_for(bcs.parent_uri)
+        # Find the last draft whose concept was successfully created
+        last_uri: str | None = None
+        import re
+
+        for draft in reversed(bcs.drafts[: bcs.current + 1]):
+            slug = re.sub(r"[^A-Za-z0-9_-]", "", draft.name.replace(" ", ""))
+            base = target_tax.base_uri()
+            uri = base + (slug or draft.name)
+            if uri in target_tax.concepts:
+                last_uri = uri
+                break
+        if last_uri:
+            for i, line in enumerate(self._flat):
+                if line.uri == last_uri:
+                    self._cursor = i
+                    break
+            self._detail_uri = last_uri
+            assert self._detail_uri is not None
+            self._detail_fields = self._bdf(self._detail_uri)
+            self._field_cursor = 0
+            self._detail_scroll = 0
+            self._history.clear()
+            self._state = DetailState()
+        else:
+            self._state = TreeState() if bcs.came_from_tree else DetailState()
 
     def _on_batch_recap(self, key: int, rows: int, bcs: BatchCreateState) -> None:
         # Build the same line count as _draw_batch_recap
