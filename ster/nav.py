@@ -44,9 +44,11 @@ from .nav_logic import (  # noqa: F401
     build_detail_fields,
     build_file_fields,
     build_global_fields,
+    build_rdf_class_detail,
     build_scheme_dashboard_fields,
     build_scheme_detail,
     build_scheme_fields,
+    flatten_ontology_tree,
     flatten_tree,
 )
 from .nav_state import (
@@ -62,6 +64,7 @@ from .nav_state import (
     MapConceptPickState,
     MapSchemePickState,
     MovePickState,
+    QueryState,
     SchemeCreateState,
     SearchState,
     TreeState,
@@ -159,6 +162,13 @@ _C_FILE_NODE = 16  # bold yellow — file-level root node in multi-file tree
 _C_BROKEN_REF = 17  # red — broader/narrower pointing to unloaded URI
 _C_BROKEN_MAP = 18  # magenta — mapping property pointing to unloaded URI
 _C_MAPPING_NAV = 19  # yellow — existing cross-scheme mapping link
+# Syntax-highlighting pairs for the SPARQL editor
+_C_SH_KEYWORD = 20  # blue  — keywords (SELECT, WHERE, FILTER…)
+_C_SH_VAR = 21  # cyan  — ?variables
+_C_SH_URI = 22  # magenta — <URIs>
+_C_SH_STRING = 23  # green — "string literals"
+_C_SH_FUNCTION = 24  # yellow — built-in functions (COUNT, REGEX…)
+_C_SH_NS = 25  # yellow — namespace prefixes (skos:, rdf:…)
 
 
 def _init_colors() -> None:
@@ -183,6 +193,12 @@ def _init_colors() -> None:
         curses.init_pair(_C_BROKEN_REF, curses.COLOR_RED, -1)
         curses.init_pair(_C_BROKEN_MAP, curses.COLOR_MAGENTA, -1)
         curses.init_pair(_C_MAPPING_NAV, curses.COLOR_YELLOW, -1)
+        curses.init_pair(_C_SH_KEYWORD, curses.COLOR_BLUE, -1)
+        curses.init_pair(_C_SH_VAR, curses.COLOR_CYAN, -1)
+        curses.init_pair(_C_SH_URI, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(_C_SH_STRING, curses.COLOR_GREEN, -1)
+        curses.init_pair(_C_SH_FUNCTION, curses.COLOR_YELLOW, -1)
+        curses.init_pair(_C_SH_NS, curses.COLOR_YELLOW, -1)
     except Exception:
         pass
 
@@ -328,23 +344,25 @@ def render_tree_col(
                 pass
             continue
 
-        # ── normal concept row ────────────────────────────────────────────
+        # ── normal concept / OWL class row ───────────────────────────────
         concept = taxonomy.concepts.get(line.uri)
-        if not concept:
+        rdf_class = taxonomy.owl_classes.get(line.uri)
+
+        if not concept and not rdf_class:
             continue
 
         handle = taxonomy.uri_to_handle(line.uri) or "?"
-        label = concept.pref_label(lang) or line.uri
-        n_children = len(concept.narrower)
-        is_top = bool(concept.top_concept_of)
+        if concept:
+            label = concept.pref_label(lang) or line.uri
+            n_children = len(concept.narrower)
+            is_top = bool(concept.top_concept_of)
+        else:
+            # Pure OWL class — no SKOS metadata
+            assert rdf_class is not None
+            label = rdf_class.label(lang)
+            n_children = sum(1 for c in taxonomy.owl_classes.values() if line.uri in c.sub_class_of)
+            is_top = False
         d_status = diff_status.get(line.uri, "unchanged") if diff_status else "unchanged"
-        has_map = bool(
-            concept.exact_match
-            or concept.close_match
-            or concept.broad_match
-            or concept.narrow_match
-            or concept.related_match
-        )
 
         # Nav marker
         if diff_status:
@@ -369,9 +387,22 @@ def render_tree_col(
             suffix = ""
 
         # Cross-scheme mapping indicator (rendered separately in yellow)
+        has_map = bool(
+            concept
+            and (
+                concept.exact_match
+                or concept.close_match
+                or concept.broad_match
+                or concept.narrow_match
+                or concept.related_match
+            )
+        )
         map_tag = "  ⇔" if has_map else ""
 
-        text = f"{line.prefix}{nav} [{handle}]  {label}{suffix}"
+        # OWL node-type indicator: ○ pure class, ⊛ promoted concept+class
+        owl_tag = {"class": "  ○", "promoted": "  ⊛"}.get(line.node_type, "")
+
+        text = f"{line.prefix}{nav} [{handle}]  {label}{suffix}{owl_tag}"
         is_match = bool(search_pattern and search_matches and idx in search_matches)
 
         # Color
@@ -514,6 +545,7 @@ class TaxonomyViewer:
         self._history: list[dict] = []
         self._status = ""
         self._folded: set[str] = set()
+        self._view_mode: str = "taxonomy"  # "taxonomy" | "ontology"
         # scheme_uri → SchemeAnalysis; populated on first run() call
         self._analysis: dict[str, SchemeAnalysis] | None = None
         # AI install threading state
@@ -523,6 +555,8 @@ class TaxonomyViewer:
         self._install_spinner: int = 0
         self._install_package: str = "llm"  # package passed to pip install
         self._install_command: list[str] | None = None  # if set, overrides pip install
+        self._generate_elapsed: float = 0.0  # seconds since current generation started
+        self._last_query_buffer: str = ""  # persist query across mode switches
 
         self._rebuild()
         # Start with the global overview panel; cursor moves will update to item-specific detail
@@ -532,7 +566,10 @@ class TaxonomyViewer:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _rebuild(self) -> None:
-        self._flat = flatten_tree(self._workspace, folded=self._folded)
+        if self._view_mode == "ontology":
+            self._flat = flatten_ontology_tree(self._workspace, folded=self._folded)
+        else:
+            self._flat = flatten_tree(self._workspace, folded=self._folded)
         # Always keep self.taxonomy in sync with the workspace so mutations
         # made on workspace taxonomy objects are immediately reflected.
         if self._workspace.multiple_schemes() or len(self._workspace.taxonomies) > 1:
@@ -558,6 +595,8 @@ class TaxonomyViewer:
             self._detail_fields = self._bff(line.file_path)
         elif line.is_scheme:
             self._detail_fields = self._bsf(uri)
+        elif self._view_mode == "ontology" and uri in self.taxonomy.owl_classes:
+            self._detail_fields = self._bcdf(uri)
         else:
             self._detail_fields = self._bdf(uri)
         self._reset_detail_cursor()
@@ -570,6 +609,10 @@ class TaxonomyViewer:
             self.lang,
             show_mappings=self._workspace.multiple_schemes(),
         )
+
+    def _bcdf(self, uri: str) -> list[DetailField]:
+        """Build OWL class detail fields."""
+        return build_rdf_class_detail(self.taxonomy, uri, self.lang)
 
     def _bsf(self, scheme_uri: str) -> list[DetailField]:
         """Build scheme dashboard fields (settings + stats + issues)."""
@@ -626,6 +669,7 @@ class TaxonomyViewer:
                 current_idx=self._search_idx,
                 pattern=self._search_pattern,
             ),
+            view_mode=self._view_mode,
         )
 
     def _sync_tree_state(self, ts: TreeState) -> None:
@@ -634,6 +678,7 @@ class TaxonomyViewer:
         self._cursor = ts.cursor
         self._tree_scroll = ts.scroll
         self._folded = ts.folded
+        self._view_mode = ts.view_mode
         self._search_query = ts.search.query
         self._search_active = ts.search.active
         self._search_matches = ts.search.matches
@@ -717,6 +762,8 @@ class TaxonomyViewer:
                 self._detail_fields = self._bff(line.file_path)
             elif line.is_scheme:
                 self._detail_fields = self._bsf(line.uri)
+            elif self._view_mode == "ontology" and line.uri in self.taxonomy.owl_classes:
+                self._detail_fields = self._bcdf(line.uri)
             else:
                 self._detail_fields = self._bdf(line.uri)
             self._reset_detail_cursor()
@@ -976,6 +1023,28 @@ class TaxonomyViewer:
                     if not _had_pending and not isinstance(self._state, AiSetupState):
                         break
 
+            elif isinstance(self._state, QueryState):
+                if self._state.ai_generating:
+                    self._run_generate(
+                        stdscr,
+                        self._generate_sparql_query,
+                        lambda r=rows, c=cols: self._draw_query(stdscr, r, c),
+                    )
+                elif self._state.running:
+                    self._run_generate(
+                        stdscr,
+                        self._execute_sparql_query,
+                        lambda r=rows, c=cols: self._draw_query(stdscr, r, c),
+                    )
+                else:
+                    self._draw_query(stdscr, rows, cols)
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    if self._on_query(key, rows, cols):
+                        break
+
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
     def _draw_welcome(self, stdscr: curses.window, rows: int, cols: int) -> None:
@@ -1204,6 +1273,10 @@ class TaxonomyViewer:
                     f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}"
                     f"   Space: fold/unfold  {jump_hint}  q: quit "
                 )
+            elif self._view_mode == "ontology":
+                has_children = any(
+                    line.uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()
+                )
             else:
                 concept = self.taxonomy.concepts.get(line.uri)
                 has_children = bool(concept and concept.narrower)
@@ -1222,9 +1295,12 @@ class TaxonomyViewer:
                 f" {pos}  {m_pos}  Tab/↓: next match  Shift+Tab/↑: prev  "
                 f"Enter: open  /: new search  Esc: clear "
             )
+        mode_hint = (
+            "[Ontology]  Tab: taxonomy" if self._view_mode == "ontology" else "Tab: ontology"
+        )
         return (
             f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
-            f"   Space bar: fold/unfold  +: add  ^D/^U: ½-page  {jump_hint}  /: search  ◉: scheme  q: quit "
+            f"   Space: fold  +: add  {jump_hint}  /: search  {mode_hint}  q: quit "
         )
 
     def _draw_tree_preview(self, stdscr: curses.window, rows: int, cols: int) -> None:
@@ -1299,6 +1375,7 @@ class TaxonomyViewer:
         highlight_uri: str | None,
     ) -> None:
         """Render the tree list into column [x0, x0+width)."""
+        title = "Ontology View" if self._view_mode == "ontology" else "Global Ster View"
         render_tree_col(
             stdscr,
             self._flat,
@@ -1309,7 +1386,7 @@ class TaxonomyViewer:
             width,
             self._tree_scroll,
             cursor_idx,
-            header_title="Global Ster View",
+            header_title=title,
             highlight_uri=highlight_uri,
             search_pattern=self._search_pattern,
             search_matches=self._search_matches,
@@ -1359,6 +1436,19 @@ class TaxonomyViewer:
                 self._search_query = ""
                 return False
 
+        # ── view mode toggle (Tab when not navigating search results) ────────
+        if key == 9 and not self._search_matches:  # Tab
+            new_mode = "ontology" if self._view_mode == "taxonomy" else "taxonomy"
+            self._view_mode = new_mode
+            self._folded = set()
+            self._rebuild()
+            self._cursor = 0
+            self._tree_scroll = 0
+            self._update_tree_preview()
+            mode_label = "Ontology" if new_mode == "ontology" else "Taxonomy"
+            self._status = f"Switched to {mode_label} view"
+            return False
+
         # ── search trigger ────────────────────────────────────────────────────
         if key == ord("/"):
             self._search_active = True
@@ -1387,6 +1477,10 @@ class TaxonomyViewer:
                 elif line.is_scheme:
                     s = self.taxonomy.schemes.get(uri)
                     has_children = bool(s and s.top_concepts)
+                elif self._view_mode == "ontology":
+                    has_children = any(
+                        uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()
+                    )
                 else:
                     c = self.taxonomy.concepts.get(uri)
                     has_children = bool(c and c.narrower)
@@ -2025,7 +2119,7 @@ class TaxonomyViewer:
         assert self._detail_uri is not None
         self._detail_fields = self._bsf(self._detail_uri)
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file()
+        self._save_file(uri=self._detail_uri)
 
     def _delete_field(self, f: DetailField) -> None:
         if not self._detail_uri:
@@ -2268,6 +2362,13 @@ class TaxonomyViewer:
                     pending_action="",  # no follow-up action after config
                 )
 
+        elif action == "open_query":
+            self._state = QueryState(
+                file_paths=list(self._workspace.taxonomies.keys()),
+                query_buffer=self._last_query_buffer,
+                query_pos=len(self._last_query_buffer),
+            )
+
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
             if self._detail_uri:
@@ -2376,10 +2477,30 @@ class TaxonomyViewer:
 
     # ── Add-concept AI helpers ────────────────────────────────────────────────
 
-    def _build_ai_context_from_uri(self, parent_uri: str | None) -> tuple[str, str, str | None]:
-        """Return (taxonomy_name, taxonomy_description, parent_label) from a parent URI."""
-        scheme = self.taxonomy.primary_scheme()
-        taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
+    def _build_ai_context_from_uri(
+        self, parent_uri: str | None
+    ) -> tuple[str, str, str | None, str]:
+        """Return (taxonomy_name, taxonomy_description, parent_label, parent_definition).
+
+        For top-level concepts (parent is a scheme or None):
+          parent_label = None, parent_definition = scheme description
+        For narrower concepts (parent is a concept):
+          parent_label = concept pref_label, parent_definition = concept skos:definition
+
+        Uses the individual file taxonomy that owns *parent_uri* so that, in a
+        multi-file workspace, the name and description reflect the correct scheme
+        rather than the first scheme in the merged taxonomy.
+        """
+        target_tax, target_path = self._individual_taxonomy_for(parent_uri)
+
+        # Resolve the relevant scheme: explicit when parent_uri IS a scheme URI,
+        # otherwise fall back to the primary scheme of the owning file.
+        if parent_uri and parent_uri in target_tax.schemes:
+            scheme = target_tax.schemes[parent_uri]
+        else:
+            scheme = target_tax.primary_scheme()  # type: ignore[assignment]
+
+        taxonomy_name = scheme.title(self.lang) if scheme else target_path.stem
 
         taxonomy_description = ""
         if scheme and scheme.descriptions:
@@ -2391,15 +2512,20 @@ class TaxonomyViewer:
                 taxonomy_description = scheme.descriptions[0].value
 
         parent_label: str | None = None
-        if parent_uri and parent_uri not in self.taxonomy.schemes:
-            parent_concept = self.taxonomy.concepts.get(parent_uri)
+        parent_definition: str = ""
+        if parent_uri and parent_uri not in target_tax.schemes:
+            parent_concept = target_tax.concepts.get(parent_uri)
             if parent_concept:
                 parent_label = parent_concept.pref_label(self.lang)
+                parent_definition = parent_concept.definition(self.lang) or ""
+        else:
+            # Top-level: use scheme description as parent context for the AI
+            parent_definition = taxonomy_description
 
-        return taxonomy_name, taxonomy_description, parent_label
+        return taxonomy_name, taxonomy_description, parent_label, parent_definition
 
-    def _build_ai_context(self, cs: CreateState) -> tuple[str, str, str | None]:
-        """Return (taxonomy_name, taxonomy_description, parent_label) from a CreateState."""
+    def _build_ai_context(self, cs: CreateState) -> tuple[str, str, str | None, str]:
+        """Return (taxonomy_name, taxonomy_description, parent_label, parent_definition) from a CreateState."""
         return self._build_ai_context_from_uri(cs.parent_uri)
 
     def _run_generate(self, stdscr: curses.window, fn, draw_fn=None) -> None:
@@ -2411,6 +2537,7 @@ class TaxonomyViewer:
         *draw_fn* is called each poll tick; if omitted the last frame is kept.
         """
         import threading
+        import time
 
         from . import ai as _ai
 
@@ -2423,22 +2550,60 @@ class TaxonomyViewer:
             return
 
         done: list[bool] = [False]
+        exc_holder: list[BaseException | None] = [None]
 
         def _worker() -> None:
             try:
                 fn()
+            except Exception as e:  # noqa: BLE001
+                exc_holder[0] = e
             finally:
                 done[0] = True
 
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
-        while not done[0]:
-            self._install_spinner += 1
-            if draw_fn is not None:
-                draw_fn()
-            else:
-                stdscr.refresh()
-            curses.napms(120)
+        t0 = time.monotonic()
+        aborted = False
+        stdscr.nodelay(True)  # non-blocking key check during poll
+        try:
+            while not done[0]:
+                self._install_spinner += 1
+                self._generate_elapsed = time.monotonic() - t0
+                if draw_fn is not None:
+                    draw_fn()
+                else:
+                    stdscr.refresh()
+                key = stdscr.getch()
+                if key == 27:  # Esc — abort
+                    aborted = True
+                    break
+                curses.napms(120)
+        finally:
+            stdscr.nodelay(False)
+            self._generate_elapsed = 0.0
+
+        # Surface any exception from the worker as an error on the current state
+        err = exc_holder[0]
+        if aborted or err is not None:
+            msg = "Cancelled." if aborted else f"Error: {err}"
+            st = self._state
+            if isinstance(st, BatchCreateState) and st.drafts:
+                draft = st.drafts[st.current]
+                draft.alts_error = msg
+                draft.def_error = msg
+                draft.alts_generating = False
+                draft.def_generating = False
+            elif isinstance(st, CreateState):
+                st.error = msg
+                st.ai_generating = False
+            elif isinstance(st, QueryState):
+                if st.ai_generating:
+                    st.ai_generating = False
+                    st.ai_step = ""
+                    st.result_error = msg
+                else:
+                    st.result_error = msg
+                    st.running = False
 
     def _create_ai_generate(self) -> None:
         """Called from main loop when CreateState.ai_generating is True."""
@@ -2447,16 +2612,9 @@ class TaxonomyViewer:
         if not isinstance(self._state, CreateState):
             return
         cs = self._state
-        taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context(cs)
         try:
-            candidates = _ai.suggest_concept_names(
-                taxonomy_name=taxonomy_name,
-                taxonomy_description=taxonomy_desc,
-                parent_label=parent_label,
-                lang=self.lang,
-                n=20,
-                exclude=cs.ai_seen,
-            )
+            # Use the (possibly user-edited) prompt_buffer directly
+            candidates = _ai.suggest_concept_names_from_prompt(cs.prompt_buffer)
         except Exception as exc:
             cs.error = str(exc)[:80]
             candidates = []
@@ -2472,19 +2630,7 @@ class TaxonomyViewer:
     def _launch_batch_create(self, cs: CreateState) -> None:
         """Build a BatchCreateState from checked candidates and enter the wizard."""
         selected = [name for name, chk in zip(cs.ai_candidates, cs.ai_checked, strict=False) if chk]
-        drafts = [
-            BatchConceptDraft(
-                name=name,
-                pref_label=name,
-                alts_generating=True,  # fire immediately for first draft
-            )
-            for name in selected
-        ]
-        # Only the first draft fires immediately; the rest fire when we reach them
-        for d in drafts[1:]:
-            d.alts_generating = False
-        if drafts:
-            drafts[0].alts_generating = True
+        drafts = [BatchConceptDraft(name=name, pref_label=name) for name in selected]
         self._state = BatchCreateState(
             parent_uri=cs.parent_uri,
             came_from_tree=cs.came_from_tree,
@@ -2562,14 +2708,8 @@ class TaxonomyViewer:
             return
         bcs = self._state
         draft = bcs.drafts[bcs.current]
-        taxonomy_name, taxonomy_desc, _ = self._build_ai_context_from_uri(bcs.parent_uri)
         try:
-            alts = _ai.suggest_alt_labels(
-                pref_label=draft.pref_label,
-                taxonomy_name=taxonomy_name,
-                taxonomy_description=taxonomy_desc,
-                lang=self.lang,
-            )
+            alts = _ai.suggest_alt_labels_from_prompt(bcs.alt_prompt_buffer)
         except Exception as exc:
             draft.alts_error = str(exc)[:80]
             alts = []
@@ -2585,13 +2725,16 @@ class TaxonomyViewer:
             return
         bcs = self._state
         draft = bcs.drafts[bcs.current]
-        taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context_from_uri(bcs.parent_uri)
+        taxonomy_name, taxonomy_desc, parent_label, parent_def = self._build_ai_context_from_uri(
+            bcs.parent_uri
+        )
         try:
             defn = _ai.suggest_definition(
                 pref_label=draft.pref_label,
                 taxonomy_name=taxonomy_name,
                 taxonomy_description=taxonomy_desc,
                 parent_label=parent_label,
+                parent_definition=parent_def,
                 lang=self.lang,
             )
         except Exception as exc:
@@ -2634,10 +2777,12 @@ class TaxonomyViewer:
             draft = bcs.drafts[bcs.current]
             if bcs.step == "label":
                 self._draw_batch_label(stdscr, rows, detail_x0, detail_w, bcs, draft)
-            elif bcs.step == "alt_labels":
-                self._draw_batch_alt_labels(stdscr, rows, detail_x0, detail_w, bcs, draft)
             elif bcs.step == "definition":
                 self._draw_batch_definition(stdscr, rows, detail_x0, detail_w, bcs, draft)
+            elif bcs.step == "alt_prompt_review":
+                self._draw_batch_alt_prompt_review(stdscr, rows, detail_x0, detail_w, bcs, draft)
+            elif bcs.step == "alt_labels":
+                self._draw_batch_alt_labels(stdscr, rows, detail_x0, detail_w, bcs, draft)
         stdscr.refresh()
 
     def _batch_header(self, bcs: BatchCreateState, step_title: str) -> str:
@@ -2673,13 +2818,15 @@ class TaxonomyViewer:
             pass
         if draft.alts_generating:
             spinner = self._SPINNER[self._install_spinner % 4]
+            elapsed = f"  {self._generate_elapsed:.0f}s" if self._generate_elapsed else ""
             try:
                 stdscr.addstr(
                     6,
                     x0 + 2,
-                    f"{spinner} Generating alt labels…"[: width - 4],
+                    f"{spinner} Generating alt labels…{elapsed}"[: width - 4],
                     curses.color_pair(_C_DIM),
                 )
+                stdscr.addstr(7, x0 + 2, "  Esc to cancel"[: width - 4], curses.color_pair(_C_DIM))
             except curses.error:
                 pass
         if bcs.error:
@@ -2694,6 +2841,58 @@ class TaxonomyViewer:
                 pass
         _draw_bar(stdscr, rows - 1, x0, width, "  Enter: confirm label   Esc: cancel  ", dim=True)
 
+    def _draw_batch_alt_prompt_review(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        bcs: BatchCreateState,
+        draft: BatchConceptDraft,
+    ) -> None:
+        """Render the editable alt-labels prompt review panel."""
+        _draw_bar(
+            stdscr,
+            0,
+            x0,
+            width,
+            self._batch_header(bcs, f"Alt-labels prompt — {draft.pref_label}"),
+            dim=False,
+        )
+        # Display prompt buffer with ▌ cursor, word-split by lines
+        buf = bcs.alt_prompt_buffer
+        pos = bcs.alt_prompt_pos
+        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
+        raw_lines = text_with_cursor.splitlines()
+        display_lines: list[str] = []
+        for raw in raw_lines:
+            while len(raw) > width:
+                display_lines.append(raw[:width])
+                raw = raw[width:]
+            display_lines.append(raw)
+        list_h = rows - 2
+        # scroll so the cursor line is visible
+        cursor_line = len((buf[:pos] + "▌").splitlines()) - 1
+        if bcs.alt_prompt_scroll > cursor_line:
+            bcs.alt_prompt_scroll = cursor_line
+        if cursor_line >= bcs.alt_prompt_scroll + list_h:
+            bcs.alt_prompt_scroll = cursor_line - list_h + 1
+        for i in range(list_h):
+            idx = bcs.alt_prompt_scroll + i
+            line = display_lines[idx] if idx < len(display_lines) else ""
+            try:
+                stdscr.addstr(1 + i, x0, line[:width])
+            except curses.error:
+                pass
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  ↑↓: scroll   type to edit   Enter: generate   Esc: back  ",
+            dim=True,
+        )
+
     def _draw_batch_alt_labels(
         self,
         stdscr: curses.window,
@@ -2706,8 +2905,17 @@ class TaxonomyViewer:
         _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Alternative labels"), dim=False)
         if draft.alts_generating:
             spinner = self._SPINNER[self._install_spinner % 4]
+            elapsed = f"  {self._generate_elapsed:.0f}s" if self._generate_elapsed else ""
             try:
-                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating…"[: width - 2])
+                stdscr.addstr(
+                    rows // 2,
+                    x0 + 2,
+                    f"{spinner}  Generating alt labels…{elapsed}"[: width - 2],
+                    curses.color_pair(_C_DIM),
+                )
+                stdscr.addstr(
+                    rows // 2 + 1, x0 + 2, "  Esc to cancel"[: width - 2], curses.color_pair(_C_DIM)
+                )
             except curses.error:
                 pass
             _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
@@ -2764,8 +2972,17 @@ class TaxonomyViewer:
         _draw_bar(stdscr, 0, x0, width, self._batch_header(bcs, "Definition"), dim=False)
         if draft.def_generating:
             spinner = self._SPINNER[self._install_spinner % 4]
+            elapsed = f"  {self._generate_elapsed:.0f}s" if self._generate_elapsed else ""
             try:
-                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating definition…"[: width - 2])
+                stdscr.addstr(
+                    rows // 2,
+                    x0 + 2,
+                    f"{spinner}  Generating definition…{elapsed}"[: width - 2],
+                    curses.color_pair(_C_DIM),
+                )
+                stdscr.addstr(
+                    rows // 2 + 1, x0 + 2, "  Esc to cancel"[: width - 2], curses.color_pair(_C_DIM)
+                )
             except curses.error:
                 pass
             _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
@@ -2956,10 +3173,12 @@ class TaxonomyViewer:
         bcs = self._state
         if bcs.step == "label":
             self._on_batch_label(key, rows, bcs)
-        elif bcs.step == "alt_labels":
-            self._on_batch_alt_labels(key, rows, bcs)
         elif bcs.step == "definition":
             self._on_batch_definition(key, rows, bcs)
+        elif bcs.step == "alt_prompt_review":
+            self._on_batch_alt_prompt_review(key, rows, bcs)
+        elif bcs.step == "alt_labels":
+            self._on_batch_alt_labels(key, rows, bcs)
         elif bcs.step == "confirm":
             self._on_batch_confirm(key, rows, bcs)
         elif bcs.step == "recap":
@@ -2967,20 +3186,62 @@ class TaxonomyViewer:
 
     def _on_batch_label(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
         draft = bcs.drafts[bcs.current]
-        if draft.alts_generating:
-            return  # wait for generation to finish
         if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             draft.pref_label = bcs.label_buffer.strip() or draft.name
             draft.def_generating = True
-            bcs.step = "alt_labels"
-            bcs.alt_cursor = 0
-            bcs.alt_scroll = 0
+            bcs.step = "definition"
+            bcs.def_pos = 0
         elif key == 27:
             # Cancel entire batch — return to tree/detail
             self._state = TreeState() if bcs.came_from_tree else DetailState()
         else:
             bcs.label_buffer, bcs.label_pos = self._apply_line_edit(
                 bcs.label_buffer, bcs.label_pos, key
+            )
+
+    def _on_batch_definition(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
+        draft = bcs.drafts[bcs.current]
+        if draft.def_generating:
+            return
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            # Build the alt-labels prompt and go to review step
+            from . import ai as _ai
+
+            taxonomy_name, taxonomy_desc, _, _pd = self._build_ai_context_from_uri(bcs.parent_uri)
+            bcs.alt_prompt_buffer = _ai.render_suggest_alt_labels_prompt(
+                pref_label=draft.pref_label,
+                taxonomy_name=taxonomy_name,
+                taxonomy_description=taxonomy_desc,
+                lang=self.lang,
+                concept_definition=draft.definition.strip(),
+            )
+            bcs.alt_prompt_pos = len(bcs.alt_prompt_buffer)
+            bcs.alt_prompt_scroll = 0
+            bcs.step = "alt_prompt_review"
+        elif key == 27:
+            bcs.step = "label"
+        else:
+            draft.definition, bcs.def_pos = self._apply_line_edit(
+                draft.definition, bcs.def_pos, key
+            )
+
+    def _on_batch_alt_prompt_review(
+        self,
+        key: int,
+        rows: int,
+        bcs: BatchCreateState,  # noqa: ARG002
+    ) -> None:
+        """Handle keys on the editable alt-labels prompt screen."""
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            bcs.drafts[bcs.current].alts_generating = True
+            bcs.step = "alt_labels"
+            bcs.alt_cursor = 0
+            bcs.alt_scroll = 0
+        elif key == 27:
+            bcs.step = "definition"
+        else:
+            bcs.alt_prompt_buffer, bcs.alt_prompt_pos = self._apply_line_edit(
+                bcs.alt_prompt_buffer, bcs.alt_prompt_pos, key
             )
 
     def _on_batch_alt_labels(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
@@ -3002,25 +3263,11 @@ class TaxonomyViewer:
             draft.alt_checked[bcs.alt_cursor] = not draft.alt_checked[bcs.alt_cursor]
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if bcs.alt_cursor == done_idx:
-                bcs.step = "definition"
+                self._batch_create_current_and_confirm(bcs)
             elif bcs.alt_cursor < len(draft.alt_labels):
                 draft.alt_checked[bcs.alt_cursor] = not draft.alt_checked[bcs.alt_cursor]
         elif key == 27:
-            bcs.step = "label"
-
-    def _on_batch_definition(self, key: int, rows: int, bcs: BatchCreateState) -> None:  # noqa: ARG002
-        draft = bcs.drafts[bcs.current]
-        if draft.def_generating:
-            return
-        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            self._batch_create_current_and_confirm(bcs)
-        elif key == 27:
-            bcs.step = "alt_labels"
-            bcs.alt_cursor = len(draft.alt_labels)  # cursor on Done row
-        else:
-            draft.definition, bcs.def_pos = self._apply_line_edit(
-                draft.definition, bcs.def_pos, key
-            )
+            bcs.step = "alt_prompt_review"
 
     def _batch_create_current_and_confirm(self, bcs: BatchCreateState) -> None:
         """Create the concept at bcs.current, then transition to the confirm step."""
@@ -3099,8 +3346,6 @@ class TaxonomyViewer:
                 bcs.alt_scroll = 0
                 bcs.def_pos = 0
                 bcs.error = ""
-                if not draft.alt_labels and not draft.alts_generating:
-                    draft.alts_generating = True
         elif key == 27 and is_last:
             self._navigate_after_batch(bcs)
 
@@ -3288,25 +3533,80 @@ class TaxonomyViewer:
             dim=True,
         )
 
-    def _draw_create_prompt_review(
+    def _draw_create_context_review(
         self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
     ) -> None:
-        """Render the prompt-review panel."""
-        _draw_bar(
-            stdscr, 0, x0, width, " Review AI prompt — Enter: generate   Esc: back ", dim=False
-        )
-        text_lines = cs.ai_prompt_preview.splitlines()
-        list_h = rows - 2
+        """Show the scheme/parent name + editable description before prompt generation."""
+        _draw_bar(stdscr, 0, x0, width, " Context for AI — edit description if needed ", dim=False)
+        try:
+            label = f"  Name:  {cs.context_name}"
+            stdscr.addstr(2, x0, label[: width - 1], curses.color_pair(_C_FIELD_LABEL))
+            stdscr.addstr(4, x0, "  Description:"[: width - 1], curses.color_pair(_C_FIELD_LABEL))
+        except curses.error:
+            pass
+        # Editable definition with ▌ cursor, word-wrapped
+        buf = cs.context_def_buffer
+        pos = cs.context_def_pos
+        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
+        raw_lines = text_with_cursor.splitlines() or ["▌"]
+        display_lines: list[str] = []
+        for raw in raw_lines:
+            while len(raw) > width - 4:
+                display_lines.append(raw[: width - 4])
+                raw = raw[width - 4 :]
+            display_lines.append(raw)
+        list_h = rows - 7
         for i in range(list_h):
-            idx = cs.ai_scroll + i
-            y = 1 + i
-            line = text_lines[idx][: width - 2] if idx < len(text_lines) else ""
+            line = display_lines[i] if i < len(display_lines) else ""
             try:
-                stdscr.addstr(y, x0 + 1, line.ljust(width - 2)[: width - 2])
+                stdscr.addstr(5 + i, x0 + 2, line[: width - 4].ljust(width - 4)[: width - 4])
             except curses.error:
                 pass
         _draw_bar(
-            stdscr, rows - 1, x0, width, "  ↑↓: scroll   Enter: generate   Esc: back  ", dim=True
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  type to edit description   Enter: review prompt   Esc: back  ",
+            dim=True,
+        )
+
+    def _draw_create_prompt_review(
+        self, stdscr: curses.window, rows: int, x0: int, width: int, cs: CreateState
+    ) -> None:
+        """Render the editable prompt-review panel."""
+        _draw_bar(stdscr, 0, x0, width, " Review & edit AI prompt — Enter: generate ", dim=False)
+        buf = cs.prompt_buffer
+        pos = cs.prompt_pos
+        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
+        raw_lines = text_with_cursor.splitlines() or ["▌"]
+        display_lines: list[str] = []
+        for raw in raw_lines:
+            while len(raw) > width:
+                display_lines.append(raw[:width])
+                raw = raw[width:]
+            display_lines.append(raw)
+        list_h = rows - 2
+        # scroll so cursor line is visible
+        cursor_line = len((buf[:pos] + "▌").splitlines()) - 1
+        if cs.ai_scroll > cursor_line:
+            cs.ai_scroll = cursor_line
+        if cursor_line >= cs.ai_scroll + list_h:
+            cs.ai_scroll = cursor_line - list_h + 1
+        for i in range(list_h):
+            idx = cs.ai_scroll + i
+            line = display_lines[idx] if idx < len(display_lines) else ""
+            try:
+                stdscr.addstr(1 + i, x0, line[:width])
+            except curses.error:
+                pass
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            "  ↑↓: scroll   type to edit   Enter: generate   Esc: back  ",
+            dim=True,
         )
 
     def _draw_create_ai_pick(
@@ -3317,8 +3617,17 @@ class TaxonomyViewer:
 
         if cs.ai_generating:
             spinner = self._SPINNER[self._install_spinner % 4]
+            elapsed = f"  {self._generate_elapsed:.0f}s" if self._generate_elapsed else ""
             try:
-                stdscr.addstr(rows // 2, x0 + 2, f"{spinner}  Generating suggestions…"[: width - 2])
+                stdscr.addstr(
+                    rows // 2,
+                    x0 + 2,
+                    f"{spinner}  Generating suggestions…{elapsed}"[: width - 2],
+                    curses.color_pair(_C_DIM),
+                )
+                stdscr.addstr(
+                    rows // 2 + 1, x0 + 2, "  Esc to cancel"[: width - 2], curses.color_pair(_C_DIM)
+                )
             except curses.error:
                 pass
             _draw_bar(stdscr, rows - 1, x0, width, "", dim=True)
@@ -3330,11 +3639,35 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
+        # Manual input overlay
+        if cs.ai_manual_mode:
+            mid = rows // 2
+            box_w = min(width - 4, 60)
+            bx = x0 + (width - box_w) // 2
+            try:
+                stdscr.addstr(
+                    mid - 1, bx, " Add concept manually "[:box_w], curses.color_pair(_C_FIELD_LABEL)
+                )
+                buf = cs.ai_manual_input
+                visible = buf[max(0, len(buf) - box_w + 3) :]
+                stdscr.addstr(
+                    mid,
+                    bx,
+                    f" {visible}▌"[:box_w].ljust(box_w)[:box_w],
+                    curses.color_pair(_C_EDIT_BAR),
+                )
+                stdscr.addstr(
+                    mid + 1, bx, " Enter: add   Esc: cancel "[:box_w], curses.color_pair(_C_DIM)
+                )
+            except curses.error:
+                pass
+            return
+
         candidates = cs.ai_candidates
         checked = cs.ai_checked
         n_checked = sum(checked) if checked else 0
         create_label = f"✓  Create selected ({n_checked})"
-        actions = ["▶  Suggest more", create_label, "←  Back"]
+        actions = ["▶  Suggest more", "➕  Add manually", create_label, "←  Back"]
         total = len(candidates) + len(actions)
         list_h = rows - 2
 
@@ -3350,9 +3683,9 @@ class TaxonomyViewer:
                 label = f"{box} {candidates[idx]}"
                 attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD if sel else 0
             else:
-                action = actions[idx - len(candidates)]
-                label = action
-                is_create = idx - len(candidates) == 1
+                action_idx = idx - len(candidates)
+                label = actions[action_idx]
+                is_create = action_idx == 2
                 if is_create and n_checked == 0:
                     attr = curses.color_pair(_C_DIM)
                 elif sel:
@@ -3390,51 +3723,124 @@ class TaxonomyViewer:
                 cs.step = "form"
                 cs.cursor = 0
             else:
-                # AI suggest — render prompt and show for review
-                try:
-                    from . import ai as _ai
-
-                    taxonomy_name, taxonomy_desc, parent_label = self._build_ai_context(cs)
-                    preview = _ai.render_suggest_concept_names_prompt(
-                        taxonomy_name=taxonomy_name,
-                        taxonomy_description=taxonomy_desc,
-                        parent_label=parent_label,
-                        lang=self.lang,
-                        n=20,
-                        exclude=cs.ai_seen,
-                    )
-                    cs.ai_prompt_preview = preview
-                    cs.ai_scroll = 0
-                    cs.step = "prompt_review"
-                except Exception as exc:
-                    cs.error = str(exc)[:120]
+                # AI suggest — show context review first
+                taxonomy_name, _taxonomy_desc, parent_label, parent_def = self._build_ai_context(cs)
+                cs.context_name = parent_label or taxonomy_name
+                cs.context_def_buffer = parent_def
+                cs.context_def_pos = len(parent_def)
+                cs.step = "context_review"
         elif key == 27:
             self._state = TreeState() if cs.came_from_tree else DetailState()
 
-    def _on_create_prompt_review(self, key: int, cs: CreateState) -> None:
-        KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
-        max_scroll = max(0, len(cs.ai_prompt_preview.splitlines()) - 3)
-        if key in (KEY_UP, ord("k")):
-            cs.ai_scroll = max(0, cs.ai_scroll - 1)
-        elif key in (KEY_DOWN, ord("j")):
-            cs.ai_scroll = min(max_scroll, cs.ai_scroll + 1)
-        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            cs.ai_generating = True
-            cs.step = "ai_pick"
+    def _on_create_context_review(self, key: int, cs: CreateState) -> None:
+        """Handle keys on the context-review step (editable definition)."""
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            from . import ai as _ai
+            from .model import Definition
+
+            taxonomy_name, taxonomy_desc, parent_label, _orig_def = self._build_ai_context(cs)
+            # Use the (possibly edited) definition from the buffer
+            edited_def = cs.context_def_buffer.strip()
+            if parent_label:
+                # narrower: save edited definition back to the parent concept
+                target_tax, _ = self._individual_taxonomy_for(cs.parent_uri)
+                concept = target_tax.concepts.get(cs.parent_uri or "")
+                if concept:
+                    for d in concept.definitions:
+                        if d.lang == self.lang:
+                            d.value = edited_def
+                            break
+                    else:
+                        if edited_def:
+                            concept.definitions.append(Definition(lang=self.lang, value=edited_def))
+                    self._save_file(uri=cs.parent_uri)
+                parent_def = edited_def
+            else:
+                # top-level: save edited description back to the scheme
+                target_tax, _ = self._individual_taxonomy_for(cs.parent_uri)
+                scheme = (
+                    target_tax.schemes.get(cs.parent_uri or "")
+                    if cs.parent_uri
+                    else target_tax.primary_scheme()
+                )
+                if scheme:
+                    for d in scheme.descriptions:
+                        if d.lang == self.lang:
+                            d.value = edited_def
+                            break
+                    else:
+                        if edited_def:
+                            scheme.descriptions.append(Definition(lang=self.lang, value=edited_def))
+                    self._save_file(uri=cs.parent_uri or (scheme.uri if scheme else None))
+                taxonomy_desc = edited_def
+                parent_def = edited_def
+            preview = _ai.render_suggest_concept_names_prompt(
+                taxonomy_name=taxonomy_name,
+                taxonomy_description=taxonomy_desc,
+                parent_label=parent_label,
+                parent_definition=parent_def,
+                lang=self.lang,
+                n=20,
+                exclude=cs.ai_seen,
+            )
+            cs.prompt_buffer = preview
+            cs.prompt_pos = len(preview)
+            cs.ai_scroll = 0
+            cs.step = "prompt_review"
         elif key == 27:
             cs.step = "choose"
             cs.ai_cursor = 1
+        else:
+            cs.context_def_buffer, cs.context_def_pos = self._apply_line_edit(
+                cs.context_def_buffer, cs.context_def_pos, key
+            )
+
+    def _on_create_prompt_review(self, key: int, cs: CreateState) -> None:
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            cs.ai_generating = True
+            cs.step = "ai_pick"
+        elif key == 27:
+            cs.step = "context_review"
+        else:
+            cs.prompt_buffer, cs.prompt_pos = self._apply_line_edit(
+                cs.prompt_buffer, cs.prompt_pos, key
+            )
+            # keep scroll tracking with cursor
+            lines_before = cs.prompt_buffer[: cs.prompt_pos].count("\n")
+            cs.ai_scroll = max(0, lines_before - 3)
 
     def _on_create_ai_pick(self, key: int, rows: int, cs: CreateState) -> None:
         if cs.ai_generating:
             return
+
+        # Manual input mode: typing a new concept name
+        if cs.ai_manual_mode:
+            if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                name = cs.ai_manual_input.strip()
+                if name:
+                    cs.ai_candidates.append(name)
+                    cs.ai_checked.append(True)
+                    cs.ai_seen.append(name)
+                cs.ai_manual_input = ""
+                cs.ai_manual_mode = False
+            elif key == 27:
+                cs.ai_manual_input = ""
+                cs.ai_manual_mode = False
+            else:
+                new_buf, _pos = self._apply_line_edit(
+                    cs.ai_manual_input, len(cs.ai_manual_input), key
+                )
+                cs.ai_manual_input = new_buf
+            return
+
         KEY_UP, KEY_DOWN = curses.KEY_UP, curses.KEY_DOWN
         candidates = cs.ai_candidates
-        # Action indices: suggest_more | create_selected | back
+        # Action indices: suggest_more | add_manually | create_selected | back
         suggest_more_idx = len(candidates)
-        create_selected_idx = len(candidates) + 1
-        back_idx = len(candidates) + 2
-        total = len(candidates) + 3
+        add_manual_idx = len(candidates) + 1
+        create_selected_idx = len(candidates) + 2
+        back_idx = len(candidates) + 3
+        total = len(candidates) + 4
         list_h = rows - 2
         n_checked = sum(cs.ai_checked) if cs.ai_checked else 0
 
@@ -3446,17 +3852,18 @@ class TaxonomyViewer:
             if cs.ai_cursor >= cs.ai_scroll + list_h:
                 cs.ai_scroll = cs.ai_cursor - list_h + 1
         elif key == ord(" ") and 0 <= cs.ai_cursor < len(candidates):
-            # Spacebar toggles checkbox
             if cs.ai_cursor < len(cs.ai_checked):
                 cs.ai_checked[cs.ai_cursor] = not cs.ai_checked[cs.ai_cursor]
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if cs.ai_cursor == suggest_more_idx:
                 cs.ai_generating = True
+            elif cs.ai_cursor == add_manual_idx:
+                cs.ai_manual_mode = True
+                cs.ai_manual_input = ""
             elif cs.ai_cursor == create_selected_idx and n_checked > 0:
                 self._launch_batch_create(cs)
             elif cs.ai_cursor == back_idx:
-                cs.step = "choose"
-                cs.ai_cursor = 1
+                cs.step = "context_review"
             elif 0 <= cs.ai_cursor < len(candidates):
                 if n_checked == 0:
                     # No checkboxes checked: single-pick → go straight to form
@@ -3469,12 +3876,10 @@ class TaxonomyViewer:
                     cs.step = "form"
                     cs.cursor = 0
                 else:
-                    # Other items already checked: toggle this one
                     if cs.ai_cursor < len(cs.ai_checked):
                         cs.ai_checked[cs.ai_cursor] = not cs.ai_checked[cs.ai_cursor]
         elif key == 27:
-            cs.step = "choose"
-            cs.ai_cursor = 1
+            cs.step = "context_review"
 
     def _render_create_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
         # Access CreateState from self._state directly, or from EditState.return_to
@@ -3491,6 +3896,9 @@ class TaxonomyViewer:
         if not _in_edit:
             if cs.step == "choose":
                 self._draw_create_choose(stdscr, rows, x0, width, cs)
+                return
+            elif cs.step == "context_review":
+                self._draw_create_context_review(stdscr, rows, x0, width, cs)
                 return
             elif cs.step == "prompt_review":
                 self._draw_create_prompt_review(stdscr, rows, x0, width, cs)
@@ -3604,6 +4012,9 @@ class TaxonomyViewer:
         if cs.step == "choose":
             cs.error = ""
             self._on_create_choose(key, cs)
+            return
+        elif cs.step == "context_review":
+            self._on_create_context_review(key, cs)
             return
         elif cs.step == "prompt_review":
             self._on_create_prompt_review(key, cs)
@@ -5743,6 +6154,1257 @@ class TaxonomyViewer:
             self._state = DetailState()
         elif key in (27, ord("q")):
             self._state = DetailState()
+
+    # ─────────────────────────── SPARQL QUERY mode ───────────────────────────
+
+    # Layout constants
+    _QUERY_EDIT_RATIO = 3  # editor takes ~1/3 of available rows
+
+    def _draw_query(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        """Render the SPARQL query interface (editor + results + optional presets)."""
+        from . import sparql_query as _sq
+
+        qs = self._state
+        if not isinstance(qs, QueryState):
+            return
+
+        # AI sub-flow screens take over the full display
+        if qs.ai_step == "prompt_review" or qs.ai_generating:
+            self._draw_query_ai_prompt_review(stdscr, rows, cols, qs)
+            return
+
+        stdscr.erase()
+
+        # ── Dimensions ────────────────────────────────────────────────────────
+        edit_h = max(5, (rows - 2) // self._QUERY_EDIT_RATIO)
+        div_row = edit_h + 1
+        res_start = div_row + 1
+        res_h = max(0, rows - res_start - 1)
+
+        # ── Header ────────────────────────────────────────────────────────────
+        file_names = ", ".join(p.name for p in qs.file_paths) or "—"
+        _draw_bar(stdscr, 0, 0, cols, f" ❯ SPARQL Query — {file_names} ", dim=False)
+
+        # ── Editor ────────────────────────────────────────────────────────────
+        is_edit = qs.panel == "editor"
+        buf = qs.query_buffer
+        pos = qs.query_pos
+        default_attr = curses.color_pair(_C_FIELD_VAL) if is_edit else curses.color_pair(_C_DIM)
+
+        # Build display lines tracking buffer offsets (no cursor injection)
+        display_lines: list[str] = []
+        display_buf_starts: list[int] = []
+        buf_off = 0
+        for raw_line in buf.split("\n") if buf else [""]:
+            chunk_start = buf_off
+            remaining = raw_line
+            while len(remaining) > cols:
+                display_lines.append(remaining[:cols])
+                display_buf_starts.append(chunk_start)
+                chunk_start += cols
+                remaining = remaining[cols:]
+            display_lines.append(remaining)
+            display_buf_starts.append(chunk_start)
+            buf_off += len(raw_line) + 1  # +1 for \n
+
+        # Find which display line the cursor is on
+        cursor_display_line = 0
+        cursor_col_on_screen = 0
+        for di in range(len(display_lines) - 1, -1, -1):
+            if display_buf_starts[di] <= pos:
+                cursor_display_line = di
+                cursor_col_on_screen = pos - display_buf_starts[di]
+                break
+
+        # Scroll so cursor stays visible
+        if qs.query_scroll > cursor_display_line:
+            qs.query_scroll = cursor_display_line
+        if cursor_display_line >= qs.query_scroll + edit_h:
+            qs.query_scroll = cursor_display_line - edit_h + 1
+
+        # Per-character syntax-highlight attrs
+        char_attrs = _sparql_hl_attrs(buf, is_edit)
+
+        for i in range(edit_h):
+            idx = qs.query_scroll + i
+            screen_y = 1 + i
+            if idx >= len(display_lines):
+                try:
+                    stdscr.addstr(screen_y, 0, " " * cols, default_attr)
+                except curses.error:
+                    pass
+                continue
+
+            line_text = display_lines[idx]
+            buf_start = display_buf_starts[idx]
+            is_cursor_line = idx == cursor_display_line
+
+            # Build coloured segments
+            segments: list[tuple[str, int]] = []
+            for ci, ch in enumerate(line_text):
+                bp = buf_start + ci
+                is_cur = is_cursor_line and ci == cursor_col_on_screen
+                attr = (
+                    curses.A_REVERSE
+                    if is_cur
+                    else (char_attrs[bp] if bp < len(char_attrs) else default_attr)
+                )
+                if segments and segments[-1][1] == attr and not is_cur:
+                    segments[-1] = (segments[-1][0] + ch, attr)
+                else:
+                    segments.append((ch, attr))
+
+            # Cursor at end-of-line
+            if is_cursor_line and cursor_col_on_screen >= len(line_text):
+                segments.append((" ", curses.A_REVERSE))
+
+            # Render
+            xcol = 0
+            for seg_text, seg_attr in segments:
+                if xcol >= cols:
+                    break
+                clip = seg_text[: cols - xcol]
+                try:
+                    stdscr.addstr(screen_y, xcol, clip, seg_attr)
+                except curses.error:
+                    pass
+                xcol += len(clip)
+            if xcol < cols:
+                try:
+                    stdscr.addstr(screen_y, xcol, " " * (cols - xcol), default_attr)
+                except curses.error:
+                    pass
+
+        # ── Divider ───────────────────────────────────────────────────────────
+        n_rows = len(qs.rows)
+        if qs.running:
+            sp = self._SPINNER[self._install_spinner % 4]
+            div_label = f"  {sp} Running…  "
+        elif qs.result_error:
+            div_label = "  ✗ Error  "
+        elif qs.columns:
+            div_label = f"  Results — {n_rows} row{'s' if n_rows != 1 else ''}  "
+        else:
+            div_label = "  Results  "
+        _draw_bar(stdscr, div_row, 0, cols, div_label, dim=qs.panel != "results")
+
+        # ── Results area ──────────────────────────────────────────────────────
+        is_res = qs.panel == "results"
+
+        if qs.running:
+            try:
+                stdscr.addstr(
+                    res_start + res_h // 2,
+                    2,
+                    "Executing query…",
+                    curses.color_pair(_C_DIM),
+                )
+            except curses.error:
+                pass
+        elif qs.result_error:
+            lines = qs.result_error.splitlines()
+            for i, ln in enumerate(lines[: max(1, res_h)]):
+                try:
+                    stdscr.addstr(res_start + i, 1, ln[: cols - 2], curses.color_pair(_C_DIFF_DEL))
+                except curses.error:
+                    pass
+        elif qs.columns:
+            widths = _sq.compute_col_widths(qs.columns, qs.rows, cols - 1)
+            # Header row
+            hdr = ""
+            for i, col in enumerate(qs.columns):
+                hdr += col[: widths[i]].ljust(widths[i])
+                if i < len(qs.columns) - 1:
+                    hdr += " │ "
+            try:
+                stdscr.addstr(res_start, 0, hdr[:cols], curses.color_pair(_C_FIELD_LABEL))
+            except curses.error:
+                pass
+            # Separator
+            sep_line = "─" * (cols - 1)
+            try:
+                stdscr.addstr(res_start + 1, 0, sep_line[:cols], curses.color_pair(_C_DIM))
+            except curses.error:
+                pass
+            # Data rows
+            data_start = res_start + 2
+            data_h = max(0, rows - data_start - 1)
+            # Clamp scroll
+            if qs.result_scroll + data_h > n_rows:
+                qs.result_scroll = max(0, n_rows - data_h)
+            for i in range(data_h):
+                row_idx = qs.result_scroll + i
+                if row_idx >= n_rows:
+                    break
+                row = qs.rows[row_idx]
+                sel = is_res and row_idx == qs.result_cursor
+                cell_text = ""
+                for ci, val in enumerate(row):
+                    if ci >= len(widths):
+                        break
+                    cell_text += val[: widths[ci]].ljust(widths[ci])
+                    if ci < len(row) - 1:
+                        cell_text += " │ "
+                attr = curses.color_pair(_C_SEL) | curses.A_BOLD if sel else curses.A_NORMAL
+                try:
+                    stdscr.addstr(data_start + i, 0, cell_text[:cols].ljust(cols)[:cols], attr)
+                except curses.error:
+                    pass
+        else:
+            hint = "Ctrl+R or F5 to run query   P for presets   Tab to switch panel"
+            try:
+                stdscr.addstr(
+                    res_start + res_h // 2,
+                    max(0, (cols - len(hint)) // 2),
+                    hint[:cols],
+                    curses.color_pair(_C_DIM),
+                )
+            except curses.error:
+                pass
+
+        # ── Presets overlay ───────────────────────────────────────────────────
+        if qs.show_presets:
+            self._draw_query_presets(stdscr, rows, cols, qs)
+
+        # ── AI ask overlay (drawn on top of everything) ───────────────────────
+        if qs.ai_step == "ask":
+            self._draw_query_ai_ask(stdscr, rows, cols, qs)
+
+        # ── @ autocomplete overlay ────────────────────────────────────────────
+        if qs.ac_active and qs.panel == "editor":
+            self._draw_query_ac(stdscr, rows, cols, qs)
+
+        # ── Keyword autocomplete popup (when editor focused and no @ AC) ──────
+        if qs.panel == "editor" and not qs.ac_active and not qs.show_presets:
+            kw_word, _kw_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
+            kw_cands = _sparql_kw_candidates(kw_word)
+            if kw_cands:
+                self._draw_query_kw_popup(
+                    stdscr, rows, cols, qs, kw_cands, cursor_display_line, cursor_col_on_screen
+                )
+
+        # ── Footer ────────────────────────────────────────────────────────────
+        if qs.show_presets:
+            hint_text = "  ↑↓: navigate   Enter: load preset   Ctrl+L/Esc: close  "
+        elif qs.ai_step == "ask":
+            hint_text = ""
+        elif qs.ac_active:
+            if qs.ac_level == 1:
+                hint_text = "  ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel  "
+            else:
+                hint_text = "  ↑↓: navigate   Tab/Enter: insert URI   Esc: back  "
+        elif qs.panel == "editor":
+            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   Tab: complete/results   Ctrl+L: presets   Esc: back  "
+        else:
+            hint_text = (
+                "  Tab: editor   Enter: go to concept   A: AI   Ctrl+L: presets   Esc: back  "
+            )
+        _draw_bar(stdscr, rows - 1, 0, cols, hint_text, dim=True)
+
+    def _draw_query_presets(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+    ) -> None:
+        """Draw the presets overlay on the right side of the screen."""
+        from . import sparql_query as _sq
+
+        presets = _sq.PRESET_QUERIES
+        ov_w = min(42, cols - 2)
+        ov_h = min(len(presets) + 4, rows - 2)
+        ov_x = cols - ov_w - 1
+        ov_y = 1
+
+        # Clamp preset cursor/scroll
+        n = len(presets)
+        qs.preset_cursor = max(0, min(qs.preset_cursor, n - 1))
+        if qs.preset_scroll > qs.preset_cursor:
+            qs.preset_scroll = qs.preset_cursor
+        list_h = ov_h - 3  # title + footer
+        if qs.preset_cursor >= qs.preset_scroll + list_h:
+            qs.preset_scroll = qs.preset_cursor - list_h + 1
+
+        # Draw box background
+        for y in range(ov_h):
+            try:
+                stdscr.addstr(ov_y + y, ov_x, " " * ov_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        # Title
+        title = " Presets "
+        try:
+            stdscr.addstr(
+                ov_y,
+                ov_x,
+                title.center(ov_w)[:ov_w],
+                curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD,
+            )
+        except curses.error:
+            pass
+
+        # List
+        for i in range(list_h):
+            idx = qs.preset_scroll + i
+            if idx >= n:
+                break
+            sel = idx == qs.preset_cursor
+            p = presets[idx]
+            prefix = "▶ " if sel else "  "
+            label = (prefix + p.label)[: ov_w - 1]
+            attr = (
+                curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            try:
+                stdscr.addstr(ov_y + 1 + i, ov_x, label.ljust(ov_w)[:ov_w], attr)
+            except curses.error:
+                pass
+
+        # Description of selected preset
+        if 0 <= qs.preset_cursor < n:
+            desc = presets[qs.preset_cursor].description[: ov_w - 1]
+            try:
+                stdscr.addstr(
+                    ov_y + ov_h - 2, ov_x, desc.ljust(ov_w)[:ov_w], curses.color_pair(_C_DIM)
+                )
+            except curses.error:
+                pass
+
+        # Hint
+        hint = " Enter: load  P/Esc: close "
+        try:
+            stdscr.addstr(
+                ov_y + ov_h - 1, ov_x, hint.center(ov_w)[:ov_w], curses.color_pair(_C_DIM)
+            )
+        except curses.error:
+            pass
+
+    def _draw_query_kw_popup(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+        candidates: list[str],
+        cursor_display_line: int,
+        cursor_col: int,
+    ) -> None:
+        """Draw the SPARQL keyword autocomplete popup below the cursor."""
+        n = len(candidates)
+        popup_w = min(max(len(c) for c in candidates) + 4, 40, cols - 2)
+        popup_h = min(n + 1, 10, rows - 3)  # items + footer hint
+        if popup_h < 2:
+            return
+
+        screen_row = 1 + (cursor_display_line - qs.query_scroll)
+        popup_y = screen_row + 1
+        popup_x = max(0, min(cursor_col, cols - popup_w - 1))
+
+        if popup_y + popup_h > rows - 1:
+            popup_y = max(1, screen_row - popup_h)
+
+        list_h = popup_h - 1  # reserve last row for hint
+
+        for y in range(popup_h):
+            try:
+                stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        kw_cur = max(0, min(qs.kw_cursor, n - 1))
+        for i in range(list_h):
+            if i >= n:
+                break
+            sel = i == kw_cur
+            text = f" {candidates[i]} "
+            attr = (
+                curses.color_pair(_C_SH_KEYWORD) | curses.A_BOLD | curses.A_REVERSE
+                if sel
+                else curses.color_pair(_C_SH_KEYWORD)
+            )
+            try:
+                stdscr.addstr(popup_y + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr)
+            except curses.error:
+                pass
+
+        hint = " ↑↓: select   Tab: insert "
+        try:
+            stdscr.addstr(
+                popup_y + popup_h - 1,
+                popup_x,
+                hint.center(popup_w)[:popup_w],
+                curses.color_pair(_C_DIM),
+            )
+        except curses.error:
+            pass
+
+    def _on_query(self, key: int, rows: int, cols: int) -> bool:
+        """Handle a keypress in SPARQL query mode. Returns True to quit the viewer."""
+        qs = self._state
+        if not isinstance(qs, QueryState):
+            return False
+
+        # ── AI sub-flow ───────────────────────────────────────────────────────
+        if qs.ai_step == "ask":
+            self._on_query_ai_ask(key, rows, cols, qs)
+            return False
+        if qs.ai_step == "prompt_review":
+            self._on_query_ai_prompt_review(key, qs)
+            return False
+
+        # ── Presets overlay is open ───────────────────────────────────────────
+        if qs.show_presets:
+            from . import sparql_query as _sq
+
+            n = len(_sq.PRESET_QUERIES)
+            if key in (curses.KEY_UP, ord("k")):
+                qs.preset_cursor = max(0, qs.preset_cursor - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                qs.preset_cursor = min(n - 1, qs.preset_cursor + 1)
+            elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                if 0 <= qs.preset_cursor < n:
+                    qs.query_buffer = _sq.PRESET_QUERIES[qs.preset_cursor].sparql
+                    qs.query_pos = len(qs.query_buffer)
+                    qs.query_scroll = 0
+                qs.show_presets = False
+                qs.panel = "editor"
+            elif key in (27, 12):  # Esc or Ctrl+L → close
+                qs.show_presets = False
+            return False
+
+        # ── Editor panel ──────────────────────────────────────────────────────
+        # Only Ctrl/function keys here — all printable chars pass to the editor.
+        if qs.panel == "editor":
+            # ── @ autocomplete intercept ──────────────────────────────────────
+            if qs.ac_active:
+                candidates = self._query_ac_candidates(
+                    qs.query_buffer[qs.ac_trigger_pos : qs.query_pos],
+                    qs.ac_level,
+                    qs.ac_scheme_uri,
+                )
+                if key == 27:  # Esc
+                    if qs.ac_level == 2:
+                        # Back to scheme selection
+                        self._query_ac_clear_filter(qs)
+                        qs.ac_level = 1
+                        qs.ac_scheme_uri = ""
+                        qs.ac_scheme_label = ""
+                        qs.ac_cursor = 0
+                        qs.ac_scroll = 0
+                    else:
+                        # Remove @ and filter text so it doesn't corrupt the query
+                        self._query_ac_cancel(qs)
+                    return False
+                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):  # Tab/Enter
+                    if qs.ac_level == 1:
+                        # Select scheme → enter level 2
+                        if candidates:
+                            s_label, s_uri, _k, _sl = candidates[qs.ac_cursor]
+                            self._query_ac_clear_filter(qs)
+                            qs.ac_level = 2
+                            qs.ac_scheme_uri = s_uri
+                            qs.ac_scheme_label = s_label
+                            qs.ac_cursor = 0
+                            qs.ac_scroll = 0
+                        else:
+                            qs.ac_active = False
+                    else:
+                        # Insert concept URI
+                        if candidates:
+                            self._query_ac_insert(qs, candidates[qs.ac_cursor])
+                        else:
+                            qs.ac_active = False
+                    return False
+                if key == curses.KEY_UP:
+                    qs.ac_cursor = max(0, qs.ac_cursor - 1)
+                    return False
+                if key == curses.KEY_DOWN:
+                    qs.ac_cursor = min(max(0, len(candidates) - 1), qs.ac_cursor + 1)
+                    return False
+                # All other keys pass through to the editor, then re-check AC state
+                qs.query_buffer, qs.query_pos = self._apply_line_edit(
+                    qs.query_buffer, qs.query_pos, key
+                )
+                # Close AC if cursor moved before trigger or '@' was deleted
+                if qs.query_pos < qs.ac_trigger_pos or (
+                    qs.ac_trigger_pos > 0
+                    and qs.query_buffer[qs.ac_trigger_pos - 1 : qs.ac_trigger_pos] != "@"
+                ):
+                    qs.ac_active = False
+                    qs.ac_cursor = 0
+                    qs.ac_scroll = 0
+                    qs.ac_level = 1
+                    qs.ac_scheme_uri = ""
+                    qs.ac_scheme_label = ""
+                else:
+                    qs.ac_cursor = 0  # reset so best match shows first
+                return False
+
+            # ── Keyword popup navigation (intercepts ↑↓ and Tab) ─────────────
+            kw_word, _ = _sparql_current_word(qs.query_buffer, qs.query_pos)
+            kw_cands = _sparql_kw_candidates(kw_word)
+            if kw_cands:
+                qs.kw_cursor = max(0, min(qs.kw_cursor, len(kw_cands) - 1))
+                if key == curses.KEY_UP:
+                    qs.kw_cursor = max(0, qs.kw_cursor - 1)
+                    return False
+                if key == curses.KEY_DOWN:
+                    qs.kw_cursor = min(len(kw_cands) - 1, qs.kw_cursor + 1)
+                    return False
+                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
+                    _sparql_kw_insert(qs, kw_cands[qs.kw_cursor])
+                    qs.kw_cursor = 0
+                    return False
+
+            if key in (18, 269):  # Ctrl+R or F5 → run
+                if qs.query_buffer.strip():
+                    self._last_query_buffer = qs.query_buffer
+                    qs.running = True
+            elif key == 7:  # Ctrl+G → AI generate
+                qs.ai_step = "ask"
+                qs.ai_question = ""
+                qs.ai_question_pos = 0
+            elif key == 9:  # Tab → results (no kw popup active)
+                qs.panel = "results"
+            elif key == 12:  # Ctrl+L → presets
+                qs.show_presets = True
+            elif key == 27:  # Esc → back to tree
+                self._last_query_buffer = qs.query_buffer
+                self._state = TreeState()
+            elif key == curses.KEY_UP:
+                qs.query_pos = _query_pos_up(qs.query_buffer, qs.query_pos)
+            elif key == curses.KEY_DOWN:
+                qs.query_pos = _query_pos_down(qs.query_buffer, qs.query_pos)
+            elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                qs.query_buffer = (
+                    qs.query_buffer[: qs.query_pos] + "\n" + qs.query_buffer[qs.query_pos :]
+                )
+                qs.query_pos += 1
+            else:
+                qs.query_buffer, qs.query_pos = self._apply_line_edit(
+                    qs.query_buffer, qs.query_pos, key
+                )
+                qs.kw_cursor = 0  # reset popup selection when word changes
+                # Trigger @ autocomplete when '@' is typed
+                if key == ord("@"):
+                    qs.ac_active = True
+                    qs.ac_context = "editor"
+                    qs.ac_trigger_pos = qs.query_pos  # pos is now right after '@'
+                    qs.ac_cursor = 0
+                    qs.ac_scroll = 0
+                    qs.ac_level = 1
+                    qs.ac_scheme_uri = ""
+                    qs.ac_scheme_label = ""
+            return False
+
+        # ── Results panel ─────────────────────────────────────────────────────
+        if qs.panel == "results":
+            edit_h = max(5, (rows - 2) // self._QUERY_EDIT_RATIO)
+            data_start_row = edit_h + 3  # header + sep above data rows
+            data_h = max(0, rows - data_start_row - 1)
+            n_rows = len(qs.rows)
+
+            if key in (curses.KEY_UP, ord("k")):
+                qs.result_cursor = max(0, qs.result_cursor - 1)
+                if qs.result_cursor < qs.result_scroll:
+                    qs.result_scroll = qs.result_cursor
+            elif key in (curses.KEY_DOWN, ord("j")):
+                qs.result_cursor = min(max(0, n_rows - 1), qs.result_cursor + 1)
+                if qs.result_cursor >= qs.result_scroll + data_h:
+                    qs.result_scroll = qs.result_cursor - data_h + 1
+            elif key in (curses.KEY_HOME, ord("g")):
+                qs.result_cursor = 0
+                qs.result_scroll = 0
+            elif key in (curses.KEY_END, ord("G")):
+                qs.result_cursor = max(0, n_rows - 1)
+                qs.result_scroll = max(0, n_rows - data_h)
+            elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                self._query_navigate_to_concept(qs)
+            elif key == 9:  # Tab → editor
+                qs.panel = "editor"
+            elif key in (18, 269):  # Ctrl+R or F5 — re-run
+                if qs.query_buffer.strip():
+                    self._last_query_buffer = qs.query_buffer
+                    qs.running = True
+            elif key == 12:  # Ctrl+L → presets
+                qs.show_presets = True
+            elif key in (ord("a"), ord("A"), 7):  # A or Ctrl+G → AI generate
+                qs.ai_step = "ask"
+                qs.ai_question = ""
+                qs.ai_question_pos = 0
+            elif key == 27:  # Esc → back to editor first
+                qs.panel = "editor"
+
+        return False
+
+    def _query_navigate_to_concept(self, qs: QueryState) -> None:
+        """If the selected result row contains a known concept/scheme URI, jump to it."""
+        from . import sparql_query as _sq
+
+        if not qs.rows or qs.result_cursor >= len(qs.rows):
+            return
+        row = qs.rows[qs.result_cursor]
+        uri_col = _sq.find_uri_column(_sq.QueryResult(columns=qs.columns, rows=qs.rows))
+        uri = row[uri_col] if uri_col is not None and uri_col < len(row) else None
+        if not uri:
+            return
+        # Check if URI is in the taxonomy
+        if uri in self.taxonomy.concepts or uri in self.taxonomy.schemes:
+            self._last_query_buffer = qs.query_buffer
+            self._detail_uri = uri
+            if uri in self.taxonomy.schemes:
+                self._detail_fields = self._bsf(uri)
+            else:
+                self._detail_fields = build_concept_detail(self.taxonomy, uri, self.lang)
+            self._field_cursor = 0
+            self._detail_scroll = 0
+            # Jump tree cursor to this URI
+            for i, line in enumerate(self._flat):
+                if line.uri == uri:
+                    self._cursor = i
+                    break
+            self._state = DetailState(
+                uri=uri,
+                fields=self._detail_fields,
+                field_cursor=0,
+                scroll=0,
+            )
+
+    def _execute_sparql_query(self) -> None:
+        """Run the SPARQL query stored in QueryState, update result fields."""
+        from . import sparql_query as _sq
+
+        qs = self._state
+        if not isinstance(qs, QueryState):
+            return
+        result = _sq.run_query(qs.file_paths, qs.query_buffer)
+        qs.columns = result.columns
+        qs.rows = result.rows
+        qs.result_error = result.error
+        qs.result_scroll = 0
+        qs.result_cursor = 0
+        qs.running = False
+        if not result.error:
+            qs.panel = "results"
+
+    def _generate_sparql_query(self) -> None:
+        """Background worker: call the LLM to generate a SPARQL query.
+
+        Reads ``qs.ai_prompt_buffer`` (possibly user-edited), calls
+        ``ai.generate_sparql_from_prompt``, and places the resulting SPARQL
+        into ``qs.query_buffer`` so the user can inspect/run/edit it.
+        """
+        from . import ai as _ai
+
+        qs = self._state
+        if not isinstance(qs, QueryState):
+            return
+        sparql = _ai.generate_sparql_from_prompt(qs.ai_prompt_buffer)
+        qs.query_buffer = sparql
+        qs.query_pos = len(sparql)
+        qs.query_scroll = 0
+        qs.ai_generating = False
+        qs.ai_step = ""
+        qs.panel = "editor"
+
+    def _draw_query_ai_ask(
+        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
+    ) -> None:
+        """Overlay: single-line natural language question input."""
+        box_h = 5
+        box_w = min(cols - 4, 70)
+        by = (rows - box_h) // 2
+        bx = (cols - box_w) // 2
+
+        for y in range(box_h):
+            try:
+                stdscr.addstr(by + y, bx, " " * box_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        title = " ✦ Ask AI — describe what you want to query "
+        try:
+            stdscr.addstr(
+                by, bx, title.center(box_w)[:box_w], curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
+            )
+        except curses.error:
+            pass
+
+        buf = qs.ai_question
+        pos = qs.ai_question_pos
+        visible_w = box_w - 2
+        start = max(0, pos - visible_w + 1)
+        visible = buf[start : start + visible_w]
+        cursor_col = pos - start
+        display = visible[:cursor_col] + "▌" + visible[cursor_col:]
+        try:
+            stdscr.addstr(
+                by + 2,
+                bx + 1,
+                display[:visible_w].ljust(visible_w)[:visible_w],
+                curses.color_pair(_C_EDIT_BAR),
+            )
+        except curses.error:
+            pass
+
+        if qs.ac_active:
+            if qs.ac_level == 1:
+                hint = " ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel "
+            else:
+                hint = (
+                    f" In {qs.ac_scheme_label} — ↑↓: navigate   Tab/Enter: insert URI   Esc: back "
+                )
+        else:
+            hint = " Enter: review prompt   @: autocomplete   Esc: cancel "
+        try:
+            stdscr.addstr(by + 4, bx, hint.center(box_w)[:box_w], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+
+        # AC popup anchored just below the dialog box
+        if qs.ac_active:
+            self._draw_query_ac(stdscr, rows, cols, qs, anchor_y=by + box_h, anchor_x=bx + 1)
+
+    def _draw_query_ai_prompt_review(
+        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
+    ) -> None:
+        """Full-screen: editable AI prompt before submission."""
+        stdscr.erase()
+        _draw_bar(
+            stdscr,
+            0,
+            0,
+            cols,
+            " ✦ AI SPARQL — review & edit prompt — Enter: generate   Esc: back ",
+            dim=False,
+        )
+
+        if qs.ai_generating:
+            sp = self._SPINNER[self._install_spinner % 4]
+            try:
+                stdscr.addstr(
+                    rows // 2,
+                    2,
+                    f"{sp}  Generating SPARQL query…",
+                    curses.color_pair(_C_DIM),
+                )
+            except curses.error:
+                pass
+            _draw_bar(stdscr, rows - 1, 0, cols, "", dim=True)
+            return
+
+        buf = qs.ai_prompt_buffer
+        pos = qs.ai_prompt_pos
+        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
+        raw_lines = text_with_cursor.splitlines() or ["▌"]
+        display_lines: list[str] = []
+        for raw in raw_lines:
+            while len(raw) > cols:
+                display_lines.append(raw[:cols])
+                raw = raw[cols:]
+            display_lines.append(raw)
+
+        list_h = rows - 2
+        cursor_line = len((buf[:pos] + "▌").splitlines()) - 1
+        if qs.ai_prompt_scroll > cursor_line:
+            qs.ai_prompt_scroll = cursor_line
+        if cursor_line >= qs.ai_prompt_scroll + list_h:
+            qs.ai_prompt_scroll = cursor_line - list_h + 1
+
+        for i in range(list_h):
+            idx = qs.ai_prompt_scroll + i
+            line = display_lines[idx] if idx < len(display_lines) else ""
+            try:
+                stdscr.addstr(1 + i, 0, line[:cols])
+            except curses.error:
+                pass
+
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            0,
+            cols,
+            "  ↑↓: scroll   type to edit   Enter: generate   Esc: back  ",
+            dim=True,
+        )
+
+    def _on_query_ai_ask(self, key: int, rows: int, cols: int, qs: QueryState) -> None:
+        """Handle keypresses in the AI question input overlay."""
+        from . import ai as _ai
+
+        # ── @ autocomplete intercept ──────────────────────────────────────────
+        if qs.ac_active:
+            candidates = self._query_ac_candidates(
+                qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos],
+                qs.ac_level,
+                qs.ac_scheme_uri,
+            )
+            if key == 27:  # Esc
+                if qs.ac_level == 2:
+                    # Back to scheme selection (don't cancel the ask dialog)
+                    self._query_ac_clear_filter(qs)
+                    qs.ac_level = 1
+                    qs.ac_scheme_uri = ""
+                    qs.ac_scheme_label = ""
+                    qs.ac_cursor = 0
+                    qs.ac_scroll = 0
+                else:
+                    # Remove @ and filter text, but keep the ask dialog open
+                    self._query_ac_cancel(qs)
+                return
+            if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):  # Tab/Enter
+                if qs.ac_level == 1:
+                    if candidates:
+                        s_label, s_uri, _k, _sl = candidates[qs.ac_cursor]
+                        self._query_ac_clear_filter(qs)
+                        qs.ac_level = 2
+                        qs.ac_scheme_uri = s_uri
+                        qs.ac_scheme_label = s_label
+                        qs.ac_cursor = 0
+                        qs.ac_scroll = 0
+                    else:
+                        qs.ac_active = False
+                else:
+                    if candidates:
+                        self._query_ac_insert(qs, candidates[qs.ac_cursor])
+                    else:
+                        qs.ac_active = False
+                return
+            if key == curses.KEY_UP:
+                qs.ac_cursor = max(0, qs.ac_cursor - 1)
+                return
+            if key == curses.KEY_DOWN:
+                qs.ac_cursor = min(max(0, len(candidates) - 1), qs.ac_cursor + 1)
+                return
+            # Pass other keys through to the input, then re-check AC state
+            qs.ai_question, qs.ai_question_pos = self._apply_line_edit(
+                qs.ai_question, qs.ai_question_pos, key
+            )
+            if qs.ai_question_pos < qs.ac_trigger_pos or (
+                qs.ac_trigger_pos > 0
+                and qs.ai_question[qs.ac_trigger_pos - 1 : qs.ac_trigger_pos] != "@"
+            ):
+                qs.ac_active = False
+                qs.ac_cursor = 0
+                qs.ac_scroll = 0
+                qs.ac_level = 1
+                qs.ac_scheme_uri = ""
+                qs.ac_scheme_label = ""
+            else:
+                qs.ac_cursor = 0
+            return
+
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if not qs.ai_question.strip():
+                return
+            if not _ai.is_configured():
+                qs.result_error = "AI not configured. Press ⚙ from the main menu."
+                qs.ai_step = ""
+                return
+            # Build taxonomy context from current taxonomy
+            scheme = self.taxonomy.primary_scheme()
+            taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
+            taxonomy_description = ""
+            if scheme and scheme.descriptions:
+                for d in scheme.descriptions:
+                    if d.lang == self.lang:
+                        taxonomy_description = d.value
+                        break
+                if not taxonomy_description and scheme.descriptions:
+                    taxonomy_description = scheme.descriptions[0].value
+            scheme_uris = list(self.taxonomy.schemes.keys())
+            prompt = _ai.render_generate_sparql_prompt(
+                taxonomy_name, taxonomy_description, scheme_uris, qs.ai_question
+            )
+            qs.ai_prompt_buffer = prompt
+            qs.ai_prompt_pos = len(prompt)
+            qs.ai_prompt_scroll = 0
+            qs.ai_step = "prompt_review"
+        elif key == 27:
+            qs.ai_step = ""
+        else:
+            qs.ai_question, qs.ai_question_pos = self._apply_line_edit(
+                qs.ai_question, qs.ai_question_pos, key
+            )
+            # Trigger @ autocomplete when '@' is typed
+            if key == ord("@"):
+                qs.ac_active = True
+                qs.ac_context = "ai_ask"
+                qs.ac_trigger_pos = qs.ai_question_pos  # pos is now right after '@'
+                qs.ac_cursor = 0
+                qs.ac_scroll = 0
+                qs.ac_level = 1
+                qs.ac_scheme_uri = ""
+                qs.ac_scheme_label = ""
+
+    def _on_query_ai_prompt_review(self, key: int, qs: QueryState) -> None:
+        """Handle keypresses in the AI prompt review screen."""
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            qs.ai_generating = True
+        elif key == 27:
+            qs.ai_step = "ask"
+        elif key == curses.KEY_UP:
+            qs.ai_prompt_pos = _query_pos_up(qs.ai_prompt_buffer, qs.ai_prompt_pos)
+        elif key == curses.KEY_DOWN:
+            qs.ai_prompt_pos = _query_pos_down(qs.ai_prompt_buffer, qs.ai_prompt_pos)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            qs.ai_prompt_buffer = (
+                qs.ai_prompt_buffer[: qs.ai_prompt_pos]
+                + "\n"
+                + qs.ai_prompt_buffer[qs.ai_prompt_pos :]
+            )
+            qs.ai_prompt_pos += 1
+        else:
+            qs.ai_prompt_buffer, qs.ai_prompt_pos = self._apply_line_edit(
+                qs.ai_prompt_buffer, qs.ai_prompt_pos, key
+            )
+
+    # ── @ autocomplete ────────────────────────────────────────────────────────
+
+    def _query_ac_candidates(
+        self, ac_query: str, level: int = 1, scheme_uri: str = ""
+    ) -> list[tuple[str, str, str, str]]:
+        """Return (label, uri, kind, scheme_label) tuples for @ autocomplete.
+
+        Level 1: schemes only, filtered by *ac_query*.
+        Level 2: concepts within *scheme_uri* only, filtered by *ac_query*.
+        """
+        q = ac_query.lower()
+
+        if level == 1:
+            rows: list[tuple[str, str, str, str]] = []
+            for uri, scheme in self.taxonomy.schemes.items():
+                label = scheme.title(self.lang)
+                if _ac_matches(label, q):
+                    rows.append((label, uri, "SCH", ""))
+            rows.sort(key=lambda t: t[0].lower())
+            return rows[:50]
+
+        # Level 2: BFS from scheme's top_concepts
+        scheme_obj = self.taxonomy.schemes.get(scheme_uri)
+        if not scheme_obj:
+            return []
+        scheme = scheme_obj
+        scheme_concepts: set[str] = set()
+        queue = list(scheme.top_concepts)
+        seen: set[str] = set()
+        while queue:
+            curi = queue.pop(0)
+            if curi in seen:
+                continue
+            seen.add(curi)
+            scheme_concepts.add(curi)
+            c = self.taxonomy.concepts.get(curi)
+            if c:
+                queue.extend(c.narrower)
+        rows2: list[tuple[str, str, str, str]] = []
+        for curi in scheme_concepts:
+            concept = self.taxonomy.concepts.get(curi)
+            if not concept:
+                continue
+            label = concept.pref_label(self.lang)
+            if _ac_matches(label, q):
+                rows2.append((label, curi, "CON", ""))
+        rows2.sort(key=lambda t: t[0].lower())
+        return rows2[:50]
+
+    def _query_ac_insert(self, qs: QueryState, candidate: tuple[str, str, str, str]) -> None:
+        """Replace @filter_text at the current cursor position with <uri>."""
+        _label, uri, _kind, _scheme = candidate
+        start = qs.ac_trigger_pos - 1  # include the '@' itself
+        replacement = f"<{uri}>"
+        if qs.ac_context == "ai_ask":
+            end = qs.ai_question_pos
+            qs.ai_question = qs.ai_question[:start] + replacement + qs.ai_question[end:]
+            qs.ai_question_pos = start + len(replacement)
+        else:
+            end = qs.query_pos
+            qs.query_buffer = qs.query_buffer[:start] + replacement + qs.query_buffer[end:]
+            qs.query_pos = start + len(replacement)
+        qs.ac_active = False
+        qs.ac_cursor = 0
+        qs.ac_scroll = 0
+        qs.ac_level = 1
+        qs.ac_scheme_uri = ""
+        qs.ac_scheme_label = ""
+
+    def _query_ac_clear_filter(self, qs: QueryState) -> None:
+        """Remove filter text typed after '@' (used when transitioning AC levels)."""
+        start = qs.ac_trigger_pos
+        if qs.ac_context == "ai_ask":
+            end = qs.ai_question_pos
+            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
+            qs.ai_question_pos = start
+        else:
+            end = qs.query_pos
+            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+            qs.query_pos = start
+
+    def _query_ac_cancel(self, qs: QueryState) -> None:
+        """Remove the '@' trigger character and any filter text, then close AC."""
+        start = qs.ac_trigger_pos - 1  # include the '@' itself
+        if qs.ac_context == "ai_ask":
+            end = qs.ai_question_pos
+            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
+            qs.ai_question_pos = start
+        else:
+            end = qs.query_pos
+            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+            qs.query_pos = start
+        qs.ac_active = False
+        qs.ac_cursor = 0
+        qs.ac_scroll = 0
+        qs.ac_level = 1
+        qs.ac_scheme_uri = ""
+        qs.ac_scheme_label = ""
+
+    def _draw_query_ac(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+        anchor_y: int | None = None,
+        anchor_x: int = 0,
+    ) -> None:
+        """Draw the @ autocomplete popup.
+
+        When *anchor_y* is given the popup is anchored at that screen row (used
+        by the AI-ask overlay). Otherwise the popup is positioned below the
+        cursor line in the editor area.
+        """
+        if qs.ac_context == "ai_ask":
+            ac_q = qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos]
+        else:
+            ac_q = qs.query_buffer[qs.ac_trigger_pos : qs.query_pos]
+        candidates = self._query_ac_candidates(ac_q, qs.ac_level, qs.ac_scheme_uri)
+
+        n_cands = len(candidates)
+
+        if anchor_y is not None:
+            screen_row = anchor_y - 1  # popup_y will be anchor_y
+            cur_col = anchor_x
+        else:
+            # Determine cursor screen position (row within the editor area)
+            buf = qs.query_buffer
+            pos = qs.query_pos
+            lines_before = (buf[:pos] + "▌").splitlines() or ["▌"]
+            cur_line = len(lines_before) - 1  # 0-based logical line index
+            cur_col = len(lines_before[-1]) - 1  # column of cursor char
+            screen_row = 1 + (cur_line - qs.query_scroll)  # 1 = header offset
+
+        # Popup dimensions (flat list — no section headers)
+        popup_w = min(60, cols - 2)
+        popup_x = max(0, min(cur_col, cols - popup_w - 1))
+        popup_y = screen_row + 1
+        if popup_y + 3 > rows - 1:
+            popup_y = max(1, screen_row - 3)
+        avail_h = (rows - 1) - popup_y - 1  # subtract footer row
+        popup_h = min(n_cands + 2, 16, max(3, avail_h))  # title + items + footer
+        list_h = popup_h - 2
+
+        # If no room below, show above
+        if popup_y + popup_h > rows - 1:
+            popup_y = max(1, screen_row - popup_h)
+
+        if popup_h < 3:
+            return
+
+        # Clamp AC cursor and scroll
+        if n_cands > 0:
+            qs.ac_cursor = max(0, min(qs.ac_cursor, n_cands - 1))
+            if qs.ac_scroll > qs.ac_cursor:
+                qs.ac_scroll = qs.ac_cursor
+            if qs.ac_cursor >= qs.ac_scroll + list_h:
+                qs.ac_scroll = qs.ac_cursor - list_h + 1
+        qs.ac_scroll = max(0, min(qs.ac_scroll, max(0, n_cands - list_h)))
+
+        # Background
+        for y in range(popup_h):
+            try:
+                stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        # Title bar
+        if qs.ac_level == 1:
+            if n_cands == 0:
+                title = f" @{ac_q} — no schemes match "
+            else:
+                title = f" @{ac_q} — {n_cands} scheme{'s' if n_cands != 1 else ''} "
+        else:
+            sl = qs.ac_scheme_label
+            if n_cands == 0:
+                title = f" {sl}: no matches "
+            else:
+                title = f" {sl}: {n_cands} concept{'s' if n_cands != 1 else ''} "
+        try:
+            stdscr.addstr(
+                popup_y,
+                popup_x,
+                title[:popup_w].ljust(popup_w)[:popup_w],
+                curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD,
+            )
+        except curses.error:
+            pass
+
+        # List rows (flat)
+        for i in range(list_h):
+            idx = qs.ac_scroll + i
+            if idx >= n_cands:
+                break
+            label, _uri, kind, _sl = candidates[idx]
+            sel = idx == qs.ac_cursor
+            if qs.ac_level == 1:
+                text = f" \u25b6 {label}"  # ▶ scheme
+            else:
+                text = f"   {label}"
+            attr = (
+                curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            try:
+                stdscr.addstr(
+                    popup_y + 1 + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr
+                )
+            except curses.error:
+                pass
+
+        # Footer hint
+        if qs.ac_level == 1:
+            footer = " Tab/Enter: select scheme   ↑↓: navigate   Esc: cancel "
+        else:
+            footer = " Tab/Enter: insert URI   ↑↓: navigate   Esc: back "
+        try:
+            stdscr.addstr(
+                popup_y + popup_h - 1,
+                popup_x,
+                footer.center(popup_w)[:popup_w],
+                curses.color_pair(_C_DIM),
+            )
+        except curses.error:
+            pass
+
+
+# ──────────────────────────── module-level helpers for query editor ───────────
+
+
+def _sparql_hl_attrs(buffer: str, is_edit: bool) -> list[int]:
+    """Tokenize *buffer* with pygments and return a per-character curses attr list.
+
+    Falls back to a uniform default attr when pygments is unavailable or the
+    buffer is empty so the caller never has to guard against ImportError.
+    """
+    default = curses.color_pair(_C_FIELD_VAL) if is_edit else curses.color_pair(_C_DIM)
+    if not buffer:
+        return []
+    attrs = [default] * len(buffer)
+    try:
+        from pygments import lex
+        from pygments.lexers.rdf import SparqlLexer
+        from pygments.token import Token
+    except ImportError:
+        return attrs
+
+    _MAP: list[tuple[object, int]] = [
+        (Token.Keyword, curses.color_pair(_C_SH_KEYWORD) | curses.A_BOLD),
+        (Token.Name.Function, curses.color_pair(_C_SH_FUNCTION) | curses.A_BOLD),
+        (Token.Name.Variable, curses.color_pair(_C_SH_VAR)),
+        (Token.Name.Label, curses.color_pair(_C_SH_URI) | curses.A_BOLD),
+        (Token.Name.Tag, curses.color_pair(_C_SH_NS)),
+        (Token.Name.Namespace, curses.color_pair(_C_SH_NS) | curses.A_BOLD),
+        (Token.Literal.String, curses.color_pair(_C_SH_STRING)),
+        (Token.Literal.Number, curses.color_pair(_C_SH_FUNCTION)),
+        (Token.Comment, curses.color_pair(_C_DIM) | curses.A_DIM),
+        (Token.Operator, curses.color_pair(_C_SH_KEYWORD)),
+    ]
+
+    char_pos = 0
+    for ttype, value in lex(buffer, SparqlLexer()):
+        attr = default
+        for pattern, a in _MAP:
+            if ttype in pattern:  # type: ignore[operator]
+                attr = a
+                break
+        for _ in value:
+            if char_pos < len(attrs):
+                attrs[char_pos] = attr
+            char_pos += 1
+    return attrs
+
+
+_SPARQL_WORD_SEPS = frozenset(" \t\n\r{}()<>,;|@?$\"'=!*+/#^&[]\\")
+
+
+def _sparql_current_word(buffer: str, pos: int) -> tuple[str, int]:
+    """Return *(word, word_start)* for the identifier ending at *pos*."""
+    i = pos
+    while i > 0 and buffer[i - 1] not in _SPARQL_WORD_SEPS:
+        i -= 1
+    return buffer[i:pos], i
+
+
+def _sparql_kw_candidates(word: str) -> list[str]:
+    """Return SPARQL keywords whose uppercase form starts with *word* (max 9)."""
+    from . import sparql_query as _sq
+
+    if not word:
+        return []
+    wu = word.upper()
+    return [kw for kw in _sq.SPARQL_KEYWORDS if kw.startswith(wu)][:9]
+
+
+def _sparql_kw_insert(qs: QueryState, keyword: str) -> None:
+    """Replace the partial word before the cursor with *keyword*."""
+    _word, word_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
+    qs.query_buffer = qs.query_buffer[:word_start] + keyword + qs.query_buffer[qs.query_pos :]
+    qs.query_pos = word_start + len(keyword)
+
+
+def _ac_matches(label: str, q: str) -> bool:
+    """Return True if *q* is a prefix of *label* or of any word in *label*.
+
+    Empty query matches everything. Comparison is case-insensitive.
+    """
+    if not q:
+        return True
+    q_lower = q.lower()
+    label_lower = label.lower()
+    if label_lower.startswith(q_lower):
+        return True
+    return any(word.startswith(q_lower) for word in label_lower.split())
+
+
+def _query_pos_up(buffer: str, pos: int) -> int:
+    """Move cursor position up one logical line, preserving column."""
+    before = buffer[:pos]
+    lines_before = before.split("\n")
+    col = len(lines_before[-1])
+    if len(lines_before) <= 1:
+        return 0
+    prev_line = lines_before[-2]
+    prefix_len = sum(len(ln) + 1 for ln in lines_before[:-2])
+    return prefix_len + min(col, len(prev_line))
+
+
+def _query_pos_down(buffer: str, pos: int) -> int:
+    """Move cursor position down one logical line, preserving column."""
+    before = buffer[:pos]
+    lines_before = before.split("\n")
+    col = len(lines_before[-1])
+    rest = buffer[pos:]
+    nl_idx = rest.find("\n")
+    if nl_idx == -1:
+        return len(buffer)  # already on last line
+    next_start = pos + nl_idx + 1
+    nl_end = buffer.find("\n", next_start)
+    next_line_len = (nl_end - next_start) if nl_end >= 0 else (len(buffer) - next_start)
+    return next_start + min(col, next_line_len)
 
 
 # ──────────────────────────── TaxonomyShell (REPL) ───────────────────────────

@@ -36,6 +36,8 @@ class TreeState:
     scroll: int = 0
     folded: set[str] = dc_field(default_factory=set)
     search: SearchState = dc_field(default_factory=SearchState)
+    # "taxonomy" = SKOS skos:broader view; "ontology" = OWL rdfs:subClassOf view
+    view_mode: str = "taxonomy"
 
 
 @dataclass
@@ -59,7 +61,7 @@ class CreateState:
     scroll: int = 0
     error: str = ""
     came_from_tree: bool = False  # True when triggered from tree mode (cancel → tree)
-    # Add-concept step: "choose" | "prompt_review" | "ai_pick" | "form"
+    # Add-concept step: "choose" | "context_review" | "prompt_review" | "ai_pick" | "form"
     # Default "form" keeps all existing call-sites unchanged.
     step: str = "form"
     ai_candidates: list[str] = dc_field(default_factory=list)
@@ -68,7 +70,17 @@ class CreateState:
     ai_generating: bool = False
     ai_cursor: int = 0
     ai_scroll: int = 0
-    ai_prompt_preview: str = ""
+    ai_prompt_preview: str = ""  # kept for compat; prompt_buffer is the live editable copy
+    # context_review step: show scheme/parent name + editable description
+    context_name: str = ""
+    context_def_buffer: str = ""
+    context_def_pos: int = 0
+    # prompt_review step: editable rendered prompt
+    prompt_buffer: str = ""
+    prompt_pos: int = 0
+    # ai_pick step: manual concept input
+    ai_manual_input: str = ""
+    ai_manual_mode: bool = False
 
 
 @dataclass
@@ -205,7 +217,7 @@ class BatchConceptDraft:
 class BatchCreateState:
     """Wizard state for creating multiple AI-selected concepts in one flow.
 
-    Steps per concept: "label" → "alt_labels" → "definition" → "confirm"
+    Steps per concept: "label" → "definition" → "alt_prompt_review" → "alt_labels" → "confirm"
     After all concepts: recap → done
     """
 
@@ -213,10 +225,14 @@ class BatchCreateState:
     came_from_tree: bool = False
     drafts: list[BatchConceptDraft] = dc_field(default_factory=list)
     current: int = 0  # index of concept currently being edited
-    step: str = "label"  # "label" | "alt_labels" | "definition" | "confirm" | "recap"
+    step: str = "label"  # "label"|"definition"|"alt_prompt_review"|"alt_labels"|"confirm"|"recap"
     # label step — inline text buffer
     label_buffer: str = ""
     label_pos: int = 0
+    # alt_prompt_review step — editable prompt for alt-label generation
+    alt_prompt_buffer: str = ""
+    alt_prompt_pos: int = 0
+    alt_prompt_scroll: int = 0
     # alt_labels step — cursor over checkbox rows + "Done" action
     alt_cursor: int = 0
     alt_scroll: int = 0
@@ -228,6 +244,51 @@ class BatchCreateState:
     recap_cursor: int = 0
     recap_scroll: int = 0
     error: str = ""
+
+
+@dataclass
+class QueryState:
+    """SPARQL query interface state."""
+
+    file_paths: list[Path] = dc_field(default_factory=list)
+    # Editor panel
+    query_buffer: str = ""
+    query_pos: int = 0
+    query_scroll: int = 0
+    # Results panel
+    columns: list[str] = dc_field(default_factory=list)
+    rows: list[list[str]] = dc_field(default_factory=list)
+    result_error: str = ""
+    result_scroll: int = 0
+    result_cursor: int = 0
+    # Presets overlay
+    show_presets: bool = False
+    preset_cursor: int = 0
+    preset_scroll: int = 0
+    # Focus: "editor" | "results"
+    panel: str = "editor"
+    # Async SPARQL execution flag
+    running: bool = False
+    # AI generation sub-flow: "" | "ask" | "prompt_review"
+    ai_step: str = ""
+    ai_question: str = ""
+    ai_question_pos: int = 0
+    ai_prompt_buffer: str = ""
+    ai_prompt_pos: int = 0
+    ai_prompt_scroll: int = 0
+    ai_generating: bool = False
+    # Keyword autocomplete popup cursor
+    kw_cursor: int = 0
+    # @ autocomplete state
+    ac_active: bool = False
+    ac_trigger_pos: int = 0  # buffer position right after the '@' character
+    ac_cursor: int = 0
+    ac_scroll: int = 0
+    ac_context: str = "editor"  # "editor" | "ai_ask"
+    # Two-level AC: 1 = scheme selection, 2 = concept selection within scheme
+    ac_level: int = 1
+    ac_scheme_uri: str = ""
+    ac_scheme_label: str = ""
 
 
 ViewerState = (
@@ -245,6 +306,7 @@ ViewerState = (
     | MapConceptPickState
     | AiInstallState
     | AiSetupState
+    | QueryState
 )
 
 
