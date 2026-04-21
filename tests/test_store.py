@@ -290,3 +290,81 @@ def test_build_detail_fields_no_top_concept_of_for_child(simple_taxonomy):
     fields = build_detail_fields(simple_taxonomy, BASE + "Child1", "en")
     keys = [f.key for f in fields]
     assert "top_concept_of" not in keys
+
+
+# ── OWL/RDFS class loading ────────────────────────────────────────────────────
+
+OWL_TURTLE = """\
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <https://example.org/onto/> .
+
+ex:Animal a owl:Class ;
+    rdfs:label "Animal"@en ;
+    rdfs:comment "A living organism."@en .
+
+ex:Dog a owl:Class ;
+    rdfs:label "Dog"@en ;
+    rdfs:subClassOf ex:Animal .
+
+ex:Cat a owl:Class ;
+    rdfs:label "Cat"@en ;
+    rdfs:subClassOf ex:Animal ;
+    owl:disjointWith ex:Dog .
+"""
+
+
+@pytest.fixture
+def owl_ttl(tmp_path):
+    p = tmp_path / "onto.ttl"
+    p.write_text(OWL_TURTLE, encoding="utf-8")
+    return p
+
+
+def test_load_owl_classes(owl_ttl):
+    t = store.load(owl_ttl)
+    assert "https://example.org/onto/Animal" in t.owl_classes
+    assert "https://example.org/onto/Dog" in t.owl_classes
+    assert "https://example.org/onto/Cat" in t.owl_classes
+
+
+def test_load_owl_class_label(owl_ttl):
+    t = store.load(owl_ttl)
+    dog = t.owl_classes["https://example.org/onto/Dog"]
+    assert dog.label("en") == "Dog"
+
+
+def test_load_owl_class_comment(owl_ttl):
+    t = store.load(owl_ttl)
+    animal = t.owl_classes["https://example.org/onto/Animal"]
+    assert any(c.value == "A living organism." for c in animal.comments)
+
+
+def test_load_owl_subclass_of(owl_ttl):
+    t = store.load(owl_ttl)
+    dog = t.owl_classes["https://example.org/onto/Dog"]
+    assert "https://example.org/onto/Animal" in dog.sub_class_of
+
+
+def test_load_owl_disjoint_with(owl_ttl):
+    t = store.load(owl_ttl)
+    cat = t.owl_classes["https://example.org/onto/Cat"]
+    assert "https://example.org/onto/Dog" in cat.disjoint_with
+
+
+def test_load_owl_skips_builtin_classes(owl_ttl):
+    t = store.load(owl_ttl)
+    for uri in t.owl_classes:
+        assert not uri.startswith("http://www.w3.org/")
+
+
+def test_owl_round_trip(owl_ttl, tmp_path):
+    t1 = store.load(owl_ttl)
+    out = tmp_path / "out.ttl"
+    store.save(t1, out)
+    t2 = store.load(out)
+    assert set(t1.owl_classes) == set(t2.owl_classes)
+    dog1 = t1.owl_classes["https://example.org/onto/Dog"]
+    dog2 = t2.owl_classes["https://example.org/onto/Dog"]
+    assert dog1.sub_class_of == dog2.sub_class_of
+    assert dog1.label("en") == dog2.label("en")

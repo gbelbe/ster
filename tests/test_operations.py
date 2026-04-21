@@ -13,7 +13,7 @@ from ster.exceptions import (
     HasChildrenError,
     RelatedHierarchyConflictError,
 )
-from ster.model import LabelType
+from ster.model import LabelType, Taxonomy
 
 BASE = "https://example.org/test/"
 NEW = BASE + "NewConcept"
@@ -505,3 +505,62 @@ def test_create_scheme_default_languages():
     # languages defaults to the label keys
     assert "en" in scheme.languages
     assert "fr" in scheme.languages
+
+
+# ── promote_to_class / demote_from_class ──────────────────────────────────────
+
+
+def test_promote_to_class_creates_rdf_class(simple_taxonomy):
+    top_uri = BASE + "Top"
+    rdf_class = operations.promote_to_class(simple_taxonomy, top_uri)
+    assert top_uri in simple_taxonomy.owl_classes
+    assert rdf_class.uri == top_uri
+
+
+def test_promote_to_class_copies_labels(simple_taxonomy):
+    top_uri = BASE + "Top"
+    operations.promote_to_class(simple_taxonomy, top_uri)
+    rdf_class = simple_taxonomy.owl_classes[top_uri]
+    assert any(lbl.value == "Top Concept" for lbl in rdf_class.labels)
+
+
+def test_promote_to_class_copies_definitions(simple_taxonomy):
+    top_uri = BASE + "Top"
+    operations.promote_to_class(simple_taxonomy, top_uri)
+    rdf_class = simple_taxonomy.owl_classes[top_uri]
+    assert any(c.value == "The root." for c in rdf_class.comments)
+
+
+def test_promote_to_class_idempotent(simple_taxonomy):
+    top_uri = BASE + "Top"
+    cls1 = operations.promote_to_class(simple_taxonomy, top_uri)
+    cls2 = operations.promote_to_class(simple_taxonomy, top_uri)
+    assert cls1 is cls2
+
+
+def test_promote_to_class_not_found():
+    from ster.exceptions import ConceptNotFoundError
+
+    t = Taxonomy()
+    with pytest.raises(ConceptNotFoundError):
+        operations.promote_to_class(t, BASE + "Ghost")
+
+
+def test_promote_to_class_node_type(simple_taxonomy):
+    top_uri = BASE + "Top"
+    operations.promote_to_class(simple_taxonomy, top_uri)
+    assert simple_taxonomy.node_type(top_uri) == "promoted"
+
+
+def test_demote_from_class_removes_owl_layer(simple_taxonomy):
+    top_uri = BASE + "Top"
+    operations.promote_to_class(simple_taxonomy, top_uri)
+    operations.demote_from_class(simple_taxonomy, top_uri)
+    assert top_uri not in simple_taxonomy.owl_classes
+    assert top_uri in simple_taxonomy.concepts  # SKOS concept still present
+
+
+def test_demote_from_class_noop_if_not_promoted(simple_taxonomy):
+    top_uri = BASE + "Top"
+    operations.demote_from_class(simple_taxonomy, top_uri)  # should not raise
+    assert top_uri in simple_taxonomy.concepts

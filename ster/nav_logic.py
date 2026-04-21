@@ -33,6 +33,8 @@ class TreeLine:
     is_folded: bool = False
     hidden_count: int = 0
     is_action: bool = False  # synthetic row (not a concept/scheme node)
+    # "concept" | "class" | "promoted" — set from taxonomy.node_type()
+    node_type: str = "concept"
 
 
 def _count_descendants(taxonomy: Taxonomy, uri: str) -> int:
@@ -106,6 +108,7 @@ def _flatten_taxonomy(
                 is_folded=is_fold,
                 hidden_count=hidden,
                 file_path=file_path,
+                node_type=taxonomy.node_type(uri),
             )
         )
         if not is_fold:
@@ -853,6 +856,216 @@ def build_scheme_detail(
     # ── Actions ───────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
     fields.extend(_scheme_action_fields())
+
+    return fields
+
+
+# ──────────────────────────── ontology tree ──────────────────────────────────
+
+
+def _count_class_descendants(children_of: dict[str, list[str]], uri: str) -> int:
+    """Count all reachable OWL class descendants (cycle-safe)."""
+    seen: set[str] = set()
+
+    def _count(u: str) -> int:
+        if u in seen:
+            return 0
+        seen.add(u)
+        kids = children_of.get(u, [])
+        return len(kids) + sum(_count(k) for k in kids)
+
+    return _count(uri)
+
+
+def flatten_ontology_tree(
+    taxonomy_or_workspace: Taxonomy | TaxonomyWorkspace,
+    folded: set[str] | None = None,
+) -> list[TreeLine]:
+    """Flatten the OWL/RDFS class hierarchy into TreeLine rows.
+
+    Uses rdfs:subClassOf instead of skos:broader. Classes with no known
+    parent inside the graph are treated as roots.
+    """
+    if isinstance(taxonomy_or_workspace, TaxonomyWorkspace):
+        ws = taxonomy_or_workspace
+        if len(ws.taxonomies) == 1:
+            tax = next(iter(ws.taxonomies.values()))
+            fp = next(iter(ws.taxonomies.keys()))
+            return _flatten_ontology(tax, folded, file_path=fp)
+        lines: list[TreeLine] = []
+        for fp, tax in ws.taxonomies.items():
+            lines.extend(_flatten_ontology(tax, folded, file_path=fp))
+        return lines
+    return _flatten_ontology(taxonomy_or_workspace, folded)
+
+
+def _flatten_ontology(
+    taxonomy: Taxonomy,
+    folded: set[str] | None = None,
+    file_path: Path | None = None,
+) -> list[TreeLine]:
+    if folded is None:
+        folded = set()
+    if not taxonomy.owl_classes:
+        return []
+
+    # Build parent→children index within the known owl_classes
+    children_of: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
+    roots: list[str] = []
+    for uri, cls in taxonomy.owl_classes.items():
+        parents_in_graph = [p for p in cls.sub_class_of if p in taxonomy.owl_classes]
+        if parents_in_graph:
+            for parent in parents_in_graph:
+                children_of[parent].append(uri)
+        else:
+            roots.append(uri)
+    roots.sort()
+
+    result: list[TreeLine] = []
+
+    def visit(uri: str, depth: int, prefix: str, is_last: bool) -> None:
+        connector = "└── " if is_last else "├── "
+        children = children_of.get(uri, [])
+        is_fold = uri in folded and bool(children)
+        hidden = _count_class_descendants(children_of, uri) if is_fold else 0
+        result.append(
+            TreeLine(
+                uri=uri,
+                depth=depth,
+                prefix=prefix + connector,
+                is_folded=is_fold,
+                hidden_count=hidden,
+                file_path=file_path,
+                node_type=taxonomy.node_type(uri),
+            )
+        )
+        if not is_fold:
+            ext = "    " if is_last else "│   "
+            for i, child in enumerate(children):
+                visit(child, depth + 1, prefix + ext, i == len(children) - 1)
+
+    for i, root_uri in enumerate(roots):
+        visit(root_uri, 0, "", i == len(roots) - 1)
+
+    return result
+
+
+# ──────────────────────────── RDF class detail ───────────────────────────────
+
+_NODE_TYPE_DISPLAY = {
+    "promoted": "skos:Concept + owl:Class",
+    "class": "owl:Class",
+    "concept": "skos:Concept",
+}
+
+
+def build_rdf_class_detail(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+) -> list[DetailField]:
+    """Detail panel for an owl:Class / rdfs:Class node."""
+    rdf_class = taxonomy.owl_classes.get(uri)
+    if not rdf_class:
+        return []
+
+    node_t = taxonomy.node_type(uri)
+    fields: list[DetailField] = []
+
+    # ── Identity ────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
+    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(
+        DetailField(
+            "node_type",
+            "type",
+            _NODE_TYPE_DISPLAY.get(node_t, node_t),
+            editable=False,
+            meta={"type": "stat"},
+        )
+    )
+
+    # ── Labels (rdfs:label) ──────────────────────────────────────────────────
+    if rdf_class.labels:
+        fields.append(_sep("Labels"))
+        for lbl in sorted(rdf_class.labels, key=lambda l: l.lang):
+            fields.append(
+                DetailField(
+                    f"rdflabel:{lbl.lang}",
+                    f"label [{lbl.lang}]",
+                    lbl.value,
+                    editable=True,
+                    meta={"type": "rdf_label", "lang": lbl.lang},
+                )
+            )
+
+    # ── Notes (rdfs:comment) ─────────────────────────────────────────────────
+    if rdf_class.comments:
+        fields.append(_sep("Notes"))
+        for comment in sorted(rdf_class.comments, key=lambda d: d.lang):
+            fields.append(
+                DetailField(
+                    f"rdfcomment:{comment.lang}",
+                    f"comment [{comment.lang}]",
+                    comment.value,
+                    editable=True,
+                    meta={"type": "rdf_comment", "lang": comment.lang},
+                )
+            )
+
+    # ── Hierarchy ────────────────────────────────────────────────────────────
+    has_hierarchy = bool(
+        rdf_class.sub_class_of or rdf_class.equivalent_class or rdf_class.disjoint_with
+    )
+    if has_hierarchy:
+        fields.append(_sep("Hierarchy"))
+        for parent_uri in rdf_class.sub_class_of:
+            parent_cls = taxonomy.owl_classes.get(parent_uri)
+            label_str = parent_cls.label(lang) if parent_cls else parent_uri
+            fields.append(
+                DetailField(
+                    f"subclassof:{parent_uri}",
+                    "↑ subClassOf",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": parent_uri, "nav": bool(parent_cls)},
+                )
+            )
+        for eq_uri in rdf_class.equivalent_class:
+            eq_cls = taxonomy.owl_classes.get(eq_uri)
+            label_str = eq_cls.label(lang) if eq_cls else eq_uri
+            fields.append(
+                DetailField(
+                    f"equivclass:{eq_uri}",
+                    "⟺ equivalentClass",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": eq_uri, "nav": bool(eq_cls)},
+                )
+            )
+        for dj_uri in rdf_class.disjoint_with:
+            dj_cls = taxonomy.owl_classes.get(dj_uri)
+            label_str = dj_cls.label(lang) if dj_cls else dj_uri
+            fields.append(
+                DetailField(
+                    f"disjoint:{dj_uri}",
+                    "⊥ disjointWith",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": dj_uri, "nav": bool(dj_cls)},
+                )
+            )
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    if node_t == "promoted":
+        fields.append(
+            _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
+        )
+    elif node_t == "concept":
+        fields.append(
+            _add_action_field("action:promote", "↑ Promote to owl:Class", "promote_to_class")
+        )
 
     return fields
 

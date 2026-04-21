@@ -4,13 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rdflib import RDF, Graph, Literal, Namespace, URIRef
-from rdflib.namespace import DCTERMS, SKOS, XSD
+from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
+from rdflib.namespace import DCTERMS, OWL, RDFS, SKOS, XSD
 
 VOID = Namespace("http://rdfs.org/ns/void#")
 
 from .handles import assign_handles
-from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
+from .model import (
+    Concept,
+    ConceptScheme,
+    Definition,
+    Label,
+    LabelType,
+    RDFClass,
+    Taxonomy,
+    is_builtin_uri,
+)
 
 _FORMAT_MAP = {
     ".ttl": "turtle",
@@ -135,6 +144,33 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
 
         taxonomy.concepts[uri] = concept
 
+    # ── RDF/OWL Classes ───────────────────────────────────────────────────────
+    class_refs = set(g.subjects(RDF.type, RDFS.Class)) | set(g.subjects(RDF.type, OWL.Class))
+    for c_ref in class_refs:
+        if isinstance(c_ref, BNode):
+            continue
+        uri = str(c_ref)
+        if is_builtin_uri(uri):
+            continue
+        rdf_class = RDFClass(uri=uri)
+        for _, p, o in g.triples((c_ref, None, None)):
+            ps = str(p)
+            if ps == str(RDFS.label):
+                rdf_class.labels.append(
+                    Label(lang=getattr(o, "language", None) or "", value=str(o))
+                )
+            elif ps == str(RDFS.comment):
+                rdf_class.comments.append(
+                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
+                )
+            elif ps == str(RDFS.subClassOf) and isinstance(o, URIRef):
+                rdf_class.sub_class_of.append(str(o))
+            elif ps == str(OWL.equivalentClass) and isinstance(o, URIRef):
+                rdf_class.equivalent_class.append(str(o))
+            elif ps == str(OWL.disjointWith) and isinstance(o, URIRef):
+                rdf_class.disjoint_with.append(str(o))
+        taxonomy.owl_classes[uri] = rdf_class
+
     # ── Normalize hierarchy (handle graphs that only declare one direction) ──
     _normalize_hierarchy(taxonomy)
 
@@ -147,6 +183,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     g.bind("dcterms", DCTERMS)
     g.bind("xsd", XSD)
     g.bind("void", VOID)
+    g.bind("rdfs", RDFS)
+    g.bind("owl", OWL)
 
     # Try to bind a short prefix for the primary namespace
     _bind_namespace(g, taxonomy)
@@ -214,6 +252,21 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, SKOS.exactMatch, URIRef(u)))
         for u in concept.close_match:
             g.add((ref, SKOS.closeMatch, URIRef(u)))
+
+    # ── OWL/RDFS Classes ─────────────────────────────────────────────────────
+    for uri, rdf_class in taxonomy.owl_classes.items():
+        ref = URIRef(uri)
+        g.add((ref, RDF.type, OWL.Class))
+        for lbl in rdf_class.labels:
+            g.add((ref, RDFS.label, Literal(lbl.value, lang=lbl.lang or None)))
+        for comment in rdf_class.comments:
+            g.add((ref, RDFS.comment, Literal(comment.value, lang=comment.lang or None)))
+        for parent_uri in rdf_class.sub_class_of:
+            g.add((ref, RDFS.subClassOf, URIRef(parent_uri)))
+        for eq_uri in rdf_class.equivalent_class:
+            g.add((ref, OWL.equivalentClass, URIRef(eq_uri)))
+        for dj_uri in rdf_class.disjoint_with:
+            g.add((ref, OWL.disjointWith, URIRef(dj_uri)))
 
     return g
 

@@ -11,7 +11,7 @@ from .exceptions import (
     RelatedHierarchyConflictError,
 )
 from .handles import assign_handles, handle_for_uri
-from .model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
+from .model import Concept, ConceptScheme, Definition, Label, LabelType, RDFClass, Taxonomy
 
 # ──────────────────────────── resolve & expand ───────────────────────────────
 
@@ -369,6 +369,38 @@ def create_scheme(
     taxonomy.schemes[uri] = scheme
     assign_handles(taxonomy)
     return scheme
+
+
+# ──────────────────────────── OWL promotion ──────────────────────────────────
+
+
+def promote_to_class(taxonomy: Taxonomy, uri: str) -> RDFClass:
+    """Add an owl:Class layer to an existing SKOS concept at the same URI.
+
+    Labels are copied from skos:prefLabel → rdfs:label and definitions from
+    skos:definition → rdfs:comment.  The skos:broader hierarchy is mirrored
+    into sub_class_of only for parents that are already OWL classes, keeping
+    the two hierarchies independent by default.
+    """
+    if uri not in taxonomy.concepts:
+        raise ConceptNotFoundError(uri)
+    if uri in taxonomy.owl_classes:
+        return taxonomy.owl_classes[uri]
+
+    concept = taxonomy.concepts[uri]
+    rdf_class = RDFClass(
+        uri=uri,
+        labels=list(concept.labels),
+        comments=list(concept.definitions),
+        sub_class_of=[p for p in concept.broader if p in taxonomy.owl_classes],
+    )
+    taxonomy.owl_classes[uri] = rdf_class
+    return rdf_class
+
+
+def demote_from_class(taxonomy: Taxonomy, uri: str) -> None:
+    """Remove the owl:Class layer from a promoted concept, leaving the SKOS concept intact."""
+    taxonomy.owl_classes.pop(uri, None)
 
 
 # ──────────────────────────── internal helpers ───────────────────────────────

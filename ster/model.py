@@ -6,6 +6,20 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+# ── OWL/RDFS layer ────────────────────────────────────────────────────────────
+
+_BUILTIN_PREFIXES = (
+    "http://www.w3.org/2002/07/owl#",
+    "http://www.w3.org/2000/01/rdf-schema#",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "http://www.w3.org/2001/XMLSchema#",
+)
+
+
+def is_builtin_uri(uri: str) -> bool:
+    """Return True for URIs from standard W3C namespaces (not user-defined)."""
+    return any(uri.startswith(p) for p in _BUILTIN_PREFIXES)
+
 
 class LabelType(str, Enum):
     PREF = "pref"
@@ -77,6 +91,33 @@ class Concept:
 
 
 @dataclass
+class RDFClass:
+    """An rdfs:Class or owl:Class node — the OWL/RDFS layer of a graph."""
+
+    uri: str
+    labels: list[Label] = field(default_factory=list)  # rdfs:label
+    comments: list[Definition] = field(default_factory=list)  # rdfs:comment
+    sub_class_of: list[str] = field(default_factory=list)  # rdfs:subClassOf URIs
+    equivalent_class: list[str] = field(default_factory=list)  # owl:equivalentClass URIs
+    disjoint_with: list[str] = field(default_factory=list)  # owl:disjointWith URIs
+
+    @property
+    def local_name(self) -> str:
+        for sep in ("#", "/"):
+            if sep in self.uri:
+                return self.uri.rsplit(sep, 1)[-1]
+        return self.uri
+
+    def label(self, lang: str = "en") -> str:
+        for lbl in self.labels:
+            if lbl.lang == lang:
+                return lbl.value
+        if self.labels:
+            return self.labels[0].value
+        return self.local_name
+
+
+@dataclass
 class ConceptScheme:
     uri: str
     labels: list[Label] = field(default_factory=list)
@@ -108,10 +149,23 @@ class ConceptScheme:
 class Taxonomy:
     schemes: dict[str, ConceptScheme] = field(default_factory=dict)  # uri → scheme
     concepts: dict[str, Concept] = field(default_factory=dict)  # uri → concept
+    owl_classes: dict[str, RDFClass] = field(default_factory=dict)  # uri → class
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
+
+    def node_type(self, uri: str) -> str:
+        """Return the RDF type of a node: 'promoted', 'concept', 'class', or 'unknown'."""
+        in_concepts = uri in self.concepts
+        in_classes = uri in self.owl_classes
+        if in_concepts and in_classes:
+            return "promoted"
+        if in_concepts:
+            return "concept"
+        if in_classes:
+            return "class"
+        return "unknown"
 
     def resolve(self, handle_or_uri: str) -> str | None:
         """Return URI for a handle, local name, or full URI. Returns None if not found."""

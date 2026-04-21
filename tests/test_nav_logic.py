@@ -359,3 +359,136 @@ def test_available_langs_empty_taxonomy():
     t = Taxonomy()
     langs = _available_langs(t)
     assert langs == []
+
+
+# ── flatten_ontology_tree ─────────────────────────────────────────────────────
+
+
+def _owl_taxonomy() -> Taxonomy:
+    """Build a small OWL taxonomy: Animal > Dog, Animal > Cat (Cat disjoint Dog)."""
+    from ster.model import RDFClass
+
+    BASE_O = "https://example.org/onto/"
+    t = Taxonomy()
+    animal = RDFClass(uri=BASE_O + "Animal", labels=[Label(lang="en", value="Animal")])
+    dog = RDFClass(
+        uri=BASE_O + "Dog",
+        labels=[Label(lang="en", value="Dog")],
+        sub_class_of=[BASE_O + "Animal"],
+    )
+    cat = RDFClass(
+        uri=BASE_O + "Cat",
+        labels=[Label(lang="en", value="Cat")],
+        sub_class_of=[BASE_O + "Animal"],
+        disjoint_with=[BASE_O + "Dog"],
+    )
+    for cls in (animal, dog, cat):
+        t.owl_classes[cls.uri] = cls
+    assign_handles(t)
+    return t
+
+
+def test_flatten_ontology_tree_roots():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    uris = [l.uri for l in lines]
+    assert "https://example.org/onto/Animal" in uris
+
+
+def test_flatten_ontology_tree_children_depth():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    animal_line = next(l for l in lines if l.uri.endswith("Animal"))
+    dog_line = next(l for l in lines if l.uri.endswith("Dog"))
+    assert dog_line.depth == animal_line.depth + 1
+
+
+def test_flatten_ontology_tree_node_type_class():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    for line in lines:
+        assert line.node_type == "class"
+
+
+def test_flatten_ontology_tree_node_type_promoted():
+    from ster.model import Concept, RDFClass
+    from ster.nav_logic import flatten_ontology_tree
+
+    BASE_O = "https://example.org/onto/"
+    t = Taxonomy()
+    t.concepts[BASE_O + "Dog"] = Concept(uri=BASE_O + "Dog")
+    t.owl_classes[BASE_O + "Dog"] = RDFClass(uri=BASE_O + "Dog")
+    lines = flatten_ontology_tree(t)
+    assert lines[0].node_type == "promoted"
+
+
+def test_flatten_ontology_tree_empty():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = Taxonomy()
+    assert flatten_ontology_tree(t) == []
+
+
+# ── node_type on taxonomy TreeLines ──────────────────────────────────────────
+
+
+def test_taxonomy_treeline_node_type_concept(simple_taxonomy):
+    lines = flatten_tree(simple_taxonomy)
+    concept_lines = [l for l in lines if not l.is_scheme]
+    assert all(l.node_type == "concept" for l in concept_lines)
+
+
+def test_taxonomy_treeline_node_type_promoted(simple_taxonomy):
+    from ster.model import RDFClass
+
+    top_uri = BASE + "Top"
+    simple_taxonomy.owl_classes[top_uri] = RDFClass(uri=top_uri)
+    lines = flatten_tree(simple_taxonomy)
+    top_line = next(l for l in lines if l.uri == top_uri)
+    assert top_line.node_type == "promoted"
+
+
+# ── build_rdf_class_detail ────────────────────────────────────────────────────
+
+
+def test_build_rdf_class_detail_identity():
+    from ster.model import Definition, RDFClass
+    from ster.nav_logic import build_rdf_class_detail
+
+    BASE_O = "https://example.org/onto/"
+    t = Taxonomy()
+    t.owl_classes[BASE_O + "Dog"] = RDFClass(
+        uri=BASE_O + "Dog",
+        labels=[Label(lang="en", value="Dog")],
+        comments=[Definition(lang="en", value="A domestic canine.")],
+    )
+    fields = build_rdf_class_detail(t, BASE_O + "Dog", "en")
+    keys = [f.key for f in fields]
+    assert "uri" in keys
+    assert "node_type" in keys
+
+
+def test_build_rdf_class_detail_subclassof():
+    from ster.model import RDFClass
+    from ster.nav_logic import build_rdf_class_detail
+
+    BASE_O = "https://example.org/onto/"
+    t = Taxonomy()
+    t.owl_classes[BASE_O + "Animal"] = RDFClass(uri=BASE_O + "Animal")
+    t.owl_classes[BASE_O + "Dog"] = RDFClass(uri=BASE_O + "Dog", sub_class_of=[BASE_O + "Animal"])
+    fields = build_rdf_class_detail(t, BASE_O + "Dog", "en")
+    keys = [f.key for f in fields]
+    assert f"subclassof:{BASE_O}Animal" in keys
+
+
+def test_build_rdf_class_detail_missing():
+    from ster.nav_logic import build_rdf_class_detail
+
+    t = Taxonomy()
+    assert build_rdf_class_detail(t, "https://x.org/Missing", "en") == []
