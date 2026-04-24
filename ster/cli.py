@@ -41,6 +41,7 @@ _VERSION = "0.3.1"
 _AUTHOR = "ster contributors"
 
 _PYPI_URL = "https://pypi.org/pypi/ster/json"
+_GH_RELEASE_URL = "https://api.github.com/repos/gbelbe/ster/releases/tags/v{version}"
 _VERSION_CACHE = Path(tempfile.gettempdir()) / "ster_version_check.json"
 
 
@@ -56,14 +57,33 @@ def _newer(a: str, b: str) -> bool:
     return _t(a) > _t(b)
 
 
-def _check_new_version() -> str | None:
-    """Return the latest PyPI version if it is newer than the installed one, else None.
+def _trim_release_notes(body: str, max_bullets: int = 5) -> str:
+    """Extract up to *max_bullets* bullet lines from a markdown release-notes body."""
+    bullets: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        # Accept lines starting with common markdown bullet markers
+        if stripped.startswith(("- ", "* ", "+ ", "• ")):
+            # Strip the marker and any bold/backtick markdown for clean terminal display
+            text = stripped[2:].strip()
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)  # **bold**
+            text = re.sub(r"`(.+?)`", r"\1", text)  # `code`
+            bullets.append(text)
+    trimmed = bullets[:max_bullets]
+    if len(bullets) > max_bullets:
+        trimmed.append(f"… and {len(bullets) - max_bullets} more")
+    return "\n".join(f"  [dim]·[/dim] {b}" for b in trimmed)
 
-    Result is cached for 24 hours in a temp file so PyPI is hit at most once a day.
-    The network fetch always runs in a background thread — this function never blocks.
+
+def _check_new_version() -> tuple[str, str] | None:
+    """Return (latest_version, release_notes_summary) if newer than installed, else None.
+
+    Result is cached for 24 hours.  The network fetch (PyPI + GitHub releases)
+    always runs in a background daemon thread — this function never blocks.
     """
     now = datetime.now()
     cached_latest: str | None = None
+    cached_notes: str = ""
 
     if _VERSION_CACHE.exists():
         try:
@@ -71,6 +91,7 @@ def _check_new_version() -> str | None:
             checked = datetime.fromisoformat(data["checked"])
             if now - checked < timedelta(hours=24):
                 cached_latest = data.get("latest")
+                cached_notes = data.get("notes", "")
         except Exception:
             pass
 
@@ -78,30 +99,50 @@ def _check_new_version() -> str | None:
         try:
             with urllib.request.urlopen(_PYPI_URL, timeout=3) as resp:  # noqa: S310
                 latest = json.loads(resp.read())["info"]["version"]
-            _VERSION_CACHE.write_text(json.dumps({"checked": now.isoformat(), "latest": latest}))
+
+            notes = ""
+            gh_url = _GH_RELEASE_URL.format(version=latest)
+            try:
+                req = urllib.request.Request(
+                    gh_url,
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "ster-cli"},
+                )
+                with urllib.request.urlopen(req, timeout=3) as gh_resp:  # noqa: S310
+                    notes = json.loads(gh_resp.read()).get("body", "")
+            except Exception:
+                pass
+
+            _VERSION_CACHE.write_text(
+                json.dumps({"checked": now.isoformat(), "latest": latest, "notes": notes})
+            )
         except Exception:
             pass
 
     threading.Thread(target=_fetch, daemon=True).start()
 
     if cached_latest and _newer(cached_latest, _VERSION):
-        return cached_latest
+        return cached_latest, cached_notes
     return None
 
 
 def _print_welcome() -> None:
     from rich.panel import Panel
 
-    new_ver = _check_new_version()
-    update_line = (
-        f"\n[yellow]↑ v{new_ver} available[/yellow]  [dim]pip install --upgrade ster[/dim]"
-        if new_ver
-        else ""
-    )
+    update_info = _check_new_version()
+    if update_info:
+        new_ver, notes = update_info
+        notes_block = f"\n{_trim_release_notes(notes)}" if notes.strip() else ""
+        update_section = (
+            f"\n[yellow]↑ v{new_ver} available[/yellow]  "
+            f"[dim]pip install --upgrade ster[/dim]{notes_block}"
+        )
+    else:
+        update_section = ""
+
     console.print()
     console.print(
         Panel(
-            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]{update_line}\n\n"
+            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]{update_section}\n\n"
             "[dim]Semantic knowledge editor — SKOS · OWL · D3 · Site generator[/dim]\n\n"
             "[dim]Select a file to open, or use the menu to generate a site or graph.[/dim]\n"
             "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",

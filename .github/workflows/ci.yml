@@ -115,10 +115,13 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
-      id-token: write  # required for OIDC trusted publishing
+      id-token: write   # required for OIDC trusted publishing
+      contents: write   # required to create GitHub releases and tags
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for --generate-notes
 
       - uses: astral-sh/setup-uv@v5
 
@@ -133,6 +136,7 @@ jobs:
           echo "remote=$REMOTE"
           if [ "$LOCAL" != "$REMOTE" ]; then
             echo "publish=true"  >> "$GITHUB_OUTPUT"
+            echo "version=$LOCAL" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
@@ -144,3 +148,13 @@ jobs:
       - name: Publish to PyPI
         if: steps.check.outputs.publish == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub release
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.check.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes
