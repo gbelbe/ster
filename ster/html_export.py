@@ -270,20 +270,22 @@ def _md_to_html(text: str) -> str:
         return f"<p>{escaped}</p>"
 
 
-def _video_embed_url(url: str) -> tuple[str, str] | None:
-    """Derive an embeddable (iframe_src, platform) from a YouTube or Vimeo URL."""
+def _video_embed_info(url: str) -> tuple[str, str, str] | None:
+    """Return (embed_src, thumbnail_url, platform) for a YouTube or Vimeo URL, or None."""
     m = _re.search(r"youtube\.com/watch\?.*v=([A-Za-z0-9_-]+)", url)
+    if not m:
+        m = _re.search(r"youtu\.be/([A-Za-z0-9_-]+)", url)
+    if not m:
+        m = _re.search(r"youtube\.com/shorts/([A-Za-z0-9_-]+)", url)
     if m:
-        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
-    m = _re.search(r"youtu\.be/([A-Za-z0-9_-]+)", url)
-    if m:
-        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
-    m = _re.search(r"youtube\.com/shorts/([A-Za-z0-9_-]+)", url)
-    if m:
-        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
+        vid = m.group(1)
+        embed = f"https://www.youtube.com/embed/{vid}?autoplay=1"
+        thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+        return embed, thumb, "youtube"
     m = _re.search(r"vimeo\.com/(\d+)", url)
     if m:
-        return f"https://player.vimeo.com/video/{m.group(1)}", "vimeo"
+        embed = f"https://player.vimeo.com/video/{m.group(1)}?autoplay=1"
+        return embed, "", "vimeo"
     return None
 
 
@@ -433,11 +435,22 @@ html,body{height:100%}
 .desc th{background:var(--surf2);color:#fff;padding:7px 10px;text-align:left}
 .desc td{border-top:1px solid var(--border);padding:7px 10px}
 
-/* video */
+/* video — facade (thumbnail shown by default, iframe loaded on click) */
 .video-wrap{position:relative;padding-bottom:56.25%;height:0;
   border-radius:var(--radius);overflow:hidden;margin-bottom:28px;
   border:1px solid var(--border)}
 .video-wrap iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
+.video-facade{position:relative;padding-bottom:56.25%;height:0;cursor:pointer;
+  border-radius:var(--radius);overflow:hidden;margin-bottom:28px;
+  border:1px solid var(--border);background:#000}
+.video-facade img{position:absolute;top:0;left:0;width:100%;height:100%;
+  object-fit:cover;opacity:.85;transition:opacity .2s}
+.video-facade:hover img{opacity:1}
+.video-play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:60px;height:60px;border-radius:50%;background:rgba(0,0,0,.72);
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:24px;pointer-events:none;transition:background .2s}
+.video-facade:hover .video-play{background:#c00}
 
 /* external link card */
 .link-card{display:flex;align-items:center;gap:14px;
@@ -978,21 +991,42 @@ _YT_ALLOW = (
 )
 _VIMEO_ALLOW = "autoplay; fullscreen; picture-in-picture"
 
+_VIDEO_FACADE_JS = """\
+<script>
+document.querySelectorAll('.video-facade').forEach(function(el){
+  el.addEventListener('click',function(){
+    var w=document.createElement('div');w.className='video-wrap';
+    var f=document.createElement('iframe');
+    f.src=el.dataset.src;f.allow=el.dataset.allow;f.allowFullscreen=true;
+    f.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;border:0';
+    w.appendChild(f);el.parentNode.replaceChild(w,el);
+  });
+});
+</script>"""
+
 
 def _render_videos(entity: object) -> str:
     parts = []
     for url in getattr(entity, "schema_videos", []):
-        result = _video_embed_url(url)
-        if result:
-            embed, platform = result
-            allow = _YT_ALLOW if platform == "youtube" else _VIMEO_ALLOW
-            parts.append(
-                f'<div class="video-wrap">'
-                f'<iframe src="{_esc(embed)}" frameborder="0" '
-                f'allow="{allow}" allowfullscreen loading="lazy"></iframe>'
-                f"</div>"
-            )
-    return "\n".join(parts)
+        info = _video_embed_info(url)
+        if not info:
+            continue
+        embed, thumb, platform = info
+        allow = _YT_ALLOW if platform == "youtube" else _VIMEO_ALLOW
+        thumb_tag = (
+            f'<img src="{_esc(thumb)}" alt="Video thumbnail" loading="lazy">'
+            if thumb
+            else '<div style="position:absolute;inset:0;background:#111"></div>'
+        )
+        parts.append(
+            f'<div class="video-facade" data-src="{_esc(embed)}" data-allow="{allow}">'
+            f'{thumb_tag}'
+            f'<div class="video-play">&#9654;</div>'
+            f"</div>"
+        )
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n" + _VIDEO_FACADE_JS
 
 
 def _render_ext_links(entity: object) -> str:
