@@ -96,3 +96,51 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false   # don't break CI if Codecov is unreachable
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ── 5. Publish to PyPI ───────────────────────────────────────────────────────
+  # Runs only on pushes to master (not PRs) after all checks pass.
+  # Skips automatically if the version in pyproject.toml is already on PyPI.
+  # Uses PyPI trusted publishing (OIDC) — no token stored in GitHub secrets.
+  #
+  # One-time setup required on PyPI:
+  #   pypi.org → ster project → Publishing → Add a new publisher
+  #     Publisher:      GitHub Actions
+  #     Owner:          gbelbe
+  #     Repository:     ster
+  #     Workflow name:  ci.yml
+  #     Environment:    (leave blank)
+  publish:
+    name: Publish to PyPI
+    needs: [lint, typecheck, security, test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Check whether this version is already published
+        id: check
+        run: |
+          LOCAL=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          REMOTE=$(curl -sf https://pypi.org/pypi/ster/json \
+            | python -c "import sys,json; print(json.load(sys.stdin)['info']['version'])" \
+            || echo "0.0.0")
+          echo "local=$LOCAL"
+          echo "remote=$REMOTE"
+          if [ "$LOCAL" != "$REMOTE" ]; then
+            echo "publish=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build package
+        if: steps.check.outputs.publish == 'true'
+        run: uv build
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
