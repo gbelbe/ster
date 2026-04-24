@@ -519,14 +519,18 @@ class GitLogViewer:
             lbl_attr = curses.color_pair(_LC_FD_KEY)
             _put(f"{fd.label:<24} ", lbl_attr)
 
+            def _one(v: str) -> str:
+                v = v.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+                return v
+
             if fd.status == "added":
-                _put(f"+ {fd.after}", curses.color_pair(_LC_FD_ADD) | curses.A_BOLD)
+                _put(f"+ {_one(fd.after)}", curses.color_pair(_LC_FD_ADD) | curses.A_BOLD)
             elif fd.status == "removed":
-                _put(f"− {fd.before}", curses.color_pair(_LC_FD_DEL) | curses.A_BOLD)
+                _put(f"− {_one(fd.before)}", curses.color_pair(_LC_FD_DEL) | curses.A_BOLD)
             else:  # changed
-                _put(f"− {fd.before}", curses.color_pair(_LC_FD_DEL))
+                _put(f"− {_one(fd.before)}", curses.color_pair(_LC_FD_DEL))
                 _put("  →  ", curses.A_DIM)
-                _put(f"+ {fd.after}", curses.color_pair(_LC_FD_ADD))
+                _put(f"+ {_one(fd.after)}", curses.color_pair(_LC_FD_ADD))
 
         if not diffs:
             try:

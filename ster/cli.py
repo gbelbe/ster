@@ -180,7 +180,6 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 # Sentinels returned by _pick_file_interactive for special menu entries
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
-_SITE_SENTINEL: Path = Path(".__ster_site__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
@@ -585,12 +584,11 @@ def _multi_file_picker(
     # Action items — cursor lives here only
     _ACTIONS: list[tuple[object, str]] = [
         (True, "↵  Open Tree View"),  # True = "open" sentinel
-        (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
+        (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
-        (_SITE_SENTINEL, "🔗 Generate Browsable Website"),
-        (_GRAPH_SENTINEL, "⬡  Open Graph Viz"),
-        (_AI_CONFIG_SENTINEL, "⚙  Configure AI"),
-        (_QUERY_SENTINEL, "🔍 Query taxonomy (SPARQL)"),
+        (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
+        (_QUERY_SENTINEL, "🔍 Query Graph SPARQL (Beta)"),
+        (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -601,31 +599,28 @@ def _multi_file_picker(
         for f in found:
             console.print(f"  ✓  {f.name}")
         console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
-        console.print("  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan] 2[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
         console.print("  [cyan] 3[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
-        console.print("  [cyan] 4[/cyan]  [green]🔗 Generate Browsable Website[/green]")
-        console.print("  [cyan] 5[/cyan]  [yellow]⬡  Open Graph Viz[/yellow]")
-        console.print("  [cyan] 6[/cyan]  [cyan]⚙  Configure AI[/cyan]")
-        console.print("  [cyan] 7[/cyan]  [green]🔍 Query taxonomy (SPARQL)[/green]")
-        console.print("  [cyan] 8[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 4[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan] 5[/cyan]  [green]🔍 Query Graph SPARQL (Beta)[/green]")
+        console.print("  [cyan] 6[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
+        console.print("  [cyan] 7[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–8)", default="1")
+        choice = Prompt.ask("Action (1–7)", default="1")
         s = choice.strip().lower()
         if s == "1" or s == "all":
             return list(found)
         if s == "2":
-            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
+            return _GRAPH_SENTINEL  # type: ignore[return-value]
         if s == "3":
             return _HTML_SENTINEL  # type: ignore[return-value]
         if s == "4":
-            return _SITE_SENTINEL  # type: ignore[return-value]
+            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
         if s == "5":
-            return _GRAPH_SENTINEL  # type: ignore[return-value]
+            return _QUERY_SENTINEL  # type: ignore[return-value]
         if s == "6":
             return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
         if s == "7":
-            return _QUERY_SENTINEL  # type: ignore[return-value]
-        if s == "8":
             return _QUIT_SENTINEL  # type: ignore[return-value]
         return list(found)
 
@@ -655,8 +650,6 @@ def _multi_file_picker(
             return MG
         if sentinel == _HTML_SENTINEL:
             return "\033[34m"  # blue
-        if sentinel == _SITE_SENTINEL:
-            return GR  # green
         if sentinel == _GRAPH_SENTINEL:
             return "\033[33m"  # yellow
         if sentinel == _QUIT_SENTINEL:
@@ -905,15 +898,6 @@ def _open_viewer(
         git_manager=gm,
         workspace=workspace,
     )
-
-    # Auto-open graph viz for OWL ontologies (no SKOS schemes)
-    if taxonomy.owl_classes and not taxonomy.schemes:
-        from . import viz as _viz
-
-        try:
-            _viz.open_in_browser(taxonomy, taxonomy_file)
-        except Exception:
-            pass
 
     if jump_concept:
         uri = _resolve(taxonomy, jump_concept)
@@ -1396,50 +1380,6 @@ def cmd_export(
         console.print(f"  [dim]Opened in browser:[/dim] {entry}")
 
 
-@app.command("site")
-def cmd_site(
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="Output directory (default: <file-stem>-site/)."
-    ),
-    lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
-) -> None:
-    """Generate a browsable hub website — one page per concept / class / individual.
-
-    Renders rdfs:comment / skos:definition as Markdown, embeds schema:image as a
-    hero photo, schema:video as a YouTube / Vimeo iframe, and schema:url as a
-    link card.  All pages link to each other; no server required.
-
-    Examples:\n
-      ster site                          # auto-detect file, open in browser\n
-      ster site --lang fr --output ./public\n
-    """
-    from .html_export import generate_site
-
-    taxonomy_file = _resolve_file(file)
-    output_dir = output or taxonomy_file.parent / f"{taxonomy_file.stem}-site"
-
-    console.print(f"[dim]Building site from[/dim] [bold]{taxonomy_file.name}[/bold]…")
-    try:
-        created = generate_site(taxonomy_file, output_dir, lang=lang)
-    except Exception as exc:
-        err.print(f"[red]Site generation failed: {exc}[/red]")
-        raise typer.Exit(1)
-
-    for path in created:
-        console.print(f"  [green]✓[/green]  {path.name}")
-
-    if created:
-        console.print(
-            f"\n[bold]Generated {len(created)} page(s)[/bold] in [cyan]{output_dir}[/cyan]"
-        )
-        index = (output_dir / "index.html").resolve()
-        import webbrowser
-
-        webbrowser.open(index.as_uri())
-        console.print(f"  [dim]Opened in browser:[/dim] {index}")
-
-
 # ──────────────────────────── internal helpers ───────────────────────────────
 
 
@@ -1724,65 +1664,6 @@ def _run_html_export_interactive(files: list[Path]) -> None:
         pass
 
 
-def _run_site_interactive(files: list[Path]) -> None:
-    """Interactive browsable site generator from the home-screen menu."""
-    from .html_export import generate_site
-
-    if not files:
-        err.print("[red]No taxonomy files selected.[/red]")
-        return
-
-    taxonomy_file = files[0]
-    default_out = taxonomy_file.parent / f"{taxonomy_file.stem}-site"
-
-    console.print()
-    console.print(f"[bold]Generate Browsable Website[/bold]  [dim]{taxonomy_file.name}[/dim]")
-    console.print()
-
-    try:
-        out_input = Prompt.ask("Output directory", default=str(default_out))
-        output_dir = Path(out_input.strip())
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled.[/dim]")
-        return
-
-    try:
-        lang_input = Prompt.ask("Display language", default="en")
-        lang = lang_input.strip() or "en"
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled.[/dim]")
-        return
-
-    console.print(f"\n[dim]Building site from[/dim] [bold]{taxonomy_file.name}[/bold]…")
-    try:
-        created = generate_site(taxonomy_file, output_dir, lang=lang)
-    except Exception as exc:
-        err.print(f"[red]Site generation failed: {exc}[/red]")
-        try:
-            Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
-        except (KeyboardInterrupt, EOFError):
-            pass
-        return
-
-    for path in created:
-        console.print(f"  [green]✓[/green]  {path.name}")
-
-    if created:
-        import webbrowser
-
-        console.print(
-            f"\n[bold]Generated {len(created)} page(s)[/bold] in [cyan]{output_dir}[/cyan]"
-        )
-        index = (output_dir / "index.html").resolve()
-        webbrowser.open(index.as_uri())
-        console.print(f"  [dim]Opened in browser:[/dim] {index}")
-
-    try:
-        Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
-    except (KeyboardInterrupt, EOFError):
-        pass
-
-
 def main() -> None:
     """Entry point.
 
@@ -1840,10 +1721,6 @@ def main() -> None:
 
         if selected is _HTML_SENTINEL:
             _run_html_export_interactive(found)
-            continue
-
-        if selected is _SITE_SENTINEL:
-            _run_site_interactive(found)
             continue
 
         if selected is _GRAPH_SENTINEL:

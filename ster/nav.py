@@ -608,7 +608,7 @@ class TaxonomyViewer:
         self._status = ""
         self._folded: set[str] = set()
         self._overview_folded: set[str] = set()
-        self._view_mode: str = "mixed"  # "mixed" | "taxonomy" | "ontology"
+        self._view_mode: str = self._default_view_mode()  # "mixed" | "taxonomy" | "ontology"
         # scheme_uri → SchemeAnalysis; populated on first run() call
         self._analysis: dict[str, SchemeAnalysis] | None = None
         # AI install threading state
@@ -627,6 +627,33 @@ class TaxonomyViewer:
         self._detail_fields = self._bgf()
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _default_view_mode(self) -> str:
+        """Infer the right initial view from what the workspace actually contains."""
+        has_skos = any(
+            bool(tax.schemes or tax.concepts) for tax in self._workspace.taxonomies.values()
+        )
+        has_owl = any(bool(tax.owl_classes) for tax in self._workspace.taxonomies.values())
+        if has_owl and not has_skos:
+            return "ontology"
+        if has_skos and not has_owl:
+            return "taxonomy"
+        return "mixed"
+
+    def _available_view_modes(self) -> list[str]:
+        """Return the subset of view modes that make sense for this workspace."""
+        has_skos = any(
+            bool(tax.schemes or tax.concepts) for tax in self._workspace.taxonomies.values()
+        )
+        has_owl = any(bool(tax.owl_classes) for tax in self._workspace.taxonomies.values())
+        modes: list[str] = []
+        if has_skos and has_owl:
+            modes.append("mixed")
+        if has_skos:
+            modes.append("taxonomy")
+        if has_owl:
+            modes.append("ontology")
+        return modes or ["mixed"]
 
     def _rebuild(self) -> None:
         if self._view_mode == "ontology":
@@ -1573,12 +1600,18 @@ class TaxonomyViewer:
                 f" {pos}  {m_pos}  Tab/↓: next match  Shift+Tab/↑: prev  "
                 f"Enter: open  /: new search  Esc: clear "
             )
-        if self._view_mode == "mixed":
-            mode_hint = "[Mixed]  Tab: taxonomy"
-        elif self._view_mode == "taxonomy":
-            mode_hint = "[Taxonomy]  Tab: ontology"
+        modes = self._available_view_modes()
+        _labels = {"mixed": "Mixed", "taxonomy": "Taxonomy", "ontology": "Ontology"}
+        cur_label = _labels.get(self._view_mode, self._view_mode.capitalize())
+        if len(modes) > 1:
+            nxt = (
+                modes[(modes.index(self._view_mode) + 1) % len(modes)]
+                if self._view_mode in modes
+                else modes[0]
+            )
+            mode_hint = f"[{cur_label}]  Tab: {_labels[nxt].lower()}"
         else:
-            mode_hint = "[Ontology]  Tab: mixed"
+            mode_hint = f"[{cur_label}]"
         return (
             f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
             f"   Space: fold  +: add  {jump_hint}  /: search  {mode_hint}  q: quit "
@@ -1724,16 +1757,18 @@ class TaxonomyViewer:
 
         # ── view mode cycle (Tab when not navigating search results) ─────────
         if key == 9 and not self._search_matches:  # Tab
-            _cycle = {"mixed": "taxonomy", "taxonomy": "ontology", "ontology": "mixed"}
-            new_mode = _cycle.get(self._view_mode, "mixed")
-            self._view_mode = new_mode
-            self._folded = set()
-            self._rebuild()
-            self._cursor = 0
-            self._tree_scroll = 0
-            self._update_tree_preview()
-            _labels = {"mixed": "Mixed", "taxonomy": "Taxonomy", "ontology": "Ontology"}
-            self._status = f"Switched to {_labels[new_mode]} view"
+            modes = self._available_view_modes()
+            if len(modes) > 1:
+                cur = self._view_mode if self._view_mode in modes else modes[0]
+                new_mode = modes[(modes.index(cur) + 1) % len(modes)]
+                self._view_mode = new_mode
+                self._folded = set()
+                self._rebuild()
+                self._cursor = 0
+                self._tree_scroll = 0
+                self._update_tree_preview()
+                _labels = {"mixed": "Mixed", "taxonomy": "Taxonomy", "ontology": "Ontology"}
+                self._status = f"Switched to {_labels[new_mode]} view"
             return False
 
         # ── search trigger ────────────────────────────────────────────────────
@@ -1976,7 +2011,11 @@ class TaxonomyViewer:
                 if (is_action or is_sep or is_map_remove)
                 else f.display[:lbl_w].ljust(lbl_w)
             )
-            fv = f.value[: width - lbl_w - 5]
+            fv = (
+                f.value.replace("\r\n", " ")
+                .replace("\n", " ")
+                .replace("\r", " ")[: width - lbl_w - 5]
+            )
             y = row + 1
 
             try:
