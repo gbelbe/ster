@@ -632,3 +632,95 @@ def test_diff_status_str(tmp_path):
     }
     result = v._diff_status_str()
     assert result == {BASE + "A": "added", BASE + "B": "unchanged"}
+
+
+# ── run() — tty path ──────────────────────────────────────────────────────────
+
+
+def test_viewer_run_tty_calls_curses_wrapper(tmp_path):
+    """When both stdin and stdout are ttys, run() calls curses.wrapper."""
+    v = GitLogViewer(repo=tmp_path)
+    with (
+        patch("sys.stdin") as mock_stdin,
+        patch("sys.stdout") as mock_stdout,
+        patch("curses.wrapper") as mock_wrapper,
+    ):
+        mock_stdin.isatty.return_value = True
+        mock_stdout.isatty.return_value = True
+        v.run()
+    mock_wrapper.assert_called_once_with(v._loop)
+
+
+def test_viewer_run_tty_handles_keyboard_interrupt(tmp_path):
+    """KeyboardInterrupt during curses.wrapper is silently swallowed."""
+    v = GitLogViewer(repo=tmp_path)
+    with (
+        patch("sys.stdin") as mock_stdin,
+        patch("sys.stdout") as mock_stdout,
+        patch("curses.wrapper", side_effect=KeyboardInterrupt),
+    ):
+        mock_stdin.isatty.return_value = True
+        mock_stdout.isatty.return_value = True
+        v.run()  # should not raise
+
+
+# ── _on_confirm ────────────────────────────────────────────────────────────────
+
+
+def test_on_confirm_y_revert_success(tmp_path):
+    v = GitLogViewer(repo=tmp_path)
+    h = "a" * 40
+    v._entries = [LogEntry(h, "aaa", "Msg", "Alice", "2024-01-01", "")]
+    v._cursor = 0
+    v._mode = GitLogViewer._CONFIRM
+
+    with (
+        patch("ster.git_log._do_revert", return_value=(True, "Reverted aaaaaa")) as mock_revert,
+        patch.object(v, "_load_log"),
+    ):
+        result = v._on_confirm(ord("y"))
+
+    assert result is False
+    assert v._mode == GitLogViewer._NORMAL
+    mock_revert.assert_called_once_with(h, tmp_path)
+
+
+def test_on_confirm_y_revert_clears_cache(tmp_path):
+    v = GitLogViewer(repo=tmp_path)
+    h = "b" * 40
+    v._entries = [LogEntry(h, "bbb", "Msg", "Bob", "2024-01-02", "")]
+    v._cursor = 0
+    v._diff_cache[h] = (MagicMock(), {})
+
+    with (
+        patch("ster.git_log._do_revert", return_value=(True, "ok")),
+        patch.object(v, "_load_log"),
+    ):
+        v._on_confirm(ord("Y"))
+
+    assert h not in v._diff_cache
+
+
+def test_on_confirm_y_revert_failure(tmp_path):
+    v = GitLogViewer(repo=tmp_path)
+    h = "c" * 40
+    v._entries = [LogEntry(h, "ccc", "Msg", "Carol", "2024-01-03", "")]
+    v._cursor = 0
+
+    with patch("ster.git_log._do_revert", return_value=(False, "conflict")):
+        result = v._on_confirm(ord("y"))
+
+    assert result is False
+    assert v._mode == GitLogViewer._NORMAL
+    assert v._status == "conflict"
+
+
+def test_on_confirm_any_other_key_cancels(tmp_path):
+    v = GitLogViewer(repo=tmp_path)
+    v._entries = [LogEntry("d" * 40, "ddd", "Msg", "Dan", "2024-01-04", "")]
+    v._cursor = 0
+    v._mode = GitLogViewer._CONFIRM
+
+    result = v._on_confirm(ord("n"))
+    assert result is False
+    assert v._mode == GitLogViewer._NORMAL
