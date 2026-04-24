@@ -349,6 +349,30 @@ pre-commit install
 
 ---
 
+## Changelog
+
+### 0.3.2
+- Show update notice with release notes summary when a new version is available on PyPI
+- Rename "Generate webpage" menu action to "Generate Web-Documentation"
+- Add "Generate Browsable Website" menu action (D3 hub site generator)
+- Extend git diff view to detect all field changes: broader/narrower/related, match properties, schema:image/video/url, subClassOf, rdf:type, property assertions, OWL properties
+
+### 0.3.1
+- Auto-publish to PyPI via GitHub Actions (OIDC trusted publishing) on every passing CI run
+- Animate AI suggestion spinners during generation
+- Handle missing Ollama gracefully; stream pull output with progress updates
+
+### 0.3.0
+- Full-screen TUI for SKOS concept schemes and OWL class hierarchies
+- Interactive D3 force graph visualisation in the browser
+- Static site generator — one page per concept, class, and individual
+- AI-assisted concept creation via `llm` library (online and local via Ollama)
+- Git integration: stage, commit, push without leaving the terminal
+- HTML export via pyLODE (VocPub and OntPub profiles)
+- SPARQL query runner against the loaded taxonomy
+
+---
+
 ## License
 
 MIT
