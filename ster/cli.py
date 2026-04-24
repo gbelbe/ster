@@ -102,7 +102,7 @@ def _check_new_version() -> tuple[str, str] | None:
         try:
             data = json.loads(_VERSION_CACHE.read_text())
             checked = datetime.fromisoformat(data["checked"])
-            if now - checked < timedelta(hours=24):
+            if now - checked < timedelta(hours=12):
                 cached_latest = data.get("latest")
                 cached_notes = data.get("notes", "")
         except Exception:
