@@ -270,17 +270,20 @@ def _md_to_html(text: str) -> str:
         return f"<p>{escaped}</p>"
 
 
-def _video_embed_url(url: str) -> str | None:
-    """Derive an embeddable iframe src from a YouTube or Vimeo URL."""
+def _video_embed_url(url: str) -> tuple[str, str] | None:
+    """Derive an embeddable (iframe_src, platform) from a YouTube or Vimeo URL."""
     m = _re.search(r"youtube\.com/watch\?.*v=([A-Za-z0-9_-]+)", url)
     if m:
-        return f"https://www.youtube.com/embed/{m.group(1)}"
+        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
     m = _re.search(r"youtu\.be/([A-Za-z0-9_-]+)", url)
     if m:
-        return f"https://www.youtube.com/embed/{m.group(1)}"
+        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
+    m = _re.search(r"youtube\.com/shorts/([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"https://www.youtube.com/embed/{m.group(1)}", "youtube"
     m = _re.search(r"vimeo\.com/(\d+)", url)
     if m:
-        return f"https://player.vimeo.com/video/{m.group(1)}"
+        return f"https://player.vimeo.com/video/{m.group(1)}", "vimeo"
     return None
 
 
@@ -969,14 +972,24 @@ def _render_description(entity: object, lang: str) -> str:
     return f'<div class="desc">{_md_to_html(text)}</div>' if text else ""
 
 
+_YT_ALLOW = (
+    "accelerometer; autoplay; clipboard-write; encrypted-media; "
+    "gyroscope; picture-in-picture; web-share"
+)
+_VIMEO_ALLOW = "autoplay; fullscreen; picture-in-picture"
+
+
 def _render_videos(entity: object) -> str:
     parts = []
     for url in getattr(entity, "schema_videos", []):
-        embed = _video_embed_url(url)
-        if embed:
+        result = _video_embed_url(url)
+        if result:
+            embed, platform = result
+            allow = _YT_ALLOW if platform == "youtube" else _VIMEO_ALLOW
             parts.append(
                 f'<div class="video-wrap">'
-                f'<iframe src="{_esc(embed)}" allowfullscreen loading="lazy"></iframe>'
+                f'<iframe src="{_esc(embed)}" frameborder="0" '
+                f'allow="{allow}" allowfullscreen loading="lazy"></iframe>'
                 f"</div>"
             )
     return "\n".join(parts)
