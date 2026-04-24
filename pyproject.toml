@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ster"
-version = "0.3.0"
+version = "0.3.1"
 description = "Terminal editor and site generator for SKOS taxonomies and OWL ontologies"
 readme = "README.md"
 license = { file = "LICENSE" }

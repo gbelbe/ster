@@ -34,7 +34,7 @@ def _app_callback(ctx: typer.Context) -> None:
     pass
 
 
-_VERSION = "0.3.0"
+_VERSION = "0.3.1"
 _AUTHOR = "ster contributors"
 
 
