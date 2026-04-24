@@ -64,7 +64,8 @@ jobs:
         run: uv run bandit -r ster/ -c pyproject.toml
 
       - name: pip-audit — dependency CVEs
-        run: uv run pip-audit
+        # CVE-2026-3219 affects pip itself (no fix version yet); not a ster dependency
+        run: uv run pip-audit --ignore-vuln CVE-2026-3219
 
   # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
