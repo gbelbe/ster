@@ -408,24 +408,26 @@ def test_flatten_ontology_tree_children_depth():
 
 
 def test_flatten_ontology_tree_node_type_class():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav_logic import _is_ontology_sentinel, flatten_ontology_tree
 
     t = _owl_taxonomy()
     lines = flatten_ontology_tree(t)
-    for line in lines:
+    class_lines = [l for l in lines if not _is_ontology_sentinel(l.uri)]
+    for line in class_lines:
         assert line.node_type == "class"
 
 
 def test_flatten_ontology_tree_node_type_promoted():
     from ster.model import Concept, RDFClass
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav_logic import _is_ontology_sentinel, flatten_ontology_tree
 
     BASE_O = "https://example.org/onto/"
     t = Taxonomy()
     t.concepts[BASE_O + "Dog"] = Concept(uri=BASE_O + "Dog")
     t.owl_classes[BASE_O + "Dog"] = RDFClass(uri=BASE_O + "Dog")
     lines = flatten_ontology_tree(t)
-    assert lines[0].node_type == "promoted"
+    class_lines = [l for l in lines if not _is_ontology_sentinel(l.uri)]
+    assert class_lines[0].node_type == "promoted"
 
 
 def test_flatten_ontology_tree_empty():
@@ -492,3 +494,306 @@ def test_build_rdf_class_detail_missing():
 
     t = Taxonomy()
     assert build_rdf_class_detail(t, "https://x.org/Missing", "en") == []
+
+
+# ── flatten_mixed_tree ────────────────────────────────────────────────────────
+
+
+def _mixed_taxonomy() -> Taxonomy:
+    """Taxonomy with one SKOS scheme + two pure OWL classes."""
+    from ster.model import ConceptScheme, RDFClass
+
+    BASE_M = "https://example.org/mix/"
+    t = Taxonomy()
+    scheme = ConceptScheme(uri=BASE_M + "Scheme")
+    concept = Concept(uri=BASE_M + "Concept", top_concept_of=BASE_M + "Scheme")
+    scheme.top_concepts = [BASE_M + "Concept"]
+    t.schemes[scheme.uri] = scheme
+    t.concepts[concept.uri] = concept
+    cls_a = RDFClass(uri=BASE_M + "ClassA", labels=[Label(lang="en", value="ClassA")])
+    cls_b = RDFClass(
+        uri=BASE_M + "ClassB",
+        labels=[Label(lang="en", value="ClassB")],
+        sub_class_of=[BASE_M + "ClassA"],
+    )
+    for cls in (cls_a, cls_b):
+        t.owl_classes[cls.uri] = cls
+    assign_handles(t)
+    return t
+
+
+def test_flatten_mixed_tree_includes_skos():
+    from ster.nav_logic import flatten_mixed_tree
+
+    t = _mixed_taxonomy()
+    lines = flatten_mixed_tree(t)
+    uris = [l.uri for l in lines]
+    assert "https://example.org/mix/Concept" in uris
+
+
+def test_flatten_mixed_tree_includes_owl_section_header():
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    t = _mixed_taxonomy()
+    lines = flatten_mixed_tree(t)
+    assert any(_is_ontology_sentinel(l.uri) for l in lines)
+
+
+def test_flatten_mixed_tree_header_has_label():
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    t = _mixed_taxonomy()
+    lines = flatten_mixed_tree(t)
+    header = next(l for l in lines if _is_ontology_sentinel(l.uri))
+    assert header.label  # ontology name should be non-empty
+
+
+def test_flatten_mixed_tree_owl_classes_after_skos():
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    t = _mixed_taxonomy()
+    lines = flatten_mixed_tree(t)
+    scheme_idx = next(
+        i for i, l in enumerate(lines) if l.is_scheme and not _is_ontology_sentinel(l.uri)
+    )
+    owl_header_idx = next(i for i, l in enumerate(lines) if _is_ontology_sentinel(l.uri))
+    assert owl_header_idx > scheme_idx
+
+
+def test_flatten_mixed_tree_pure_classes_node_type():
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    t = _mixed_taxonomy()
+    lines = flatten_mixed_tree(t)
+    owl_lines = [
+        l
+        for l in lines
+        if not l.is_scheme and not _is_ontology_sentinel(l.uri) and l.uri not in t.concepts
+    ]
+    assert all(l.node_type == "class" for l in owl_lines)
+
+
+def test_flatten_mixed_tree_owl_only_no_header():
+    from ster.model import RDFClass
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    t = Taxonomy()
+    t.owl_classes["https://x.org/A"] = RDFClass(uri="https://x.org/A")
+    lines = flatten_mixed_tree(t)
+    # OWL-only taxonomy: ontology root + the class itself
+    assert any(_is_ontology_sentinel(l.uri) for l in lines)
+    assert any(l.uri == "https://x.org/A" for l in lines)
+
+
+def test_flatten_mixed_tree_no_owl_no_header():
+    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+
+    lines = flatten_mixed_tree(simple_taxonomy())
+    assert not any(_is_ontology_sentinel(l.uri) for l in lines)
+
+
+def simple_taxonomy() -> Taxonomy:
+    """Reusable simple SKOS-only taxonomy."""
+    BASE_S = "https://example.org/s/"
+    t = Taxonomy()
+    scheme = ConceptScheme(uri=BASE_S + "Scheme")
+    top = Concept(uri=BASE_S + "Top", top_concept_of=BASE_S + "Scheme")
+    scheme.top_concepts = [BASE_S + "Top"]
+    t.schemes[scheme.uri] = scheme
+    t.concepts[top.uri] = top
+    assign_handles(t)
+    return t
+
+
+# ── build_promoted_detail ─────────────────────────────────────────────────────
+
+
+def _promoted_taxonomy() -> Taxonomy:
+    from ster.model import Definition, RDFClass
+
+    BASE_P = "https://example.org/promo/"
+    t = Taxonomy()
+    scheme = ConceptScheme(uri=BASE_P + "Scheme")
+    concept = Concept(
+        uri=BASE_P + "Dog",
+        top_concept_of=BASE_P + "Scheme",
+        labels=[Label(lang="en", value="Dog")],
+        definitions=[Definition(lang="en", value="A domestic canine.")],
+    )
+    scheme.top_concepts = [BASE_P + "Dog"]
+    t.schemes[scheme.uri] = scheme
+    t.concepts[concept.uri] = concept
+    rdf_class = RDFClass(
+        uri=BASE_P + "Dog",
+        labels=[Label(lang="en", value="Dog")],
+        comments=[Definition(lang="en", value="Canis lupus familiaris.")],
+    )
+    t.owl_classes[rdf_class.uri] = rdf_class
+    assign_handles(t)
+    return t
+
+
+def test_build_promoted_detail_has_both_sections():
+    from ster.nav_logic import build_promoted_detail
+
+    t = _promoted_taxonomy()
+    uri = "https://example.org/promo/Dog"
+    fields = build_promoted_detail(t, uri, "en")
+    sep_displays = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "SKOS — Concept" in sep_displays
+    assert "OWL — Class" in sep_displays
+
+
+def test_build_promoted_detail_type_stat():
+    from ster.nav_logic import build_promoted_detail
+
+    t = _promoted_taxonomy()
+    uri = "https://example.org/promo/Dog"
+    fields = build_promoted_detail(t, uri, "en")
+    type_field = next((f for f in fields if f.key == "node_type"), None)
+    assert type_field is not None
+    assert "Concept" in type_field.value and "Class" in type_field.value
+
+
+def test_build_promoted_detail_fallback_concept_only():
+    from ster.nav_logic import build_promoted_detail
+
+    t = Taxonomy()
+    BASE_P = "https://example.org/promo/"
+    t.concepts[BASE_P + "X"] = Concept(uri=BASE_P + "X")
+    fields = build_promoted_detail(t, BASE_P + "X", "en")
+    # Falls back to concept detail — should still have fields
+    assert len(fields) > 0
+
+
+def test_build_promoted_detail_fallback_class_only():
+    from ster.model import RDFClass
+    from ster.nav_logic import build_promoted_detail
+
+    t = Taxonomy()
+    BASE_P = "https://example.org/promo/"
+    t.owl_classes[BASE_P + "X"] = RDFClass(uri=BASE_P + "X")
+    fields = build_promoted_detail(t, BASE_P + "X", "en")
+    assert len(fields) > 0
+
+
+# ── OWL individuals ───────────────────────────────────────────────────────────
+
+
+BASE_I = "https://example.org/ind/"
+
+
+def _individual_taxonomy():
+    from ster.model import Definition, Label, OWLIndividual, RDFClass
+
+    t = Taxonomy()
+    t.owl_classes[BASE_I + "Animal"] = RDFClass(uri=BASE_I + "Animal")
+    t.owl_classes[BASE_I + "Dog"] = RDFClass(uri=BASE_I + "Dog", sub_class_of=[BASE_I + "Animal"])
+    ind = OWLIndividual(
+        uri=BASE_I + "Rex",
+        labels=[Label(lang="en", value="Rex")],
+        comments=[Definition(lang="en", value="A dog")],
+        types=[BASE_I + "Dog"],
+    )
+    t.owl_individuals[BASE_I + "Rex"] = ind
+    assign_handles(t)
+    return t
+
+
+def test_individual_node_type():
+    t = _individual_taxonomy()
+    assert t.node_type(BASE_I + "Rex") == "individual"
+
+
+def test_individual_handle_assigned():
+    t = _individual_taxonomy()
+    h = t.uri_to_handle(BASE_I + "Rex")
+    assert h is not None
+
+
+def test_individual_appears_under_class_in_ontology_tree():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _individual_taxonomy()
+    lines = flatten_ontology_tree(t)
+    uris = [l.uri for l in lines]
+    assert BASE_I + "Rex" in uris
+
+
+def test_individual_node_type_in_tree_line():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _individual_taxonomy()
+    lines = flatten_ontology_tree(t)
+    rex_line = next(l for l in lines if l.uri == BASE_I + "Rex")
+    assert rex_line.node_type == "individual"
+
+
+def test_individual_under_dog_not_animal():
+    from ster.nav_logic import flatten_ontology_tree
+
+    t = _individual_taxonomy()
+    lines = flatten_ontology_tree(t)
+    uris = [l.uri for l in lines]
+    dog_idx = uris.index(BASE_I + "Dog")
+    rex_idx = uris.index(BASE_I + "Rex")
+    # Rex should appear after Dog (under Dog), not at top level
+    assert rex_idx > dog_idx
+
+
+def test_individual_appears_in_mixed_tree():
+    from ster.nav_logic import flatten_mixed_tree
+
+    t = _individual_taxonomy()
+    lines = flatten_mixed_tree(t)
+    uris = [l.uri for l in lines]
+    assert BASE_I + "Rex" in uris
+
+
+def test_individual_appears_under_multiple_classes():
+    from ster.model import OWLIndividual, RDFClass
+
+    t = Taxonomy()
+    t.owl_classes[BASE_I + "Cat"] = RDFClass(uri=BASE_I + "Cat")
+    t.owl_classes[BASE_I + "Pet"] = RDFClass(uri=BASE_I + "Pet")
+    ind = OWLIndividual(uri=BASE_I + "Whiskers", types=[BASE_I + "Cat", BASE_I + "Pet"])
+    t.owl_individuals[BASE_I + "Whiskers"] = ind
+    assign_handles(t)
+
+    from ster.nav_logic import flatten_ontology_tree
+
+    lines = flatten_ontology_tree(t)
+    uris = [l.uri for l in lines]
+    # Whiskers belongs to 2 classes → should appear twice
+    count = uris.count(BASE_I + "Whiskers")
+    assert count == 2
+
+
+def test_build_individual_detail_sections():
+    from ster.nav_logic import build_individual_detail
+
+    t = _individual_taxonomy()
+    fields = build_individual_detail(t, BASE_I + "Rex", "en")
+    sep_displays = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "Identity" in sep_displays
+    assert "Labels" in sep_displays
+    assert "Actions" in sep_displays
+
+
+def test_build_individual_detail_class_membership():
+    from ster.nav_logic import build_individual_detail
+
+    t = _individual_taxonomy()
+    fields = build_individual_detail(t, BASE_I + "Rex", "en")
+    membership = [f for f in fields if f.meta.get("type") == "rdf_relation"]
+    assert len(membership) == 1
+    assert membership[0].meta["uri"] == BASE_I + "Dog"
+
+
+def test_build_individual_detail_add_label_action():
+    from ster.nav_logic import build_individual_detail
+
+    t = _individual_taxonomy()
+    fields = build_individual_detail(t, BASE_I + "Rex", "fr")
+    actions = [f.meta.get("action") for f in fields if f.meta.get("type") == "action"]
+    assert "add_ind_label" in actions

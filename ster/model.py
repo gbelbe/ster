@@ -56,6 +56,10 @@ class Concept:
     related_match: list[str] = field(default_factory=list)
     exact_match: list[str] = field(default_factory=list)
     close_match: list[str] = field(default_factory=list)
+    # Rich-content annotations (schema.org)
+    schema_images: list[str] = field(default_factory=list)  # schema:image URLs
+    schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
+    schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
 
     @property
     def local_name(self) -> str:
@@ -91,6 +95,67 @@ class Concept:
 
 
 @dataclass
+class OWLProperty:
+    """An owl:ObjectProperty / owl:DatatypeProperty / rdfs:Property."""
+
+    uri: str
+    prop_type: str = (
+        "ObjectProperty"  # ObjectProperty | DatatypeProperty | AnnotationProperty | Property
+    )
+    labels: list[Label] = field(default_factory=list)  # rdfs:label
+    comments: list[Definition] = field(default_factory=list)  # rdfs:comment
+    domains: list[str] = field(default_factory=list)  # rdfs:domain class URIs
+    ranges: list[str] = field(default_factory=list)  # rdfs:range URIs
+    sub_property_of: list[str] = field(default_factory=list)  # rdfs:subPropertyOf
+    inverse_of: list[str] = field(default_factory=list)  # owl:inverseOf
+
+    @property
+    def local_name(self) -> str:
+        for sep in ("#", "/"):
+            if sep in self.uri:
+                return self.uri.rsplit(sep, 1)[-1]
+        return self.uri
+
+    def label(self, lang: str = "en") -> str:
+        for lbl in self.labels:
+            if lbl.lang == lang:
+                return lbl.value
+        if self.labels:
+            return self.labels[0].value
+        return self.local_name
+
+
+@dataclass
+class OWLIndividual:
+    """An owl:NamedIndividual (or instance typed as a known OWL class)."""
+
+    uri: str
+    labels: list[Label] = field(default_factory=list)  # rdfs:label
+    comments: list[Definition] = field(default_factory=list)  # rdfs:comment
+    types: list[str] = field(default_factory=list)  # rdf:type class URIs (user-defined only)
+    # Object-property assertions: (property_uri, target_individual_uri)
+    property_values: list[tuple[str, str]] = field(default_factory=list)
+    schema_images: list[str] = field(default_factory=list)  # schema:image URLs
+    schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
+    schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
+
+    @property
+    def local_name(self) -> str:
+        for sep in ("#", "/"):
+            if sep in self.uri:
+                return self.uri.rsplit(sep, 1)[-1]
+        return self.uri
+
+    def label(self, lang: str = "en") -> str:
+        for lbl in self.labels:
+            if lbl.lang == lang:
+                return lbl.value
+        if self.labels:
+            return self.labels[0].value
+        return self.local_name
+
+
+@dataclass
 class RDFClass:
     """An rdfs:Class or owl:Class node — the OWL/RDFS layer of a graph."""
 
@@ -100,6 +165,9 @@ class RDFClass:
     sub_class_of: list[str] = field(default_factory=list)  # rdfs:subClassOf URIs
     equivalent_class: list[str] = field(default_factory=list)  # owl:equivalentClass URIs
     disjoint_with: list[str] = field(default_factory=list)  # owl:disjointWith URIs
+    schema_images: list[str] = field(default_factory=list)  # schema:image URLs
+    schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
+    schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
 
     @property
     def local_name(self) -> str:
@@ -150,13 +218,17 @@ class Taxonomy:
     schemes: dict[str, ConceptScheme] = field(default_factory=dict)  # uri → scheme
     concepts: dict[str, Concept] = field(default_factory=dict)  # uri → concept
     owl_classes: dict[str, RDFClass] = field(default_factory=dict)  # uri → class
+    owl_individuals: dict[str, OWLIndividual] = field(default_factory=dict)  # uri → individual
+    owl_properties: dict[str, OWLProperty] = field(default_factory=dict)  # uri → property
+    ontology_uri: str | None = field(default=None)  # owl:Ontology URI if declared
+    ontology_label: str | None = field(default=None)  # rdfs:label of the ontology
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
 
     def node_type(self, uri: str) -> str:
-        """Return the RDF type of a node: 'promoted', 'concept', 'class', or 'unknown'."""
+        """Return the RDF type: 'promoted', 'concept', 'class', 'individual', 'property', or 'unknown'."""
         in_concepts = uri in self.concepts
         in_classes = uri in self.owl_classes
         if in_concepts and in_classes:
@@ -165,6 +237,10 @@ class Taxonomy:
             return "concept"
         if in_classes:
             return "class"
+        if uri in self.owl_individuals:
+            return "individual"
+        if uri in self.owl_properties:
+            return "property"
         return "unknown"
 
     def resolve(self, handle_or_uri: str) -> str | None:

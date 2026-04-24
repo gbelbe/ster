@@ -20,62 +20,100 @@
 /____/ /_/  /_____//_/ |_|
 
   [ Breton: "Meaning" or "Sense" ]
-  [  Simple Taxonomy EditoR     ]
+  [  Semantic Knowledge Editor  ]
 ```
 
-**ster** is an interactive terminal editor for [SKOS](https://www.w3.org/TR/skos-reference/) taxonomy files.
-Browse, create, and edit concepts in a full-screen TUI — no GUI, no database, just clean Turtle files.
+**ster** is a terminal tool for building and publishing semantic knowledge bases.
+Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as interactive D3 force graphs, and publish them as linked hub sites — all from your terminal, no database required.
 
 > *ster* is the Breton word for *meaning*, with homonyms for *river* and *star*.
 > Let it guide your semantic voyage, keeping the flow and always following your star.
 
 ---
 
+## What's inside
+
+| Layer | What ster does |
+|---|---|
+| **Edit** | Full-screen TUI for SKOS concepts and OWL classes / individuals / properties |
+| **Visualise** | Interactive D3 v7 force graph — colour-coded clusters, drag, zoom, filter |
+| **Publish** | Static site generator — one hub page per entity, neighbourhood graph, media |
+| **AI assist** | LLM-powered concept suggestions (online or local via Ollama) |
+| **Git** | Stage, commit, push without leaving the terminal |
+| **Export** | pyLODE HTML documentation; SPARQL query runner |
+
+---
+
 ## Features
 
-### Interactive TUI
-- Full-screen tree browser with keyboard navigation
+### Interactive TUI — SKOS and OWL in one view
+
+- Full-screen tree browser for SKOS concept schemes and OWL class hierarchies
 - Inline concept creation, renaming, deletion, and label editing
 - Detail panel: view and edit all SKOS fields (labels, definitions, scope notes, related links…)
-- Fold / unfold subtrees; shows hidden-concept count
-- Visual `⇔` indicator for concepts that carry cross-scheme mapping links
-- Scheme dashboard: completion rates, quality issues, and concept counts at a glance
+- OWL layer: browse classes, named individuals, object/datatype properties, axioms
+- Visual `⇔` indicator for concepts with cross-scheme mapping links
+- Fold / unfold subtrees; hidden-concept count shown
+- Scheme dashboard: completion rates, quality issues, concept counts at a glance
+
+### D3 force graph visualisation
+
+Open any ontology or taxonomy as an interactive force graph in the browser:
+
+- Colour-coded node clusters per root class or top concept
+- Node types rendered distinctly: OWL classes (rectangles), individuals (ellipses), SKOS concepts (small ellipses), schemes (rounded rects)
+- Representative images embedded inside nodes when `schema:image` is set
+- Drag, zoom, and pin nodes; hover tooltips; highlight neighbourhoods on click
+- Lane-based hierarchical layout option for SKOS concept trees
+
+### Static site generator
+
+Turn any ontology into a linked knowledge hub with a single command:
+
+```bash
+ster site my-ontology.ttl -o ./site
+```
+
+Each class, individual, and concept gets its own page with:
+- **Left panel** — interactive D3 neighbourhood graph, centred on the entity
+- **Right panel** — title, badge, representative image, description, embedded videos, external links, and related entity cards
+- **Index page** — full-screen D3 force graph of the entire ontology, with click-to-navigate nodes
+
+Annotate entities with `schema:image`, `schema:video`, and `schema:url` in your RDF file; ster picks them up automatically and renders them inline.
 
 ### AI-assisted concept creation
+
 When adding a concept (`+` key), choose between entering a name manually or letting AI suggest up to 20 ordered concept names:
 
 - **AI Auto Suggest** — the AI acts as a professional taxonomist who knows your domain.
   It proposes names ranked by relevance, you pick one (or ask for more), and the form is pre-filled.
 - Before generating, ster shows you the exact prompt so you can review and adjust it.
-- Supports any LLM via the [`llm`](https://llm.datasette.io/) library (online or local/offline models).
-- **Copy-paste mode** — no local LLM needed: ster displays the prompt, copies it to the clipboard,
-  and you paste the model's response from any web AI (ChatGPT, Claude, Gemini…).
-
-Configure AI from the **⚙ Configure AI** menu entry (sets model, provider, and copy-paste mode).
+- Supports any LLM via the [`llm`](https://llm.datasette.io/) library — including local models via [Ollama](https://ollama.com/).
+- Pull Ollama models directly from the **⚙ Configure AI** wizard without leaving ster.
+- **Copy-paste mode** — no local LLM needed: ster displays the prompt, copies it to the clipboard, and you paste the model's response from any web AI (ChatGPT, Claude, Gemini…).
 
 ### Multi-file workspace
+
 - Open several `.ttl` files at once and see a merged taxonomy view
 - Edits are always written to the correct source file automatically
 
 ### Cross-scheme mapping
+
 - Add `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch` links between concepts in different files
 - Remove links from the detail view — works even when the target file has been deleted
 - Both source and target files are saved and staged in git on every change
 
 ### Git integration
+
 - Stage, commit, and push changes without leaving the terminal
 - Browse full commit history with diffs inside the TUI
 
 ### HTML export
+
 - Generate a browsable, wiki-style HTML page from any taxonomy via [pyLODE](https://github.com/RDFLib/pyLODE)
 - One HTML file per language detected in the taxonomy
 - Sticky language-switcher bar links between language versions
 - Available from the main menu or `ster export`
-
-### Other
-- Auto-detection of taxonomy files in the current directory
-- Round-trip safe: reads and writes `.ttl`, `.rdf`, `.jsonld`
-- SKOS integrity validation
 
 ---
 
@@ -123,7 +161,7 @@ pip install -e ".[dev]"    # with test suite
 | core | `typer[all]>=0.12` | CLI framework |
 | core | `rich>=13.0` | Terminal rendering, prompts, tables |
 | `[ai]` | `llm>=0.19` | LLM abstraction layer (online & offline models) |
-| `[html]` | `pylode>=3.0` | HTML generation from SKOS (VocPub profile) |
+| `[html]` | `pylode>=3.0` | HTML generation from SKOS / OWL (VocPub / OntPub profiles) |
 | `[dev]` | `pytest>=8.0` | Test suite |
 | `[dev]` | `pytest-cov>=5.0` | Coverage reporting |
 
@@ -139,18 +177,20 @@ Both `llm` and `pylode` are **not** installed by default. When you trigger a fea
 ster
 ```
 
-The home screen lists all taxonomy files in the current directory as a read-only ✓ display.
+The home screen lists all ontology and taxonomy files in the current directory.
 Use arrow keys to navigate the action menu, then press **Enter** to confirm.
 
 ```
-       ✓  equipement.ttl
-       ✓  windvane-taxonomy.ttl
+       ✓  my-ontology.ttl
+       ✓  products.ttl
 
  ▶  1  ↵  Open Tree View
-    2  ⎇  Browse git history
-    3  🌐 Generate webpage
-    4  ⚙  Configure AI
-    5  ✕  Quit
+    2  ⊙  Graph visualisation
+    3  ⎇  Browse git history
+    4  🌐 Generate site
+    5  🌐 Generate webpage
+    6  ⚙  Configure AI
+    7  ✕  Quit
 ```
 
 ### Keyboard shortcuts (TUI)
@@ -166,6 +206,15 @@ Use arrow keys to navigate the action menu, then press **Enter** to confirm.
 | `g` | Commit & push changes |
 | `?` | Help screen |
 | `q` / `Esc` | Back / quit |
+
+### Generate a site
+
+```bash
+ster site my-ontology.ttl -o ./site
+```
+
+Open `./site/index.html` in a browser to explore the full D3 force graph.
+Click any node to navigate to its entity page.
 
 ### AI Auto Suggest
 
@@ -196,26 +245,47 @@ ster validate my-taxonomy.ttl
 
 ---
 
+## Annotating entities with rich media
+
+ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses them in both the graph visualiser and the generated site:
+
+```turtle
+@prefix schema: <https://schema.org/> .
+
+<https://example.org/MyClass> a owl:Class ;
+    rdfs:label "My Class"@en ;
+    schema:image <https://upload.wikimedia.org/wikipedia/commons/thumb/.../500px-image.png> ;
+    schema:video <https://www.youtube.com/watch?v=...> ;
+    schema:url   <https://en.wikipedia.org/wiki/My_Class> .
+```
+
+Images appear as thumbnails inside D3 node circles; videos are embedded as iframes in entity pages; URLs render as link cards.
+
+---
+
 ## Architecture
 
 ```
 ster/
-├── model.py         — Pure dataclasses: Concept, ConceptScheme, Taxonomy
-├── store.py         — RDF I/O via rdflib (.ttl / .rdf / .jsonld)
-├── operations.py    — All SKOS mutations (add, remove, move, relate…)
-├── workspace.py     — Multi-file workspace: merged view + per-file saves
-├── workspace_ops.py — Cross-file mapping operations
-├── nav.py           — Full-screen TUI (curses): tree, detail, inline edit
-├── nav_state.py     — Typed state machine: one dataclass per viewer mode
-├── nav_logic.py     — Pure functions: tree flattening, field builders
-├── cli.py           — Typer entry-points (ster, ster export…)
-├── ai.py            — LLM abstraction: model routing, copy-paste mode
-├── prompts.py       — All AI prompt templates (string.Template)
-├── html_export.py   — HTML generation via pyLODE VocPub
-├── git_manager.py   — Git staging, commit, push
-├── git_log.py       — Git history browser (TUI)
-├── handles.py       — Short handle generation from camelCase URIs
-└── validator.py     — SKOS integrity checks
+├── model.py          — Pure dataclasses: Concept, ConceptScheme, Taxonomy, RDFClass, OWLIndividual…
+├── store.py          — RDF I/O via rdflib (.ttl / .rdf / .jsonld); loads SKOS + OWL layers
+├── operations.py     — All SKOS mutations (add, remove, move, relate…)
+├── workspace.py      — Multi-file workspace: merged view + per-file saves
+├── workspace_ops.py  — Cross-file mapping operations
+├── nav.py            — Full-screen TUI (curses): tree, detail, inline edit; SKOS + OWL modes
+├── nav_state.py      — Typed state machine: one dataclass per viewer mode
+├── nav_logic.py      — Pure functions: tree flattening, field builders, OWL node rendering
+├── cli.py            — Typer entry-points (ster, ster export, ster site…)
+├── ai.py             — LLM abstraction: model routing, copy-paste mode, Ollama integration
+├── prompts.py        — All AI prompt templates (string.Template)
+├── html_export.py    — pyLODE HTML export + D3 site generator (index + entity pages)
+├── viz.py            — Standalone D3 graph: writes HTML, opens in browser
+├── owl_analysis.py   — OWL axiom analysis and statistics
+├── sparql_query.py   — SPARQL query runner against the loaded taxonomy
+├── git_manager.py    — Git staging, commit, push
+├── git_log.py        — Git history browser (TUI)
+├── handles.py        — Short handle generation from camelCase URIs
+└── validator.py      — SKOS integrity checks
 ```
 
 Each layer depends only on the layers below it, keeping every module independently testable.
@@ -230,6 +300,7 @@ AI prompts live in `prompts.py` as plain `string.Template` objects — edit them
 | `.ttl` | Turtle (recommended) |
 | `.rdf` / `.xml` | RDF/XML |
 | `.jsonld` / `.json` | JSON-LD |
+| `.owl` | OWL/XML |
 
 ---
 

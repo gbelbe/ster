@@ -1238,7 +1238,7 @@ def test_launch_batch_create_builds_drafts(simple_taxonomy, tmp_path):
     assert len(bcs.drafts) == 2
     assert bcs.drafts[0].name == "Alpha"
     assert bcs.drafts[1].name == "Gamma"
-    assert bcs.drafts[0].alts_generating is True
+    assert bcs.drafts[0].alts_generating is False
     assert bcs.drafts[1].alts_generating is False
     assert bcs.came_from_tree is True
     assert bcs.step == "label"
@@ -1284,8 +1284,8 @@ def test_batch_advance_or_recap_last_goes_to_recap(simple_taxonomy, tmp_path):
 # ── Batch concept wizard — _on_batch_label ───────────────────────────────────
 
 
-def test_on_batch_label_enter_advances_to_alt_labels(simple_taxonomy, tmp_path):
-    """Enter on label step confirms the label and moves to alt_labels step."""
+def test_on_batch_label_enter_advances_to_definition(simple_taxonomy, tmp_path):
+    """Enter on label step confirms the label and moves to definition step with def_generating."""
     v = _make_viewer(simple_taxonomy, tmp_path)
     bcs = BatchCreateState(
         drafts=[BatchConceptDraft(name="Alpha", pref_label="Alpha")],
@@ -1297,7 +1297,7 @@ def test_on_batch_label_enter_advances_to_alt_labels(simple_taxonomy, tmp_path):
     v._state = bcs
     v._on_batch_label(ord("\n"), 24, bcs)
 
-    assert bcs.step == "alt_labels"
+    assert bcs.step == "definition"
     assert bcs.drafts[0].pref_label == "Machine Learning"
     assert bcs.drafts[0].def_generating is True
 
@@ -1353,25 +1353,28 @@ def test_on_batch_alt_labels_space_toggles(simple_taxonomy, tmp_path):
     assert draft.alt_checked[1] is True
 
 
-def test_on_batch_alt_labels_enter_on_done_advances(simple_taxonomy, tmp_path):
-    """Enter on 'Done' row in alt_labels step advances to definition step."""
+def test_on_batch_alt_labels_enter_on_done_creates_and_confirms(simple_taxonomy, tmp_path):
+    """Enter on 'Done' row in alt_labels step creates the concept and goes to confirm."""
     v = _make_viewer(simple_taxonomy, tmp_path)
     draft = BatchConceptDraft(
-        name="Alpha", pref_label="Alpha", alt_labels=["ML"], alt_checked=[True]
+        name="OnlyUnique2", pref_label="Only Unique 2", alt_labels=["ML"], alt_checked=[True]
     )
     bcs = BatchCreateState(
+        parent_uri=BASE + "Scheme",
         drafts=[draft],
+        current=0,
         step="alt_labels",
         alt_cursor=1,  # Done row (index = len(alt_labels))
     )
     v._state = bcs
     v._on_batch_alt_labels(ord("\n"), 24, bcs)
 
-    assert bcs.step == "definition"
+    assert bcs.step == "confirm"
+    assert any("OnlyUnique2" in uri for uri in simple_taxonomy.concepts)
 
 
-def test_on_batch_alt_labels_esc_returns_to_label(simple_taxonomy, tmp_path):
-    """Esc in alt_labels step goes back to label step."""
+def test_on_batch_alt_labels_esc_returns_to_alt_prompt_review(simple_taxonomy, tmp_path):
+    """Esc in alt_labels step goes back to alt_prompt_review step."""
     v = _make_viewer(simple_taxonomy, tmp_path)
     draft = BatchConceptDraft(
         name="Alpha", pref_label="Alpha", alt_labels=["ML"], alt_checked=[True]
@@ -1380,14 +1383,14 @@ def test_on_batch_alt_labels_esc_returns_to_label(simple_taxonomy, tmp_path):
     v._state = bcs
     v._on_batch_alt_labels(27, 24, bcs)
 
-    assert bcs.step == "label"
+    assert bcs.step == "alt_prompt_review"
 
 
 # ── Batch concept wizard — _on_batch_definition ──────────────────────────────
 
 
-def test_on_batch_definition_enter_creates_and_confirms(simple_taxonomy, tmp_path):
-    """Enter in definition step creates the concept and transitions to confirm step."""
+def test_on_batch_definition_enter_advances_to_alt_prompt_review(simple_taxonomy, tmp_path):
+    """Enter in definition step renders the alt-labels prompt and goes to alt_prompt_review."""
     v = _make_viewer(simple_taxonomy, tmp_path)
     draft = BatchConceptDraft(
         name="OnlyUnique", pref_label="Only Unique", definition="A definition."
@@ -1401,24 +1404,21 @@ def test_on_batch_definition_enter_creates_and_confirms(simple_taxonomy, tmp_pat
     v._state = bcs
     v._on_batch_definition(ord("\n"), 24, bcs)
 
-    assert bcs.step == "confirm"
-    assert bcs.confirm_cursor == 0
-    # Concept was created in the taxonomy
-    assert any("OnlyUnique" in uri for uri in simple_taxonomy.concepts)
+    assert bcs.step == "alt_prompt_review"
+    assert "Only Unique" in bcs.alt_prompt_buffer
+    # Concept NOT yet created at definition step
+    assert not any("OnlyUnique" in uri for uri in simple_taxonomy.concepts)
 
 
-def test_on_batch_definition_esc_returns_to_alt_labels(simple_taxonomy, tmp_path):
-    """Esc in definition step goes back to alt_labels step."""
+def test_on_batch_definition_esc_returns_to_label(simple_taxonomy, tmp_path):
+    """Esc in definition step goes back to label step."""
     v = _make_viewer(simple_taxonomy, tmp_path)
-    draft = BatchConceptDraft(
-        name="Only", pref_label="Only", alt_labels=["X", "Y"], alt_checked=[True, False]
-    )
+    draft = BatchConceptDraft(name="Only", pref_label="Only")
     bcs = BatchCreateState(drafts=[draft], step="definition")
     v._state = bcs
     v._on_batch_definition(27, 24, bcs)
 
-    assert bcs.step == "alt_labels"
-    assert bcs.alt_cursor == len(draft.alt_labels)  # cursor on Done row
+    assert bcs.step == "label"
 
 
 def test_on_batch_definition_edit_updates_definition(simple_taxonomy, tmp_path):

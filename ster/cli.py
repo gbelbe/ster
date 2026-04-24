@@ -21,7 +21,7 @@ from .workspace import TaxonomyWorkspace
 
 app = typer.Typer(
     name="ster",
-    help="Interactive SKOS taxonomy editor.",
+    help="Terminal editor and site generator for SKOS taxonomies and OWL ontologies.",
     no_args_is_help=False,
     invoke_without_command=True,
 )
@@ -34,7 +34,7 @@ def _app_callback(ctx: typer.Context) -> None:
     pass
 
 
-_VERSION = "0.1.0"
+_VERSION = "0.3.0"
 _AUTHOR = "ster contributors"
 
 
@@ -44,8 +44,9 @@ def _print_welcome() -> None:
     console.print()
     console.print(
         Panel(
-            f"[bold]SKOS Taxonomy Editor[/bold]  [dim]v{_VERSION}[/dim]\n\n"
-            "[dim]Select a taxonomy file or browse git history.[/dim]\n"
+            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]\n\n"
+            "[dim]Semantic knowledge editor — SKOS · OWL · D3 · Site generator[/dim]\n\n"
+            "[dim]Select a file to open, or use the menu to generate a site or graph.[/dim]\n"
             "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
             border_style="cyan",
             padding=(1, 4),
@@ -78,7 +79,9 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 # Sentinels returned by _pick_file_interactive for special menu entries
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
+_GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
+_QUERY_SENTINEL: Path = Path(".__ster_query__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
@@ -482,7 +485,9 @@ def _multi_file_picker(
         (True, "↵  Open Tree View"),  # True = "open" sentinel
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_HTML_SENTINEL, "🌐 Generate webpage"),
+        (_GRAPH_SENTINEL, "⬡  Open Graph Viz"),
         (_AI_CONFIG_SENTINEL, "⚙  Configure AI"),
+        (_QUERY_SENTINEL, "🔍 Query taxonomy (SPARQL)"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -495,10 +500,12 @@ def _multi_file_picker(
         console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
         console.print("  [cyan] 2[/cyan]  [magenta]⎇  Browse git history[/magenta]")
         console.print("  [cyan] 3[/cyan]  [blue]🌐 Generate webpage[/blue]")
-        console.print("  [cyan] 4[/cyan]  [cyan]⚙  Configure AI[/cyan]")
-        console.print("  [cyan] 5[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 4[/cyan]  [yellow]⬡  Open Graph Viz[/yellow]")
+        console.print("  [cyan] 5[/cyan]  [cyan]⚙  Configure AI[/cyan]")
+        console.print("  [cyan] 6[/cyan]  [green]🔍 Query taxonomy (SPARQL)[/green]")
+        console.print("  [cyan] 7[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–5)", default="1")
+        choice = Prompt.ask("Action (1–7)", default="1")
         s = choice.strip().lower()
         if s == "1" or s == "all":
             return list(found)
@@ -507,8 +514,12 @@ def _multi_file_picker(
         if s == "3":
             return _HTML_SENTINEL  # type: ignore[return-value]
         if s == "4":
-            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
+            return _GRAPH_SENTINEL  # type: ignore[return-value]
         if s == "5":
+            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
+        if s == "6":
+            return _QUERY_SENTINEL  # type: ignore[return-value]
+        if s == "7":
             return _QUIT_SENTINEL  # type: ignore[return-value]
         return list(found)
 
@@ -538,10 +549,14 @@ def _multi_file_picker(
             return MG
         if sentinel == _HTML_SENTINEL:
             return "\033[34m"  # blue
+        if sentinel == _GRAPH_SENTINEL:
+            return "\033[33m"  # yellow
         if sentinel == _QUIT_SENTINEL:
             return RE
         if sentinel == _AI_CONFIG_SENTINEL:
-            return CY  # cyan
+            return CY
+        if sentinel == _QUERY_SENTINEL:
+            return GR  # green
         return CY  # "open tree view"
 
     def render(first: bool = False) -> None:
@@ -715,6 +730,39 @@ def _launch_ai_config(found: list[Path]) -> None:
     viewer.run()
 
 
+# ──────────────────────────── SPARQL query launcher ─────────────────────────
+
+
+def _launch_query(found: list[Path]) -> None:
+    """Open the TUI in SPARQL query mode for the given files."""
+    from .git_manager import GitManager
+    from .nav import TaxonomyViewer
+    from .workspace import TaxonomyWorkspace
+
+    if not found:
+        err.print("[red]No taxonomy files to query.[/red]")
+        return
+
+    try:
+        workspace = TaxonomyWorkspace.from_files(found)
+    except Exception as exc:
+        err.print(f"[red]Failed to load files: {exc}[/red]")
+        return
+
+    primary = found[0]
+    if primary in workspace.taxonomies:
+        taxonomy = workspace.taxonomies[primary]
+    else:
+        from .model import Taxonomy
+
+        taxonomy = Taxonomy()
+
+    gm = GitManager(primary)
+    viewer = TaxonomyViewer(taxonomy, primary, workspace=workspace, git_manager=gm)
+    viewer._trigger_action("open_query")
+    viewer.run()
+
+
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
 
@@ -749,6 +797,16 @@ def _open_viewer(
         git_manager=gm,
         workspace=workspace,
     )
+
+    # Auto-open graph viz for OWL ontologies (no SKOS schemes)
+    if taxonomy.owl_classes and not taxonomy.schemes:
+        from . import viz as _viz
+
+        try:
+            _viz.open_in_browser(taxonomy, taxonomy_file)
+        except Exception:
+            pass
+
     if jump_concept:
         uri = _resolve(taxonomy, jump_concept)
         for i, line in enumerate(viewer._flat):
@@ -1184,21 +1242,39 @@ def cmd_export(
       ster export --lang en               # English only\n
       ster export --lang en,fr --output ./docs\n
     """
-    from .html_export import generate_html
+    from .html_export import detect_profile, generate_html
 
     taxonomy_file = _resolve_file(file)
     output_dir = output or taxonomy_file.parent / "html"
     languages = [lg.strip() for lg in lang.split(",")] if lang else None
 
+    if not _ensure_ontology_uri(taxonomy_file):
+        raise typer.Exit(1)
+
+    detected = detect_profile(taxonomy_file)
+    chosen_profile = detected if detected != "both" else "ontpub"
+    if detected == "both":
+        console.print(
+            f"[yellow]{taxonomy_file.name}[/yellow] contains both skos:ConceptScheme "
+            "and owl:Ontology — using OntPub. Pass --profile vocpub to override."
+        )
+
     console.print(f"[dim]Generating HTML from[/dim] [bold]{taxonomy_file.name}[/bold]…")
     try:
-        created = generate_html(taxonomy_file, output_dir, languages=languages)
+        created = generate_html(
+            taxonomy_file,
+            output_dir,
+            languages=languages if chosen_profile == "vocpub" else None,
+            profile=chosen_profile,  # type: ignore[arg-type]
+        )
     except RuntimeError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
     except Exception as exc:
         err.print(f"[red]Export failed: {exc}[/red]")
         raise typer.Exit(1)
+
+    import webbrowser
 
     for path in created:
         console.print(f"  [green]✓[/green]  {path}")
@@ -1207,11 +1283,53 @@ def cmd_export(
         console.print(
             f"\n[bold]Generated {len(created)} file(s)[/bold] in [cyan]{output_dir}[/cyan]"
         )
-        if len(created) == 1:
-            console.print(f"  Open with:  open {created[0]}")
-        else:
-            entry = next((p for p in created if "_en" in p.name), created[0])
-            console.print(f"  Open with:  open {entry}")
+        entry = next((p for p in created if "_en" in p.name), created[0])
+        webbrowser.open(entry.as_uri())
+        console.print(f"  [dim]Opened in browser:[/dim] {entry}")
+
+
+@app.command("site")
+def cmd_site(
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output directory (default: <file-stem>-site/)."
+    ),
+    lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
+) -> None:
+    """Generate a browsable hub website — one page per concept / class / individual.
+
+    Renders rdfs:comment / skos:definition as Markdown, embeds schema:image as a
+    hero photo, schema:video as a YouTube / Vimeo iframe, and schema:url as a
+    link card.  All pages link to each other; no server required.
+
+    Examples:\n
+      ster site                          # auto-detect file, open in browser\n
+      ster site --lang fr --output ./public\n
+    """
+    from .html_export import generate_site
+
+    taxonomy_file = _resolve_file(file)
+    output_dir = output or taxonomy_file.parent / f"{taxonomy_file.stem}-site"
+
+    console.print(f"[dim]Building site from[/dim] [bold]{taxonomy_file.name}[/bold]…")
+    try:
+        created = generate_site(taxonomy_file, output_dir, lang=lang)
+    except Exception as exc:
+        err.print(f"[red]Site generation failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+    for path in created:
+        console.print(f"  [green]✓[/green]  {path.name}")
+
+    if created:
+        console.print(
+            f"\n[bold]Generated {len(created)} page(s)[/bold] in [cyan]{output_dir}[/cyan]"
+        )
+        index = (output_dir / "index.html").resolve()
+        import webbrowser
+
+        webbrowser.open(index.as_uri())
+        console.print(f"  [dim]Opened in browser:[/dim] {index}")
 
 
 # ──────────────────────────── internal helpers ───────────────────────────────
@@ -1263,6 +1381,52 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
             _collect_reachable(taxonomy, child, visited)
 
 
+def _run_graph_viz_interactive(files: list[Path]) -> None:
+    """Open the graph visualisation for a chosen file."""
+    from . import viz as _viz
+
+    if not files:
+        err.print("[red]No taxonomy files found.[/red]")
+        return
+
+    # Pick the file to visualise
+    taxonomy_file: Path
+    if len(files) == 1:
+        taxonomy_file = files[0]
+    else:
+        console.print()
+        for i, f in enumerate(files, 1):
+            console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}")
+        console.print()
+        try:
+            choice = Prompt.ask(
+                "File to visualise",
+                default="1",
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled.[/dim]")
+            return
+        try:
+            idx = int(choice.strip()) - 1
+            taxonomy_file = files[idx]
+        except (ValueError, IndexError):
+            err.print("[red]Invalid choice.[/red]")
+            return
+
+    taxonomy = _load(taxonomy_file)
+    console.print(f"\n[dim]Opening graph for[/dim] [bold]{taxonomy_file.name}[/bold]…")
+    try:
+        out = _viz.open_in_browser(taxonomy, taxonomy_file)
+        console.print(f"  [green]✓[/green]  {out}")
+    except Exception as exc:
+        err.print(f"[red]Graph error: {exc}[/red]")
+
+    try:
+        Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
+    except (KeyboardInterrupt, EOFError):
+        pass
+
+
 def _ensure_pylode() -> bool:
     """Return True if pyLODE is importable, offering to install it if not."""
     from .html_export import _patch_missing_pyproject
@@ -1302,12 +1466,47 @@ def _ensure_pylode() -> bool:
     return True
 
 
+def _ensure_ontology_uri(taxonomy_file: Path) -> bool:
+    """If the file has no owl:Ontology/skos:ConceptScheme URI, prompt for one and save it.
+
+    Returns False if the user cancels.
+    """
+    taxonomy = _load(taxonomy_file)
+    if taxonomy.ontology_uri or taxonomy.schemes:
+        return True
+
+    console.print()
+    console.print(
+        f"[yellow]{taxonomy_file.name}[/yellow] has no ontology URI (required by pyLODE)."
+    )
+    stem = re.sub(r"[^a-z0-9]+", "-", taxonomy_file.stem.lower()).strip("-")
+    default_name = taxonomy_file.stem.replace("_", " ").replace("-", " ").title()
+    default_uri = f"https://example.org/ontology/{stem}"
+
+    try:
+        name = Prompt.ask("Ontology name", default=default_name)
+        uri = Prompt.ask("Ontology URI", default=default_uri)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return False
+
+    if not uri or " " in uri.strip():
+        err.print("[red]Invalid URI — spaces are not allowed.[/red]")
+        return False
+
+    taxonomy.ontology_uri = uri.strip()
+    taxonomy.ontology_label = name.strip() or None
+    store.save(taxonomy, taxonomy_file)
+    console.print(f"  [green]✓[/green]  Saved ontology URI to {taxonomy_file.name}")
+    return True
+
+
 def _run_html_export_interactive(files: list[Path]) -> None:
     """Interactive HTML export from the home-screen menu."""
     if not _ensure_pylode():
         return
 
-    from .html_export import _available_languages, generate_html
+    from .html_export import _available_languages, detect_profile, generate_html
 
     if not files:
         err.print("[red]No taxonomy files selected.[/red]")
@@ -1315,24 +1514,55 @@ def _run_html_export_interactive(files: list[Path]) -> None:
 
     console.print()
     for taxonomy_file in files:
+        detected = detect_profile(taxonomy_file)
         taxonomy = _load(taxonomy_file)
-        langs = _available_languages(taxonomy)
-        lang_str = ", ".join(langs) if langs else "en"
+        langs = _available_languages(taxonomy) if detected != "ontpub" else []
+        lang_str = (", ".join(langs) if langs else "en") if detected != "ontpub" else "n/a (OWL)"
+        profile_str = {"vocpub": "SKOS/VocPub", "ontpub": "OWL/OntPub", "both": "SKOS+OWL"}.get(
+            detected, detected
+        )
         console.print(
-            f"[bold]{taxonomy_file.name}[/bold]  [dim]Languages detected: {lang_str}[/dim]"
+            f"[bold]{taxonomy_file.name}[/bold]  "
+            f"[dim]Profile: {profile_str}  Languages: {lang_str}[/dim]"
         )
 
     console.print()
-    try:
-        lang_input = Prompt.ask(
-            "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
-            default="",
-        )
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled.[/dim]")
-        return
 
-    languages = [lg.strip() for lg in lang_input.split(",") if lg.strip()] or None
+    # Per-file profile selection (needed when a file contains both SKOS and OWL)
+    file_profiles: dict[Path, str] = {}
+    for taxonomy_file in files:
+        detected = detect_profile(taxonomy_file)
+        if detected == "both":
+            console.print(
+                f"[yellow]{taxonomy_file.name}[/yellow] contains both "
+                "skos:ConceptScheme and owl:Ontology declarations."
+            )
+            try:
+                choice = Prompt.ask(
+                    "  Which profile?",
+                    choices=["vocpub", "ontpub"],
+                    default="ontpub",
+                )
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Cancelled.[/dim]")
+                return
+            file_profiles[taxonomy_file] = choice
+        else:
+            file_profiles[taxonomy_file] = detected
+
+    # Language prompt — only relevant for VocPub files
+    has_vocpub = any(p == "vocpub" for p in file_profiles.values())
+    languages: list[str] | None = None
+    if has_vocpub:
+        try:
+            lang_input = Prompt.ask(
+                "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
+                default="",
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled.[/dim]")
+            return
+        languages = [lg.strip() for lg in lang_input.split(",") if lg.strip()] or None
 
     output_dir = files[0].parent / "html"
     console.print()
@@ -1349,9 +1579,18 @@ def _run_html_export_interactive(files: list[Path]) -> None:
     console.print()
     all_created: list[Path] = []
     for taxonomy_file in files:
+        if not _ensure_ontology_uri(taxonomy_file):
+            return
         console.print(f"[dim]Generating[/dim] [bold]{taxonomy_file.name}[/bold]…")
+        chosen_profile = file_profiles[taxonomy_file]
+        file_langs = languages if chosen_profile == "vocpub" else None
         try:
-            created = generate_html(taxonomy_file, output_dir, languages=languages)
+            created = generate_html(
+                taxonomy_file,
+                output_dir,
+                languages=file_langs,
+                profile=chosen_profile,  # type: ignore[arg-type]
+            )
             for p in created:
                 console.print(f"  [green]✓[/green]  {p}")
             all_created.extend(created)
@@ -1362,11 +1601,14 @@ def _run_html_export_interactive(files: list[Path]) -> None:
             err.print(f"[red]Export failed for {taxonomy_file.name}: {exc}[/red]")
 
     if all_created:
+        import webbrowser
+
         console.print(
             f"\n[bold]Done.[/bold]  {len(all_created)} file(s) in [cyan]{output_dir}[/cyan]"
         )
         entry = next((p for p in all_created if "_en" in p.name), all_created[0])
-        console.print(f"  Open with:  open {entry}")
+        webbrowser.open(entry.as_uri())
+        console.print(f"  [dim]Opened in browser:[/dim] {entry}")
 
     try:
         Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
@@ -1433,8 +1675,16 @@ def main() -> None:
             _run_html_export_interactive(found)
             continue
 
+        if selected is _GRAPH_SENTINEL:
+            _run_graph_viz_interactive(found)
+            continue
+
         if selected is _AI_CONFIG_SENTINEL:
             _launch_ai_config(found)
+            continue
+
+        if selected is _QUERY_SENTINEL:
+            _launch_query(found)
             continue
 
         if not selected:

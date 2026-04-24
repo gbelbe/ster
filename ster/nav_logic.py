@@ -8,6 +8,7 @@ from dataclasses import field as dc_field
 from pathlib import Path
 
 from .model import LabelType, Taxonomy
+from .owl_analysis import compute_owl_analysis
 from .taxonomy_analysis import ISSUE_DISPLAY_NAMES, SchemeAnalysis, compute_completions
 from .workspace import TaxonomyWorkspace
 
@@ -16,6 +17,22 @@ from .workspace import TaxonomyWorkspace
 _ACTION_ADD_SCHEME = "__ster:add_scheme__"  # sentinel URI for action rows
 _FILE_URI_PREFIX = "__ster:file::"  # prefix for file-node sentinel URIs
 _GLOBAL_URI = "__ster:global__"  # sentinel URI for the global overview panel
+_OWL_SECTION_URI = (
+    "__ster:owl_classes__"  # legacy: synthetic section header (replaced by ontology root)
+)
+_OWL_ONTOLOGY_PREFIX = "__ster:owl_ontology::"  # prefix for per-file ontology root nodes
+_UNATTACHED_INDS_URI = "__ster:unattached_inds__"  # group node for typeless individuals
+
+
+def _ontology_sentinel(file_path: Path | None) -> str:
+    """Return the ontology-root sentinel URI for *file_path*."""
+    if file_path is None:
+        return f"{_OWL_ONTOLOGY_PREFIX}__"
+    return f"{_OWL_ONTOLOGY_PREFIX}{file_path}"
+
+
+def _is_ontology_sentinel(uri: str) -> bool:
+    return uri.startswith(_OWL_ONTOLOGY_PREFIX)
 
 
 def _file_sentinel(path: Path) -> str:
@@ -35,6 +52,9 @@ class TreeLine:
     is_action: bool = False  # synthetic row (not a concept/scheme node)
     # "concept" | "class" | "promoted" — set from taxonomy.node_type()
     node_type: str = "concept"
+    # When non-empty, the renderer uses this string instead of looking up from taxonomy.
+    # Used for synthetic section headers (e.g. the OWL classes section in mixed view).
+    label: str = ""
 
 
 def _count_descendants(taxonomy: Taxonomy, uri: str) -> int:
@@ -91,8 +111,12 @@ def _flatten_taxonomy(
     if folded is None:
         folded = set()
     result: list[TreeLine] = []
+    _visited_tax: set[str] = set()
 
     def visit(uri: str, depth: int, prefix: str, is_last: bool) -> None:
+        if uri in _visited_tax:
+            return
+        _visited_tax.add(uri)
         concept = taxonomy.concepts.get(uri)
         if not concept:
             return  # dangling reference — skip silently
@@ -263,6 +287,98 @@ def _add_action_field(key: str, label: str, action: str, **extra_meta) -> Detail
     return DetailField(
         key, label, "", editable=False, meta={"type": "action", "action": action, **extra_meta}
     )
+
+
+def _schema_media_display_fields(entity: object, prefix: str) -> list[DetailField]:
+    """Display rows for schema:image / schema:video / schema:url if any are set."""
+    imgs = getattr(entity, "schema_images", [])
+    vids = getattr(entity, "schema_videos", [])
+    urls = getattr(entity, "schema_urls", [])
+    if not (imgs or vids or urls):
+        return []
+    fields: list[DetailField] = [_sep("Rich Content")]
+    for url in imgs:
+        short = url if len(url) <= 52 else "…" + url[-51:]
+        fields.append(
+            DetailField(
+                f"{prefix}img:{url}",
+                "img",
+                short,
+                editable=False,
+                meta={"type": "schema_image_val", "url": url},
+            )
+        )
+    for url in vids:
+        short = url if len(url) <= 52 else "…" + url[-51:]
+        fields.append(
+            DetailField(
+                f"{prefix}vid:{url}",
+                "video",
+                short,
+                editable=False,
+                meta={"type": "schema_video_val", "url": url},
+            )
+        )
+    for url in urls:
+        short = url if len(url) <= 52 else "…" + url[-51:]
+        fields.append(
+            DetailField(
+                f"{prefix}url:{url}",
+                "link",
+                short,
+                editable=False,
+                meta={"type": "schema_url_val", "url": url},
+            )
+        )
+    return fields
+
+
+def _schema_media_action_fields(entity: object, prefix: str) -> list[DetailField]:
+    """Add / remove action rows for schema media."""
+    imgs = getattr(entity, "schema_images", [])
+    vids = getattr(entity, "schema_videos", [])
+    urls = getattr(entity, "schema_urls", [])
+    fields: list[DetailField] = [
+        _add_action_field(
+            f"action:{prefix}add_img", "+ Add schema:image (photo URL)", "add_schema_image"
+        ),
+        _add_action_field(
+            f"action:{prefix}add_vid",
+            "+ Add schema:video (YouTube / Vimeo URL)",
+            "add_schema_video",
+        ),
+        _add_action_field(
+            f"action:{prefix}add_url", "+ Add schema:url (external link)", "add_schema_url"
+        ),
+    ]
+    for url in imgs:
+        short = "…" + url[-34:] if len(url) > 34 else url
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}rmi:{url}",
+                f"✗ Remove image: {short}",
+                "remove_schema_image",
+                url=url,
+            )
+        )
+    for url in vids:
+        short = "…" + url[-34:] if len(url) > 34 else url
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}rmv:{url}",
+                f"✗ Remove video: {short}",
+                "remove_schema_video",
+                url=url,
+            )
+        )
+    for url in urls:
+        short = "…" + url[-34:] if len(url) > 34 else url
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}rmu:{url}", f"✗ Remove link: {short}", "remove_schema_url", url=url
+            )
+        )
+    return fields
 
 
 def _section_pref_labels(
@@ -772,9 +888,13 @@ def build_concept_detail(
         fields.extend(_concept_overview_fields(taxonomy, uri, concept))
         fields.extend(_concept_completion_fields(taxonomy, uri))  # includes its own _sep rows
 
+    # ── Rich Content (schema.org) ─────────────────────────────────────────────
+    fields.extend(_schema_media_display_fields(concept, "c:"))
+
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
     fields.extend(_concept_action_fields(lang, concept, show_mappings))
+    fields.extend(_schema_media_action_fields(concept, "c:"))
 
     return fields
 
@@ -860,11 +980,196 @@ def build_scheme_detail(
     return fields
 
 
+# ──────────────────────────── mixed tree (SKOS + OWL) ────────────────────────
+
+
+def _ontology_display_name(taxonomy: Taxonomy, file_path: Path | None) -> str:
+    """Return the display name for an ontology root node."""
+    if taxonomy.ontology_label:
+        return taxonomy.ontology_label
+    if taxonomy.ontology_uri:
+        uri = taxonomy.ontology_uri.rstrip("/")
+        for sep in ("#", "/"):
+            if sep in uri:
+                return uri.rsplit(sep, 1)[-1]
+        return taxonomy.ontology_uri
+    if file_path:
+        return file_path.stem
+    return "OWL Ontology"
+
+
+def flatten_mixed_tree(
+    taxonomy_or_workspace: Taxonomy | TaxonomyWorkspace,
+    folded: set[str] | None = None,
+) -> list[TreeLine]:
+    """Flatten 'mixed' view: SKOS hierarchy then pure OWL classes appended.
+
+    OWL-only files (no SKOS schemes): renders the OWL hierarchy directly.
+    When both exist: appends a synthetic "OWL Classes" section header row.
+    """
+    if isinstance(taxonomy_or_workspace, TaxonomyWorkspace):
+        ws = taxonomy_or_workspace
+        if len(ws.taxonomies) == 1:
+            tax = next(iter(ws.taxonomies.values()))
+            fp = next(iter(ws.taxonomies.keys()))
+            return _flatten_mixed(tax, folded, file_path=fp)
+        return _flatten_workspace_mixed(ws, folded)
+    return _flatten_mixed(taxonomy_or_workspace, folded)
+
+
+def _flatten_mixed(
+    taxonomy: Taxonomy,
+    folded: set[str] | None = None,
+    file_path: Path | None = None,
+    scheme_depth: int = 0,
+    scheme_prefix: str = "",
+    concept_base_depth: int = 0,
+) -> list[TreeLine]:
+    if folded is None:
+        folded = set()
+
+    skos_rows = _flatten_taxonomy(
+        taxonomy,
+        folded,
+        file_path=file_path,
+        scheme_depth=scheme_depth,
+        scheme_prefix=scheme_prefix,
+        concept_base_depth=concept_base_depth,
+    )
+
+    # Pure classes: in owl_classes but NOT already shown as SKOS concepts
+    pure_class_uris = {uri for uri in taxonomy.owl_classes if uri not in taxonomy.concepts}
+    if not pure_class_uris:
+        return skos_rows
+
+    # Build children index within pure classes only
+    children_of: dict[str, list[str]] = {uri: [] for uri in pure_class_uris}
+    roots: list[str] = []
+    for uri in pure_class_uris:
+        cls = taxonomy.owl_classes[uri]
+        parents_in_pure = [p for p in cls.sub_class_of if p in pure_class_uris]
+        if parents_in_pure:
+            for p in parents_in_pure:
+                children_of[p].append(uri)
+        else:
+            roots.append(uri)
+    roots.sort()
+
+    individuals_of = _build_individuals_of(taxonomy)
+    owl_rows: list[TreeLine] = []
+    _visited_mixed: set[str] = set()
+
+    def visit_class(uri: str, depth: int, prefix: str, is_last: bool) -> None:
+        if uri in _visited_mixed:
+            return
+        _visited_mixed.add(uri)
+        connector = "└── " if is_last else "├── "
+        children = children_of.get(uri, [])
+        inds = individuals_of.get(uri, [])
+        has_content = bool(children) or bool(inds)
+        is_fold = uri in folded and has_content
+        hidden = _count_class_descendants(children_of, uri, individuals_of) if is_fold else 0
+        owl_rows.append(
+            TreeLine(
+                uri=uri,
+                depth=depth,
+                prefix=prefix + connector,
+                is_folded=is_fold,
+                hidden_count=hidden,
+                file_path=file_path,
+                node_type=taxonomy.node_type(uri),
+            )
+        )
+        if not is_fold:
+            ext = "    " if is_last else "│   "
+            all_children = list(children)
+            for i, child in enumerate(all_children):
+                is_last_child = i == len(all_children) - 1 and not inds
+                visit_class(child, depth + 1, prefix + ext, is_last_child)
+            for j, ind_uri in enumerate(inds):
+                ind_connector = "└── " if j == len(inds) - 1 else "├── "
+                owl_rows.append(
+                    TreeLine(
+                        uri=ind_uri,
+                        depth=depth + 1,
+                        prefix=prefix + ext + ind_connector,
+                        file_path=file_path,
+                        node_type="individual",
+                    )
+                )
+
+    for i, root_uri in enumerate(roots):
+        visit_class(root_uri, concept_base_depth, scheme_prefix, i == len(roots) - 1)
+
+    ontology_name = _ontology_display_name(taxonomy, file_path)
+    ont_root = TreeLine(
+        uri=_ontology_sentinel(file_path),
+        depth=scheme_depth,
+        prefix=scheme_prefix,
+        is_scheme=True,
+        label=ontology_name,
+        file_path=file_path,
+        node_type="ontology",
+    )
+    if not skos_rows:
+        return [ont_root] + owl_rows
+    return skos_rows + [ont_root] + owl_rows
+
+
+def _flatten_workspace_mixed(
+    workspace: TaxonomyWorkspace,
+    folded: set[str] | None = None,
+) -> list[TreeLine]:
+    if folded is None:
+        folded = set()
+    result: list[TreeLine] = []
+
+    for file_path, taxonomy in workspace.taxonomies.items():
+        file_uri = _file_sentinel(file_path)
+        file_folded = file_uri in folded
+        hidden_in_file = 0
+        if file_folded:
+            for scheme in taxonomy.schemes.values():
+                hidden_in_file += 1
+                for tc in scheme.top_concepts:
+                    if tc in taxonomy.concepts:
+                        hidden_in_file += 1 + _count_descendants(taxonomy, tc)
+            hidden_in_file += sum(1 for uri in taxonomy.owl_classes if uri not in taxonomy.concepts)
+
+        result.append(
+            TreeLine(
+                uri=file_uri,
+                depth=0,
+                prefix="",
+                is_file=True,
+                file_path=file_path,
+                is_folded=file_folded,
+                hidden_count=hidden_in_file,
+            )
+        )
+        if not file_folded:
+            inner = _flatten_mixed(
+                taxonomy,
+                folded,
+                file_path=file_path,
+                scheme_depth=1,
+                scheme_prefix="    ",
+                concept_base_depth=1,
+            )
+            result.extend(inner)
+
+    return result
+
+
 # ──────────────────────────── ontology tree ──────────────────────────────────
 
 
-def _count_class_descendants(children_of: dict[str, list[str]], uri: str) -> int:
-    """Count all reachable OWL class descendants (cycle-safe)."""
+def _count_class_descendants(
+    children_of: dict[str, list[str]],
+    uri: str,
+    individuals_of: dict[str, list[str]] | None = None,
+) -> int:
+    """Count all reachable OWL class descendants + their individuals (cycle-safe)."""
     seen: set[str] = set()
 
     def _count(u: str) -> int:
@@ -872,9 +1177,42 @@ def _count_class_descendants(children_of: dict[str, list[str]], uri: str) -> int
             return 0
         seen.add(u)
         kids = children_of.get(u, [])
-        return len(kids) + sum(_count(k) for k in kids)
+        ind_count = len(individuals_of.get(u, [])) if individuals_of else 0
+        return len(kids) + ind_count + sum(_count(k) for k in kids)
 
     return _count(uri)
+
+
+def _effective_types(taxonomy: Taxonomy, individual_types: list[str]) -> set[str]:
+    """Return all class URIs reachable via rdfs:subClassOf from an individual's direct types.
+
+    Includes the direct types themselves. Cycle-safe.
+    """
+    result: set[str] = set()
+
+    def _walk(uri: str) -> None:
+        if uri in result:
+            return
+        result.add(uri)
+        cls = taxonomy.owl_classes.get(uri)
+        if cls:
+            for parent in cls.sub_class_of:
+                _walk(parent)
+
+    for t in individual_types:
+        _walk(t)
+    return result
+
+
+def _build_individuals_of(taxonomy: Taxonomy) -> dict[str, list[str]]:
+    """Return a mapping from class URI → sorted list of individual URIs typed as that class."""
+    result: dict[str, list[str]] = {}
+    for uri, individual in taxonomy.owl_individuals.items():
+        for type_uri in individual.types:
+            result.setdefault(type_uri, []).append(uri)
+    for uris in result.values():
+        uris.sort()
+    return result
 
 
 def flatten_ontology_tree(
@@ -906,7 +1244,15 @@ def _flatten_ontology(
 ) -> list[TreeLine]:
     if folded is None:
         folded = set()
-    if not taxonomy.owl_classes:
+
+    # Individuals not typed under any known class
+    unattached = sorted(
+        uri
+        for uri, ind in taxonomy.owl_individuals.items()
+        if not any(t in taxonomy.owl_classes for t in ind.types)
+    )
+
+    if not taxonomy.owl_classes and not unattached:
         return []
 
     # Build parent→children index within the known owl_classes
@@ -921,13 +1267,20 @@ def _flatten_ontology(
             roots.append(uri)
     roots.sort()
 
+    individuals_of = _build_individuals_of(taxonomy)
     result: list[TreeLine] = []
+    _visited: set[str] = set()
 
     def visit(uri: str, depth: int, prefix: str, is_last: bool) -> None:
+        if uri in _visited:
+            return
+        _visited.add(uri)
         connector = "└── " if is_last else "├── "
         children = children_of.get(uri, [])
-        is_fold = uri in folded and bool(children)
-        hidden = _count_class_descendants(children_of, uri) if is_fold else 0
+        inds = individuals_of.get(uri, [])
+        has_content = bool(children) or bool(inds)
+        is_fold = uri in folded and has_content
+        hidden = _count_class_descendants(children_of, uri, individuals_of) if is_fold else 0
         result.append(
             TreeLine(
                 uri=uri,
@@ -941,13 +1294,71 @@ def _flatten_ontology(
         )
         if not is_fold:
             ext = "    " if is_last else "│   "
-            for i, child in enumerate(children):
-                visit(child, depth + 1, prefix + ext, i == len(children) - 1)
+            all_children = list(children)
+            for i, child in enumerate(all_children):
+                is_last_child = i == len(all_children) - 1 and not inds
+                visit(child, depth + 1, prefix + ext, is_last_child)
+            for j, ind_uri in enumerate(inds):
+                ind_connector = "└── " if j == len(inds) - 1 else "├── "
+                result.append(
+                    TreeLine(
+                        uri=ind_uri,
+                        depth=depth + 1,
+                        prefix=prefix + ext + ind_connector,
+                        file_path=file_path,
+                        node_type="individual",
+                    )
+                )
 
+    ontology_name = _ontology_display_name(taxonomy, file_path)
+    ont_root = TreeLine(
+        uri=_ontology_sentinel(file_path),
+        depth=0,
+        prefix="",
+        is_scheme=True,
+        label=ontology_name,
+        file_path=file_path,
+        node_type="ontology",
+    )
+
+    # ── Unattached individuals group (depth 1, always first) ─────────────────
+    if unattached:
+        grp_is_last = not roots
+        grp_connector = "└── " if grp_is_last else "├── "
+        grp_is_fold = _UNATTACHED_INDS_URI in folded
+        n = len(unattached)
+        noun = "individual" if n == 1 else "individuals"
+        result.append(
+            TreeLine(
+                uri=_UNATTACHED_INDS_URI,
+                depth=1,
+                prefix="    " + grp_connector,
+                is_folded=grp_is_fold,
+                hidden_count=n if grp_is_fold else 0,
+                file_path=file_path,
+                node_type="unattached_group",
+                label=f"Unattached {noun}  ·  {n}",
+            )
+        )
+        if not grp_is_fold:
+            child_base = "    " + ("    " if grp_is_last else "│   ")
+            for j, ind_uri in enumerate(unattached):
+                ind_connector = "└── " if j == n - 1 else "├── "
+                result.append(
+                    TreeLine(
+                        uri=ind_uri,
+                        depth=2,
+                        prefix=child_base + ind_connector,
+                        file_path=file_path,
+                        node_type="individual",
+                    )
+                )
+
+    # ── Root OWL classes ──────────────────────────────────────────────────────
     for i, root_uri in enumerate(roots):
-        visit(root_uri, 0, "", i == len(roots) - 1)
+        visit(root_uri, 1, "    ", i == len(roots) - 1)
 
-    return result
+    return [ont_root] + result
 
 
 # ──────────────────────────── RDF class detail ───────────────────────────────
@@ -1056,8 +1467,72 @@ def build_rdf_class_detail(
                 )
             )
 
+    # ── Rich Content (schema.org) ─────────────────────────────────────────────
+    fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
+
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
+
+    # Add label / comment for the current language if absent
+    label_langs = {lbl.lang for lbl in rdf_class.labels}
+    if lang not in label_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_rdf_label:{lang}",
+                f"+ Add rdfs:label [{lang}]",
+                "add_rdf_label",
+                lang=lang,
+            )
+        )
+    comment_langs = {cmt.lang for cmt in rdf_class.comments}
+    if lang not in comment_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_rdf_comment:{lang}",
+                f"+ Add rdfs:comment [{lang}]",
+                "add_rdf_comment",
+                lang=lang,
+            )
+        )
+
+    # Hierarchy mutations
+    fields.append(
+        _add_action_field("action:link_super", "↑ Add superclass (subClassOf)", "link_superclass")
+    )
+    if rdf_class.sub_class_of:
+        fields.append(
+            _add_action_field(
+                "action:move_class", "↷ Move under different superclass", "move_class"
+            )
+        )
+        for parent_uri in rdf_class.sub_class_of:
+            parent_cls = taxonomy.owl_classes.get(parent_uri)
+            parent_lbl = parent_cls.label(lang) if parent_cls else parent_uri
+            fields.append(
+                _add_action_field(
+                    f"action:rm_super:{parent_uri}",
+                    f"✗ Remove subClassOf {parent_lbl}",
+                    "remove_superclass",
+                    parent_uri=parent_uri,
+                )
+            )
+    fields.append(
+        _add_action_field(
+            "action:add_individual",
+            "+ New individual of this class",
+            "add_individual",
+        )
+    )
+    fields.append(_add_action_field("action:delete_class", "⊘ Delete this class", "delete_class"))
+    fields.append(
+        _add_action_field(
+            "action:class_to_individual",
+            "⇢ Change to individual",
+            "class_to_individual",
+        )
+    )
+
+    # Promote / demote toggle
     if node_t == "promoted":
         fields.append(
             _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
@@ -1066,6 +1541,689 @@ def build_rdf_class_detail(
         fields.append(
             _add_action_field("action:promote", "↑ Promote to owl:Class", "promote_to_class")
         )
+
+    fields.extend(_schema_media_action_fields(rdf_class, "cls:"))
+
+    return fields
+
+
+# ──────────────────────────── promoted node detail ───────────────────────────
+
+
+def build_promoted_detail(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+    show_mappings: bool = False,
+) -> list[DetailField]:
+    """Detail panel for a node that is both skos:Concept and owl:Class."""
+    concept = taxonomy.concepts.get(uri)
+    rdf_class = taxonomy.owl_classes.get(uri)
+    if not concept:
+        return build_rdf_class_detail(taxonomy, uri, lang)
+    if not rdf_class:
+        return build_concept_detail(taxonomy, uri, lang, show_mappings=show_mappings)
+
+    fields: list[DetailField] = []
+
+    # ── Identity ────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
+    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(
+        DetailField(
+            "node_type",
+            "type",
+            "skos:Concept + owl:Class",
+            editable=False,
+            meta={"type": "stat"},
+        )
+    )
+
+    # ── SKOS section ─────────────────────────────────────────────────────────
+    fields.append(_sep("SKOS — Concept"))
+    fields.extend(
+        _section_labels_grouped(concept.labels, "pref", "alt", "prefLabel", "pref", "alt")
+    )
+    if concept.definitions or concept.scope_notes:
+        fields.append(_sep("Notes"))
+        fields.extend(_section_text_list(concept.definitions, "def", "definition", "def"))
+        fields.extend(_section_text_list(concept.scope_notes, "scope", "scopeNote", "scope_note"))
+    if concept.narrower or concept.broader or concept.related:
+        fields.append(_sep("SKOS Hierarchy"))
+        fields.extend(_concept_hierarchy_fields(taxonomy, concept, lang))
+
+    # ── OWL section ──────────────────────────────────────────────────────────
+    fields.append(_sep("OWL — Class"))
+    for lbl in sorted(rdf_class.labels, key=lambda l: l.lang):
+        fields.append(
+            DetailField(
+                f"rdflabel:{lbl.lang}",
+                f"rdfs:label [{lbl.lang}]",
+                lbl.value,
+                editable=True,
+                meta={"type": "rdf_label", "lang": lbl.lang},
+            )
+        )
+    for comment in sorted(rdf_class.comments, key=lambda d: d.lang):
+        fields.append(
+            DetailField(
+                f"rdfcomment:{comment.lang}",
+                f"rdfs:comment [{comment.lang}]",
+                comment.value,
+                editable=True,
+                meta={"type": "rdf_comment", "lang": comment.lang},
+            )
+        )
+    has_owl_hierarchy = bool(
+        rdf_class.sub_class_of or rdf_class.equivalent_class or rdf_class.disjoint_with
+    )
+    if has_owl_hierarchy:
+        fields.append(_sep("OWL Hierarchy"))
+        for parent_uri in rdf_class.sub_class_of:
+            parent_cls = taxonomy.owl_classes.get(parent_uri)
+            label_str = parent_cls.label(lang) if parent_cls else parent_uri
+            fields.append(
+                DetailField(
+                    f"subclassof:{parent_uri}",
+                    "↑ subClassOf",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": parent_uri, "nav": bool(parent_cls)},
+                )
+            )
+        for eq_uri in rdf_class.equivalent_class:
+            eq_cls = taxonomy.owl_classes.get(eq_uri)
+            label_str = eq_cls.label(lang) if eq_cls else eq_uri
+            fields.append(
+                DetailField(
+                    f"equivclass:{eq_uri}",
+                    "⟺ equivalentClass",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": eq_uri, "nav": bool(eq_cls)},
+                )
+            )
+        for dj_uri in rdf_class.disjoint_with:
+            dj_cls = taxonomy.owl_classes.get(dj_uri)
+            label_str = dj_cls.label(lang) if dj_cls else dj_uri
+            fields.append(
+                DetailField(
+                    f"disjoint:{dj_uri}",
+                    "⊥ disjointWith",
+                    label_str,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": dj_uri, "nav": bool(dj_cls)},
+                )
+            )
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    fields.append(
+        _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
+    )
+    fields.extend(_concept_action_fields(lang, concept, show_mappings))
+
+    return fields
+
+
+# ──────────────────────────── individual detail ──────────────────────────────
+
+
+def build_individual_detail(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+) -> list[DetailField]:
+    """Detail panel for an owl:NamedIndividual."""
+    individual = taxonomy.owl_individuals.get(uri)
+    if not individual:
+        return []
+
+    fields: list[DetailField] = []
+
+    # ── Identity ────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
+    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(
+        DetailField(
+            "node_type",
+            "type",
+            "owl:NamedIndividual",
+            editable=False,
+            meta={"type": "stat"},
+        )
+    )
+
+    # ── Type links (navigable to each OWL class) ─────────────────────────────
+    if individual.types:
+        fields.append(_sep("Class Membership"))
+        for type_uri in sorted(individual.types):
+            cls = taxonomy.owl_classes.get(type_uri)
+            label_str = cls.label(lang) if cls else type_uri
+            h = taxonomy.uri_to_handle(type_uri) or "?"
+            fields.append(
+                DetailField(
+                    f"ind_type:{type_uri}",
+                    "◈ instanceOf",
+                    f"{label_str}  [{h}]",
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": type_uri, "nav": bool(cls)},
+                )
+            )
+
+    # ── Property values (object-property assertions) ─────────────────────────
+    # Show all applicable properties (domain matches) with their values or "—".
+    eff_types_display = _effective_types(taxonomy, individual.types)
+    applicable_display = [
+        (p_uri, prop)
+        for p_uri, prop in sorted(taxonomy.owl_properties.items(), key=lambda kv: kv[1].label(lang))
+        if prop.prop_type in ("ObjectProperty", "Property")
+        and (not prop.domains or any(t in prop.domains for t in eff_types_display))
+    ]
+    if applicable_display:
+        fields.append(_sep("Property Values"))
+        # Index asserted values by property for O(1) lookup
+        asserted: dict[str, list[str]] = {}
+        for prop_uri, val_uri in individual.property_values:
+            asserted.setdefault(prop_uri, []).append(val_uri)
+        for p_uri, prop in applicable_display:
+            prop_lbl = prop.label(lang)
+            values = asserted.get(p_uri, [])
+            if values:
+                for val_uri in values:
+                    target = taxonomy.owl_individuals.get(val_uri)
+                    val_lbl = target.label(lang) if target else val_uri
+                    fields.append(
+                        DetailField(
+                            f"ind_propval:{p_uri}::{val_uri}",
+                            f"→ {prop_lbl}",
+                            val_lbl,
+                            editable=False,
+                            meta={
+                                "type": "ind_prop_val",
+                                "prop_uri": p_uri,
+                                "val_uri": val_uri,
+                                "nav": bool(target),
+                            },
+                        )
+                    )
+            else:
+                fields.append(
+                    DetailField(
+                        f"ind_prop_empty:{p_uri}",
+                        f"→ {prop_lbl}",
+                        "—",
+                        editable=False,
+                        meta={"type": "stat"},
+                    )
+                )
+
+    # ── Labels (rdfs:label) ──────────────────────────────────────────────────
+    if individual.labels:
+        fields.append(_sep("Labels"))
+        for lbl in sorted(individual.labels, key=lambda l: l.lang):
+            fields.append(
+                DetailField(
+                    f"ind_label:{lbl.lang}",
+                    f"label [{lbl.lang}]",
+                    lbl.value,
+                    editable=True,
+                    meta={"type": "ind_label", "lang": lbl.lang},
+                )
+            )
+
+    # ── Notes (rdfs:comment) ─────────────────────────────────────────────────
+    if individual.comments:
+        fields.append(_sep("Notes"))
+        for comment in sorted(individual.comments, key=lambda d: d.lang):
+            fields.append(
+                DetailField(
+                    f"ind_comment:{comment.lang}",
+                    f"comment [{comment.lang}]",
+                    comment.value,
+                    editable=True,
+                    meta={"type": "ind_comment", "lang": comment.lang},
+                )
+            )
+
+    # ── Rich Content (schema.org) ─────────────────────────────────────────────
+    fields.extend(_schema_media_display_fields(individual, "ind:"))
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    label_langs = {lbl.lang for lbl in individual.labels}
+    if lang not in label_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_ind_label:{lang}",
+                f"+ Add rdfs:label [{lang}]",
+                "add_ind_label",
+                lang=lang,
+            )
+        )
+    comment_langs = {cmt.lang for cmt in individual.comments}
+    if lang not in comment_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_ind_comment:{lang}",
+                f"+ Add rdfs:comment [{lang}]",
+                "add_ind_comment",
+                lang=lang,
+            )
+        )
+    # Add / remove class membership (rdf:type)
+    fields.append(
+        _add_action_field(
+            "action:add_ind_type",
+            "+ Add class membership (rdf:type)",
+            "add_ind_type",
+        )
+    )
+    for type_uri in sorted(individual.types):
+        cls = taxonomy.owl_classes.get(type_uri)
+        type_lbl = cls.label(lang) if cls else type_uri
+        fields.append(
+            _add_action_field(
+                f"action:rm_ind_type:{type_uri}",
+                f"✗ Remove instanceOf: {type_lbl}",
+                "remove_ind_type",
+                type_uri=type_uri,
+            )
+        )
+    # Add property value — only if at least one applicable property exists
+    if applicable_display:
+        fields.append(
+            _add_action_field(
+                "action:add_prop_value",
+                "+ Add property value",
+                "add_prop_value",
+            )
+        )
+    # Edit / Remove individual property values
+    for prop_uri, val_uri in individual.property_values:
+        rm_prop = taxonomy.owl_properties.get(prop_uri)
+        prop_lbl = rm_prop.label(lang) if rm_prop else prop_uri
+        target = taxonomy.owl_individuals.get(val_uri)
+        val_lbl = target.label(lang) if target else val_uri
+        fields.append(
+            _add_action_field(
+                f"action:edit_prop_value:{prop_uri}::{val_uri}",
+                f"✎ Change → {prop_lbl}: {val_lbl}",
+                "edit_prop_value",
+                prop_uri=prop_uri,
+                val_uri=val_uri,
+            )
+        )
+        fields.append(
+            _add_action_field(
+                f"action:rm_prop_value:{prop_uri}::{val_uri}",
+                f"✗ Remove → {prop_lbl}: {val_lbl}",
+                "remove_prop_value",
+                prop_uri=prop_uri,
+                val_uri=val_uri,
+            )
+        )
+    fields.append(
+        _add_action_field(
+            "action:delete_individual", "⊘ Delete this individual", "delete_individual"
+        )
+    )
+    fields.append(
+        _add_action_field(
+            "action:individual_to_class",
+            "⇢ Change to class",
+            "individual_to_class",
+        )
+    )
+    fields.extend(_schema_media_action_fields(individual, "ind:"))
+
+    return fields
+
+
+# ──────────────────────────── ontology overview ──────────────────────────────
+
+
+def build_ontology_overview_fields(
+    taxonomy: Taxonomy,
+    file_path: Path | None,
+    lang: str,
+    folded: set[str] | None = None,
+) -> list[DetailField]:
+    """Detail panel for the ontology root node.
+
+    Shows ontology metadata, a class hierarchy with fold/unfold, all
+    properties, and creation actions.
+    """
+    if folded is None:
+        folded = set()
+
+    fields: list[DetailField] = []
+
+    # ── Ontology metadata ────────────────────────────────────────────────────
+    fields.append(_sep("Ontology"))
+    if taxonomy.ontology_uri:
+        fields.append(
+            DetailField(
+                "ont:uri",
+                "URI",
+                taxonomy.ontology_uri,
+                editable=False,
+                meta={"type": "uri"},
+            )
+        )
+    if taxonomy.ontology_label:
+        fields.append(
+            DetailField(
+                "ont:label",
+                "label",
+                taxonomy.ontology_label,
+                editable=True,
+                meta={"type": "ont_label"},
+            )
+        )
+
+    # ── Actions ─────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    fields.append(
+        _add_action_field(
+            "action:view_ontology_graph",
+            "⊙ View graph in browser",
+            "view_ontology_graph",
+        )
+    )
+    fields.append(
+        _add_action_field("action:create_owl_class", "+ New OWL class", "create_owl_class")
+    )
+    fields.append(
+        _add_action_field("action:create_owl_property", "+ New OWL property", "create_owl_property")
+    )
+
+    # ── Class hierarchy ───────────────────────────────────────────────────────
+    if taxonomy.owl_classes:
+        # Build children_map from sub_class_of links within owl_classes
+        children_map: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
+        for cls_uri, cls in taxonomy.owl_classes.items():
+            for parent_uri in cls.sub_class_of:
+                if parent_uri in taxonomy.owl_classes:
+                    children_map[parent_uri].append(cls_uri)
+
+        # Root classes: those with no parent inside taxonomy.owl_classes
+        root_classes = [
+            uri
+            for uri, cls in taxonomy.owl_classes.items()
+            if not any(p in taxonomy.owl_classes for p in cls.sub_class_of)
+        ]
+        root_classes.sort()
+
+        # Map class URI → properties that have it as rdfs:domain
+        props_by_domain: dict[str, list[str]] = {}
+        for p_uri, prop in taxonomy.owl_properties.items():
+            for domain_uri in prop.domains:
+                props_by_domain.setdefault(domain_uri, []).append(p_uri)
+
+        def _add_class_rows(cls_uri: str, depth: int) -> None:
+            cls = taxonomy.owl_classes[cls_uri]
+            children = sorted(children_map.get(cls_uri, []))
+            indent = "  " * depth
+            cls_label = cls.label(lang)
+            if children:
+                is_folded_cls = cls_uri in folded
+                fold_icon = "▶" if is_folded_cls else "▼"
+                fields.append(
+                    DetailField(
+                        f"ovw:cls:{cls_uri}",
+                        f"{indent}{fold_icon} {cls_label}",
+                        "",
+                        editable=False,
+                        meta={
+                            "type": "action",
+                            "action": "toggle_class_fold",
+                            "uri": cls_uri,
+                        },
+                    )
+                )
+                if not is_folded_cls:
+                    # Show domain properties at this level (indented one extra)
+                    prop_indent = "  " * (depth + 1)
+                    for p_uri in sorted(props_by_domain.get(cls_uri, [])):
+                        prop = taxonomy.owl_properties[p_uri]
+                        ranges = [
+                            taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
+                            for r in prop.ranges
+                        ]
+                        range_str = f"  ({', '.join(ranges)})" if ranges else ""
+                        fields.append(
+                            DetailField(
+                                f"ovw:prop:{cls_uri}:{p_uri}",
+                                f"{prop_indent}→ {prop.label(lang)}{range_str}",
+                                "",
+                                editable=False,
+                                meta={"type": "prop_nav", "uri": p_uri, "nav": True},
+                            )
+                        )
+                    for child_uri in children:
+                        _add_class_rows(child_uri, depth + 1)
+            else:
+                fields.append(
+                    DetailField(
+                        f"ovw:cls:{cls_uri}",
+                        f"{indent}◈ {cls_label}",
+                        "",
+                        editable=False,
+                        meta={"type": "rdf_relation", "uri": cls_uri, "nav": True},
+                    )
+                )
+                # Show domain properties at this level (indented one extra)
+                prop_indent = "  " * (depth + 1)
+                for p_uri in sorted(props_by_domain.get(cls_uri, [])):
+                    prop = taxonomy.owl_properties[p_uri]
+                    ranges = [
+                        taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
+                        for r in prop.ranges
+                    ]
+                    range_str = f"  ({', '.join(ranges)})" if ranges else ""
+                    fields.append(
+                        DetailField(
+                            f"ovw:prop:{cls_uri}:{p_uri}",
+                            f"{prop_indent}→ {prop.label(lang)}{range_str}",
+                            "",
+                            editable=False,
+                            meta={"type": "prop_nav", "uri": p_uri, "nav": True},
+                        )
+                    )
+
+        fields.append(_sep("Classes & Properties"))
+        for root_uri in root_classes:
+            _add_class_rows(root_uri, 0)
+
+    # ── All properties ────────────────────────────────────────────────────────
+    if taxonomy.owl_properties:
+        fields.append(_sep("Properties"))
+        for p_uri in sorted(
+            taxonomy.owl_properties, key=lambda u: taxonomy.owl_properties[u].label(lang)
+        ):
+            prop = taxonomy.owl_properties[p_uri]
+            prop_type = f"owl:{prop.prop_type}"
+            domains = [
+                taxonomy.owl_classes[d].label(lang) if d in taxonomy.owl_classes else d
+                for d in prop.domains
+            ]
+            ranges = [
+                taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
+                for r in prop.ranges
+            ]
+            domain_str = ", ".join(domains) if domains else "—"
+            range_str = ", ".join(ranges) if ranges else "—"
+            summary = f"{prop_type}  {domain_str} → {range_str}"
+            fields.append(
+                DetailField(
+                    f"ovw:allprop:{p_uri}",
+                    prop.label(lang) or p_uri,
+                    summary,
+                    editable=False,
+                    meta={"type": "prop_nav", "uri": p_uri, "nav": True},
+                )
+            )
+
+    return fields
+
+
+# ──────────────────────────── OWL property detail ────────────────────────────
+
+
+def build_property_detail(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+) -> list[DetailField]:
+    """Detail panel for an owl:ObjectProperty / DatatypeProperty / etc."""
+    prop = taxonomy.owl_properties.get(uri)
+    if not prop:
+        return []
+
+    fields: list[DetailField] = []
+
+    # ── Identity ─────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
+    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(
+        DetailField(
+            "prop_type",
+            "type",
+            f"owl:{prop.prop_type}",
+            editable=False,
+            meta={"type": "stat"},
+        )
+    )
+
+    # ── Labels ───────────────────────────────────────────────────────────────
+    if prop.labels:
+        fields.append(_sep("Labels"))
+        for lbl in sorted(prop.labels, key=lambda l: l.lang):
+            fields.append(
+                DetailField(
+                    f"prop_label:{lbl.lang}",
+                    f"label [{lbl.lang}]",
+                    lbl.value,
+                    editable=True,
+                    meta={"type": "prop_label", "lang": lbl.lang},
+                )
+            )
+
+    # ── Notes ────────────────────────────────────────────────────────────────
+    if prop.comments:
+        fields.append(_sep("Notes"))
+        for cmt in sorted(prop.comments, key=lambda d: d.lang):
+            fields.append(
+                DetailField(
+                    f"prop_comment:{cmt.lang}",
+                    f"comment [{cmt.lang}]",
+                    cmt.value,
+                    editable=True,
+                    meta={"type": "prop_comment", "lang": cmt.lang},
+                )
+            )
+
+    # ── Signature (domain / range / subPropertyOf / inverseOf) ───────────────
+    has_sig = bool(prop.domains or prop.ranges or prop.sub_property_of or prop.inverse_of)
+    if has_sig:
+        fields.append(_sep("Signature"))
+        for d_uri in prop.domains:
+            cls = taxonomy.owl_classes.get(d_uri)
+            fields.append(
+                DetailField(
+                    f"prop_domain:{d_uri}",
+                    "domain",
+                    cls.label(lang) if cls else d_uri,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": d_uri, "nav": bool(cls)},
+                )
+            )
+        for r_uri in prop.ranges:
+            cls = taxonomy.owl_classes.get(r_uri)
+            fields.append(
+                DetailField(
+                    f"prop_range:{r_uri}",
+                    "range",
+                    cls.label(lang) if cls else r_uri,
+                    editable=False,
+                    meta={"type": "rdf_relation", "uri": r_uri, "nav": bool(cls)},
+                )
+            )
+        for sp_uri in prop.sub_property_of:
+            sp = taxonomy.owl_properties.get(sp_uri)
+            fields.append(
+                DetailField(
+                    f"prop_sub:{sp_uri}",
+                    "↑ subPropertyOf",
+                    sp.label(lang) if sp else sp_uri,
+                    editable=False,
+                    meta={"type": "prop_nav", "uri": sp_uri, "nav": bool(sp)},
+                )
+            )
+        for inv_uri in prop.inverse_of:
+            inv = taxonomy.owl_properties.get(inv_uri)
+            fields.append(
+                DetailField(
+                    f"prop_inv:{inv_uri}",
+                    "⟺ inverseOf",
+                    inv.label(lang) if inv else inv_uri,
+                    editable=False,
+                    meta={"type": "prop_nav", "uri": inv_uri, "nav": bool(inv)},
+                )
+            )
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    label_langs = {lbl.lang for lbl in prop.labels}
+    if lang not in label_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_prop_label:{lang}",
+                f"+ Add rdfs:label [{lang}]",
+                "add_prop_label",
+                lang=lang,
+            )
+        )
+    comment_langs = {cmt.lang for cmt in prop.comments}
+    if lang not in comment_langs:
+        fields.append(
+            _add_action_field(
+                f"action:add_prop_comment:{lang}",
+                f"+ Add rdfs:comment [{lang}]",
+                "add_prop_comment",
+                lang=lang,
+            )
+        )
+    fields.append(
+        _add_action_field("action:add_prop_domain", "→ Add domain class", "add_prop_domain")
+    )
+    fields.append(_add_action_field("action:add_prop_range", "→ Add range class", "add_prop_range"))
+    for d_uri in prop.domains:
+        cls = taxonomy.owl_classes.get(d_uri)
+        d_lbl = cls.label(lang) if cls else d_uri
+        fields.append(
+            _add_action_field(
+                f"action:rm_prop_domain:{d_uri}",
+                f"✗ Remove domain {d_lbl}",
+                "remove_prop_domain",
+                domain_uri=d_uri,
+            )
+        )
+    for r_uri in prop.ranges:
+        cls = taxonomy.owl_classes.get(r_uri)
+        r_lbl = cls.label(lang) if cls else r_uri
+        fields.append(
+            _add_action_field(
+                f"action:rm_prop_range:{r_uri}",
+                f"✗ Remove range {r_lbl}",
+                "remove_prop_range",
+                range_uri=r_uri,
+            )
+        )
+    fields.append(
+        _add_action_field("action:delete_property", "⊘ Delete this property", "delete_property")
+    )
 
     return fields
 
@@ -1187,6 +2345,9 @@ def build_global_fields(
     all_taxes = list(workspace.taxonomies.values())
     n_schemes = sum(len(t.schemes) for t in all_taxes)
     n_concepts = sum(len(t.concepts) for t in all_taxes)
+    n_owl = sum(len(t.owl_classes) for t in all_taxes)
+    n_promoted = sum(sum(1 for uri in t.owl_classes if uri in t.concepts) for t in all_taxes)
+    n_pure = n_owl - n_promoted
     all_langs: set[str] = set()
     for t in all_taxes:
         for c in t.concepts.values():
@@ -1200,16 +2361,30 @@ def build_global_fields(
             "g:files", "taxonomy files", str(n_files), editable=False, meta={"type": "stat"}
         )
     )
-    fields.append(
-        DetailField(
-            "g:schemes", "concept schemes", str(n_schemes), editable=False, meta={"type": "stat"}
+    if n_schemes:
+        fields.append(
+            DetailField(
+                "g:schemes",
+                "concept schemes",
+                str(n_schemes),
+                editable=False,
+                meta={"type": "stat"},
+            )
         )
-    )
-    fields.append(
-        DetailField(
-            "g:concepts", "total concepts", str(n_concepts), editable=False, meta={"type": "stat"}
+    if n_concepts:
+        fields.append(
+            DetailField(
+                "g:concepts",
+                "total concepts",
+                str(n_concepts),
+                editable=False,
+                meta={"type": "stat"},
+            )
         )
-    )
+    if n_owl:
+        fields.append(
+            DetailField("g:owl", "OWL classes", str(n_owl), editable=False, meta={"type": "stat"})
+        )
     fields.append(
         DetailField(
             "g:langs",
@@ -1220,84 +2395,116 @@ def build_global_fields(
         )
     )
 
-    # ── 4. Completeness (aggregated across all schemes) ───────────────────────
-    if analysis:
-        # Collect all analyses, aggregate completions by property_key
-        agg: dict[str, tuple[str, int, dict[str, int]]] = {}  # key → (display, total, by_lang)
-        for sa in analysis.values():
-            for comp in sa.completions:
-                if comp.property_key not in agg:
-                    agg[comp.property_key] = (comp.display_name, 0, {})
-                disp, tot, by_lang = agg[comp.property_key]
-                tot += comp.total
-                for lg, cnt in comp.by_language.items():
-                    by_lang[lg] = by_lang.get(lg, 0) + cnt
-                agg[comp.property_key] = (disp, tot, by_lang)
+    # ── 4. OWL classes quality (always shown when classes present) ────────────
+    if n_owl:
+        max_depth = max(
+            (compute_owl_analysis(t).max_depth for t in all_taxes if t.owl_classes),
+            default=0,
+        )
+        missing_lbl = sum(
+            sum(1 for cls in t.owl_classes.values() if not cls.labels) for t in all_taxes
+        )
+        missing_cmt = sum(
+            sum(1 for cls in t.owl_classes.values() if not cls.comments) for t in all_taxes
+        )
+        fields.append(_sep("OWL Classes"))
+        if n_promoted:
+            fields.append(_stat("owl:promoted", "promoted (concept+class)", str(n_promoted)))
+        if n_pure:
+            fields.append(_stat("owl:pure", "pure classes", str(n_pure)))
+        fields.append(_stat("owl:depth", "max depth", str(max_depth)))
+        if missing_lbl:
+            fields.append(_stat("owl:miss_lbl", "missing rdfs:label", str(missing_lbl)))
+        if missing_cmt:
+            fields.append(_stat("owl:miss_cmt", "missing rdfs:comment", str(missing_cmt)))
 
-        if agg:
-            fields.append(_sep("Completeness"))
-            for prop_key, (disp, total, by_lang) in agg.items():
-                if total == 0:
-                    continue
-                # Best completion across languages (highest %)
-                best_lang, best_cnt = (
-                    max(by_lang.items(), key=lambda kv: kv[1]) if by_lang else ("—", 0)
-                )
-                best_pct = int(best_cnt * 100 / total) if total else 0
-                bar = _pct_bar(best_pct)
-                lang_parts = []
-                for lg, cnt in sorted(by_lang.items()):
-                    pct = int(cnt * 100 / total) if total else 0
-                    lang_parts.append(f"[{lg}] {pct}%")
-                value = f"{bar}  " + "  ".join(lang_parts) if lang_parts else f"{bar}"
-                fields.append(
-                    DetailField(
-                        f"g:comp:{prop_key}",
-                        disp,
-                        value,
-                        editable=False,
-                        meta={"type": "stat"},
+    # ── 5. Completeness / Quality (SKOS only — skip when no schemes) ──────────
+    if n_schemes:
+        if analysis:
+            agg: dict[str, tuple[str, int, dict[str, int]]] = {}
+            for sa in analysis.values():
+                for comp in sa.completions:
+                    if comp.property_key not in agg:
+                        agg[comp.property_key] = (comp.display_name, 0, {})
+                    disp, tot, by_lang = agg[comp.property_key]
+                    tot += comp.total
+                    for lg, cnt in comp.by_language.items():
+                        by_lang[lg] = by_lang.get(lg, 0) + cnt
+                    agg[comp.property_key] = (disp, tot, by_lang)
+
+            if agg:
+                fields.append(_sep("Completeness"))
+                for prop_key, (disp, total, by_lang) in agg.items():
+                    if total == 0:
+                        continue
+                    best_lang, best_cnt = (
+                        max(by_lang.items(), key=lambda kv: kv[1]) if by_lang else ("—", 0)
                     )
-                )
+                    best_pct = int(best_cnt * 100 / total) if total else 0
+                    bar = _pct_bar(best_pct)
+                    lang_parts = []
+                    for lg, cnt in sorted(by_lang.items()):
+                        pct = int(cnt * 100 / total) if total else 0
+                        lang_parts.append(f"[{lg}] {pct}%")
+                    value = f"{bar}  " + "  ".join(lang_parts) if lang_parts else f"{bar}"
+                    fields.append(
+                        DetailField(
+                            f"g:comp:{prop_key}",
+                            disp,
+                            value,
+                            editable=False,
+                            meta={"type": "stat"},
+                        )
+                    )
 
-        # ── 5. Quality ────────────────────────────────────────────────────────
-        total_errors = sum(
-            sum(1 for i in sa.issues if i.severity == "error") for sa in analysis.values()
-        )
-        total_warnings = sum(
-            sum(1 for i in sa.issues if i.severity == "warning") for sa in analysis.values()
-        )
-        fields.append(_sep("Quality"))
-        if total_errors == 0 and total_warnings == 0:
-            fields.append(
-                DetailField("g:issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"})
+            total_errors = sum(
+                sum(1 for i in sa.issues if i.severity == "error") for sa in analysis.values()
             )
+            total_warnings = sum(
+                sum(1 for i in sa.issues if i.severity == "warning") for sa in analysis.values()
+            )
+            fields.append(_sep("Quality"))
+            if total_errors == 0 and total_warnings == 0:
+                fields.append(
+                    DetailField(
+                        "g:issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"}
+                    )
+                )
+            else:
+                if total_errors:
+                    fields.append(
+                        DetailField(
+                            "g:errors",
+                            "⊘ errors",
+                            str(total_errors),
+                            editable=False,
+                            meta={"type": "stat"},
+                        )
+                    )
+                if total_warnings:
+                    fields.append(
+                        DetailField(
+                            "g:warnings",
+                            "⚠ warnings",
+                            str(total_warnings),
+                            editable=False,
+                            meta={"type": "stat"},
+                        )
+                    )
         else:
-            if total_errors:
-                fields.append(
-                    DetailField(
-                        "g:errors",
-                        "⊘ errors",
-                        str(total_errors),
-                        editable=False,
-                        meta={"type": "stat"},
-                    )
+            fields.append(_sep("Completeness & Quality"))
+            fields.append(
+                DetailField(
+                    "g:pending", "analysis", "loading…", editable=False, meta={"type": "stat"}
                 )
-            if total_warnings:
-                fields.append(
-                    DetailField(
-                        "g:warnings",
-                        "⚠ warnings",
-                        str(total_warnings),
-                        editable=False,
-                        meta={"type": "stat"},
-                    )
-                )
-    else:
-        fields.append(_sep("Completeness & Quality"))
-        fields.append(
-            DetailField("g:pending", "analysis", "loading…", editable=False, meta={"type": "stat"})
+            )
+
+    fields.append(_sep("Graph"))
+    fields.append(
+        _add_action_field(
+            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
         )
+    )
 
     return fields
 
@@ -1336,25 +2543,58 @@ def build_file_fields(
     # ── 2. Overview ───────────────────────────────────────────────────────────
     n_schemes = len(taxonomy.schemes)
     total_concepts = len(taxonomy.concepts)
+    n_owl = len(taxonomy.owl_classes)
     fields.append(_sep("Overview"))
-    fields.append(
-        DetailField(
-            "file:n_schemes",
-            "concept schemes",
-            str(n_schemes),
-            editable=False,
-            meta={"type": "stat"},
+    if n_schemes:
+        fields.append(
+            DetailField(
+                "file:n_schemes",
+                "concept schemes",
+                str(n_schemes),
+                editable=False,
+                meta={"type": "stat"},
+            )
         )
-    )
-    fields.append(
-        DetailField(
-            "file:total",
-            "total concepts",
-            str(total_concepts),
-            editable=False,
-            meta={"type": "stat"},
+    if total_concepts:
+        fields.append(
+            DetailField(
+                "file:total",
+                "total concepts",
+                str(total_concepts),
+                editable=False,
+                meta={"type": "stat"},
+            )
         )
-    )
+    if n_owl:
+        fields.append(
+            DetailField(
+                "file:owl",
+                "OWL classes",
+                str(n_owl),
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+
+    # ── 2b. OWL Classes quality ───────────────────────────────────────────────
+    if n_owl:
+        owl_stats = compute_owl_analysis(taxonomy)
+        fields.append(_sep("OWL Classes"))
+        if owl_stats.promoted:
+            fields.append(
+                _stat("file:owl:promoted", "promoted (concept+class)", str(owl_stats.promoted))
+            )
+        if owl_stats.pure_classes:
+            fields.append(_stat("file:owl:pure", "pure classes", str(owl_stats.pure_classes)))
+        fields.append(_stat("file:owl:depth", "max depth", str(owl_stats.max_depth)))
+        if owl_stats.missing_label:
+            fields.append(
+                _stat("file:owl:miss_lbl", "missing rdfs:label", str(owl_stats.missing_label))
+            )
+        if owl_stats.missing_comment:
+            fields.append(
+                _stat("file:owl:miss_cmt", "missing rdfs:comment", str(owl_stats.missing_comment))
+            )
 
     # ── 3. Per-scheme stats ───────────────────────────────────────────────────
     for scheme_uri, scheme in taxonomy.schemes.items():

@@ -58,3 +58,19 @@ def assign_handles(taxonomy: Taxonomy) -> None:
         h = handle_for_uri(uri, used)
         used.add(h)
         taxonomy.handle_index[h] = uri
+
+    for uri in sorted(taxonomy.owl_classes):
+        if uri not in taxonomy.concepts:  # promoted nodes already indexed above
+            h = handle_for_uri(uri, used)
+            used.add(h)
+            taxonomy.handle_index[h] = uri
+
+    for uri in sorted(taxonomy.owl_individuals):
+        h = handle_for_uri(uri, used)
+        used.add(h)
+        taxonomy.handle_index[h] = uri
+
+    for uri in sorted(taxonomy.owl_properties):
+        h = handle_for_uri(uri, used)
+        used.add(h)
+        taxonomy.handle_index[h] = uri

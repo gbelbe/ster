@@ -368,3 +368,66 @@ def test_owl_round_trip(owl_ttl, tmp_path):
     dog2 = t2.owl_classes["https://example.org/onto/Dog"]
     assert dog1.sub_class_of == dog2.sub_class_of
     assert dog1.label("en") == dog2.label("en")
+
+
+# ── Inferred class / individual type loading ──────────────────────────────────
+
+INFERRED_TURTLE = """\
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex:   <https://example.org/onto/> .
+
+ex:Prop a owl:ObjectProperty ;
+    rdfs:range ex:Animal .
+
+# Animal is only declared via rdfs:range — no explicit owl:Class triple.
+# Dog is only declared via rdfs:subClassOf — no explicit owl:Class triple.
+ex:Dog rdfs:subClassOf ex:Animal ;
+    rdfs:label "Dog"@en .
+
+ex:Fido a owl:NamedIndividual ;
+    rdf:type ex:Dog ;
+    rdfs:label "Fido"@en .
+"""
+
+
+@pytest.fixture
+def inferred_ttl(tmp_path):
+    p = tmp_path / "inferred.ttl"
+    p.write_text(INFERRED_TURTLE, encoding="utf-8")
+    return p
+
+
+def test_inferred_class_from_range(inferred_ttl):
+    """A class used only as rdfs:range must appear in owl_classes."""
+    t = store.load(inferred_ttl)
+    assert "https://example.org/onto/Animal" in t.owl_classes
+
+
+def test_inferred_class_from_subclass_subject(inferred_ttl):
+    """A class used only as rdfs:subClassOf subject must appear in owl_classes."""
+    t = store.load(inferred_ttl)
+    assert "https://example.org/onto/Dog" in t.owl_classes
+
+
+def test_inferred_subclass_has_sub_class_of_populated(inferred_ttl):
+    """The inferred Dog class must have Animal in sub_class_of."""
+    t = store.load(inferred_ttl)
+    dog = t.owl_classes["https://example.org/onto/Dog"]
+    assert "https://example.org/onto/Animal" in dog.sub_class_of
+
+
+def test_inferred_class_label(inferred_ttl):
+    """Labels are loaded even for inferred (non-declared) classes."""
+    t = store.load(inferred_ttl)
+    dog = t.owl_classes["https://example.org/onto/Dog"]
+    assert dog.label("en") == "Dog"
+
+
+def test_individual_type_loaded_for_inferred_class(inferred_ttl):
+    """Individual rdf:type is loaded even when the class is not formally owl:Class."""
+    t = store.load(inferred_ttl)
+    fido = t.owl_individuals.get("https://example.org/onto/Fido")
+    assert fido is not None
+    assert "https://example.org/onto/Dog" in fido.types
