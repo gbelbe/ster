@@ -23,8 +23,8 @@
   [  Semantic Knowledge Editor  ]
 ```
 
-**ster** is a terminal tool for building and publishing semantic knowledge bases.
-Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as interactive D3 force graphs, and publish them as linked hub sites — all from your terminal, no database required.
+**ster** is a terminal tool for building and exploring semantic knowledge bases.
+Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as interactive D3 force graphs, and export HTML documentation — all from your terminal, no database required.
 
 > *ster* is the Breton word for *meaning*, with homonyms for *river* and *star*.
 > Let it guide your semantic voyage, keeping the flow and always following your star.
@@ -36,8 +36,7 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 | Layer | What ster does |
 |---|---|
 | **Edit** | Full-screen TUI for SKOS concepts and OWL classes / individuals / properties |
-| **Visualise** | Interactive D3 v7 force graph — colour-coded clusters, drag, zoom, filter |
-| **Publish** | Static site generator — one hub page per entity, neighbourhood graph, media |
+| **Visualise** | Interactive D3 v7 force graph — colour-coded clusters, drag, zoom, filter, detail panel |
 | **AI assist** | LLM-powered concept suggestions (online or local via Ollama) |
 | **Git** | Stage, commit, push without leaving the terminal |
 | **Export** | pyLODE HTML documentation; SPARQL query runner |
@@ -66,21 +65,6 @@ Open any ontology or taxonomy as an interactive force graph in the browser:
 - Drag, zoom, and pin nodes; hover tooltips; highlight neighbourhoods on click
 - Lane-based hierarchical layout option for SKOS concept trees
 
-### Static site generator
-
-Turn any ontology into a linked knowledge hub with a single command:
-
-```bash
-ster site my-ontology.ttl -o ./site
-```
-
-Each class, individual, and concept gets its own page with:
-- **Left panel** — interactive D3 neighbourhood graph, centred on the entity
-- **Right panel** — title, badge, representative image, description, embedded videos, external links, and related entity cards
-- **Index page** — full-screen D3 force graph of the entire ontology, with click-to-navigate nodes
-
-Annotate entities with `schema:image`, `schema:video`, and `schema:url` in your RDF file; ster picks them up automatically and renders them inline.
-
 ### AI-assisted concept creation
 
 When adding a concept (`+` key), choose between entering a name manually or letting AI suggest up to 20 ordered concept names:
@@ -89,7 +73,7 @@ When adding a concept (`+` key), choose between entering a name manually or lett
   It proposes names ranked by relevance, you pick one (or ask for more), and the form is pre-filled.
 - Before generating, ster shows you the exact prompt so you can review and adjust it.
 - Supports any LLM via the [`llm`](https://llm.datasette.io/) library — including local models via [Ollama](https://ollama.com/).
-- Pull Ollama models directly from the **⚙ Configure AI** wizard without leaving ster.
+- Pull Ollama models directly from the **⚙ Setup / Options** wizard without leaving ster.
 - **Copy-paste mode** — no local LLM needed: ster displays the prompt, copies it to the clipboard, and you paste the model's response from any web AI (ChatGPT, Claude, Gemini…).
 
 ### Multi-file workspace
@@ -131,7 +115,7 @@ pip install ster
 pip install "ster[ai]"
 ```
 
-Then configure your model from the main menu: **⚙ Configure AI**.
+Then configure your model from the main menu: **⚙ Setup / Options**.
 No model needed if you use copy-paste mode.
 
 ### With HTML export
@@ -185,11 +169,11 @@ Use arrow keys to navigate the action menu, then press **Enter** to confirm.
        ✓  products.ttl
 
  ▶  1  ↵  Open Tree View
-    2  ⊙  Graph visualisation
-    3  ⎇  Browse git history
-    4  🌐 Generate site
-    5  🌐 Generate webpage
-    6  ⚙  Configure AI
+    2  ◈  Open Graph Viz
+    3  🌐 Generate Web-Documentation
+    4  ⎇  Browse git history
+    5  🔍 Query Graph SPARQL (Beta)
+    6  ⚙  Setup / Options
     7  ✕  Quit
 ```
 
@@ -206,15 +190,6 @@ Use arrow keys to navigate the action menu, then press **Enter** to confirm.
 | `g` | Commit & push changes |
 | `?` | Help screen |
 | `q` / `Esc` | Back / quit |
-
-### Generate a site
-
-```bash
-ster site my-ontology.ttl -o ./site
-```
-
-Open `./site/index.html` in a browser to explore the full D3 force graph.
-Click any node to navigate to its entity page.
 
 ### AI Auto Suggest
 
@@ -235,7 +210,7 @@ ster export my-taxonomy.ttl -l en,fr # specific languages only
 ster export my-taxonomy.ttl -o /tmp  # custom output directory
 ```
 
-Or use the **🌐 Generate webpage** option from the main menu.
+Or use the **🌐 Generate Web-Documentation** option from the main menu.
 
 ### Validate
 
@@ -247,7 +222,7 @@ ster validate my-taxonomy.ttl
 
 ## Annotating entities with rich media
 
-ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses them in both the graph visualiser and the generated site:
+ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses them in the graph visualiser's detail panel:
 
 ```turtle
 @prefix schema: <https://schema.org/> .
@@ -259,7 +234,7 @@ ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses the
     schema:url   <https://en.wikipedia.org/wiki/My_Class> .
 ```
 
-Images appear as thumbnails inside D3 node circles; videos are embedded as iframes in entity pages; URLs render as link cards.
+Images appear as thumbnails inside D3 node circles; videos open in a popup window; URLs render as link buttons in the detail panel.
 
 ---
 
@@ -275,15 +250,16 @@ ster/
 ├── nav.py            — Full-screen TUI (curses): tree, detail, inline edit; SKOS + OWL modes
 ├── nav_state.py      — Typed state machine: one dataclass per viewer mode
 ├── nav_logic.py      — Pure functions: tree flattening, field builders, OWL node rendering
-├── cli.py            — Typer entry-points (ster, ster export, ster site…)
+├── cli.py            — Typer entry-points (ster, ster export…)
 ├── ai.py             — LLM abstraction: model routing, copy-paste mode, Ollama integration
 ├── prompts.py        — All AI prompt templates (string.Template)
-├── html_export.py    — pyLODE HTML export + D3 site generator (index + entity pages)
+├── html_export.py    — pyLODE HTML export (VocPub / OntPub profiles)
 ├── viz.py            — Standalone D3 graph: writes HTML, opens in browser
 ├── owl_analysis.py   — OWL axiom analysis and statistics
 ├── sparql_query.py   — SPARQL query runner against the loaded taxonomy
 ├── git_manager.py    — Git staging, commit, push
 ├── git_log.py        — Git history browser (TUI)
+├── git_log_logic.py  — Pure functions: diff parsing, field extraction for git log viewer
 ├── handles.py        — Short handle generation from camelCase URIs
 └── validator.py      — SKOS integrity checks
 ```
@@ -353,9 +329,15 @@ pre-commit install
 
 ### 0.3.2
 - Show update notice with release notes summary when a new version is available on PyPI
-- Rename "Generate webpage" menu action to "Generate Web-Documentation"
-- Add "Generate Browsable Website" menu action (D3 hub site generator)
+- Restructured main menu: new icons (◈ graph, ⎇ git), reordered items, renamed "Configure AI" → "Setup / Options", added "Query Graph SPARQL (Beta)"
+- Tree view auto-detects file content: OWL-only files open in ontology mode, SKOS-only in taxonomy mode
+- D3 graph: root OWL classes visually distinct (brighter fill, glow ring, bolder text); legend adapts to content actually present in the file
+- Fixed: Escape key in graph viz now always returns to global view
+- Fixed: OWL individuals correctly nested under their parent classes in the tree
+- Fixed: multiline `rdfs:comment` values no longer bleed across TUI panels
+- Fixed: global tree view no longer renders OWL classes twice
 - Extend git diff view to detect all field changes: broader/narrower/related, match properties, schema:image/video/url, subClassOf, rdf:type, property assertions, OWL properties
+- Removed "Generate Browsable Website" menu option (use `ster export` CLI instead)
 
 ### 0.3.1
 - Auto-publish to PyPI via GitHub Actions (OIDC trusted publishing) on every passing CI run
@@ -364,8 +346,7 @@ pre-commit install
 
 ### 0.3.0
 - Full-screen TUI for SKOS concept schemes and OWL class hierarchies
-- Interactive D3 force graph visualisation in the browser
-- Static site generator — one page per concept, class, and individual
+- Interactive D3 force graph visualisation in the browser with entity detail panel
 - AI-assisted concept creation via `llm` library (online and local via Ollama)
 - Git integration: stage, commit, push without leaving the terminal
 - HTML export via pyLODE (VocPub and OntPub profiles)

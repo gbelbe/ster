@@ -6,14 +6,28 @@ from ster.git_log_logic import (
     ConceptChange,
     FieldDiff,
     _concept_field_diffs,
+    _owl_class_field_diffs,
+    _owl_ind_field_diffs,
+    _owl_prop_field_diffs,
     _parse_log,
+    _set_diff,
     _subtree_has_change,
     build_diff_taxonomy,
     compute_auto_fold,
     compute_taxonomy_diff,
 )
 from ster.handles import assign_handles
-from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
+from ster.model import (
+    Concept,
+    ConceptScheme,
+    Definition,
+    Label,
+    LabelType,
+    OWLIndividual,
+    OWLProperty,
+    RDFClass,
+    Taxonomy,
+)
 
 SEP = "\x1f"
 BASE = "https://example.org/test/"
@@ -365,3 +379,261 @@ def test_auto_fold_scheme_not_folded_when_changed():
     diff = {BASE + "C": ConceptChange(BASE + "C", "added")}
     folded = compute_auto_fold(t, diff)
     assert BASE + "S" not in folded
+
+
+# ── _set_diff ─────────────────────────────────────────────────────────────────
+
+
+def test_set_diff_added():
+    diffs = _set_diff("broader", [], ["https://x.org/A"])
+    assert len(diffs) == 1
+    assert diffs[0].before == ""
+    assert diffs[0].after == "https://x.org/A"
+
+
+def test_set_diff_removed():
+    diffs = _set_diff("broader", ["https://x.org/A"], [])
+    assert len(diffs) == 1
+    assert diffs[0].before == "https://x.org/A"
+    assert diffs[0].after == ""
+
+
+def test_set_diff_no_change():
+    diffs = _set_diff("broader", ["https://x.org/A"], ["https://x.org/A"])
+    assert diffs == []
+
+
+# ── _owl_class_field_diffs ────────────────────────────────────────────────────
+
+
+def test_owl_class_field_diffs_no_change():
+    cls = RDFClass(uri=BASE + "C", labels=[Label("en", "Cat")])
+    assert _owl_class_field_diffs(cls, cls) == []
+
+
+def test_owl_class_field_diffs_label_changed():
+    before = RDFClass(uri=BASE + "C", labels=[Label("en", "Cat")])
+    after = RDFClass(uri=BASE + "C", labels=[Label("en", "Kitty")])
+    diffs = _owl_class_field_diffs(before, after)
+    lbl = [d for d in diffs if d.label == "label[en]"]
+    assert len(lbl) == 1
+    assert lbl[0].before == "Cat"
+    assert lbl[0].after == "Kitty"
+
+
+def test_owl_class_field_diffs_comment_changed():
+    before = RDFClass(uri=BASE + "C", comments=[Definition("en", "old comment")])
+    after = RDFClass(uri=BASE + "C", comments=[Definition("en", "new comment")])
+    diffs = _owl_class_field_diffs(before, after)
+    cmt = [d for d in diffs if d.label == "comment[en]"]
+    assert len(cmt) == 1
+    assert cmt[0].before == "old comment"
+
+
+def test_owl_class_field_diffs_subclass_added():
+    before = RDFClass(uri=BASE + "C")
+    after = RDFClass(uri=BASE + "C", sub_class_of=[BASE + "P"])
+    diffs = _owl_class_field_diffs(before, after)
+    sub = [d for d in diffs if d.label == "subClassOf"]
+    assert len(sub) == 1
+    assert sub[0].after == BASE + "P"
+
+
+def test_owl_class_field_diffs_equivalent_class_removed():
+    before = RDFClass(uri=BASE + "C", equivalent_class=[BASE + "E"])
+    after = RDFClass(uri=BASE + "C")
+    diffs = _owl_class_field_diffs(before, after)
+    eq = [d for d in diffs if d.label == "equivalentClass"]
+    assert len(eq) == 1
+    assert eq[0].before == BASE + "E"
+    assert eq[0].after == ""
+
+
+# ── _owl_ind_field_diffs ──────────────────────────────────────────────────────
+
+
+def test_owl_ind_field_diffs_no_change():
+    ind = OWLIndividual(uri=BASE + "Fido", labels=[Label("en", "Fido")])
+    assert _owl_ind_field_diffs(ind, ind) == []
+
+
+def test_owl_ind_field_diffs_label_changed():
+    before = OWLIndividual(uri=BASE + "Fido", labels=[Label("en", "Fido")])
+    after = OWLIndividual(uri=BASE + "Fido", labels=[Label("en", "Rex")])
+    diffs = _owl_ind_field_diffs(before, after)
+    lbl = [d for d in diffs if d.label == "label[en]"]
+    assert len(lbl) == 1
+    assert lbl[0].after == "Rex"
+
+
+def test_owl_ind_field_diffs_type_added():
+    before = OWLIndividual(uri=BASE + "Fido")
+    after = OWLIndividual(uri=BASE + "Fido", types=[BASE + "Dog"])
+    diffs = _owl_ind_field_diffs(before, after)
+    types = [d for d in diffs if d.label == "rdf:type"]
+    assert len(types) == 1
+    assert types[0].after == BASE + "Dog"
+
+
+def test_owl_ind_field_diffs_property_value_changed():
+    before = OWLIndividual(uri=BASE + "Fido", property_values=[(BASE + "hasOwner", BASE + "Alice")])
+    after = OWLIndividual(uri=BASE + "Fido", property_values=[(BASE + "hasOwner", BASE + "Bob")])
+    diffs = _owl_ind_field_diffs(before, after)
+    pv = [d for d in diffs if d.label == "propertyValue"]
+    assert len(pv) == 2  # one removed, one added
+
+
+# ── _owl_prop_field_diffs ─────────────────────────────────────────────────────
+
+
+def test_owl_prop_field_diffs_no_change():
+    prop = OWLProperty(uri=BASE + "hasName", labels=[Label("en", "has name")])
+    assert _owl_prop_field_diffs(prop, prop) == []
+
+
+def test_owl_prop_field_diffs_domain_added():
+    before = OWLProperty(uri=BASE + "hasName")
+    after = OWLProperty(uri=BASE + "hasName", domains=[BASE + "Animal"])
+    diffs = _owl_prop_field_diffs(before, after)
+    dom = [d for d in diffs if d.label == "domain"]
+    assert len(dom) == 1
+    assert dom[0].after == BASE + "Animal"
+
+
+def test_owl_prop_field_diffs_range_removed():
+    before = OWLProperty(uri=BASE + "hasName", ranges=[BASE + "Name"])
+    after = OWLProperty(uri=BASE + "hasName")
+    diffs = _owl_prop_field_diffs(before, after)
+    rng = [d for d in diffs if d.label == "range"]
+    assert len(rng) == 1
+    assert rng[0].before == BASE + "Name"
+    assert rng[0].after == ""
+
+
+def test_owl_prop_field_diffs_inverse_of_added():
+    before = OWLProperty(uri=BASE + "hasOwner")
+    after = OWLProperty(uri=BASE + "hasOwner", inverse_of=[BASE + "isOwnedBy"])
+    diffs = _owl_prop_field_diffs(before, after)
+    inv = [d for d in diffs if d.label == "inverseOf"]
+    assert len(inv) == 1
+    assert inv[0].after == BASE + "isOwnedBy"
+
+
+# ── compute_taxonomy_diff — OWL sections ─────────────────────────────────────
+
+
+def test_compute_diff_owl_class_added():
+    before = Taxonomy()
+    after = Taxonomy(owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog")})
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "Dog"].status == "added"
+
+
+def test_compute_diff_owl_class_removed():
+    before = Taxonomy(owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog")})
+    after = Taxonomy()
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "Dog"].status == "removed"
+
+
+def test_compute_diff_owl_class_changed():
+    before = Taxonomy(
+        owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog", labels=[Label("en", "Dog")])}
+    )
+    after = Taxonomy(
+        owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog", labels=[Label("en", "Hound")])}
+    )
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "Dog"].status == "changed"
+
+
+def test_compute_diff_owl_class_unchanged():
+    cls = RDFClass(uri=BASE + "Dog", labels=[Label("en", "Dog")])
+    t = Taxonomy(owl_classes={BASE + "Dog": cls})
+    diff = compute_taxonomy_diff(t, t)
+    assert diff[BASE + "Dog"].status == "unchanged"
+
+
+def test_compute_diff_owl_individual_added():
+    before = Taxonomy()
+    after = Taxonomy(owl_individuals={BASE + "Fido": OWLIndividual(uri=BASE + "Fido")})
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "Fido"].status == "added"
+
+
+def test_compute_diff_owl_individual_removed():
+    before = Taxonomy(owl_individuals={BASE + "Fido": OWLIndividual(uri=BASE + "Fido")})
+    after = Taxonomy()
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "Fido"].status == "removed"
+
+
+def test_compute_diff_owl_property_added():
+    before = Taxonomy()
+    after = Taxonomy(owl_properties={BASE + "hasName": OWLProperty(uri=BASE + "hasName")})
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "hasName"].status == "added"
+
+
+def test_compute_diff_owl_property_removed():
+    before = Taxonomy(owl_properties={BASE + "hasName": OWLProperty(uri=BASE + "hasName")})
+    after = Taxonomy()
+    diff = compute_taxonomy_diff(before, after)
+    assert diff[BASE + "hasName"].status == "removed"
+
+
+# ── build_diff_taxonomy — OWL ghosts ─────────────────────────────────────────
+
+
+def test_build_diff_taxonomy_ghost_owl_class():
+    before = Taxonomy(owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog")})
+    after = Taxonomy()
+    merged = build_diff_taxonomy(before, after)
+    assert BASE + "Dog" in merged.owl_classes
+
+
+def test_build_diff_taxonomy_ghost_owl_individual():
+    before = Taxonomy(owl_individuals={BASE + "Fido": OWLIndividual(uri=BASE + "Fido")})
+    after = Taxonomy()
+    merged = build_diff_taxonomy(before, after)
+    assert BASE + "Fido" in merged.owl_individuals
+
+
+def test_build_diff_taxonomy_ghost_owl_property():
+    before = Taxonomy(owl_properties={BASE + "hasName": OWLProperty(uri=BASE + "hasName")})
+    after = Taxonomy()
+    merged = build_diff_taxonomy(before, after)
+    assert BASE + "hasName" in merged.owl_properties
+
+
+# ── compute_auto_fold — OWL classes ──────────────────────────────────────────
+
+
+def test_auto_fold_owl_parent_with_unchanged_children():
+    t = Taxonomy(
+        owl_classes={
+            BASE + "Animal": RDFClass(uri=BASE + "Animal"),
+            BASE + "Dog": RDFClass(uri=BASE + "Dog", sub_class_of=[BASE + "Animal"]),
+        }
+    )
+    diff = {
+        BASE + "Animal": ConceptChange(BASE + "Animal", "unchanged"),
+        BASE + "Dog": ConceptChange(BASE + "Dog", "unchanged"),
+    }
+    folded = compute_auto_fold(t, diff)
+    assert BASE + "Animal" in folded
+
+
+def test_auto_fold_owl_parent_not_folded_when_child_changed():
+    t = Taxonomy(
+        owl_classes={
+            BASE + "Animal": RDFClass(uri=BASE + "Animal"),
+            BASE + "Dog": RDFClass(uri=BASE + "Dog", sub_class_of=[BASE + "Animal"]),
+        }
+    )
+    diff = {
+        BASE + "Animal": ConceptChange(BASE + "Animal", "unchanged"),
+        BASE + "Dog": ConceptChange(BASE + "Dog", "changed"),
+    }
+    folded = compute_auto_fold(t, diff)
+    assert BASE + "Animal" not in folded

@@ -1,6 +1,19 @@
 """Tests for the pure domain model."""
 
-from ster.model import Concept, ConceptScheme, Label, LabelType, RDFClass, Taxonomy, is_builtin_uri
+from __future__ import annotations
+
+from ster.model import (
+    Concept,
+    ConceptScheme,
+    Definition,
+    Label,
+    LabelType,
+    OWLIndividual,
+    OWLProperty,
+    RDFClass,
+    Taxonomy,
+    is_builtin_uri,
+)
 
 BASE = "https://example.org/test/"
 
@@ -187,3 +200,189 @@ def test_node_type_promoted():
 def test_node_type_unknown():
     t = Taxonomy()
     assert t.node_type(BASE + "Missing") == "unknown"
+
+
+def test_node_type_individual():
+    t = Taxonomy(owl_individuals={BASE + "Fido": OWLIndividual(uri=BASE + "Fido")})
+    assert t.node_type(BASE + "Fido") == "individual"
+
+
+def test_node_type_property():
+    t = Taxonomy(owl_properties={BASE + "hasName": OWLProperty(uri=BASE + "hasName")})
+    assert t.node_type(BASE + "hasName") == "property"
+
+
+# ── Concept.local_name edge case ──────────────────────────────────────────────
+
+
+def test_concept_local_name_no_separator():
+    c = Concept(uri="urn:simple")
+    assert c.local_name == "urn:simple"
+
+
+# ── Concept.definition ────────────────────────────────────────────────────────
+
+
+def test_concept_definition_found():
+    c = Concept(uri=BASE + "X", definitions=[Definition("en", "An explanation")])
+    assert c.definition("en") == "An explanation"
+
+
+def test_concept_definition_not_found():
+    c = Concept(uri=BASE + "X", definitions=[Definition("fr", "Explication")])
+    assert c.definition("en") is None
+
+
+def test_concept_definition_empty():
+    c = Concept(uri=BASE + "X")
+    assert c.definition() is None
+
+
+# ── OWLProperty ───────────────────────────────────────────────────────────────
+
+
+def test_owl_property_local_name_hash():
+    p = OWLProperty(uri="https://example.org/onto#hasName")
+    assert p.local_name == "hasName"
+
+
+def test_owl_property_local_name_slash():
+    p = OWLProperty(uri="https://example.org/onto/hasName")
+    assert p.local_name == "hasName"
+
+
+def test_owl_property_local_name_no_separator():
+    p = OWLProperty(uri="urn:hasName")
+    assert p.local_name == "urn:hasName"
+
+
+def test_owl_property_label_by_lang():
+    p = OWLProperty(uri=BASE + "p", labels=[Label("en", "has name"), Label("fr", "a nom")])
+    assert p.label("en") == "has name"
+    assert p.label("fr") == "a nom"
+
+
+def test_owl_property_label_fallback_to_first():
+    p = OWLProperty(uri=BASE + "p", labels=[Label("fr", "a nom")])
+    assert p.label("en") == "a nom"
+
+
+def test_owl_property_label_fallback_to_local():
+    p = OWLProperty(uri=BASE + "hasName")
+    assert p.label("en") == "hasName"
+
+
+# ── OWLIndividual ─────────────────────────────────────────────────────────────
+
+
+def test_owl_individual_local_name_hash():
+    ind = OWLIndividual(uri="https://example.org/onto#Fido")
+    assert ind.local_name == "Fido"
+
+
+def test_owl_individual_local_name_slash():
+    ind = OWLIndividual(uri="https://example.org/onto/Fido")
+    assert ind.local_name == "Fido"
+
+
+def test_owl_individual_local_name_no_separator():
+    ind = OWLIndividual(uri="urn:Fido")
+    assert ind.local_name == "urn:Fido"
+
+
+def test_owl_individual_label_by_lang():
+    ind = OWLIndividual(uri=BASE + "Fido", labels=[Label("en", "Fido"), Label("fr", "Fidou")])
+    assert ind.label("en") == "Fido"
+
+
+def test_owl_individual_label_fallback_to_first():
+    ind = OWLIndividual(uri=BASE + "Fido", labels=[Label("fr", "Fidou")])
+    assert ind.label("en") == "Fidou"
+
+
+def test_owl_individual_label_fallback_to_local():
+    ind = OWLIndividual(uri=BASE + "Fido")
+    assert ind.label("en") == "Fido"
+
+
+# ── RDFClass.local_name edge case ─────────────────────────────────────────────
+
+
+def test_rdf_class_local_name_no_separator():
+    c = RDFClass(uri="urn:Dog")
+    assert c.local_name == "urn:Dog"
+
+
+# ── ConceptScheme.local_name ──────────────────────────────────────────────────
+
+
+def test_concept_scheme_local_name_hash():
+    s = ConceptScheme(uri="https://example.org/onto#MyScheme")
+    assert s.local_name == "MyScheme"
+
+
+def test_concept_scheme_local_name_slash_trailing():
+    s = ConceptScheme(uri="https://example.org/onto/MyScheme/")
+    assert s.local_name == "MyScheme"
+
+
+def test_concept_scheme_local_name_no_separator():
+    s = ConceptScheme(uri="urn:MyScheme")
+    assert s.local_name == "urn:MyScheme"
+
+
+def test_concept_scheme_title_fallback_to_first_pref():
+    s = ConceptScheme(
+        uri=BASE + "S",
+        labels=[Label("fr", "Titre", type=LabelType.PREF)],
+    )
+    assert s.title("en") == "Titre"
+
+
+# ── Taxonomy.primary_scheme ───────────────────────────────────────────────────
+
+
+def test_taxonomy_primary_scheme_none():
+    t = Taxonomy()
+    assert t.primary_scheme() is None
+
+
+def test_taxonomy_primary_scheme_returns_first():
+    s1 = ConceptScheme(uri=BASE + "S1")
+    s2 = ConceptScheme(uri=BASE + "S2")
+    t = Taxonomy(schemes={s1.uri: s1, s2.uri: s2})
+    assert t.primary_scheme() is s1
+
+
+# ── Taxonomy.base_uri ─────────────────────────────────────────────────────────
+
+
+def test_taxonomy_base_uri_from_scheme_base_uri():
+    s = ConceptScheme(uri=BASE + "S", base_uri="https://example.org/test/")
+    t = Taxonomy(
+        schemes={s.uri: s},
+        concepts={BASE + "A": Concept(uri=BASE + "A")},
+    )
+    assert t.base_uri() == "https://example.org/test/"
+
+
+def test_taxonomy_base_uri_derived_from_concepts():
+    t = Taxonomy(
+        concepts={
+            "https://example.org/ns/A": Concept(uri="https://example.org/ns/A"),
+            "https://example.org/ns/B": Concept(uri="https://example.org/ns/B"),
+        }
+    )
+    assert t.base_uri() == "https://example.org/ns/"
+
+
+def test_taxonomy_base_uri_derived_from_scheme_uri():
+    s = ConceptScheme(uri="https://example.org/ns/MyScheme")
+    t = Taxonomy(schemes={s.uri: s})
+    result = t.base_uri()
+    assert result in ("https://example.org/ns/", "https://example.org/ns#")
+
+
+def test_taxonomy_base_uri_empty_fallback():
+    t = Taxonomy()
+    assert t.base_uri() == ""

@@ -11,13 +11,29 @@ import json
 import webbrowser
 from pathlib import Path
 
-from .model import Taxonomy, is_builtin_uri
+from .model import (
+    Concept,
+    ConceptScheme,
+    LabelType,
+    OWLIndividual,
+    RDFClass,
+    Taxonomy,
+    is_builtin_uri,
+)
+from .taxonomy_analysis import analyze_taxonomy
 
-# ── Data builder ──────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _label(text: str, max_len: int = 18) -> str:
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _local(uri: str) -> str:
+    for sep in ("#", "/"):
+        if sep in uri:
+            return uri.rsplit(sep, 1)[-1]
+    return uri
 
 
 def _ontology_title(taxonomy: Taxonomy, file_path: Path | None) -> str:
@@ -34,13 +50,141 @@ def _ontology_title(taxonomy: Taxonomy, file_path: Path | None) -> str:
     return "Ontology"
 
 
+def _label_for(uri: str, taxonomy: Taxonomy) -> str:
+    if uri in taxonomy.concepts:
+        return taxonomy.concepts[uri].pref_label("en")
+    if uri in taxonomy.owl_classes:
+        return taxonomy.owl_classes[uri].label("en")
+    if uri in taxonomy.owl_individuals:
+        return taxonomy.owl_individuals[uri].label("en")
+    if uri in taxonomy.owl_properties:
+        return taxonomy.owl_properties[uri].label("en")
+    return _local(uri)
+
+
+# ── Node detail builders ──────────────────────────────────────────────────────
+
+
+def _detail_concept(concept: Concept, taxonomy: Taxonomy) -> dict:
+    labels = [
+        {
+            "lang": lbl.lang,
+            "kind": "pref" if lbl.type == LabelType.PREF else "alt",
+            "value": lbl.value,
+        }
+        for lbl in concept.labels
+    ]
+    description = concept.definitions[0].value if concept.definitions else ""
+    scope = concept.scope_notes[0].value if concept.scope_notes else ""
+    relations: list[dict] = []
+    for u in concept.broader:
+        relations.append({"rel": "broader", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.narrower:
+        relations.append({"rel": "narrower", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.related:
+        relations.append({"rel": "related", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.exact_match:
+        relations.append({"rel": "exactMatch", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.close_match:
+        relations.append({"rel": "closeMatch", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.broad_match:
+        relations.append({"rel": "broadMatch", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.narrow_match:
+        relations.append({"rel": "narrowMatch", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in concept.related_match:
+        relations.append({"rel": "relatedMatch", "uri": u, "label": _label_for(u, taxonomy)})
+    return {
+        "labels": labels,
+        "description": description,
+        "scopeNote": scope,
+        "images": concept.schema_images,
+        "videos": concept.schema_videos,
+        "urls": concept.schema_urls,
+        "relations": relations,
+    }
+
+
+def _detail_class(cls: RDFClass, taxonomy: Taxonomy) -> dict:
+    labels = [{"lang": lbl.lang, "kind": "label", "value": lbl.value} for lbl in cls.labels]
+    description = cls.comments[0].value if cls.comments else ""
+    relations: list[dict] = []
+    for u in cls.sub_class_of:
+        if not is_builtin_uri(u):
+            relations.append({"rel": "subClassOf", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in cls.equivalent_class:
+        if not is_builtin_uri(u):
+            relations.append({"rel": "equivalentClass", "uri": u, "label": _label_for(u, taxonomy)})
+    for u in cls.disjoint_with:
+        if not is_builtin_uri(u):
+            relations.append({"rel": "disjointWith", "uri": u, "label": _label_for(u, taxonomy)})
+    return {
+        "labels": labels,
+        "description": description,
+        "scopeNote": "",
+        "images": cls.schema_images,
+        "videos": cls.schema_videos,
+        "urls": cls.schema_urls,
+        "relations": relations,
+    }
+
+
+def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
+    labels = [{"lang": lbl.lang, "kind": "label", "value": lbl.value} for lbl in ind.labels]
+    description = ind.comments[0].value if ind.comments else ""
+    relations: list[dict] = []
+    for u in ind.types:
+        if not is_builtin_uri(u):
+            relations.append({"rel": "type", "uri": u, "label": _label_for(u, taxonomy)})
+    for prop_uri, val_uri in ind.property_values:
+        prop = taxonomy.owl_properties.get(prop_uri)
+        prop_label = prop.label("en") if prop else _local(prop_uri)
+        relations.append(
+            {"rel": prop_label, "uri": val_uri, "label": _label_for(val_uri, taxonomy)}
+        )
+    return {
+        "labels": labels,
+        "description": description,
+        "scopeNote": "",
+        "images": ind.schema_images,
+        "videos": ind.schema_videos,
+        "urls": ind.schema_urls,
+        "relations": relations,
+    }
+
+
+def _detail_scheme(scheme: ConceptScheme, taxonomy: Taxonomy) -> dict:  # noqa: ARG001
+    labels = [
+        {
+            "lang": lbl.lang,
+            "kind": "pref" if lbl.type == LabelType.PREF else "alt",
+            "value": lbl.value,
+        }
+        for lbl in scheme.labels
+    ]
+    description = scheme.descriptions[0].value if scheme.descriptions else ""
+    return {
+        "labels": labels,
+        "description": description,
+        "scopeNote": "",
+        "images": [],
+        "videos": [],
+        "urls": [],
+        "relations": [],
+    }
+
+
+# ── Data builder ──────────────────────────────────────────────────────────────
+
+
 def build_graph(taxonomy: Taxonomy) -> dict:
     """Serialise taxonomy into a D3 {nodes, links} payload."""
     nodes: list[dict] = []
     links: list[dict] = []
     seen_nodes: set[str] = set()
 
-    def add_node(uri: str, label: str, node_type: str, img: str = "") -> None:
+    def add_node(
+        uri: str, label: str, node_type: str, img: str = "", detail: dict | None = None
+    ) -> None:
         if uri not in seen_nodes:
             seen_nodes.add(uri)
             nodes.append(
@@ -50,17 +194,28 @@ def build_graph(taxonomy: Taxonomy) -> dict:
                     "fullLabel": label,
                     "type": node_type,
                     "img": img,
+                    "detail": detail or {},
                 }
             )
 
     # Classes
     for uri, cls in taxonomy.owl_classes.items():
-        add_node(uri, cls.label("en"), "class", cls.schema_images[0] if cls.schema_images else "")
+        add_node(
+            uri,
+            cls.label("en"),
+            "class",
+            cls.schema_images[0] if cls.schema_images else "",
+            _detail_class(cls, taxonomy),
+        )
 
     # Individuals
     for uri, ind in taxonomy.owl_individuals.items():
         add_node(
-            uri, ind.label("en"), "individual", ind.schema_images[0] if ind.schema_images else ""
+            uri,
+            ind.label("en"),
+            "individual",
+            ind.schema_images[0] if ind.schema_images else "",
+            _detail_individual(ind, taxonomy),
         )
 
     # subClassOf
@@ -113,7 +268,7 @@ def build_graph(taxonomy: Taxonomy) -> dict:
 
     # SKOS ConceptSchemes
     for uri, scheme in taxonomy.schemes.items():
-        add_node(uri, scheme.title("en"), "scheme")
+        add_node(uri, scheme.title("en"), "scheme", "", _detail_scheme(scheme, taxonomy))
 
     # SKOS Concepts — top concepts get their own type for distinct rendering
     top_concept_uris: set[str] = {uri for uri, c in taxonomy.concepts.items() if c.top_concept_of}
@@ -124,6 +279,7 @@ def build_graph(taxonomy: Taxonomy) -> dict:
             concept.pref_label("en"),
             node_type,
             concept.schema_images[0] if concept.schema_images else "",
+            _detail_concept(concept, taxonomy),
         )
 
     # SKOS broader/narrower (show broader only to avoid duplicate edges)
@@ -150,9 +306,6 @@ def build_graph(taxonomy: Taxonomy) -> dict:
             )
 
     # ── Tier assignment for layout ─────────────────────────────────────────────
-    # tier 0 = roots (schemes, root OWL classes)
-    # tier 1 = top concepts, direct subclasses of root classes, root individuals
-    # tier 2 = deeper concepts / subclasses / typed individuals
     child_classes: set[str] = {p for cls in taxonomy.owl_classes.values() for p in cls.sub_class_of}
     for node in nodes:
         t = node["type"]
@@ -170,9 +323,59 @@ def build_graph(taxonomy: Taxonomy) -> dict:
     return {"nodes": nodes, "links": links}
 
 
+# ── Taxonomy metadata (for detail panel default view) ─────────────────────────
+
+
+def _taxonomy_meta(taxonomy: Taxonomy, file_path: Path | None) -> dict:
+    title = _ontology_title(taxonomy, file_path)
+    counts = {
+        "classes": len(taxonomy.owl_classes),
+        "individuals": len(taxonomy.owl_individuals),
+        "properties": len(taxonomy.owl_properties),
+        "schemes": len(taxonomy.schemes),
+        "top_concepts": sum(1 for c in taxonomy.concepts.values() if c.top_concept_of),
+        "concepts": len(taxonomy.concepts),
+    }
+    analyses = analyze_taxonomy(taxonomy)
+    schemes_data: list[dict] = []
+    for uri, analysis in analyses.items():
+        scheme = taxonomy.schemes.get(uri)
+        scheme_title = scheme.title("en") if scheme else _local(uri)
+        schemes_data.append(
+            {
+                "scheme_uri": uri,
+                "scheme_title": scheme_title,
+                "stats": {
+                    "total_concepts": analysis.stats.total_concepts,
+                    "top_level_concepts": analysis.stats.top_level_concepts,
+                    "max_depth": analysis.stats.max_depth,
+                    "avg_depth": analysis.stats.avg_depth,
+                    "languages": analysis.stats.languages,
+                },
+                "completions": [
+                    {
+                        "display_name": c.display_name,
+                        "total": c.total,
+                        "by_language": c.by_language,
+                    }
+                    for c in analysis.completions
+                ],
+                "issue_counts": {
+                    "errors": sum(1 for i in analysis.issues if i.severity == "error"),
+                    "warnings": sum(1 for i in analysis.issues if i.severity == "warning"),
+                },
+            }
+        )
+    return {
+        "title": title,
+        "ontology_uri": taxonomy.ontology_uri or "",
+        "counts": counts,
+        "schemes": schemes_data,
+    }
+
+
 # ── File output ───────────────────────────────────────────────────────────────
 
-# Module-level state: where the graph was last written.
 _out_path: Path | None = None
 _file_path: Path | None = None
 
@@ -188,7 +391,13 @@ def _write_html(taxonomy: Taxonomy, file_path: Path | None, out_path: Path) -> N
     title = _ontology_title(taxonomy, file_path)
     graph = build_graph(taxonomy)
     graph_json = json.dumps(graph, ensure_ascii=False)
-    html = _HTML_TEMPLATE.replace("__TITLE__", title).replace('"__GRAPH_DATA__"', graph_json)
+    meta = _taxonomy_meta(taxonomy, file_path)
+    meta_json = json.dumps(meta, ensure_ascii=False)
+    html = (
+        _HTML_TEMPLATE.replace("__TITLE__", title)
+        .replace('"__GRAPH_DATA__"', graph_json)
+        .replace('"__TAXO_META__"', meta_json)
+    )
     out_path.write_text(html, encoding="utf-8")
 
 
@@ -218,9 +427,11 @@ _HTML_TEMPLATE = """\
 <title>__TITLE__</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;overflow:hidden}
-#canvas{width:100vw;height:100vh;display:block}
-/* fill/stroke set inline per node for cluster colours; only structural props here */
+body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:flex;overflow:hidden}
+#canvas{flex:1;height:100vh;display:block}
+#detail-panel{width:25vw;min-width:200px;max-width:380px;height:100vh;overflow-y:auto;
+              background:#161b22;border-left:1px solid #30363d;flex-shrink:0}
+/* node / link structural styles */
 .node-class rect,.node-scheme rect{stroke-width:1.5px}
 .node-individual ellipse,.node-concept ellipse{stroke-width:1.5px}
 .node-topconcept ellipse{stroke-width:2.5px}
@@ -237,21 +448,11 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;overflow:
 .link-disjointWith{stroke:#ef4444;stroke-dasharray:5 3}
 .link-instanceOf{stroke:#8b5cf6;stroke-dasharray:3 3}
 .link-property{stroke:#10b981}
-.link-broader{stroke-dasharray:6 3}   /* stroke colour set inline per cluster */
+.link-broader{stroke-dasharray:6 3}
 .link-related{stroke:#f97316}
 .link-inScheme{stroke:#a855f7;stroke-dasharray:3 2}
 .link-label{font-size:9px;fill:#94a3b8;pointer-events:none;font-family:system-ui,sans-serif}
-#legend{position:fixed;top:12px;right:12px;background:#161b22;
-        border:1px solid #30363d;border-radius:8px;padding:10px 14px;min-width:170px;
-        max-height:calc(100vh - 24px);overflow-y:auto}
-#legend h3{font-size:12px;color:#8b949e;margin-bottom:8px;text-transform:uppercase;
-           letter-spacing:.05em}
-#legend h4{font-size:10px;color:#6b7280;margin:10px 0 5px;text-transform:uppercase;
-           letter-spacing:.04em}
-.lr{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px;color:#c9d1d9}
-.lsvg{flex-shrink:0}
-.lline{width:28px;height:0;flex-shrink:0}
-#stats{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);
+#stats{position:fixed;bottom:10px;left:37.5vw;transform:translateX(-50%);
        font-size:11px;color:#8b949e;background:#161b22;padding:4px 12px;
        border-radius:20px;border:1px solid #30363d}
 #hint{position:fixed;bottom:10px;left:12px;font-size:10px;color:#4b5563;
@@ -259,43 +460,78 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;overflow:
 #tip{position:fixed;pointer-events:none;background:#161b22;border:1px solid #30363d;
      border-radius:6px;padding:6px 10px;font-size:11px;color:#c9d1d9;
      max-width:280px;word-break:break-all;display:none;z-index:99}
+/* ── detail panel internals ── */
+.dp{padding:14px}
+.dp-h2{font-size:15px;font-weight:600;color:#f0f6fc;margin-bottom:3px;line-height:1.3}
+.dp-h3{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:5px;line-height:1.3;word-break:break-word}
+.dp-uri{font-size:10px;color:#6b7280;word-break:break-all;margin-bottom:10px}
+.dp-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;
+          font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
+.dp-class{background:#1d4ed8;color:#bfdbfe}
+.dp-individual{background:#92400e;color:#fef3c7}
+.dp-concept{background:#166534;color:#bbf7d0}
+.dp-topconcept{background:#0e7490;color:#a5f3fc}
+.dp-scheme{background:#6b21a8;color:#e9d5ff}
+.dp-property{background:#374151;color:#d1d5db}
+.dp-section{margin:8px 0}
+.dp-row{display:flex;justify-content:space-between;align-items:center;
+        padding:3px 0;border-bottom:1px solid #21262d;font-size:11px;color:#c9d1d9}
+.dp-row span:first-child{color:#8b949e}
+.dp-hr{border:none;border-top:1px solid #21262d;margin:10px 0}
+.dp-sub{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.dp-lbl{margin:2px 0;font-size:11px;line-height:1.3}
+.dp-lang{color:#8b949e;font-size:10px;margin-right:4px}
+.dp-pref{font-weight:600;color:#e6edf3}
+.dp-alt{color:#8b949e;font-style:italic}
+.dp-desc{color:#c9d1d9;font-size:11px;line-height:1.5;margin:8px 0}
+.dp-scope{color:#8b949e;font-size:11px;font-style:italic;line-height:1.4;margin:4px 0}
+.dp-img{width:100%;border-radius:6px;margin:6px 0;display:block}
+.dp-video{position:relative;margin:6px 0;cursor:pointer;border-radius:6px;overflow:hidden;background:#000}
+.dp-video img{width:100%;display:block}
+.dp-play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+         background:rgba(0,0,0,.65);border-radius:50%;width:44px;height:44px;
+         display:flex;align-items:center;justify-content:center;font-size:20px;
+         color:#fff;pointer-events:none}
+.dp-video:hover .dp-play{background:rgba(200,0,0,.85)}
+.dp-ext{display:block;color:#58a6ff;font-size:11px;margin:3px 0;
+        word-break:break-all;text-decoration:none}
+.dp-ext:hover{text-decoration:underline}
+.dp-rel{padding:3px 0;border-bottom:1px solid #21262d;font-size:11px;
+        display:flex;align-items:baseline;gap:6px}
+.dp-rel-tag{color:#8b949e;font-size:10px;min-width:72px;flex-shrink:0}
+.dp-link{color:#58a6ff;cursor:pointer;background:none;border:none;
+         font-size:11px;padding:0;text-align:left}
+.dp-link:hover{text-decoration:underline}
+.dp-back{background:none;border:none;color:#58a6ff;cursor:pointer;
+         font-size:11px;padding:0 0 12px;display:block}
+.dp-back:hover{text-decoration:underline}
+.dp-stitle{font-size:11px;font-weight:600;color:#c9d1d9;margin:10px 0 4px}
+.dp-issue{font-size:10px;margin-top:4px}
+/* legend rows (shared) */
+.lr{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px;color:#c9d1d9}
+.lsvg{flex-shrink:0}
+.lline{width:28px;height:0;flex-shrink:0}
 </style>
 </head>
 <body>
 <svg id="canvas"></svg>
-
-<div id="legend">
-  <h3>Legend</h3>
-  <div class="lr"><svg class="lsvg" width="34" height="16"><rect x="1" y="3" width="32" height="10" rx="2" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/></svg>Class</div>
-  <div class="lr"><svg class="lsvg" width="34" height="16"><rect x="1" y="4" width="32" height="8" rx="4" fill="#6b21a8" stroke="#c084fc" stroke-width="1.5"/></svg>Scheme</div>
-  <div class="lr"><svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="15" ry="7.5" fill="none" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3 2" opacity="0.6"/><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#0e7490" stroke="#22d3ee" stroke-width="2"/></svg>Top Concept</div>
-  <div class="lr"><svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="13" ry="6.5" fill="#166534" stroke="#4ade80" stroke-width="1.5"/></svg>Concept</div>
-  <div class="lr"><svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#b45309" stroke="#fcd34d" stroke-width="1.5"/></svg>Individual</div>
-  <div id="cluster-legend"></div>
-  <h4>Relations</h4>
-  <div class="lr"><div class="lline" style="border-top:2px dashed #475569"></div>subClassOf</div>
-  <div class="lr"><div class="lline" style="border-top:2px dashed #0ea5e9"></div>equivalentClass</div>
-  <div class="lr"><div class="lline" style="border-top:2px dashed #ef4444"></div>disjointWith</div>
-  <div class="lr"><div class="lline" style="border-top:2px dotted #8b5cf6"></div>rdf:type</div>
-  <div class="lr"><div class="lline" style="border-top:2px solid #10b981"></div>property</div>
-  <div class="lr"><div class="lline" style="border-top:2px dashed #6b7280"></div>broader</div>
-  <div class="lr"><div class="lline" style="border-top:2px solid #f97316"></div>related</div>
-  <div class="lr"><div class="lline" style="border-top:2px dotted #a855f7"></div>inScheme</div>
-</div>
-
+<div id="detail-panel"></div>
 <div id="stats"></div>
-<div id="hint">drag top-concept → moves whole tree · dbl-click to unpin · click: highlight · f: re-layout · esc: clear</div>
+<div id="hint">drag top-concept → moves whole tree · dbl-click to unpin · click: details · f: re-layout · esc: back</div>
 <div id="tip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
 (function(){
 const graphData = "__GRAPH_DATA__";
+const taxoMeta  = "__TAXO_META__";
+
+const panelEl = document.getElementById('detail-panel');
+const W = window.innerWidth - panelEl.offsetWidth;
+const H = window.innerHeight;
 const svg = d3.select("#canvas");
-const W = window.innerWidth, H = window.innerHeight;
 
 const defs = svg.append("defs");
-// Base markers for non-cluster link types (broader gets per-cluster markers below)
 [
   {id:"arr-subClassOf",     color:"#475569"},
   {id:"arr-equivalentClass",color:"#0ea5e9"},
@@ -315,27 +551,26 @@ const defs = svg.append("defs");
 });
 
 const root = svg.append("g");
-svg.call(d3.zoom().scaleExtent([0.05,6])
-  .on("zoom",e=>root.attr("transform",e.transform)));
+const zoomBehavior = d3.zoom().scaleExtent([0.05,6])
+  .on("zoom",e=>root.attr("transform",e.transform));
+svg.call(zoomBehavior);
 
 const CLS_W=110, CLS_H=36, IND_RX=52, IND_RY=24, TC_RX=60, TC_RY=30;
 
 function isRootClass(d){
-  return d.type==="class"&&!hasClusters&&d._owlCluster===d.id;
+  return d.type==="class"&&!subClassOfParentMap[d.id];
 }
 function nodeRadius(d){
-  if(isRootClass(d)) return Math.sqrt((CLS_W/2+7)**2+(CLS_H/2+7)**2);
+  if(isRootClass(d)) return Math.sqrt((CLS_W/2+10)**2+(CLS_H/2+10)**2);
   if(d.type==="class"||d.type==="scheme") return Math.sqrt((CLS_W/2)**2+(CLS_H/2)**2);
   if(d.type==="topconcept") return Math.max(TC_RX,TC_RY);
   return Math.max(IND_RX,IND_RY);
 }
 
-// ── Pre-computation (before D3 mutates link.source/target to node objects) ────
 const nodes = graphData.nodes;
 const links = graphData.links;
 const nodeById = Object.fromEntries(nodes.map(n=>[n.id,n]));
 
-// Arc offsets: parallel edges between the same pair fan out as curves.
 const pairCount={}, pairIdx={};
 links.forEach(l=>{
   const k=[l.source,l.target].sort().join("\x00");
@@ -348,7 +583,6 @@ links.forEach(l=>{
   pairIdx[k]++;
 });
 
-// Broader map (child→parent) and children map (parent→[children]).
 const broaderMap={};
 const childrenMap={};
 nodes.forEach(n=>{ childrenMap[n.id]=[]; });
@@ -358,7 +592,6 @@ links.forEach(l=>{
   (childrenMap[l.target]=childrenMap[l.target]||[]).push(l.source);
 });
 
-// subClassOf maps (child→parent, parent→[children]) for OWL tree coloring.
 const subClassOfParentMap={};
 const subClassOfChildMap={};
 nodes.forEach(n=>{ subClassOfChildMap[n.id]=[]; });
@@ -368,7 +601,6 @@ links.forEach(l=>{
   (subClassOfChildMap[l.target]=subClassOfChildMap[l.target]||[]).push(l.source);
 });
 
-// Cluster: walk broader chain to find topconcept ancestor.
 function clusterOf(id,depth){
   if(depth>20) return null;
   const n=nodeById[id]; if(!n) return null;
@@ -376,11 +608,8 @@ function clusterOf(id,depth){
   const b=broaderMap[id];
   return b?clusterOf(b,depth+1):null;
 }
-nodes.forEach(n=>{
-  n._cluster=(n.type==="topconcept")?n.id:clusterOf(n.id,0);
-});
+nodes.forEach(n=>{ n._cluster=(n.type==="topconcept")?n.id:clusterOf(n.id,0); });
 
-// Depth: 0=topconcept, 1=direct child, 2=grandchild, …
 function depthOf(id,visited){
   if(visited.has(id)) return 99;
   visited.add(id);
@@ -392,12 +621,11 @@ function depthOf(id,visited){
   return bd<0?1:bd+1;
 }
 nodes.forEach(n=>{
-  if(n.type==="scheme")       n._depth=-1;
-  else if(n.type==="topconcept") n._depth=0;
-  else                           n._depth=depthOf(n.id,new Set());
+  if(n.type==="scheme")           n._depth=-1;
+  else if(n.type==="topconcept")  n._depth=0;
+  else                             n._depth=depthOf(n.id,new Set());
 });
 
-// Tag each broader link with its source cluster (for per-cluster colouring).
 links.forEach(l=>{
   if(l.type==="broader") l._cluster=(nodeById[l.source]||{})._cluster||null;
 });
@@ -406,9 +634,6 @@ const topConcepts=nodes.filter(n=>n.type==="topconcept");
 const schemeNodes=nodes.filter(n=>n.type==="scheme");
 const hasClusters=topConcepts.length>0;
 
-// ── OWL class-tree clusters ───────────────────────────────────────────────────
-// Root classes (no superclass in the graph) each become a colour-coded tree.
-// Root OWL class = no superclass in the visible graph (regardless of tier).
 const rootClasses=!hasClusters
   ?nodes.filter(n=>n.type==="class"&&!subClassOfParentMap[n.id])
   :[];
@@ -419,26 +644,20 @@ rootClasses.forEach((rc,i)=>{
 
 function owlClusterOf(id,depth){
   if(depth>30) return null;
-  if(classTreeHue[id]!==undefined) return id;  // reached a root class
+  if(classTreeHue[id]!==undefined) return id;
   const p=subClassOfParentMap[id];
   return p?owlClusterOf(p,depth+1):null;
 }
-nodes.forEach(n=>{
-  n._owlCluster=n.type==="class"?owlClusterOf(n.id,0):null;
-});
-// Propagate to individuals via instanceOf links.
+nodes.forEach(n=>{ n._owlCluster=n.type==="class"?owlClusterOf(n.id,0):null; });
 links.forEach(l=>{
   if(l.type!=="instanceOf") return;
   const ind=nodeById[l.source], cls=nodeById[l.target];
   if(ind&&cls&&!ind._owlCluster) ind._owlCluster=cls._owlCluster;
 });
-// Tag each subClassOf link with its cluster.
 links.forEach(l=>{
   if(l.type==="subClassOf") l._owlCluster=(nodeById[l.source]||{})._owlCluster||null;
 });
 
-// ── Cluster colour palette ────────────────────────────────────────────────────
-// Each top concept gets a distinct hue; descendants inherit at reduced lightness.
 const clusterHue={};
 topConcepts.forEach((tc,i)=>{
   clusterHue[tc.id]=Math.round((i/topConcepts.length)*360+200)%360;
@@ -447,14 +666,14 @@ topConcepts.forEach((tc,i)=>{
 function nodeFill(d){
   if(d.type==="scheme") return "#6b21a8";
   if(d.type==="class"){
+    const rr=isRootClass(d);
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
-    return hue!=null?`hsl(${hue},65%,22%)`:"#1d4ed8";
+    return hue!=null?`hsl(${hue},65%,${rr?32:20}%)`:(rr?"#2563eb":"#1d4ed8");
   }
   if(d.type==="individual"){
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
     return hue!=null?`hsl(${hue},55%,18%)`:"#b45309";
   }
-  // SKOS (concept, topconcept)
   const hue=d._cluster?clusterHue[d._cluster]:null;
   if(hue==null) return d.type==="topconcept"?"#0e7490":"#166534";
   const dep=Math.max(0,d._depth||0);
@@ -463,14 +682,14 @@ function nodeFill(d){
 function nodeStroke(d){
   if(d.type==="scheme") return "#c084fc";
   if(d.type==="class"){
+    const rr=isRootClass(d);
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
-    return hue!=null?`hsl(${hue},90%,58%)`:"#60a5fa";
+    return hue!=null?`hsl(${hue},90%,${rr?72:58}%)`:(rr?"#93c5fd":"#60a5fa");
   }
   if(d.type==="individual"){
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
     return hue!=null?`hsl(${hue},80%,52%)`:"#fcd34d";
   }
-  // SKOS
   const hue=d._cluster?clusterHue[d._cluster]:null;
   if(hue==null) return d.type==="topconcept"?"#22d3ee":"#4ade80";
   const dep=Math.max(0,d._depth||0);
@@ -485,7 +704,6 @@ function subClassOfStroke(owlCluster){
   return hue!=null?`hsl(${hue},55%,40%)`:"#475569";
 }
 
-// Per-cluster arrowhead markers — broader (SKOS) and subClassOf (OWL).
 const clusterMarkerId={};
 topConcepts.forEach(tc=>{
   const hue=clusterHue[tc.id];
@@ -513,7 +731,6 @@ rootClasses.forEach(rc=>{
     .append("path").attr("d","M0,-4L8,0L0,4Z").attr("fill",color);
 });
 
-// ── Subtree helpers ───────────────────────────────────────────────────────────
 function getSubtree(rootId){
   const result=[],queue=[rootId],seen=new Set();
   while(queue.length){
@@ -526,8 +743,6 @@ function getSubtree(rootId){
   return result;
 }
 
-// ── SKOS lane assignment ──────────────────────────────────────────────────────
-// Each top concept owns an equal-width horizontal strip; _laneX is its centre.
 const laneWidth=hasClusters?W/(topConcepts.length+1):W;
 if(hasClusters){
   topConcepts.forEach((tc,i)=>{ tc._laneX=laneWidth*(i+1); });
@@ -538,8 +753,6 @@ if(hasClusters){
   });
 }
 
-// ── OWL cluster layout ────────────────────────────────────────────────────────
-// Root classes placed on a circle; subclasses orbit their root as a free network.
 const owlCircleR=!hasClusters&&rootClasses.length>0
   ?Math.min(W,H)*(0.28+0.05*Math.min(rootClasses.length,8)):0;
 if(!hasClusters){
@@ -550,7 +763,6 @@ if(!hasClusters){
   });
 }
 
-// Custom force: pull OWL subclasses toward their root-class centre.
 function owlClusterForce(alpha){
   nodes.forEach(n=>{
     if(!n._owlCluster||n._owlCluster===n.id) return;
@@ -560,12 +772,11 @@ function owlClusterForce(alpha){
   });
 }
 
-// ── Tier Y positions (SKOS only) ──────────────────────────────────────────────
 function tierY(n){
   if(n.type==="scheme")     return H*0.04;
   if(n.type==="topconcept") return H*0.14;
   const d=Math.min(n._depth||1,4);
-  return H*(0.14+d*0.18);  // depth1=32% depth2=50% depth3=68% depth4=86%
+  return H*(0.14+d*0.18);
 }
 function tierYStr(n){
   if(n.type==="scheme")     return 0.98;
@@ -573,11 +784,9 @@ function tierYStr(n){
   return 0.70;
 }
 
-// ── Seed positions ────────────────────────────────────────────────────────────
 function seedPositions(){
   nodes.forEach(n=>{ n.vx=0; n.vy=0; n.fx=null; n.fy=null; });
   if(hasClusters){
-    // SKOS: scheme at top, top concepts in horizontal lanes.
     schemeNodes.forEach(s=>{ s.x=W/2; s.y=H*0.04; });
     topConcepts.forEach(tc=>{
       tc.x=tc._laneX; tc.y=H*0.14;
@@ -589,13 +798,12 @@ function seedPositions(){
       n.y=tierY(n)+(Math.random()-0.5)*40;
     });
   } else {
-    // OWL: root classes pinned on a circle; subclasses seeded around their root.
     rootClasses.forEach(rc=>{
       rc.x=rc._cx; rc.y=rc._cy;
       rc.fx=rc._cx; rc.fy=rc._cy;
     });
     nodes.forEach(n=>{
-      if(n.type==="class"&&n._owlCluster===n.id) return;  // root, already placed
+      if(n.type==="class"&&n._owlCluster===n.id) return;
       if(n._owlCluster){
         const root=nodeById[n._owlCluster];
         if(root){
@@ -610,7 +818,6 @@ function seedPositions(){
 }
 seedPositions();
 
-// ── Edge path ─────────────────────────────────────────────────────────────────
 function edgePath(d){
   const dx=d.target.x-d.source.x, dy=d.target.y-d.source.y;
   const dist=Math.sqrt(dx*dx+dy*dy)||1;
@@ -624,12 +831,10 @@ function edgePath(d){
   return `M${sx},${sy}Q${mx},${my} ${tx},${ty}`;
 }
 
-// ── Simulation ────────────────────────────────────────────────────────────────
 const sim=d3.forceSimulation()
   .force("collide",d3.forceCollide(d=>nodeRadius(d)+18));
 
 if(hasClusters){
-  // SKOS: lane + tier forces
   sim.force("link",d3.forceLink().id(d=>d.id)
     .distance(d=>d.type==="inScheme"?H*0.12:d.type==="broader"?H*0.17:150)
     .strength(0.12))
@@ -638,7 +843,6 @@ if(hasClusters){
   .force("cx",d3.forceX(d=>d._laneX).strength(d=>d.type==="scheme"?0.04:0.35))
   .force("cy",d3.forceY(d=>tierY(d)).strength(d=>tierYStr(d)));
 } else {
-  // OWL: network clusters — root classes repel hard, subclasses pulled to their root.
   sim.force("link",d3.forceLink().id(d=>d.id)
     .distance(120).strength(0.3))
   .force("charge",d3.forceManyBody().strength(d=>
@@ -648,7 +852,6 @@ if(hasClusters){
   .force("owlCluster",owlClusterForce);
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
 const linkG=root.append("g");
 const nodeG=root.append("g");
 
@@ -727,7 +930,6 @@ nodeSel=nodeG.selectAll("g")
           if(!e.active) sim.alphaTarget(0.3).restart();
           d.fx=d.x; d.fy=d.y;
           if(d.type==="topconcept"){
-            // Carry the whole subtree as a rigid group.
             const sub=getSubtree(d.id).filter(n=>n!==d);
             d._dragSub=sub.map(n=>({n,dx:n.x-d.x,dy:n.y-d.y}));
             sub.forEach(n=>{ n.fx=n.x; n.fy=n.y; });
@@ -741,11 +943,15 @@ nodeSel=nodeG.selectAll("g")
         .on("end",(e,d)=>{
           if(!e.active) sim.alphaTarget(0);
           d._dragSub=null;
-          updatePinMarker(nodeSel);  // sticky: fx/fy kept
+          updatePinMarker(nodeSel);
         }))
-      .on("click",(_,d)=>{ highlighted=highlighted===d.id?null:d.id; applyHighlight(); })
+      .on("click",(_,d)=>{
+        const newHl=highlighted===d.id?null:d.id;
+        highlighted=newHl;
+        applyHighlight();
+        if(newHl) showDetail(d); else showDefault();
+      })
       .on("dblclick",(_,d)=>{
-        // Unpin whole subtree for top concepts, just the node otherwise.
         (d.type==="topconcept"?getSubtree(d.id):[d])
           .forEach(n=>{ n.fx=null; n.fy=null; });
         updatePinMarker(nodeSel);
@@ -757,17 +963,17 @@ nodeSel=nodeG.selectAll("g")
       const s=d3.select(this);
       const fill=nodeFill(d), stroke=nodeStroke(d);
       if(d.type==="class"||d.type==="scheme"){
-        const root=isRootClass(d);
-        if(root){
-          s.append("rect").attr("x",-CLS_W/2-7).attr("y",-CLS_H/2-7)
-            .attr("width",CLS_W+14).attr("height",CLS_H+14).attr("rx",12)
-            .attr("fill","none").attr("stroke",stroke).attr("stroke-width",1.5)
-            .attr("stroke-dasharray","5 3").attr("opacity",0.55);
+        const rr=isRootClass(d);
+        if(rr){
+          s.append("rect").attr("x",-CLS_W/2-9).attr("y",-CLS_H/2-9)
+            .attr("width",CLS_W+18).attr("height",CLS_H+18).attr("rx",14)
+            .attr("fill","none").attr("stroke",stroke).attr("stroke-width",2)
+            .attr("opacity",0.7);
         }
         s.append("rect").attr("x",-CLS_W/2).attr("y",-CLS_H/2)
           .attr("width",CLS_W).attr("height",CLS_H).attr("rx",7)
           .style("fill",fill).style("stroke",stroke)
-          .style("stroke-width",root?"2.5px":"1.5px");
+          .style("stroke-width",rr?"3px":"1.5px");
       } else if(d.type==="topconcept"){
         s.append("ellipse").attr("rx",TC_RX+6).attr("ry",TC_RY+6)
           .attr("fill","none").attr("stroke",stroke).attr("stroke-width",1)
@@ -778,7 +984,6 @@ nodeSel=nodeG.selectAll("g")
         s.append("ellipse").attr("rx",IND_RX).attr("ry",IND_RY)
           .style("fill",fill).style("stroke",stroke);
       }
-      // Image thumbnail clipped to node shape
       if(d.img){
         if(d.type==="class"||d.type==="scheme"){
           s.append("image").attr("href",d.img)
@@ -800,25 +1005,10 @@ nodeSel=nodeG.selectAll("g")
         .attr("cx",d.type==="class"||d.type==="scheme"?CLS_W/2-6:IND_RX-6)
         .attr("cy",d.type==="class"||d.type==="scheme"?-CLS_H/2+6:-IND_RY+6)
         .attr("r",4).attr("fill","#f59e0b").attr("stroke","#0d1117").attr("stroke-width",1.5);
-      s.append("text").text(d.label);
+      s.append("text").text(d.label).style("font-weight",isRootClass(d)?"600":"400");
     });
     return g;
   });
-
-// ── Dynamic cluster legend ────────────────────────────────────────────────────
-const cl=document.getElementById("cluster-legend");
-if(topConcepts.length>0){
-  const h=document.createElement("h4"); h.textContent="Trees"; cl.appendChild(h);
-  topConcepts.forEach(tc=>{
-    const hue=clusterHue[tc.id];
-    const fill=`hsl(${hue},65%,28%)`, stroke=`hsl(${hue},90%,60%)`;
-    const row=document.createElement("div"); row.className="lr";
-    row.innerHTML=`<div class="lbox" style="background:${fill};border:2px solid ${stroke};`
-      +`border-radius:50%"></div><span style="font-size:11px">${tc.fullLabel||tc.label}</span>`;
-    cl.appendChild(row);
-  });
-}
-// (OWL class trees not listed individually — colour visible on nodes)
 
 sim.nodes(nodes);
 sim.force("link").links(links);
@@ -833,14 +1023,215 @@ sim.on("tick",()=>{
 });
 
 document.addEventListener("keydown",e=>{
-  if(e.key==="Escape"){ highlighted=null; applyHighlight(); }
+  if(e.key==="Escape"){
+    highlighted=null; applyHighlight(); showDefault();
+  }
   if(e.key==="f"){
     nodes.forEach(n=>{ n.fx=null; n.fy=null; });
-    seedPositions();           // re-seeds and re-pins top concepts at their lanes
+    seedPositions();
     updatePinMarker(nodeSel);
     sim.alpha(0.9).restart();
   }
 });
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+let _vIdx=0;
+const _vEmbed={}, _vWatch={}, _vTitle={};
+
+function ytId(url){
+  const m=url.match(/[?&]v=([A-Za-z0-9_-]{11})|youtu\\.be\\/([A-Za-z0-9_-]{11})|\\/shorts\\/([A-Za-z0-9_-]{11})/);
+  return m?(m[1]||m[2]||m[3]):null;
+}
+
+function renderVideo(url, title){
+  const vid=ytId(url);
+  if(vid){
+    const idx=_vIdx++;
+    _vEmbed[idx]='https://www.youtube.com/embed/'+vid+'?autoplay=1';
+    _vWatch[idx]='https://www.youtube.com/watch?v='+vid;
+    _vTitle[idx]=title||'Video';
+    return '<div class="dp-video" id="vf'+idx+'" onclick="playVideo('+idx+')">'
+      +'<img src="https://img.youtube.com/vi/'+vid+'/hqdefault.jpg" alt="">'
+      +'<div class="dp-play">&#9654;</div></div>';
+  }
+  return '<a class="dp-ext" href="'+esc(url)+'" target="_blank">&#9654; Watch video</a>';
+}
+
+function playVideo(idx){
+  const w=Math.round(window.screen.width*0.45);
+  const h=Math.round(window.screen.height*0.5);
+  const left=Math.round((window.screen.width-w)/2);
+  const top=Math.round((window.screen.height-h)/2);
+  window.open(_vWatch[idx],'_blank',
+    'width='+w+',height='+h+',left='+left+',top='+top+',resizable=yes,scrollbars=yes');
+}
+
+function closeVideo(){}
+
+
+function showDefault(){
+  const c=taxoMeta.counts;
+  let rows='';
+  if(c.classes)      rows+='<div class="dp-row"><span>Classes</span><span>'+c.classes+'</span></div>';
+  if(c.individuals)  rows+='<div class="dp-row"><span>Individuals</span><span>'+c.individuals+'</span></div>';
+  if(c.properties)   rows+='<div class="dp-row"><span>Properties</span><span>'+c.properties+'</span></div>';
+  if(c.schemes)      rows+='<div class="dp-row"><span>Schemes</span><span>'+c.schemes+'</span></div>';
+  if(c.top_concepts) rows+='<div class="dp-row"><span>Top Concepts</span><span>'+c.top_concepts+'</span></div>';
+  if(c.concepts)     rows+='<div class="dp-row"><span>Concepts</span><span>'+c.concepts+'</span></div>';
+
+  let schHtml='';
+  (taxoMeta.schemes||[]).forEach(s=>{
+    schHtml+='<hr class="dp-hr"><div class="dp-stitle">'+esc(s.scheme_title)+'</div>';
+    const st=s.stats;
+    schHtml+='<div class="dp-row"><span>Total concepts</span><span>'+st.total_concepts+'</span></div>';
+    schHtml+='<div class="dp-row"><span>Top-level</span><span>'+st.top_level_concepts+'</span></div>';
+    schHtml+='<div class="dp-row"><span>Max depth</span><span>'+st.max_depth+'</span></div>';
+    schHtml+='<div class="dp-row"><span>Avg depth</span><span>'+st.avg_depth+'</span></div>';
+    if(st.languages&&st.languages.length)
+      schHtml+='<div class="dp-row"><span>Languages</span><span>'+st.languages.join(', ')+'</span></div>';
+    (s.completions||[]).forEach(cp=>{
+      Object.keys(cp.by_language).forEach(lg=>{
+        const pct=st.total_concepts?Math.round(cp.by_language[lg]/st.total_concepts*100):0;
+        schHtml+='<div class="dp-row"><span>'+esc(cp.display_name)+' ['+lg+']</span><span>'+pct+'%</span></div>';
+      });
+    });
+    const ic=s.issue_counts||{};
+    const parts=[];
+    if(ic.errors)   parts.push('<span style="color:#f87171">'+ic.errors+' error'+(ic.errors!==1?'s':'')+'</span>');
+    if(ic.warnings) parts.push('<span style="color:#fbbf24">'+ic.warnings+' warning'+(ic.warnings!==1?'s':'')+'</span>');
+    if(parts.length) schHtml+='<div class="dp-issue">'+parts.join(' · ')+'</div>';
+  });
+
+  // Cluster legend
+  let clLeg='';
+  if(topConcepts.length>0){
+    clLeg+='<hr class="dp-hr"><div class="dp-sub">Trees</div>';
+    topConcepts.forEach(tc=>{
+      const hue=clusterHue[tc.id];
+      const fill=`hsl(${hue},65%,28%)`,stroke=`hsl(${hue},90%,60%)`;
+      clLeg+='<div class="lr"><div style="width:14px;height:14px;background:'+fill+';border:2px solid '+stroke+';border-radius:50%;flex-shrink:0"></div>'
+        +'<span style="font-size:11px">'+esc(tc.fullLabel||tc.label)+'</span></div>';
+    });
+  }
+
+  panelEl.innerHTML='<div class="dp">'
+    +'<div class="dp-h2">'+esc(taxoMeta.title)+'</div>'
+    +(taxoMeta.ontology_uri?'<div class="dp-uri">'+esc(taxoMeta.ontology_uri)+'</div>':'')
+    +'<div class="dp-section">'+rows+'</div>'
+    +schHtml
+    +(()=>{
+    const nodeTypes=new Set(nodes.map(n=>n.type));
+    const linkTypes=new Set(links.map(l=>l.type));
+    const hasRootCls=nodes.some(n=>n.type==="class"&&!subClassOfParentMap[n.id]);
+    const hasSubCls=nodes.some(n=>n.type==="class"&&!!subClassOfParentMap[n.id]);
+    const NT=[
+      ['class-root','<svg class="lsvg" width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="4" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.7"/><rect x="5" y="3" width="24" height="10" rx="2" fill="#2563eb" stroke="#93c5fd" stroke-width="2"/></svg>','Root Class'],
+      ['class-sub', '<svg class="lsvg" width="34" height="16"><rect x="1" y="3" width="32" height="10" rx="2" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/></svg>','Class'],
+      ['scheme',    '<svg class="lsvg" width="34" height="16"><rect x="1" y="4" width="32" height="8" rx="4" fill="#6b21a8" stroke="#c084fc" stroke-width="1.5"/></svg>','Scheme'],
+      ['topconcept','<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#0e7490" stroke="#22d3ee" stroke-width="2"/></svg>','Top Concept'],
+      ['concept',   '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="13" ry="6.5" fill="#166534" stroke="#4ade80" stroke-width="1.5"/></svg>','Concept'],
+      ['individual','<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#b45309" stroke="#fcd34d" stroke-width="1.5"/></svg>','Individual'],
+      ['property',  '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#374151" stroke="#9ca3af" stroke-width="1.5"/></svg>','Property'],
+    ];
+    const LT=[
+      ['subClassOf',    'border-top:2px dashed #475569', 'subClassOf'],
+      ['equivalentClass','border-top:2px dashed #0ea5e9','equivalentClass'],
+      ['disjointWith',  'border-top:2px dashed #ef4444', 'disjointWith'],
+      ['instanceOf',    'border-top:2px dotted #8b5cf6', 'rdf:type'],
+      ['property',      'border-top:2px solid #10b981',  'property'],
+      ['broader',       'border-top:2px dashed #6b7280', 'broader'],
+      ['related',       'border-top:2px solid #f97316',  'related'],
+      ['inScheme',      'border-top:2px dotted #a855f7', 'inScheme'],
+    ];
+    let leg='<hr class="dp-hr"><div class="dp-sub">Legend</div>';
+    NT.forEach(([t,svg,label])=>{
+      if(t==='class-root'&&hasRootCls) leg+='<div class="lr">'+svg+label+'</div>';
+      else if(t==='class-sub'&&hasSubCls) leg+='<div class="lr">'+svg+label+'</div>';
+      else if(t!=='class-root'&&t!=='class-sub'&&nodeTypes.has(t)) leg+='<div class="lr">'+svg+label+'</div>';
+    });
+    leg+=clLeg;
+    const relRows=LT.filter(([t])=>linkTypes.has(t));
+    if(relRows.length){
+      leg+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';
+      relRows.forEach(([,style,label])=>{ leg+='<div class="lr"><div class="lline" style="'+style+'"></div>'+label+'</div>'; });
+    }
+    return leg;
+  })()
+    +'</div>';
+}
+
+function showDetail(d){
+  const det=d.detail||{};
+  const km={class:'Class',individual:'Individual',concept:'Concept',topconcept:'Top Concept',scheme:'Scheme',property:'Property'};
+  let h='<div class="dp">';
+  h+='<button class="dp-back" onclick="dpBack()">&#8592; Overview</button>';
+  h+='<span class="dp-badge dp-'+d.type+'">'+esc(km[d.type]||d.type)+'</span>';
+  h+='<div class="dp-h3">'+esc(d.fullLabel)+'</div>';
+  h+='<div class="dp-uri">'+esc(d.id)+'</div>';
+
+  // Labels
+  const labels=det.labels||[];
+  const prefs=labels.filter(l=>l.kind==='pref');
+  const alts=labels.filter(l=>l.kind==='alt');
+  const allOther=labels.filter(l=>l.kind==='label');
+  const showLbls=[...prefs.slice(1),...alts,...allOther];
+  if(showLbls.length){
+    h+='<div class="dp-section">';
+    showLbls.forEach(l=>{
+      h+='<div class="dp-lbl"><span class="dp-lang">['+esc(l.lang)+']</span>'
+        +'<span class="'+(l.kind==='pref'?'dp-pref':'dp-alt')+'">'+esc(l.value)+'</span></div>';
+    });
+    h+='</div>';
+  }
+
+  if(det.description) h+='<div class="dp-desc">'+esc(det.description)+'</div>';
+  if(det.scopeNote)   h+='<div class="dp-scope">'+esc(det.scopeNote)+'</div>';
+
+  (det.images||[]).forEach(u=>{ h+='<img class="dp-img" src="'+esc(u)+'" loading="lazy">'; });
+  (det.videos||[]).forEach(u=>{ h+=renderVideo(u,d.fullLabel); });
+
+  if((det.urls||[]).length){
+    h+='<div class="dp-section">';
+    det.urls.forEach(u=>{ h+='<a class="dp-ext" href="'+esc(u)+'" target="_blank">'+esc(u)+'</a>'; });
+    h+='</div>';
+  }
+
+  const rels=det.relations||[];
+  if(rels.length){
+    h+='<hr class="dp-hr">';
+    rels.forEach(r=>{
+      const inGraph=!!nodeById[r.uri];
+      const labelPart=inGraph
+        ?`<button class="dp-link" onclick="selectNode('${esc(r.uri)}')">${esc(r.label)}</button>`
+        :'<span style="color:#c9d1d9">'+esc(r.label)+'</span>';
+      h+='<div class="dp-rel"><span class="dp-rel-tag">'+esc(r.rel)+'</span>'+labelPart+'</div>';
+    });
+  }
+  h+='</div>';
+  panelEl.innerHTML=h;
+}
+
+function selectNode(uri){
+  const n=nodeById[uri]; if(!n) return;
+  highlighted=uri;
+  applyHighlight();
+  showDetail(n);
+  const t=d3.zoomTransform(svg.node());
+  svg.transition().duration(500).call(
+    zoomBehavior.transform,
+    d3.zoomIdentity.translate(W/2-t.k*n.x, H/2-t.k*n.y).scale(t.k)
+  );
+}
+
+// Expose functions needed by onclick attributes in dynamically-built HTML
+window.playVideo=playVideo;
+window.selectNode=selectNode;
+window.dpBack=function(){highlighted=null;applyHighlight();showDefault();};
+
+showDefault();
 
 })();
 </script>

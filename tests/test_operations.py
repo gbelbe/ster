@@ -216,6 +216,32 @@ def test_set_definition_replaces(simple_taxonomy):
     assert defns[0].value == "New definition."
 
 
+# ── set_scope_note ───────────────────────────────────────────────────────────
+
+
+def test_set_scope_note_new(simple_taxonomy):
+    uri = BASE + "Child2"
+    operations.set_scope_note(simple_taxonomy, uri, "en", "Use for mammals only.")
+    notes = [sn for sn in simple_taxonomy.concepts[uri].scope_notes if sn.lang == "en"]
+    assert len(notes) == 1
+    assert notes[0].value == "Use for mammals only."
+
+
+def test_set_scope_note_replaces(simple_taxonomy):
+    uri = BASE + "Child2"
+    operations.set_scope_note(simple_taxonomy, uri, "en", "First note.")
+    operations.set_scope_note(simple_taxonomy, uri, "en", "Replaced note.")
+    notes = [sn for sn in simple_taxonomy.concepts[uri].scope_notes if sn.lang == "en"]
+    assert len(notes) == 1
+    assert notes[0].value == "Replaced note."
+
+
+def test_set_scope_note_missing_concept():
+    t = Taxonomy()
+    with pytest.raises(ConceptNotFoundError):
+        operations.set_scope_note(t, BASE + "Ghost", "en", "Some note.")
+
+
 # ── add_related / remove_related ─────────────────────────────────────────────
 
 

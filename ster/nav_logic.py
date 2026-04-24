@@ -102,11 +102,14 @@ def _flatten_taxonomy(
     scheme_depth: int = 0,
     scheme_prefix: str = "",
     concept_base_depth: int = 0,
+    include_owl: bool = True,
 ) -> list[TreeLine]:
     """Flatten a single Taxonomy into TreeLine rows.
 
     *scheme_depth* / *scheme_prefix* / *concept_base_depth* let callers
     embed the output inside a parent file node (multi-file workspace).
+    Set *include_owl=False* when the caller handles OWL rendering itself
+    (e.g. _flatten_mixed) to avoid double-rendering classes and individuals.
     """
     if folded is None:
         folded = set()
@@ -141,19 +144,39 @@ def _flatten_taxonomy(
                 visit(child, depth + 1, prefix + ext, i == len(children) - 1)
 
     # ── OWL class hierarchy ───────────────────────────────────────────────────
-    if taxonomy.owl_classes:
+    if include_owl and (taxonomy.owl_classes or taxonomy.owl_individuals):
         _cls_children: dict[str, list[str]] = {u: [] for u in taxonomy.owl_classes}
         for uri, cls in taxonomy.owl_classes.items():
             for parent in cls.sub_class_of:
                 if parent in _cls_children:
                     _cls_children[parent].append(uri)
+        # Nest individuals under their first known parent class
+        for ind_uri, ind in taxonomy.owl_individuals.items():
+            placed = False
+            for t in ind.types:
+                if t in _cls_children:
+                    _cls_children[t].append(ind_uri)
+                    placed = True
+                    break
+            if not placed:
+                # no known class parent → add as pseudo-root so it still renders
+                _cls_children[ind_uri] = []
         _child_uris = {
             uri
             for uri, cls in taxonomy.owl_classes.items()
             for p in cls.sub_class_of
             if p in taxonomy.owl_classes
         }
+        # individuals nested under a class are also child URIs
+        _ind_child_uris = {
+            ind_uri
+            for ind in taxonomy.owl_individuals.values()
+            for t in ind.types
+            if t in taxonomy.owl_classes
+            for ind_uri in [ind.uri]
+        }
         root_classes = [u for u in taxonomy.owl_classes if u not in _child_uris]
+        root_inds = [u for u in taxonomy.owl_individuals if u not in _ind_child_uris]
 
         def visit_class(uri: str, depth: int, prefix: str, is_last: bool) -> None:
             if uri in _visited_tax:
@@ -162,6 +185,7 @@ def _flatten_taxonomy(
             connector = "└── " if is_last else "├── "
             children = _cls_children.get(uri, [])
             is_fold = uri in folded and bool(children)
+            node_t = "individual" if uri in taxonomy.owl_individuals else taxonomy.node_type(uri)
             result.append(
                 TreeLine(
                     uri=uri,
@@ -169,7 +193,7 @@ def _flatten_taxonomy(
                     prefix=scheme_prefix + prefix + connector,
                     is_folded=is_fold,
                     file_path=file_path,
-                    node_type=taxonomy.node_type(uri),
+                    node_type=node_t,
                 )
             )
             if not is_fold:
@@ -177,11 +201,12 @@ def _flatten_taxonomy(
                 for i, child in enumerate(children):
                     visit_class(child, depth + 1, prefix + ext, i == len(children) - 1)
 
-        for i, uri in enumerate(root_classes):
-            visit_class(uri, 0, "", i == len(root_classes) - 1)
+        all_roots = root_classes + root_inds
+        for i, uri in enumerate(all_roots):
+            visit_class(uri, 0, "", i == len(all_roots) - 1)
 
-    # ── OWL individuals ───────────────────────────────────────────────────────
-    for uri in taxonomy.owl_individuals:
+    # ── OWL individuals not yet placed (fallback — should be empty after above) ─
+    for uri in taxonomy.owl_individuals if include_owl else []:
         if uri in _visited_tax:
             continue
         _visited_tax.add(uri)
@@ -196,7 +221,7 @@ def _flatten_taxonomy(
         )
 
     # ── OWL properties ────────────────────────────────────────────────────────
-    for uri in taxonomy.owl_properties:
+    for uri in taxonomy.owl_properties if include_owl else []:
         if uri in _visited_tax:
             continue
         _visited_tax.add(uri)
@@ -1106,6 +1131,7 @@ def _flatten_mixed(
         scheme_depth=scheme_depth,
         scheme_prefix=scheme_prefix,
         concept_base_depth=concept_base_depth,
+        include_owl=False,
     )
 
     # Pure classes: in owl_classes but NOT already shown as SKOS concepts
