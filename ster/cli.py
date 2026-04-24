@@ -41,7 +41,6 @@ _VERSION = "0.3.1"
 _AUTHOR = "ster contributors"
 
 _PYPI_URL = "https://pypi.org/pypi/ster/json"
-_GH_RELEASE_URL = "https://api.github.com/repos/gbelbe/ster/releases/tags/v{version}"
 _VERSION_CACHE = Path(tempfile.gettempdir()) / "ster_version_check.json"
 
 
@@ -57,18 +56,30 @@ def _newer(a: str, b: str) -> bool:
     return _t(a) > _t(b)
 
 
-def _trim_release_notes(body: str, max_bullets: int = 5) -> str:
-    """Extract up to *max_bullets* bullet lines from a markdown release-notes body."""
+def _parse_changelog_section(description: str, version: str, max_bullets: int = 5) -> str:
+    """Extract bullet points from the ## Changelog section matching *version*.
+
+    Looks for a header like "### 0.3.2" or "### 0.3.2 — …" and collects the
+    bullet lines that follow it, stopping at the next header.
+    Returns a Rich-formatted string ready for display, or "" if not found.
+    """
     bullets: list[str] = []
-    for line in body.splitlines():
-        stripped = line.strip()
-        # Accept lines starting with common markdown bullet markers
-        if stripped.startswith(("- ", "* ", "+ ", "• ")):
-            # Strip the marker and any bold/backtick markdown for clean terminal display
-            text = stripped[2:].strip()
-            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)  # **bold**
-            text = re.sub(r"`(.+?)`", r"\1", text)  # `code`
-            bullets.append(text)
+    in_section = False
+    version_pat = re.compile(r"^#{1,4}\s+" + re.escape(version) + r"(\s|$)")
+    header_pat = re.compile(r"^#{1,4}\s+")
+    for line in description.splitlines():
+        if version_pat.match(line):
+            in_section = True
+            continue
+        if in_section:
+            if header_pat.match(line):
+                break
+            stripped = line.strip()
+            if stripped.startswith(("- ", "* ", "+ ")):
+                text = stripped[2:].strip()
+                text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+                text = re.sub(r"`(.+?)`", r"\1", text)
+                bullets.append(text)
     trimmed = bullets[:max_bullets]
     if len(bullets) > max_bullets:
         trimmed.append(f"… and {len(bullets) - max_bullets} more")
@@ -78,8 +89,10 @@ def _trim_release_notes(body: str, max_bullets: int = 5) -> str:
 def _check_new_version() -> tuple[str, str] | None:
     """Return (latest_version, release_notes_summary) if newer than installed, else None.
 
-    Result is cached for 24 hours.  The network fetch (PyPI + GitHub releases)
-    always runs in a background daemon thread — this function never blocks.
+    Makes a single call to the PyPI JSON API (at most once per 24 h; result is
+    cached in a temp file).  Release notes are parsed from the package description
+    (README ## Changelog section) returned by the same API response.
+    The network fetch always runs in a background daemon thread — never blocks.
     """
     now = datetime.now()
     cached_latest: str | None = None
@@ -98,20 +111,10 @@ def _check_new_version() -> tuple[str, str] | None:
     def _fetch() -> None:
         try:
             with urllib.request.urlopen(_PYPI_URL, timeout=3) as resp:  # noqa: S310
-                latest = json.loads(resp.read())["info"]["version"]
-
-            notes = ""
-            gh_url = _GH_RELEASE_URL.format(version=latest)
-            try:
-                req = urllib.request.Request(
-                    gh_url,
-                    headers={"Accept": "application/vnd.github+json", "User-Agent": "ster-cli"},
-                )
-                with urllib.request.urlopen(req, timeout=3) as gh_resp:  # noqa: S310
-                    notes = json.loads(gh_resp.read()).get("body", "")
-            except Exception:
-                pass
-
+                payload = json.loads(resp.read())
+            latest = payload["info"]["version"]
+            description = payload["info"].get("description") or ""
+            notes = _parse_changelog_section(description, latest)
             _VERSION_CACHE.write_text(
                 json.dumps({"checked": now.isoformat(), "latest": latest, "notes": notes})
             )
@@ -131,7 +134,7 @@ def _print_welcome() -> None:
     update_info = _check_new_version()
     if update_info:
         new_ver, notes = update_info
-        notes_block = f"\n{_trim_release_notes(notes)}" if notes.strip() else ""
+        notes_block = f"\n{notes}" if notes.strip() else ""
         update_section = (
             f"\n[yellow]↑ v{new_ver} available[/yellow]  "
             f"[dim]pip install --upgrade ster[/dim]{notes_block}"
