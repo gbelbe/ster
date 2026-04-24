@@ -140,6 +140,62 @@ def _flatten_taxonomy(
             for i, child in enumerate(children):
                 visit(child, depth + 1, prefix + ext, i == len(children) - 1)
 
+    # ── OWL class hierarchy ───────────────────────────────────────────────────
+    if taxonomy.owl_classes:
+        _cls_children: dict[str, list[str]] = {u: [] for u in taxonomy.owl_classes}
+        for uri, cls in taxonomy.owl_classes.items():
+            for parent in cls.sub_class_of:
+                if parent in _cls_children:
+                    _cls_children[parent].append(uri)
+        _child_uris = {
+            uri
+            for uri, cls in taxonomy.owl_classes.items()
+            for p in cls.sub_class_of
+            if p in taxonomy.owl_classes
+        }
+        root_classes = [u for u in taxonomy.owl_classes if u not in _child_uris]
+
+        def visit_class(uri: str, depth: int, prefix: str, is_last: bool) -> None:
+            if uri in _visited_tax:
+                return
+            _visited_tax.add(uri)
+            connector = "└── " if is_last else "├── "
+            children = _cls_children.get(uri, [])
+            is_fold = uri in folded and bool(children)
+            result.append(
+                TreeLine(
+                    uri=uri,
+                    depth=scheme_depth + depth,
+                    prefix=scheme_prefix + prefix + connector,
+                    is_folded=is_fold,
+                    file_path=file_path,
+                    node_type=taxonomy.node_type(uri),
+                )
+            )
+            if not is_fold:
+                ext = "    " if is_last else "│   "
+                for i, child in enumerate(children):
+                    visit_class(child, depth + 1, prefix + ext, i == len(children) - 1)
+
+        for i, uri in enumerate(root_classes):
+            visit_class(uri, 0, "", i == len(root_classes) - 1)
+
+    # ── OWL individuals ───────────────────────────────────────────────────────
+    for uri in taxonomy.owl_individuals:
+        if uri in _visited_tax:
+            continue
+        _visited_tax.add(uri)
+        result.append(
+            TreeLine(
+                uri=uri,
+                depth=scheme_depth,
+                prefix=scheme_prefix,
+                node_type="individual",
+                file_path=file_path,
+            )
+        )
+
+    # ── SKOS concept schemes ──────────────────────────────────────────────────
     for scheme in taxonomy.schemes.values():
         scheme_folded = scheme.uri in folded
         tops = list(scheme.top_concepts)

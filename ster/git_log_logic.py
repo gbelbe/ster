@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from .handles import assign_handles
-from .model import Concept, LabelType, Taxonomy
+from .model import Concept, LabelType, OWLIndividual, RDFClass, Taxonomy
 
 # ──────────────────────────── data model ─────────────────────────────────────
 
@@ -123,9 +123,45 @@ def _concept_field_diffs(before: Concept, after: Concept) -> list[FieldDiff]:
     return diffs
 
 
+def _owl_class_field_diffs(before: RDFClass, after: RDFClass) -> list[FieldDiff]:
+    diffs: list[FieldDiff] = []
+    b_lbl = {lbl.lang: lbl.value for lbl in before.labels}
+    a_lbl = {lbl.lang: lbl.value for lbl in after.labels}
+    for lang in sorted(set(b_lbl) | set(a_lbl)):
+        b, a = b_lbl.get(lang, ""), a_lbl.get(lang, "")
+        if b != a:
+            diffs.append(FieldDiff(f"label[{lang}]", b, a))
+    b_cmt = {c.lang: c.value for c in before.comments}
+    a_cmt = {c.lang: c.value for c in after.comments}
+    for lang in sorted(set(b_cmt) | set(a_cmt)):
+        b, a = b_cmt.get(lang, ""), a_cmt.get(lang, "")
+        if b != a:
+            diffs.append(FieldDiff(f"comment[{lang}]", b, a))
+    return diffs
+
+
+def _owl_ind_field_diffs(before: OWLIndividual, after: OWLIndividual) -> list[FieldDiff]:
+    diffs: list[FieldDiff] = []
+    b_lbl = {lbl.lang: lbl.value for lbl in before.labels}
+    a_lbl = {lbl.lang: lbl.value for lbl in after.labels}
+    for lang in sorted(set(b_lbl) | set(a_lbl)):
+        b, a = b_lbl.get(lang, ""), a_lbl.get(lang, "")
+        if b != a:
+            diffs.append(FieldDiff(f"label[{lang}]", b, a))
+    b_cmt = {c.lang: c.value for c in before.comments}
+    a_cmt = {c.lang: c.value for c in after.comments}
+    for lang in sorted(set(b_cmt) | set(a_cmt)):
+        b, a = b_cmt.get(lang, ""), a_cmt.get(lang, "")
+        if b != a:
+            diffs.append(FieldDiff(f"comment[{lang}]", b, a))
+    return diffs
+
+
 def compute_taxonomy_diff(before: Taxonomy, after: Taxonomy) -> dict[str, ConceptChange]:
     """Compare two taxonomies; return a mapping from URI to ConceptChange."""
     result: dict[str, ConceptChange] = {}
+
+    # SKOS concepts
     for uri in set(before.concepts) | set(after.concepts):
         bc = before.concepts.get(uri)
         ac = after.concepts.get(uri)
@@ -136,21 +172,46 @@ def compute_taxonomy_diff(before: Taxonomy, after: Taxonomy) -> dict[str, Concep
         else:
             fd = _concept_field_diffs(bc, ac)
             result[uri] = ConceptChange(uri, "changed" if fd else "unchanged", fd)
+
+    # OWL classes
+    for uri in set(before.owl_classes) | set(after.owl_classes):
+        bc2 = before.owl_classes.get(uri)
+        ac2 = after.owl_classes.get(uri)
+        if bc2 is None:
+            result[uri] = ConceptChange(uri, "added")
+        elif ac2 is None:
+            result[uri] = ConceptChange(uri, "removed")
+        else:
+            fd2 = _owl_class_field_diffs(bc2, ac2)
+            result[uri] = ConceptChange(uri, "changed" if fd2 else "unchanged", fd2)
+
+    # OWL individuals
+    for uri in set(before.owl_individuals) | set(after.owl_individuals):
+        bi = before.owl_individuals.get(uri)
+        ai = after.owl_individuals.get(uri)
+        if bi is None:
+            result[uri] = ConceptChange(uri, "added")
+        elif ai is None:
+            result[uri] = ConceptChange(uri, "removed")
+        else:
+            fd3 = _owl_ind_field_diffs(bi, ai)
+            result[uri] = ConceptChange(uri, "changed" if fd3 else "unchanged", fd3)
+
     return result
 
 
 def build_diff_taxonomy(before: Taxonomy, after: Taxonomy) -> Taxonomy:
-    """Create a merged taxonomy for display: after + ghost concepts from before.
+    """Create a merged taxonomy for display: after + ghost entities from before.
 
-    Deleted concepts are re-inserted at their former parent position so they
-    still appear in the tree (coloured red by the renderer).
+    Deleted concepts/classes/individuals are re-inserted so they still appear
+    in the tree (coloured red by the renderer).
     """
     merged = deepcopy(after)
 
+    # Ghost SKOS concepts
     for uri in sorted(set(before.concepts) - set(after.concepts)):
         ghost = deepcopy(before.concepts[uri])
         merged.concepts[uri] = ghost
-
         attached = False
         for p_uri in ghost.broader:
             if p_uri in merged.concepts:
@@ -159,11 +220,18 @@ def build_diff_taxonomy(before: Taxonomy, after: Taxonomy) -> Taxonomy:
                     p.narrower.append(uri)
                 attached = True
                 break
-
         if not attached:
             scheme = merged.primary_scheme()
             if scheme and uri not in scheme.top_concepts:
                 scheme.top_concepts.append(uri)
+
+    # Ghost OWL classes
+    for uri in sorted(set(before.owl_classes) - set(after.owl_classes)):
+        merged.owl_classes[uri] = deepcopy(before.owl_classes[uri])
+
+    # Ghost OWL individuals
+    for uri in sorted(set(before.owl_individuals) - set(after.owl_individuals)):
+        merged.owl_individuals[uri] = deepcopy(before.owl_individuals[uri])
 
     assign_handles(merged)
     return merged
@@ -198,4 +266,20 @@ def compute_auto_fold(taxonomy: Taxonomy, diff: dict[str, ConceptChange]) -> set
             _subtree_has_change(taxonomy, tc, diff, set()) for tc in scheme.top_concepts
         ):
             folded.add(scheme.uri)
+    # Fold unchanged OWL classes that have subclasses
+    children_map: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
+    for uri, cls in taxonomy.owl_classes.items():
+        for parent in cls.sub_class_of:
+            if parent in children_map:
+                children_map[parent].append(uri)
+    for uri in taxonomy.owl_classes:
+        if children_map.get(uri):
+            ch = diff.get(uri)
+            subtree_changed = ch and ch.status != "unchanged"
+            if not subtree_changed:
+                subtree_changed = any(
+                    diff.get(c) and diff[c].status != "unchanged" for c in children_map.get(uri, [])
+                )
+            if not subtree_changed:
+                folded.add(uri)
     return folded
