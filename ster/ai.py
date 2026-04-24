@@ -388,6 +388,7 @@ def _build_concept_names_prompt(
     lang: str,
     n: int,
     exclude: list[str] | None,
+    parent_definition: str = "",
 ) -> str:
     """Return the rendered prompt for suggest_concept_names without calling the LLM."""
     ex = exclude or []
@@ -397,9 +398,13 @@ def _build_concept_names_prompt(
     desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
     if parent_label:
         parent_line = f'Parent concept: "{parent_label}"\n'
+        if parent_definition.strip():
+            parent_line += f'Parent definition: "{parent_definition}"\n'
         scope_phrase = f'narrower concept labels directly under "{parent_label}"'
     else:
         parent_line = "Scope: top-level concepts (direct children of the scheme)\n"
+        if parent_definition.strip():
+            parent_line += f'Scheme description: "{parent_definition}"\n'
         scope_phrase = "top-level concept labels for this taxonomy"
 
     return _P.TMPL_SUGGEST_CONCEPT_NAMES.substitute(
@@ -420,6 +425,7 @@ def render_suggest_concept_names_prompt(
     lang: str,
     n: int = 20,
     exclude: list[str] | None = None,
+    parent_definition: str = "",
 ) -> str:
     """Return the rendered prompt text without calling the LLM.
 
@@ -427,7 +433,7 @@ def render_suggest_concept_names_prompt(
     before it is submitted.
     """
     return _build_concept_names_prompt(
-        taxonomy_name, taxonomy_description, parent_label, lang, n, exclude
+        taxonomy_name, taxonomy_description, parent_label, lang, n, exclude, parent_definition
     )
 
 
@@ -438,6 +444,7 @@ def suggest_concept_names(
     lang: str,
     n: int = 20,
     exclude: list[str] | None = None,
+    parent_definition: str = "",
 ) -> list[str]:
     """Return up to *n* concept name suggestions for insertion into a taxonomy.
 
@@ -446,7 +453,7 @@ def suggest_concept_names(
     """
     ex = exclude or []
     prompt_text = _build_concept_names_prompt(
-        taxonomy_name, taxonomy_description, parent_label, lang, n, ex
+        taxonomy_name, taxonomy_description, parent_label, lang, n, ex, parent_definition
     )
     text = _call(prompt_text, _P.SUGGEST_CONCEPT_NAMES)
 
@@ -460,7 +467,53 @@ def suggest_concept_names(
     return [r for r in results if r.lower() not in seen_set][:n]
 
 
+def suggest_concept_names_from_prompt(prompt_text: str) -> list[str]:
+    """Call the LLM with a pre-rendered (possibly user-edited) concept-names prompt."""
+    text = _call(prompt_text, _P.SUGGEST_CONCEPT_NAMES)
+
+    def _clean(ln: str) -> str:
+        return _NUMBERING_RE.sub("", ln.strip()).strip().strip('"').strip("'")
+
+    return [_clean(ln) for ln in text.splitlines() if _is_label(_NUMBERING_RE.sub("", ln.strip()))]
+
+
 # ── Feature: suggest alternative labels ───────────────────────────────────────
+
+
+def _build_alt_labels_prompt(
+    pref_label: str,
+    taxonomy_name: str,
+    taxonomy_description: str,
+    lang: str,
+    concept_definition: str = "",
+) -> str:
+    """Return the rendered prompt for suggest_alt_labels without calling the LLM."""
+    desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
+    def_line = f'Concept definition: "{concept_definition}"\n' if concept_definition.strip() else ""
+    return _P.TMPL_SUGGEST_ALT_LABELS.substitute(
+        taxonomy_name=taxonomy_name,
+        taxonomy_description_line=desc_line,
+        pref_label=pref_label,
+        concept_definition_line=def_line,
+        lang=lang,
+    )
+
+
+def render_suggest_alt_labels_prompt(
+    pref_label: str,
+    taxonomy_name: str,
+    taxonomy_description: str,
+    lang: str,
+    concept_definition: str = "",
+) -> str:
+    """Return the rendered alt-labels prompt text without calling the LLM.
+
+    Used by the prompt-review step so the user can inspect and edit the prompt
+    before it is submitted.
+    """
+    return _build_alt_labels_prompt(
+        pref_label, taxonomy_name, taxonomy_description, lang, concept_definition
+    )
 
 
 def suggest_alt_labels(
@@ -468,17 +521,21 @@ def suggest_alt_labels(
     taxonomy_name: str,
     taxonomy_description: str,
     lang: str,
+    concept_definition: str = "",
 ) -> list[str]:
     """Return up to 5 alternative-label suggestions for a concept."""
-    desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
-    prompt_text = _P.TMPL_SUGGEST_ALT_LABELS.substitute(
-        taxonomy_name=taxonomy_name,
-        taxonomy_description_line=desc_line,
-        pref_label=pref_label,
-        lang=lang,
+    prompt_text = _build_alt_labels_prompt(
+        pref_label, taxonomy_name, taxonomy_description, lang, concept_definition
     )
-    text = _call(prompt_text, _P.SUGGEST_ALT_LABELS)
+    return _parse_alt_labels(_call(prompt_text, _P.SUGGEST_ALT_LABELS))
 
+
+def suggest_alt_labels_from_prompt(prompt_text: str) -> list[str]:
+    """Call the LLM with a pre-rendered (possibly user-edited) alt-labels prompt."""
+    return _parse_alt_labels(_call(prompt_text, _P.SUGGEST_ALT_LABELS))
+
+
+def _parse_alt_labels(text: str) -> list[str]:
     def _clean(ln: str) -> str:
         return _NUMBERING_RE.sub("", ln.strip()).strip().strip('"').strip("'")
 
@@ -496,13 +553,18 @@ def suggest_definition(
     taxonomy_description: str,
     parent_label: str | None,
     lang: str,
+    parent_definition: str = "",
 ) -> str:
     """Return an AI-suggested skos:definition for a concept."""
     desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
     if parent_label:
         parent_line = f'Parent concept: "{parent_label}"\n'
+        if parent_definition.strip():
+            parent_line += f'Parent definition: "{parent_definition}"\n'
     else:
         parent_line = "Scope: top-level concept\n"
+        if parent_definition.strip():
+            parent_line += f'Scheme description: "{parent_definition}"\n'
     prompt_text = _P.TMPL_SUGGEST_DEFINITION.substitute(
         taxonomy_name=taxonomy_name,
         taxonomy_description_line=desc_line,
@@ -511,3 +573,126 @@ def suggest_definition(
         lang=lang,
     )
     return _call(prompt_text, _P.SUGGEST_DEFINITION).strip()
+
+
+# ── Feature: generate SPARQL query from natural language ──────────────────────
+
+_SPARQL_FENCE_RE = re.compile(r"```(?:sparql)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
+_SPARQL_PREFIX_RE = re.compile(r"^\s*PREFIX\b", re.IGNORECASE | re.MULTILINE)
+
+# Standard prefixes injected when the LLM omits them (saves input + output tokens).
+_SPARQL_PREFIXES = """\
+PREFIX skos:    <http://www.w3.org/2004/02/skos/core#>
+PREFIX rdfs:    <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX owl:     <http://www.w3.org/2002/07/owl#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+PREFIX xsd:     <http://www.w3.org/2001/XMLSchema#>
+"""
+
+
+def _parse_sparql(text: str) -> str:
+    """Extract the SPARQL query from an LLM response and ensure prefixes are present.
+
+    Strips markdown fences and leading prose.  When the LLM follows the prompt
+    instruction to omit PREFIX declarations, the standard SKOS/RDF set is
+    prepended automatically — so the query is always executable as-is.
+    """
+    m = _SPARQL_FENCE_RE.search(text)
+    body = m.group(1).strip() if m else _extract_sparql_body(text)
+    if not _SPARQL_PREFIX_RE.search(body):
+        body = _SPARQL_PREFIXES + "\n" + body
+    return body
+
+
+def _extract_sparql_body(text: str) -> str:
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if re.match(r"\s*(PREFIX|SELECT|ASK|CONSTRUCT|DESCRIBE)\b", ln, re.IGNORECASE):
+            return "\n".join(lines[i:]).strip()
+    return text.strip()
+
+
+def _build_sparql_prompt(
+    taxonomy_name: str,
+    taxonomy_description: str,
+    scheme_uris: list[str],
+    question: str,
+) -> str:
+    desc_line = f"Description: {taxonomy_description}\n" if taxonomy_description.strip() else ""
+    uris_line = (
+        "Base URIs: " + ", ".join(f"<{u}>" for u in scheme_uris[:5]) + "\n" if scheme_uris else ""
+    )
+    return _P.TMPL_GENERATE_SPARQL.substitute(
+        taxonomy_name=taxonomy_name,
+        taxonomy_description_line=desc_line,
+        scheme_uris_line=uris_line,
+        question=question,
+    )
+
+
+def render_generate_sparql_prompt(
+    taxonomy_name: str,
+    taxonomy_description: str,
+    scheme_uris: list[str],
+    question: str,
+) -> str:
+    """Return the rendered SPARQL-generation prompt without calling the LLM.
+
+    Used by the prompt-review step so the user can inspect or edit the
+    prompt before submission.
+    """
+    return _build_sparql_prompt(taxonomy_name, taxonomy_description, scheme_uris, question)
+
+
+def _validate_sparql_syntax(query: str) -> str:
+    """Return an error string if *query* fails rdflib's SPARQL parser, else ''.
+
+    Uses ``rdflib.plugins.sparql.prepareQuery`` which parses and compiles the
+    query without executing it — safe to call on untrusted LLM output.
+    Returns '' on any import error so callers degrade gracefully.
+    """
+    try:
+        from rdflib.plugins.sparql import prepareQuery
+
+        prepareQuery(query)
+        return ""
+    except ImportError:
+        return ""
+    except Exception as exc:
+        return str(exc)
+
+
+def _repair_sparql(query: str, error: str) -> str:
+    """Ask the LLM to fix *query* given the parse *error*. Returns repaired query."""
+    prompt_text = _P.TMPL_SPARQL_REPAIR.substitute(error=error, faulty_query=query)
+    return _parse_sparql(_call(prompt_text, _P.SPARQL_REPAIR))
+
+
+def _validated_sparql(query: str, max_repairs: int = 1) -> str:
+    """Validate *query* syntax and attempt up to *max_repairs* LLM repair calls.
+
+    Skips repair in copy-paste mode (would require a second interactive paste).
+    """
+    for _ in range(max_repairs):
+        error = _validate_sparql_syntax(query)
+        if not error or is_copypaste():
+            break
+        query = _repair_sparql(query, error)
+    return query
+
+
+def generate_sparql(
+    taxonomy_name: str,
+    taxonomy_description: str,
+    scheme_uris: list[str],
+    question: str,
+) -> str:
+    """Return an AI-generated SPARQL query for *question* about the taxonomy."""
+    prompt_text = _build_sparql_prompt(taxonomy_name, taxonomy_description, scheme_uris, question)
+    return _validated_sparql(_parse_sparql(_call(prompt_text, _P.GENERATE_SPARQL)))
+
+
+def generate_sparql_from_prompt(prompt_text: str) -> str:
+    """Call the LLM with a pre-rendered (possibly user-edited) SPARQL-generation prompt."""
+    return _validated_sparql(_parse_sparql(_call(prompt_text, _P.GENERATE_SPARQL)))

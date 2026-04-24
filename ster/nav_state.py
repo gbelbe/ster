@@ -36,8 +36,8 @@ class TreeState:
     scroll: int = 0
     folded: set[str] = dc_field(default_factory=set)
     search: SearchState = dc_field(default_factory=SearchState)
-    # "taxonomy" = SKOS skos:broader view; "ontology" = OWL rdfs:subClassOf view
-    view_mode: str = "taxonomy"
+    # "mixed" = SKOS + OWL; "taxonomy" = SKOS only; "ontology" = OWL rdfs:subClassOf
+    view_mode: str = "mixed"
 
 
 @dataclass
@@ -107,6 +107,45 @@ class ConfirmDeleteState:
 
 
 @dataclass
+class OntologySetupState:
+    """Startup prompt: no owl:Ontology / skos:ConceptScheme URI found in file."""
+
+    # 0 = name field active, 1 = URI field active
+    active: int = 0
+    name_buf: str = ""
+    name_pos: int = 0
+    uri_buf: str = ""
+    uri_pos: int = 0
+    error: str = ""
+
+
+@dataclass
+class ClassToIndividualState:
+    """Confirmation dialog when converting a class that has typed individuals."""
+
+    class_uri: str = ""
+    # Individuals that will lose their rdf:type link to this class
+    affected_uris: list[str] = dc_field(default_factory=list)
+    # Superclasses to re-attach individuals to (may be empty)
+    parent_uris: list[str] = dc_field(default_factory=list)
+    # 0 = Delete individuals, 1 = Re-attach to superclass, 2 = Cancel
+    cursor: int = 0
+
+
+@dataclass
+class IndividualToClassState:
+    """Confirmation dialog when converting an individual that has property-value relations."""
+
+    individual_uri: str = ""
+    # Outgoing: (prop_uri, prop_label, target_label) — this individual → others
+    outgoing: list[tuple[str, str, str]] = dc_field(default_factory=list)
+    # Incoming: (source_label, prop_uri, prop_label) — other individuals → this one
+    incoming: list[tuple[str, str, str]] = dc_field(default_factory=list)
+    # 0 = Proceed (delete relations), 1 = Cancel
+    cursor: int = 0
+
+
+@dataclass
 class MovePickState:
     source_uri: str = ""
     is_link: bool = False  # kept for compat; prefer pick_type
@@ -115,6 +154,7 @@ class MovePickState:
     filter_text: str = ""
     cursor: int = 0
     scroll: int = 0
+    replace_val_uri: str = ""  # non-empty → edit mode (replace this val, not append)
 
 
 @dataclass
@@ -300,6 +340,9 @@ ViewerState = (
     | SchemeCreateState
     | BatchCreateState
     | ConfirmDeleteState
+    | OntologySetupState
+    | ClassToIndividualState
+    | IndividualToClassState
     | MovePickState
     | LangPickState
     | MapSchemePickState
