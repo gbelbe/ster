@@ -195,6 +195,21 @@ def _flatten_taxonomy(
             )
         )
 
+    # ── OWL properties ────────────────────────────────────────────────────────
+    for uri in taxonomy.owl_properties:
+        if uri in _visited_tax:
+            continue
+        _visited_tax.add(uri)
+        result.append(
+            TreeLine(
+                uri=uri,
+                depth=scheme_depth,
+                prefix=scheme_prefix,
+                node_type="property",
+                file_path=file_path,
+            )
+        )
+
     # ── SKOS concept schemes ──────────────────────────────────────────────────
     for scheme in taxonomy.schemes.values():
         scheme_folded = scheme.uri in folded

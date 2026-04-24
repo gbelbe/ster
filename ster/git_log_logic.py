@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from .handles import assign_handles
-from .model import Concept, LabelType, OWLIndividual, RDFClass, Taxonomy
+from .model import Concept, LabelType, OWLIndividual, OWLProperty, RDFClass, Taxonomy
 
 # ──────────────────────────── data model ─────────────────────────────────────
 
@@ -78,18 +78,40 @@ def _parse_log(raw: str) -> list[LogEntry]:
     return entries
 
 
+def _set_diff(label: str, before: list[str], after: list[str]) -> list[FieldDiff]:
+    """Return FieldDiffs for items added/removed in a list-valued field."""
+    b, a = set(before), set(after)
+    diffs: list[FieldDiff] = []
+    for v in sorted(b - a):
+        diffs.append(FieldDiff(label, v, ""))
+    for v in sorted(a - b):
+        diffs.append(FieldDiff(label, "", v))
+    return diffs
+
+
+def _lang_diffs(
+    label_fmt: str, before_map: dict[str, str], after_map: dict[str, str]
+) -> list[FieldDiff]:
+    """Return FieldDiffs for per-language scalar fields (label, definition…)."""
+    diffs: list[FieldDiff] = []
+    for lang in sorted(set(before_map) | set(after_map)):
+        b, a = before_map.get(lang, ""), after_map.get(lang, "")
+        if b != a:
+            diffs.append(FieldDiff(label_fmt.format(lang=lang), b, a))
+    return diffs
+
+
 def _concept_field_diffs(before: Concept, after: Concept) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
 
-    # prefLabel
-    b_pref = {lbl.lang: lbl.value for lbl in before.labels if lbl.type == LabelType.PREF}
-    a_pref = {lbl.lang: lbl.value for lbl in after.labels if lbl.type == LabelType.PREF}
-    for lang in sorted(set(b_pref) | set(a_pref)):
-        b, a = b_pref.get(lang, ""), a_pref.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"prefLabel[{lang}]", b, a))
+    # prefLabel (scalar per lang)
+    diffs += _lang_diffs(
+        "prefLabel[{lang}]",
+        {lbl.lang: lbl.value for lbl in before.labels if lbl.type == LabelType.PREF},
+        {lbl.lang: lbl.value for lbl in after.labels if lbl.type == LabelType.PREF},
+    )
 
-    # altLabel  (multi-valued per lang)
+    # altLabel (multi-valued per lang)
     b_alt: dict[str, set[str]] = {}
     a_alt: dict[str, set[str]] = {}
     for lbl in before.labels:
@@ -104,56 +126,98 @@ def _concept_field_diffs(before: Concept, after: Concept) -> list[FieldDiff]:
         for v in sorted(a_alt.get(lang, set()) - b_alt.get(lang, set())):
             diffs.append(FieldDiff(f"altLabel[{lang}]", "", v))
 
-    # definition
-    b_def = {d.lang: d.value for d in before.definitions}
-    a_def = {d.lang: d.value for d in after.definitions}
-    for lang in sorted(set(b_def) | set(a_def)):
-        b, a = b_def.get(lang, ""), a_def.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"definition[{lang}]", b, a))
+    # definition / scopeNote (scalar per lang)
+    diffs += _lang_diffs(
+        "definition[{lang}]",
+        {d.lang: d.value for d in before.definitions},
+        {d.lang: d.value for d in after.definitions},
+    )
+    diffs += _lang_diffs(
+        "scopeNote[{lang}]",
+        {d.lang: d.value for d in before.scope_notes},
+        {d.lang: d.value for d in after.scope_notes},
+    )
 
-    # scopeNote
-    b_sn = {d.lang: d.value for d in before.scope_notes}
-    a_sn = {d.lang: d.value for d in after.scope_notes}
-    for lang in sorted(set(b_sn) | set(a_sn)):
-        b, a = b_sn.get(lang, ""), a_sn.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"scopeNote[{lang}]", b, a))
+    # Structural relations
+    diffs += _set_diff("broader", before.broader, after.broader)
+    diffs += _set_diff("narrower", before.narrower, after.narrower)
+    diffs += _set_diff("related", before.related, after.related)
+
+    # SKOS mapping properties
+    diffs += _set_diff("broadMatch", before.broad_match, after.broad_match)
+    diffs += _set_diff("narrowMatch", before.narrow_match, after.narrow_match)
+    diffs += _set_diff("exactMatch", before.exact_match, after.exact_match)
+    diffs += _set_diff("closeMatch", before.close_match, after.close_match)
+    diffs += _set_diff("relatedMatch", before.related_match, after.related_match)
+
+    # schema.org annotations
+    diffs += _set_diff("schema:image", before.schema_images, after.schema_images)
+    diffs += _set_diff("schema:video", before.schema_videos, after.schema_videos)
+    diffs += _set_diff("schema:url", before.schema_urls, after.schema_urls)
 
     return diffs
 
 
 def _owl_class_field_diffs(before: RDFClass, after: RDFClass) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
-    b_lbl = {lbl.lang: lbl.value for lbl in before.labels}
-    a_lbl = {lbl.lang: lbl.value for lbl in after.labels}
-    for lang in sorted(set(b_lbl) | set(a_lbl)):
-        b, a = b_lbl.get(lang, ""), a_lbl.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"label[{lang}]", b, a))
-    b_cmt = {c.lang: c.value for c in before.comments}
-    a_cmt = {c.lang: c.value for c in after.comments}
-    for lang in sorted(set(b_cmt) | set(a_cmt)):
-        b, a = b_cmt.get(lang, ""), a_cmt.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"comment[{lang}]", b, a))
+    diffs += _lang_diffs(
+        "label[{lang}]",
+        {lbl.lang: lbl.value for lbl in before.labels},
+        {lbl.lang: lbl.value for lbl in after.labels},
+    )
+    diffs += _lang_diffs(
+        "comment[{lang}]",
+        {c.lang: c.value for c in before.comments},
+        {c.lang: c.value for c in after.comments},
+    )
+    diffs += _set_diff("subClassOf", before.sub_class_of, after.sub_class_of)
+    diffs += _set_diff("equivalentClass", before.equivalent_class, after.equivalent_class)
+    diffs += _set_diff("disjointWith", before.disjoint_with, after.disjoint_with)
+    diffs += _set_diff("schema:image", before.schema_images, after.schema_images)
+    diffs += _set_diff("schema:video", before.schema_videos, after.schema_videos)
+    diffs += _set_diff("schema:url", before.schema_urls, after.schema_urls)
     return diffs
 
 
 def _owl_ind_field_diffs(before: OWLIndividual, after: OWLIndividual) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
-    b_lbl = {lbl.lang: lbl.value for lbl in before.labels}
-    a_lbl = {lbl.lang: lbl.value for lbl in after.labels}
-    for lang in sorted(set(b_lbl) | set(a_lbl)):
-        b, a = b_lbl.get(lang, ""), a_lbl.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"label[{lang}]", b, a))
-    b_cmt = {c.lang: c.value for c in before.comments}
-    a_cmt = {c.lang: c.value for c in after.comments}
-    for lang in sorted(set(b_cmt) | set(a_cmt)):
-        b, a = b_cmt.get(lang, ""), a_cmt.get(lang, "")
-        if b != a:
-            diffs.append(FieldDiff(f"comment[{lang}]", b, a))
+    diffs += _lang_diffs(
+        "label[{lang}]",
+        {lbl.lang: lbl.value for lbl in before.labels},
+        {lbl.lang: lbl.value for lbl in after.labels},
+    )
+    diffs += _lang_diffs(
+        "comment[{lang}]",
+        {c.lang: c.value for c in before.comments},
+        {c.lang: c.value for c in after.comments},
+    )
+    diffs += _set_diff("rdf:type", before.types, after.types)
+    # property assertions: represent each as "prop → target"
+    b_pv = [f"{p} → {t}" for p, t in before.property_values]
+    a_pv = [f"{p} → {t}" for p, t in after.property_values]
+    diffs += _set_diff("propertyValue", b_pv, a_pv)
+    diffs += _set_diff("schema:image", before.schema_images, after.schema_images)
+    diffs += _set_diff("schema:video", before.schema_videos, after.schema_videos)
+    diffs += _set_diff("schema:url", before.schema_urls, after.schema_urls)
+    return diffs
+
+
+def _owl_prop_field_diffs(before: OWLProperty, after: OWLProperty) -> list[FieldDiff]:
+    diffs: list[FieldDiff] = []
+    diffs += _lang_diffs(
+        "label[{lang}]",
+        {lbl.lang: lbl.value for lbl in before.labels},
+        {lbl.lang: lbl.value for lbl in after.labels},
+    )
+    diffs += _lang_diffs(
+        "comment[{lang}]",
+        {c.lang: c.value for c in before.comments},
+        {c.lang: c.value for c in after.comments},
+    )
+    diffs += _set_diff("domain", before.domains, after.domains)
+    diffs += _set_diff("range", before.ranges, after.ranges)
+    diffs += _set_diff("subPropertyOf", before.sub_property_of, after.sub_property_of)
+    diffs += _set_diff("inverseOf", before.inverse_of, after.inverse_of)
     return diffs
 
 
@@ -197,6 +261,18 @@ def compute_taxonomy_diff(before: Taxonomy, after: Taxonomy) -> dict[str, Concep
             fd3 = _owl_ind_field_diffs(bi, ai)
             result[uri] = ConceptChange(uri, "changed" if fd3 else "unchanged", fd3)
 
+    # OWL properties
+    for uri in set(before.owl_properties) | set(after.owl_properties):
+        bp = before.owl_properties.get(uri)
+        ap = after.owl_properties.get(uri)
+        if bp is None:
+            result[uri] = ConceptChange(uri, "added")
+        elif ap is None:
+            result[uri] = ConceptChange(uri, "removed")
+        else:
+            fd4 = _owl_prop_field_diffs(bp, ap)
+            result[uri] = ConceptChange(uri, "changed" if fd4 else "unchanged", fd4)
+
     return result
 
 
@@ -232,6 +308,10 @@ def build_diff_taxonomy(before: Taxonomy, after: Taxonomy) -> Taxonomy:
     # Ghost OWL individuals
     for uri in sorted(set(before.owl_individuals) - set(after.owl_individuals)):
         merged.owl_individuals[uri] = deepcopy(before.owl_individuals[uri])
+
+    # Ghost OWL properties
+    for uri in sorted(set(before.owl_properties) - set(after.owl_properties)):
+        merged.owl_properties[uri] = deepcopy(before.owl_properties[uri])
 
     assign_handles(merged)
     return merged
