@@ -6,6 +6,9 @@ import hashlib
 import json
 import re
 import tempfile
+import threading
+import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -37,14 +40,68 @@ def _app_callback(ctx: typer.Context) -> None:
 _VERSION = "0.3.1"
 _AUTHOR = "ster contributors"
 
+_PYPI_URL = "https://pypi.org/pypi/ster/json"
+_VERSION_CACHE = Path(tempfile.gettempdir()) / "ster_version_check.json"
+
+
+def _newer(a: str, b: str) -> bool:
+    """Return True if version string *a* is greater than *b*."""
+
+    def _t(v: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(x) for x in v.split("."))
+        except ValueError:
+            return (0,)
+
+    return _t(a) > _t(b)
+
+
+def _check_new_version() -> str | None:
+    """Return the latest PyPI version if it is newer than the installed one, else None.
+
+    Result is cached for 24 hours in a temp file so PyPI is hit at most once a day.
+    The network fetch always runs in a background thread — this function never blocks.
+    """
+    now = datetime.now()
+    cached_latest: str | None = None
+
+    if _VERSION_CACHE.exists():
+        try:
+            data = json.loads(_VERSION_CACHE.read_text())
+            checked = datetime.fromisoformat(data["checked"])
+            if now - checked < timedelta(hours=24):
+                cached_latest = data.get("latest")
+        except Exception:
+            pass
+
+    def _fetch() -> None:
+        try:
+            with urllib.request.urlopen(_PYPI_URL, timeout=3) as resp:  # noqa: S310
+                latest = json.loads(resp.read())["info"]["version"]
+            _VERSION_CACHE.write_text(json.dumps({"checked": now.isoformat(), "latest": latest}))
+        except Exception:
+            pass
+
+    threading.Thread(target=_fetch, daemon=True).start()
+
+    if cached_latest and _newer(cached_latest, _VERSION):
+        return cached_latest
+    return None
+
 
 def _print_welcome() -> None:
     from rich.panel import Panel
 
+    new_ver = _check_new_version()
+    update_line = (
+        f"\n[yellow]↑ v{new_ver} available[/yellow]  [dim]pip install --upgrade ster[/dim]"
+        if new_ver
+        else ""
+    )
     console.print()
     console.print(
         Panel(
-            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]\n\n"
+            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]{update_line}\n\n"
             "[dim]Semantic knowledge editor — SKOS · OWL · D3 · Site generator[/dim]\n\n"
             "[dim]Select a file to open, or use the menu to generate a site or graph.[/dim]\n"
             "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
