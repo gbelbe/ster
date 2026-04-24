@@ -472,3 +472,255 @@ def test_link_existing_repo(tmp_path, monkeypatch):
 
     assert mgr._cfg["repo_path"] == str(tmp_path)
     assert mgr._cfg["remote_url"] == "https://github.com/u/r"
+
+
+# ── _ensure_on_branch ────────────────────────────────────────────────────────
+
+
+def test_ensure_on_branch_already_current(tmp_path):
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args[0])
+        return MagicMock(returncode=0, stdout="main\n")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        GitManager._ensure_on_branch(tmp_path, "main")
+    # Only one git call (branch --show-current); no checkout
+    assert "checkout" not in calls
+
+
+def test_ensure_on_branch_exists_checks_out(tmp_path):
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "branch":
+            return MagicMock(returncode=0, stdout="dev\n")
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        GitManager._ensure_on_branch(tmp_path, "main")
+    assert any(a[0] == "checkout" and "-b" not in a for a in calls)
+
+
+def test_ensure_on_branch_creates_new(tmp_path):
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "branch":
+            return MagicMock(returncode=0, stdout="dev\n")
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=1, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        GitManager._ensure_on_branch(tmp_path, "main")
+    assert any(a[0] == "checkout" and "-b" in a for a in calls)
+
+
+# ── _detect_remote_default_branch ────────────────────────────────────────────
+
+
+def test_detect_remote_default_branch_from_show(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "remote" and "show" in args:
+            return MagicMock(returncode=0, stdout="  HEAD branch: develop\n")
+        return MagicMock(returncode=1, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._detect_remote_default_branch(tmp_path)
+    assert result == "develop"
+
+
+def test_detect_remote_default_branch_fallback_main(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "remote":
+            return MagicMock(returncode=0, stdout="no HEAD info\n")
+        if args[0] == "rev-parse" and "main" in str(args):
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=1, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._detect_remote_default_branch(tmp_path)
+    assert result == "main"
+
+
+def test_detect_remote_default_branch_final_fallback(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with patch("ster.git_manager._git", return_value=MagicMock(returncode=1, stdout="")):
+        result = mgr._detect_remote_default_branch(tmp_path)
+    assert result == "main"
+
+
+# ── _local_branch ────────────────────────────────────────────────────────────
+
+
+def test_local_branch_returns_current(tmp_path):
+    with patch("ster.git_manager._git", return_value=MagicMock(returncode=0, stdout="feature\n")):
+        result = GitManager._local_branch(tmp_path)
+    assert result == "feature"
+
+
+def test_local_branch_fallback_main_when_empty(tmp_path):
+    with patch("ster.git_manager._git", return_value=MagicMock(returncode=0, stdout="")):
+        result = GitManager._local_branch(tmp_path)
+    assert result == "main"
+
+
+# ── _create_pr ────────────────────────────────────────────────────────────────
+
+
+def test_create_pr_gh_cli_success(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    mock_result = MagicMock(returncode=0, stdout="https://github.com/u/r/pull/1\n")
+    with patch("subprocess.run", return_value=mock_result):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url == "https://github.com/u/r/pull/1"
+
+
+def test_create_pr_gh_cli_fail_no_token(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "remote_url": ""})
+    mock_fail = MagicMock(returncode=1, stdout="")
+    with (
+        patch("subprocess.run", return_value=mock_fail),
+        patch.object(mgr, "_get_github_token", return_value=None),
+    ):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url is None
+
+
+def test_create_pr_gh_cli_fail_no_github_owner(tmp_path):
+    mgr = _make_manager(
+        tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://gitlab.com/u/r"}
+    )
+    mock_fail = MagicMock(returncode=1, stdout="")
+    with (
+        patch("subprocess.run", return_value=mock_fail),
+        patch.object(mgr, "_get_github_token", return_value="tok"),
+    ):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url is None
+
+
+# ── pre_edit_check — pull path ────────────────────────────────────────────────
+
+
+def test_pre_edit_check_user_declines_pull(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://github.com/u/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "fetch" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="1\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: False)
+    assert mgr.pre_edit_check() is None
+
+
+def test_pre_edit_check_pulls_and_returns_diff(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://github.com/u/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "fetch" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="2\n")
+        if "rev-parse" in args:
+            return MagicMock(returncode=0, stdout="abc123\n")
+        if "pull" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "diff" in args:
+            return MagicMock(returncode=0, stdout="+added line\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: True)
+    result = mgr.pre_edit_check()
+    assert result is not None
+    assert "added" in result
+
+
+def test_pre_edit_check_pull_fails(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://github.com/u/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "fetch" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="1\n")
+        if "rev-parse" in args:
+            return MagicMock(returncode=0, stdout="abc\n")
+        if "pull" in args:
+            return MagicMock(returncode=1, stderr="conflict")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: True)
+    assert mgr.pre_edit_check() is None
+
+
+def test_pre_edit_check_invalid_behind_count(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://github.com/u/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "fetch" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="not-a-number\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    assert mgr.pre_edit_check() is None
+
+
+# ── commit_new_taxonomy — remote push ─────────────────────────────────────────
+
+
+def test_commit_new_taxonomy_pushes_with_remote(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {
+            "repo_path": str(tmp_path),
+            "remote_url": "https://github.com/u/r",
+            "main_branch": "main",
+        },
+    )
+
+    push_called = []
+
+    def git_side(*args, **kwargs):
+        if args[0] == "add":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "commit":
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if args[0] == "push":
+            push_called.append(args)
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    mgr.commit_new_taxonomy("chore: add taxonomy")
+    assert push_called, "push should have been called when remote_url is set"

@@ -6,16 +6,23 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click.exceptions
 import pytest
+from typer.testing import CliRunner
 
 import ster.cli as cli_module
 from ster.cli import (
     _humanize,
     _load_session,
     _make_taxonomy_commit_msg,
+    _newer,
+    _parse_changelog_section,
     _resolve_file,
     _save_session,
+    app,
 )
+
+_runner = CliRunner()
 
 
 @pytest.mark.parametrize(
@@ -503,3 +510,427 @@ def simple_taxonomy():
     t.concepts[child.uri] = child
     assign_handles(t)
     return t
+
+
+# ── _newer ────────────────────────────────────────────────────────────────────
+
+
+def test_newer_greater():
+    assert _newer("0.3.2", "0.3.1") is True
+
+
+def test_newer_equal():
+    assert _newer("0.3.1", "0.3.1") is False
+
+
+def test_newer_less():
+    assert _newer("0.3.0", "0.3.1") is False
+
+
+def test_newer_major():
+    assert _newer("1.0.0", "0.9.9") is True
+
+
+def test_newer_minor():
+    assert _newer("0.4.0", "0.3.9") is True
+
+
+def test_newer_invalid_string():
+    # Falls back to (0,) — neither is newer
+    assert _newer("bad", "0.1.0") is False
+
+
+# ── _parse_changelog_section ──────────────────────────────────────────────────
+
+_SAMPLE_CHANGELOG = """\
+## Changelog
+
+### 0.3.2
+- Fix the Escape key in graph viz
+- Root OWL classes are now visually distinct
+- Removed Generate Browsable Website option
+
+### 0.3.1
+- Animate AI suggestion spinners
+- Handle missing Ollama gracefully
+"""
+
+
+def test_parse_changelog_found():
+    result = _parse_changelog_section(_SAMPLE_CHANGELOG, "0.3.2")
+    assert "Escape" in result
+    assert "Root OWL" in result
+    assert "Removed" in result
+
+
+def test_parse_changelog_stops_at_next_header():
+    result = _parse_changelog_section(_SAMPLE_CHANGELOG, "0.3.2")
+    assert "Animate" not in result
+
+
+def test_parse_changelog_max_bullets():
+    long_desc = "### 1.0.0\n" + "\n".join(f"- Item {i}" for i in range(10))
+    result = _parse_changelog_section(long_desc, "1.0.0", max_bullets=3)
+    assert "Item 0" in result
+    assert "Item 1" in result
+    assert "Item 2" in result
+    assert "more" in result  # truncation indicator
+
+
+def test_parse_changelog_not_found():
+    result = _parse_changelog_section(_SAMPLE_CHANGELOG, "9.9.9")
+    assert result == ""
+
+
+def test_parse_changelog_strips_markdown():
+    desc = "### 0.1.0\n- **Bold** and `code` text\n"
+    result = _parse_changelog_section(desc, "0.1.0")
+    assert "**" not in result
+    assert "`" not in result
+    assert "Bold" in result
+    assert "code" in result
+
+
+def test_parse_changelog_exact_max_no_ellipsis():
+    desc = "### 1.0.0\n- A\n- B\n- C\n"
+    result = _parse_changelog_section(desc, "1.0.0", max_bullets=3)
+    assert "more" not in result
+
+
+# ── _check_new_version ────────────────────────────────────────────────────────
+
+
+def test_check_new_version_uses_cache(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    from datetime import datetime
+
+    data = {
+        "checked": datetime.now().isoformat(),
+        "latest": "99.0.0",
+        "notes": "· big update",
+    }
+    cache.write_text(json.dumps(data))
+    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module, "_VERSION", "0.1.0")
+
+    result = cli_module._check_new_version()
+    assert result is not None
+    assert result[0] == "99.0.0"
+    assert "big update" in result[1]
+
+
+def test_check_new_version_no_update_when_same(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    from datetime import datetime
+
+    data = {"checked": datetime.now().isoformat(), "latest": "0.3.1", "notes": ""}
+    cache.write_text(json.dumps(data))
+    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module, "_VERSION", "0.3.1")
+
+    result = cli_module._check_new_version()
+    assert result is None
+
+
+def test_check_new_version_stale_cache(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    from datetime import datetime, timedelta
+
+    old = datetime.now() - timedelta(hours=24)
+    data = {"checked": old.isoformat(), "latest": "99.0.0", "notes": ""}
+    cache.write_text(json.dumps(data))
+    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module, "_VERSION", "0.1.0")
+
+    # Stale cache → background fetch launched, but no cached result returned
+    with patch("threading.Thread") as mock_thread:
+        mock_thread.return_value = MagicMock()
+        result = cli_module._check_new_version()
+    # Stale → no cached result served (fresh fetch pending)
+    assert result is None
+
+
+# ── _load / _save / _resolve / _run error paths ───────────────────────────────
+
+
+def test_load_bad_file_exits(tmp_path):
+    bad = tmp_path / "bad.ttl"
+    bad.write_text("NOT TURTLE @@@@")
+    with pytest.raises((SystemExit, click.exceptions.Exit)):
+        cli_module._load(bad)
+
+
+def test_save_unwritable_exits(tmp_path, monkeypatch):
+    import ster.store as _store
+
+    monkeypatch.setattr(_store, "save", lambda t, p: (_ for _ in ()).throw(OSError("disk full")))
+    from ster.model import Taxonomy
+
+    with pytest.raises((SystemExit, click.exceptions.Exit)):
+        cli_module._save(Taxonomy(), tmp_path / "out.ttl")
+
+
+def test_resolve_missing_handle_exits(simple_taxonomy):
+    with pytest.raises((SystemExit, click.exceptions.Exit)):
+        cli_module._resolve(simple_taxonomy, "NONEXISTENT")
+
+
+def test_run_converts_skostax_error_to_exit(simple_taxonomy):
+    from ster.exceptions import ConceptNotFoundError
+
+    with pytest.raises((SystemExit, click.exceptions.Exit)):
+        cli_module._run(lambda: (_ for _ in ()).throw(ConceptNotFoundError("https://x.org/Ghost")))
+
+
+# ── CLI commands via CliRunner ─────────────────────────────────────────────────
+# All commands accept --file so we never rely on session / CWD detection.
+
+
+def test_cmd_handles(tmp_ttl):
+    result = _runner.invoke(app, ["handles", "--file", str(tmp_ttl)])
+    assert result.exit_code == 0
+    assert "TOP" in result.output.upper() or "Top" in result.output
+
+
+def test_cmd_validate_clean(tmp_ttl):
+    result = _runner.invoke(app, ["validate", "--file", str(tmp_ttl)])
+    assert result.exit_code == 0
+    assert "No issues" in result.output
+
+
+def test_cmd_validate_finds_orphan(tmp_path):
+    ttl = tmp_path / "orphan.ttl"
+    # t:Orphan has skos:broader pointing to a non-existent concept, so it is not
+    # auto-promoted to top_concepts but is also unreachable from t:Top.
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:Top .
+t:Top a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+      skos:prefLabel "Top"@en .
+t:Orphan a skos:Concept ; skos:inScheme t:Scheme ; skos:prefLabel "Orphan"@en ;
+         skos:broader t:Ghost .
+"""
+    )
+    result = _runner.invoke(app, ["validate", "--file", str(ttl)])
+    assert result.exit_code == 1
+    assert "orphan" in result.output.lower() or "issue" in result.output.lower()
+
+
+def test_cmd_validate_finds_missing_label(tmp_path):
+    ttl = tmp_path / "nolabel.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:Top .
+t:Top a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme .
+"""
+    )
+    result = _runner.invoke(app, ["validate", "--file", str(ttl)])
+    assert result.exit_code == 1
+    assert "prefLabel" in result.output or "label" in result.output.lower()
+
+
+def test_cmd_add_creates_concept(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["add", "NewWidget", "--en", "New Widget", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Added" in result.output
+    assert "New Widget" in result.output
+
+
+def test_cmd_add_default_label_from_name(tmp_ttl):
+    result = _runner.invoke(app, ["add", "MyNewThing", "--file", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+    assert "My New Thing" in result.output
+
+
+def test_cmd_add_with_parent(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["add", "SubWidget", "--en", "Sub Widget", "--parent", "TOP", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Added" in result.output
+
+
+def test_cmd_add_with_definition(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        [
+            "add",
+            "DefConcept",
+            "--en",
+            "Def Concept",
+            "--def-en",
+            "A definition.",
+            "--file",
+            str(tmp_ttl),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_cmd_remove_with_yes(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["remove", "GRA", "--yes", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Removed" in result.output
+
+
+def test_cmd_remove_cascade(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["remove", "CHI", "--cascade", "--yes", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_cmd_remove_missing_concept(tmp_ttl):
+    result = _runner.invoke(app, ["remove", "DOESNOTEXIST", "--yes", "--file", str(tmp_ttl)])
+    assert result.exit_code != 0
+
+
+def test_cmd_label_set_pref(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["label", "TOP", "de", "Wurzel", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "pref label" in result.output.lower()
+    assert "Wurzel" in result.output
+
+
+def test_cmd_label_set_alt(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["label", "TOP", "en", "Root Node", "--alt", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "alt label" in result.output.lower()
+
+
+def test_cmd_define_sets_definition(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["define", "CHI2", "en", "The second child concept.", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "definition" in result.output.lower()
+
+
+def test_cmd_relate_add(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["relate", "CHI2", "GRA", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Added" in result.output
+
+
+def test_cmd_relate_remove(tmp_ttl):
+    # First add a related link, then remove it
+    _runner.invoke(app, ["relate", "CHI2", "GRA", "--file", str(tmp_ttl)])
+    result = _runner.invoke(
+        app,
+        ["relate", "CHI2", "GRA", "--remove", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Removed" in result.output
+
+
+def test_cmd_rename_changes_uri(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["rename", "GRA", "GreatGrandchild", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Renamed" in result.output
+
+
+def test_cmd_move_to_new_parent(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["move", "GRA", "--parent", "CHI2", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Moved" in result.output
+
+
+def test_cmd_move_to_top_level(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        ["move", "GRA", "--file", str(tmp_ttl)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Moved" in result.output
+    assert "top level" in result.output
+
+
+# ── cmd_show --plain (non-interactive) ────────────────────────────────────────
+
+
+def test_cmd_show_plain(tmp_ttl):
+    result = _runner.invoke(app, ["show", "--plain", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+    assert "Top" in result.output
+
+
+def test_cmd_show_plain_with_concept(tmp_ttl):
+    result = _runner.invoke(app, ["show", "--plain", "--concept", "TOP", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+
+
+def test_cmd_show_handles(tmp_ttl):
+    result = _runner.invoke(app, ["show", "--handles", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+
+
+# ── _resolve_broken_mappings_at_load ─────────────────────────────────────────
+
+
+def test_resolve_broken_mappings_no_issues(tmp_ttl):
+    from ster.workspace import TaxonomyWorkspace
+
+    workspace = TaxonomyWorkspace.from_files([tmp_ttl])
+    # Should silently return when no broken mappings
+    cli_module._resolve_broken_mappings_at_load(workspace, [tmp_ttl])
+
+
+def test_resolve_broken_mappings_no_unloaded_files(tmp_path):
+    from ster.workspace import TaxonomyWorkspace
+
+    ttl = tmp_path / "mapped.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+@prefix other: <https://other.org/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:A .
+t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+    skos:prefLabel "A"@en ; skos:exactMatch other:B .
+"""
+    )
+    workspace = TaxonomyWorkspace.from_files([ttl])
+    # found_files == workspace files → no unloaded files → prints warning, no prompt
+    cli_module._resolve_broken_mappings_at_load(workspace, [ttl])
+
+
+# ── _load_workspace ───────────────────────────────────────────────────────────
+
+
+def test_load_workspace_returns_workspace(tmp_ttl):
+    from ster.workspace import TaxonomyWorkspace
+
+    ws = cli_module._load_workspace([tmp_ttl], [tmp_ttl])
+    assert isinstance(ws, TaxonomyWorkspace)
+    assert tmp_ttl in ws.taxonomies
