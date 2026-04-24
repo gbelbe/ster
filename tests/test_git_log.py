@@ -548,3 +548,87 @@ def test_launch_git_log_file_path(tmp_path):
         launch_git_log(path=fp, repo=None)
     MockV.assert_called_once_with(repo=tmp_path, file_path=fp.resolve())
     mock_viewer.run.assert_called_once()
+
+
+# ── _git ──────────────────────────────────────────────────────────────────────
+
+
+def test_git_runs_subprocess(tmp_path):
+    from ster.git_log import _git
+
+    r = _git("rev-parse", "--show-toplevel", cwd=tmp_path)
+    assert hasattr(r, "returncode")
+    assert hasattr(r, "stdout")
+
+
+# ── _get_file_at_commit ───────────────────────────────────────────────────────
+
+
+def test_get_file_at_commit_success(tmp_path):
+    from ster.git_log import _get_file_at_commit
+
+    content = "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+    with patch("ster.git_log._git", return_value=_completed(content)) as mock:
+        result = _get_file_at_commit("abc1234", tmp_path / "vocab.ttl", tmp_path)
+    assert result == content
+    mock.assert_called_once_with("show", "abc1234:vocab.ttl", cwd=tmp_path)
+
+
+def test_get_file_at_commit_failure(tmp_path):
+    from ster.git_log import _get_file_at_commit
+
+    with patch("ster.git_log._git", return_value=_completed(returncode=128)):
+        result = _get_file_at_commit("abc1234", tmp_path / "vocab.ttl", tmp_path)
+    assert result is None
+
+
+def test_get_file_at_commit_outside_repo(tmp_path):
+    from ster.git_log import _get_file_at_commit
+
+    other = Path("/absolute/path/vocab.ttl")
+    with patch("ster.git_log._git", return_value=_completed("content")) as mock:
+        _get_file_at_commit("abc1234", other, tmp_path)
+    mock.assert_called_once_with("show", "abc1234:/absolute/path/vocab.ttl", cwd=tmp_path)
+
+
+# ── _load_taxonomy_safe ───────────────────────────────────────────────────────
+
+MINIMAL_TTL = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://example.org/> .
+
+ex:S a skos:ConceptScheme ;
+    skos:prefLabel "Test"@en .
+
+ex:C a skos:Concept ;
+    skos:inScheme ex:S ;
+    skos:prefLabel "Concept"@en .
+"""
+
+
+def test_load_taxonomy_safe_valid():
+    from ster.git_log import _load_taxonomy_safe
+
+    result = _load_taxonomy_safe(MINIMAL_TTL, suffix=".ttl")
+    assert result is not None
+    assert len(result.concepts) >= 1
+
+
+def test_load_taxonomy_safe_invalid_returns_none():
+    from ster.git_log import _load_taxonomy_safe
+
+    result = _load_taxonomy_safe("not valid turtle !!!", suffix=".ttl")
+    assert result is None
+
+
+# ── _diff_status_str ──────────────────────────────────────────────────────────
+
+
+def test_diff_status_str(tmp_path):
+    v = GitLogViewer(repo=tmp_path)
+    v._diff_status = {
+        BASE + "A": ConceptChange(BASE + "A", "added"),
+        BASE + "B": ConceptChange(BASE + "B", "unchanged"),
+    }
+    result = v._diff_status_str()
+    assert result == {BASE + "A": "added", BASE + "B": "unchanged"}
