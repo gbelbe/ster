@@ -696,6 +696,422 @@ def test_pre_edit_check_invalid_behind_count(tmp_path, monkeypatch):
     assert mgr.pre_edit_check() is None
 
 
+# ── _git direct call (line 59) ────────────────────────────────────────────────
+
+
+def test_git_function_runs_subprocess(tmp_path):
+    from ster.git_manager import _git
+
+    r = _git("rev-parse", "--show-toplevel", cwd=tmp_path)
+    assert hasattr(r, "returncode")
+    assert hasattr(r, "stdout")
+
+
+# ── setup() early returns ─────────────────────────────────────────────────────
+
+
+def test_setup_git_not_available(tmp_path):
+    mgr = _make_manager(tmp_path)
+    with patch("ster.git_manager._git_available", return_value=False):
+        result = mgr.setup()
+    assert result is False
+
+
+def test_setup_not_enabled(tmp_path):
+    mgr = _make_manager(tmp_path, {"git_enabled": False})
+    with patch("ster.git_manager._git_available", return_value=True):
+        result = mgr.setup()
+    assert result is False
+
+
+def test_setup_auto_links_existing_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
+    monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
+    mgr = _make_manager(tmp_path, {})
+
+    with (
+        patch("ster.git_manager._git_available", return_value=True),
+        patch.object(mgr, "_find_repo_root", return_value=tmp_path),
+        patch.object(mgr, "_link_existing_repo"),
+        patch.object(mgr, "_ask_branch_strategy"),
+    ):
+        mgr._cfg["branch_strategy"] = "direct"  # skip _ask_branch_strategy
+        result = mgr.setup()
+    assert result is True
+
+
+def test_setup_auto_links_asks_strategy_if_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
+    monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
+    mgr = _make_manager(tmp_path, {})
+
+    asked = []
+
+    with (
+        patch("ster.git_manager._git_available", return_value=True),
+        patch.object(mgr, "_find_repo_root", return_value=tmp_path),
+        patch.object(mgr, "_link_existing_repo"),
+        patch.object(mgr, "_ask_branch_strategy", side_effect=lambda: asked.append(1)),
+    ):
+        result = mgr.setup()
+    assert result is True
+    assert asked  # _ask_branch_strategy was called
+
+
+# ── pre_edit_check — repo path missing ────────────────────────────────────────
+
+
+def test_pre_edit_check_repo_path_nonexistent(tmp_path):
+    """Configured but repo directory has been deleted — hits the `not repo` return."""
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path / "gone"), "remote_url": "x"})
+    assert mgr.pre_edit_check() is None
+
+
+# ── pre_edit_check — pull succeeds with no diff output ────────────────────────
+
+
+def test_pre_edit_check_pull_succeeds_no_diff(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://x.com/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "fetch" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="1\n")
+        if "rev-parse" in args:
+            return MagicMock(returncode=0, stdout="abc\n")
+        if "pull" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "diff" in args:
+            return MagicMock(returncode=0, stdout="")  # empty diff
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: True)
+    result = mgr.pre_edit_check()
+    assert result is None  # empty diff → returns None at line 223
+
+
+# ── commit_and_push() early returns ───────────────────────────────────────────
+
+
+def test_commit_and_push_not_configured(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with patch("ster.git_manager._git") as mock_git:
+        mgr.commit_and_push()
+    mock_git.assert_not_called()
+
+
+def test_commit_and_push_no_staged_changes(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    with patch.object(mgr, "has_staged_changes", return_value=False):
+        mgr.commit_and_push()  # should return silently
+
+
+def test_commit_and_push_commit_fails(tmp_path, monkeypatch):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://x.com/r"})
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: kw.get("default", "msg"))
+
+    def git_side(*args, **kwargs):
+        if args[0] == "commit":
+            return MagicMock(returncode=1, stdout="", stderr="lock")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(mgr, "has_staged_changes", return_value=True),
+        patch("ster.git_manager._git", side_effect=git_side),
+    ):
+        mgr.commit_and_push()  # no crash
+
+
+def test_commit_and_push_direct_no_remote(tmp_path, monkeypatch):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: kw.get("default", "msg"))
+
+    def git_side(*args, **kwargs):
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(mgr, "has_staged_changes", return_value=True),
+        patch("ster.git_manager._git", side_effect=git_side),
+    ):
+        mgr.commit_and_push()  # commits locally; no push
+
+
+def test_commit_and_push_direct_push(tmp_path, monkeypatch):
+    push_called = []
+    mgr = _make_manager(
+        tmp_path,
+        {
+            "repo_path": str(tmp_path),
+            "remote_url": "https://x.com/r",
+            "main_branch": "main",
+            "branch_strategy": "direct",
+        },
+    )
+    monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
+    monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
+
+    def git_side(*args, **kwargs):
+        if args[0] == "push":
+            push_called.append(args)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: "1")
+
+    with (
+        patch.object(mgr, "has_staged_changes", return_value=True),
+        patch("ster.git_manager._git", side_effect=git_side),
+    ):
+        mgr.commit_and_push()
+    assert push_called
+
+
+# ── _pull_remote_into_dir ─────────────────────────────────────────────────────
+
+
+def test_pull_remote_into_dir_branch_not_exists(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "rev-parse":  # branch --verify
+            return MagicMock(returncode=1, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._pull_remote_into_dir(tmp_path, "main")
+    assert result is True
+    assert any("-b" in a for a in calls)
+
+
+def test_pull_remote_into_dir_branch_exists_ff_ok(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._pull_remote_into_dir(tmp_path, "main")
+    assert result is True
+    assert any("--ff-only" in a for a in calls)
+
+
+def test_pull_remote_into_dir_ff_fails_fallback(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "pull" and "--ff-only" in args:
+            return MagicMock(returncode=1, stdout="", stderr="diverged")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._pull_remote_into_dir(tmp_path, "main")
+    assert result is True
+    assert any("--allow-unrelated-histories" in a for a in calls)
+
+
+def test_pull_remote_into_dir_all_pull_fail(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "pull":
+            return MagicMock(returncode=1, stdout="", stderr="err")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._pull_remote_into_dir(tmp_path, "main")
+    assert result is False
+
+
+# ── _push_local_to_remote ─────────────────────────────────────────────────────
+
+
+def test_push_local_to_remote_success_no_staged(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "diff":
+            return MagicMock(returncode=0, stdout="")  # nothing staged
+        return MagicMock(returncode=0, stdout="main\n")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._push_local_to_remote(tmp_path, "main", force=False)
+    assert result is True
+    assert any("push" in a for a in calls)
+
+
+def test_push_local_to_remote_success_with_staged(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "diff":
+            return MagicMock(returncode=0, stdout="file.ttl\n")  # staged
+        return MagicMock(returncode=0, stdout="main\n")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._push_local_to_remote(tmp_path, "main", force=False)
+    assert result is True
+    assert any(a[0] == "commit" for a in calls)
+
+
+def test_push_local_to_remote_force(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "diff":
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="main\n")
+
+    with patch("ster.git_manager._git", side_effect=git_side):
+        result = mgr._push_local_to_remote(tmp_path, "main", force=True)
+    assert result is True
+    assert any("--force" in a for a in calls)
+
+
+def test_push_local_to_remote_push_fails(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "diff":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "branch":
+            return MagicMock(returncode=0, stdout="main\n")
+        if args[0] == "push":
+            return MagicMock(returncode=1, stdout="", stderr="rejected")
+        return MagicMock(returncode=0, stdout="main\n")
+
+    with (
+        patch("ster.git_manager._git", side_effect=git_side),
+        patch("rich.prompt.Confirm.ask", return_value=False),
+    ):
+        result = mgr._push_local_to_remote(tmp_path, "main", force=False)
+    assert result is False
+
+
+# ── _ask_branch_strategy ──────────────────────────────────────────────────────
+
+
+def test_ask_branch_strategy_direct(tmp_path, monkeypatch):
+    monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
+    monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
+    mgr = _make_manager(tmp_path, {})
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: "1")
+    mgr._ask_branch_strategy()
+    assert mgr._cfg["branch_strategy"] == "direct"
+
+
+def test_ask_branch_strategy_pr(tmp_path, monkeypatch):
+    monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
+    monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
+    mgr = _make_manager(tmp_path, {})
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: "2")
+    mgr._ask_branch_strategy()
+    assert mgr._cfg["branch_strategy"] == "pr"
+
+
+# ── _create_pr REST API path ──────────────────────────────────────────────────
+
+
+def test_create_pr_rest_api_success(tmp_path):
+    mgr = _make_manager(
+        tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://github.com/alice/repo"}
+    )
+    mock_fail = MagicMock(returncode=1, stdout="")
+    fake_response = MagicMock()
+    fake_response.__enter__ = lambda s: s
+    fake_response.__exit__ = MagicMock(return_value=False)
+    fake_response.read.return_value = b'{"html_url": "https://github.com/alice/repo/pull/42"}'
+
+    with (
+        patch("subprocess.run", return_value=mock_fail),
+        patch.object(mgr, "_get_github_token", return_value="tok"),
+        patch("urllib.request.urlopen", return_value=fake_response),
+    ):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url == "https://github.com/alice/repo/pull/42"
+
+
+def test_create_pr_rest_api_http_error(tmp_path):
+    import urllib.error
+
+    mgr = _make_manager(
+        tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://github.com/alice/repo"}
+    )
+    mock_fail = MagicMock(returncode=1, stdout="")
+
+    with (
+        patch("subprocess.run", return_value=mock_fail),
+        patch.object(mgr, "_get_github_token", return_value="tok"),
+        patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(None, 422, "Unprocessable", {}, None),
+        ),
+    ):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url is None
+
+
+def test_create_pr_rest_api_generic_exception(tmp_path):
+    mgr = _make_manager(
+        tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://github.com/alice/repo"}
+    )
+    mock_fail = MagicMock(returncode=1, stdout="")
+
+    with (
+        patch("subprocess.run", return_value=mock_fail),
+        patch.object(mgr, "_get_github_token", return_value="tok"),
+        patch("urllib.request.urlopen", side_effect=OSError("network")),
+    ):
+        url = mgr._create_pr(tmp_path, "feat", "main", "My PR", "body")
+    assert url is None
+
+
+# ── _get_github_token ─────────────────────────────────────────────────────────
+
+
+def test_get_github_token_from_gh_cli(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="ghp_abc\n")):
+        token = mgr._get_github_token()
+    assert token == "ghp_abc"
+
+
+def test_get_github_token_from_stored(tmp_path):
+    mgr = _make_manager(tmp_path, {"github_token": "stored_tok"})
+    with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
+        token = mgr._get_github_token()
+    assert token == "stored_tok"
+
+
+def test_get_github_token_none_when_skipped(tmp_path, monkeypatch):
+    mgr = _make_manager(tmp_path, {})
+    monkeypatch.setattr("rich.prompt.Prompt.ask", lambda *a, **kw: "")
+    with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
+        token = mgr._get_github_token()
+    assert token is None
+
+
 # ── commit_new_taxonomy — remote push ─────────────────────────────────────────
 
 
