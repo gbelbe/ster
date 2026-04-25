@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-from ster.nav_logic import TreeLine
-from ster.nav_state import (
+from ster.nav.logic import TreeLine
+from ster.nav.state import (
     DetailField,
     DetailState,
     SearchState,

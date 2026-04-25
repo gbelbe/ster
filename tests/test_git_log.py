@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ster.git_log import (
+from ster.git.log import (
     ConceptChange,
     FieldDiff,
     GitLogViewer,
@@ -131,14 +131,14 @@ def test_parse_log_skips_non_sep_lines():
 
 
 def test_find_repo_root_success(tmp_path):
-    with patch("ster.git_log._git", return_value=_completed(str(tmp_path) + "\n")) as mock:
+    with patch("ster.git.log._git", return_value=_completed(str(tmp_path) + "\n")) as mock:
         result = find_repo_root(tmp_path)
     assert result == tmp_path
     mock.assert_called_once_with("rev-parse", "--show-toplevel", cwd=tmp_path)
 
 
 def test_find_repo_root_not_a_repo(tmp_path):
-    with patch("ster.git_log._git", return_value=_completed(returncode=128)):
+    with patch("ster.git.log._git", return_value=_completed(returncode=128)):
         assert find_repo_root(tmp_path) is None
 
 
@@ -146,7 +146,7 @@ def test_find_repo_root_not_a_repo(tmp_path):
 
 
 def test_do_revert_success(tmp_path):
-    with patch("ster.git_log._git", return_value=_completed("")) as mock:
+    with patch("ster.git.log._git", return_value=_completed("")) as mock:
         ok, msg = _do_revert("abc1234", tmp_path)
     assert ok is True
     assert "abc1234"[:7] in msg
@@ -155,7 +155,7 @@ def test_do_revert_success(tmp_path):
 
 def test_do_revert_failure(tmp_path):
     r = _completed(stdout="conflict", returncode=1)
-    with patch("ster.git_log._git", return_value=r):
+    with patch("ster.git.log._git", return_value=r):
         ok, msg = _do_revert("abc1234", tmp_path)
     assert ok is False
 
@@ -164,7 +164,7 @@ def test_do_revert_failure_uses_stderr(tmp_path):
     r = _completed(returncode=1)
     r.stderr = "error message"
     r.stdout = ""
-    with patch("ster.git_log._git", return_value=r):
+    with patch("ster.git.log._git", return_value=r):
         ok, msg = _do_revert("abc1234", tmp_path)
     assert ok is False
     assert "error message" in msg
@@ -175,7 +175,7 @@ def test_do_revert_failure_uses_stderr(tmp_path):
 
 def test_do_restore_success(tmp_path):
     fp = tmp_path / "vocab.ttl"
-    with patch("ster.git_log._git", return_value=_completed("")) as mock:
+    with patch("ster.git.log._git", return_value=_completed("")) as mock:
         ok, msg = _do_restore("abc1234", fp, tmp_path)
     assert ok is True
     assert "vocab.ttl" in msg
@@ -184,7 +184,7 @@ def test_do_restore_success(tmp_path):
 
 def test_do_restore_file_outside_repo(tmp_path):
     other = Path("/some/other/path/file.ttl")
-    with patch("ster.git_log._git", return_value=_completed("")) as mock:
+    with patch("ster.git.log._git", return_value=_completed("")) as mock:
         ok, msg = _do_restore("abc1234", other, tmp_path)
     assert ok is True
     mock.assert_called_once_with("checkout", "abc1234", "--", str(other), cwd=tmp_path)
@@ -193,7 +193,7 @@ def test_do_restore_file_outside_repo(tmp_path):
 def test_do_restore_failure(tmp_path):
     fp = tmp_path / "vocab.ttl"
     r = _completed(stdout="err", returncode=1)
-    with patch("ster.git_log._git", return_value=r):
+    with patch("ster.git.log._git", return_value=r):
         ok, msg = _do_restore("abc1234", fp, tmp_path)
     assert ok is False
 
@@ -204,7 +204,7 @@ def test_do_restore_failure(tmp_path):
 def test_fetch_diff_no_file(tmp_path):
     hdr = _completed("commit abc\nAuthor: Alice\n\n    Subject\n")
     diff = _completed("diff --git a/f b/f\n+new line\n")
-    with patch("ster.git_log._git", side_effect=[hdr, diff]):
+    with patch("ster.git.log._git", side_effect=[hdr, diff]):
         lines = _fetch_diff("abc1234", None, tmp_path)
     assert any("commit abc" in l for l in lines)
     assert any("+new line" in l for l in lines)
@@ -214,7 +214,7 @@ def test_fetch_diff_with_file(tmp_path):
     fp = tmp_path / "vocab.ttl"
     hdr = _completed("commit abc\n")
     diff = _completed("+line\n")
-    with patch("ster.git_log._git", side_effect=[hdr, diff]) as mock:
+    with patch("ster.git.log._git", side_effect=[hdr, diff]) as mock:
         _fetch_diff("abc1234", fp, tmp_path)
     diff_args = mock.call_args_list[1][0]
     assert "--" in diff_args and "vocab.ttl" in diff_args
@@ -224,20 +224,20 @@ def test_fetch_diff_file_outside_repo(tmp_path):
     other = Path("/absolute/path/file.ttl")
     hdr = _completed("commit abc\n")
     diff = _completed("+line\n")
-    with patch("ster.git_log._git", side_effect=[hdr, diff]) as mock:
+    with patch("ster.git.log._git", side_effect=[hdr, diff]) as mock:
         _fetch_diff("abc1234", other, tmp_path)
     assert str(other) in mock.call_args_list[1][0]
 
 
 def test_fetch_diff_header_failure(tmp_path):
-    with patch("ster.git_log._git", side_effect=[_completed(returncode=1), _completed("+line\n")]):
+    with patch("ster.git.log._git", side_effect=[_completed(returncode=1), _completed("+line\n")]):
         lines = _fetch_diff("abc1234", None, tmp_path)
     assert any("+line" in l for l in lines)
 
 
 def test_fetch_diff_diff_failure(tmp_path):
     with patch(
-        "ster.git_log._git", side_effect=[_completed("commit abc\n"), _completed(returncode=1)]
+        "ster.git.log._git", side_effect=[_completed("commit abc\n"), _completed(returncode=1)]
     ):
         lines = _fetch_diff("abc1234", None, tmp_path)
     assert any("commit abc" in l for l in lines)
@@ -429,7 +429,7 @@ def test_viewer_load_log_parses_output(tmp_path):
         "a" * 40, "aaaaaaa", "Initial commit", "Alice", "2024-01-15", "HEAD -> main"
     )
     r = _completed(line)
-    with patch("ster.git_log._git", return_value=r), patch.object(GitLogViewer, "_load_diff_tree"):
+    with patch("ster.git.log._git", return_value=r), patch.object(GitLogViewer, "_load_diff_tree"):
         v = GitLogViewer(repo=tmp_path)
         v._load_log()
     assert len(v._entries) == 1
@@ -442,7 +442,7 @@ def test_viewer_load_log_parses_output(tmp_path):
 def test_viewer_load_log_git_error(tmp_path):
     r = _completed(stdout="fatal: not a repo", returncode=128)
     r.stderr = "fatal: not a repo"
-    with patch("ster.git_log._git", return_value=r):
+    with patch("ster.git.log._git", return_value=r):
         v = GitLogViewer(repo=tmp_path)
         v._load_log()
     assert v._entries == []
@@ -454,7 +454,7 @@ def test_viewer_load_log_with_file_path(tmp_path):
     line = _make_log_line("b" * 40, "bbbbbbb", "Msg", "Bob", "2024-01-14", "")
     r = _completed(line)
     with (
-        patch("ster.git_log._git", return_value=r) as mock,
+        patch("ster.git.log._git", return_value=r) as mock,
         patch.object(GitLogViewer, "_load_diff_tree"),
     ):
         v = GitLogViewer(repo=tmp_path, file_path=fp)
@@ -468,7 +468,7 @@ def test_viewer_load_log_file_outside_repo(tmp_path):
     line = _make_log_line("c" * 40, "ccccccc", "Msg", "Carol", "2024-01-13", "")
     r = _completed(line)
     with (
-        patch("ster.git_log._git", return_value=r) as mock,
+        patch("ster.git.log._git", return_value=r) as mock,
         patch.object(GitLogViewer, "_load_diff_tree"),
     ):
         v = GitLogViewer(repo=tmp_path, file_path=other)
@@ -496,10 +496,10 @@ def test_viewer_load_diff_tree_caches(tmp_path):
     fake_t = T()
     fake_st = {}
     with (
-        patch("ster.git_log._get_file_at_commit", return_value=None),
-        patch("ster.git_log.compute_taxonomy_diff", return_value=fake_st),
-        patch("ster.git_log.build_diff_taxonomy", return_value=fake_t),
-        patch("ster.git_log.compute_auto_fold", return_value=set()),
+        patch("ster.git.log._get_file_at_commit", return_value=None),
+        patch("ster.git.log.compute_taxonomy_diff", return_value=fake_st),
+        patch("ster.git.log.build_diff_taxonomy", return_value=fake_t),
+        patch("ster.git.log.compute_auto_fold", return_value=set()),
     ):
         v._load_diff_tree(0)
         v._load_diff_tree(0)  # second call should use cache
@@ -516,19 +516,19 @@ def test_viewer_load_diff_tree_out_of_bounds(tmp_path):
 
 
 def test_launch_git_log_no_repo(tmp_path):
-    from ster.git_log import launch_git_log
+    from ster.git.log import launch_git_log
 
-    with patch("ster.git_log.find_repo_root", return_value=None):
+    with patch("ster.git.log.find_repo_root", return_value=None):
         launch_git_log(path=tmp_path, repo=None)
 
 
 def test_launch_git_log_explicit_repo(tmp_path):
     mock_viewer = MagicMock()
     with (
-        patch("ster.git_log.find_repo_root") as mock_find,
-        patch("ster.git_log.GitLogViewer", return_value=mock_viewer),
+        patch("ster.git.log.find_repo_root") as mock_find,
+        patch("ster.git.log.GitLogViewer", return_value=mock_viewer),
     ):
-        from ster.git_log import launch_git_log
+        from ster.git.log import launch_git_log
 
         launch_git_log(path=None, repo=tmp_path)
     mock_find.assert_not_called()
@@ -540,10 +540,10 @@ def test_launch_git_log_file_path(tmp_path):
     fp.write_text("")
     mock_viewer = MagicMock()
     with (
-        patch("ster.git_log.find_repo_root", return_value=tmp_path),
-        patch("ster.git_log.GitLogViewer", return_value=mock_viewer) as MockV,
+        patch("ster.git.log.find_repo_root", return_value=tmp_path),
+        patch("ster.git.log.GitLogViewer", return_value=mock_viewer) as MockV,
     ):
-        from ster.git_log import launch_git_log
+        from ster.git.log import launch_git_log
 
         launch_git_log(path=fp, repo=None)
     MockV.assert_called_once_with(repo=tmp_path, file_path=fp.resolve())
@@ -554,7 +554,7 @@ def test_launch_git_log_file_path(tmp_path):
 
 
 def test_git_runs_subprocess(tmp_path):
-    from ster.git_log import _git
+    from ster.git.log import _git
 
     r = _git("rev-parse", "--show-toplevel", cwd=tmp_path)
     assert hasattr(r, "returncode")
@@ -565,28 +565,28 @@ def test_git_runs_subprocess(tmp_path):
 
 
 def test_get_file_at_commit_success(tmp_path):
-    from ster.git_log import _get_file_at_commit
+    from ster.git.log import _get_file_at_commit
 
     content = "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
-    with patch("ster.git_log._git", return_value=_completed(content)) as mock:
+    with patch("ster.git.log._git", return_value=_completed(content)) as mock:
         result = _get_file_at_commit("abc1234", tmp_path / "vocab.ttl", tmp_path)
     assert result == content
     mock.assert_called_once_with("show", "abc1234:vocab.ttl", cwd=tmp_path)
 
 
 def test_get_file_at_commit_failure(tmp_path):
-    from ster.git_log import _get_file_at_commit
+    from ster.git.log import _get_file_at_commit
 
-    with patch("ster.git_log._git", return_value=_completed(returncode=128)):
+    with patch("ster.git.log._git", return_value=_completed(returncode=128)):
         result = _get_file_at_commit("abc1234", tmp_path / "vocab.ttl", tmp_path)
     assert result is None
 
 
 def test_get_file_at_commit_outside_repo(tmp_path):
-    from ster.git_log import _get_file_at_commit
+    from ster.git.log import _get_file_at_commit
 
     other = Path("/absolute/path/vocab.ttl")
-    with patch("ster.git_log._git", return_value=_completed("content")) as mock:
+    with patch("ster.git.log._git", return_value=_completed("content")) as mock:
         _get_file_at_commit("abc1234", other, tmp_path)
     mock.assert_called_once_with("show", "abc1234:/absolute/path/vocab.ttl", cwd=tmp_path)
 
@@ -607,7 +607,7 @@ ex:C a skos:Concept ;
 
 
 def test_load_taxonomy_safe_valid():
-    from ster.git_log import _load_taxonomy_safe
+    from ster.git.log import _load_taxonomy_safe
 
     result = _load_taxonomy_safe(MINIMAL_TTL, suffix=".ttl")
     assert result is not None
@@ -615,7 +615,7 @@ def test_load_taxonomy_safe_valid():
 
 
 def test_load_taxonomy_safe_invalid_returns_none():
-    from ster.git_log import _load_taxonomy_safe
+    from ster.git.log import _load_taxonomy_safe
 
     result = _load_taxonomy_safe("not valid turtle !!!", suffix=".ttl")
     assert result is None
@@ -675,7 +675,7 @@ def test_on_confirm_y_revert_success(tmp_path):
     v._mode = GitLogViewer._CONFIRM
 
     with (
-        patch("ster.git_log._do_revert", return_value=(True, "Reverted aaaaaa")) as mock_revert,
+        patch("ster.git.log._do_revert", return_value=(True, "Reverted aaaaaa")) as mock_revert,
         patch.object(v, "_load_log"),
     ):
         result = v._on_confirm(ord("y"))
@@ -693,7 +693,7 @@ def test_on_confirm_y_revert_clears_cache(tmp_path):
     v._diff_cache[h] = (MagicMock(), {})
 
     with (
-        patch("ster.git_log._do_revert", return_value=(True, "ok")),
+        patch("ster.git.log._do_revert", return_value=(True, "ok")),
         patch.object(v, "_load_log"),
     ):
         v._on_confirm(ord("Y"))
@@ -707,7 +707,7 @@ def test_on_confirm_y_revert_failure(tmp_path):
     v._entries = [LogEntry(h, "ccc", "Msg", "Carol", "2024-01-03", "")]
     v._cursor = 0
 
-    with patch("ster.git_log._do_revert", return_value=(False, "conflict")):
+    with patch("ster.git.log._do_revert", return_value=(False, "conflict")):
         result = v._on_confirm(ord("y"))
 
     assert result is False

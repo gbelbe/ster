@@ -19,7 +19,8 @@ from ster.nav import (
     build_scheme_fields,
     flatten_tree,
 )
-from ster.nav_state import (
+from ster.nav.editor import _apply_line_edit
+from ster.nav.state import (
     BatchConceptDraft,
     BatchCreateState,
     CreateState,
@@ -211,7 +212,7 @@ def test_exit_returns_true(shell):
 def viewer(simple_taxonomy, tmp_path, monkeypatch) -> TaxonomyViewer:
     f = tmp_path / "vocab.ttl"
     f.write_text("")
-    import ster.nav as nav_mod
+    import ster.nav.viewer as nav_mod
 
     monkeypatch.setattr(nav_mod, "_load_prefs", lambda: {})
     return TaxonomyViewer(simple_taxonomy, f, lang="en")
@@ -261,7 +262,7 @@ def test_build_detail_fields_narrower_read_only(simple_taxonomy):
 
 
 def test_viewer_initial_cursor(viewer):
-    assert viewer._cursor == 0
+    assert viewer._tree.cursor == 0
     # Viewer starts in WELCOME mode (splash screen); transitions to TREE on any key
     assert isinstance(viewer._state, WelcomeState)
 
@@ -278,7 +279,7 @@ def test_run_flushes_stdin_before_and_after_curses(viewer, monkeypatch):
       OS input queue when endwin() is called on exit.
     """
     termios = pytest.importorskip("termios")
-    import ster.nav as nav_mod
+    import ster.nav.viewer as nav_mod
 
     class _FakeTTY:
         def isatty(self):
@@ -313,31 +314,31 @@ def test_run_flushes_stdin_before_and_after_curses(viewer, monkeypatch):
 
 def test_viewer_open_detail(viewer, simple_taxonomy):
     # flat[0] is the scheme row
-    viewer._cursor = 0
+    viewer._tree.cursor = 0
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
-    assert viewer._detail_uri == viewer._flat[0].uri
+    assert viewer._detail_uri == viewer._tree.flat[0].uri
     assert len(viewer._detail_fields) > 0
 
 
 def test_viewer_back_from_detail(viewer):
     viewer._state = TreeState()  # skip welcome for this test
-    viewer._cursor = 0  # scheme row
+    viewer._tree.cursor = 0  # scheme row
     viewer._open_detail()
     viewer._back()
     assert isinstance(viewer._state, TreeState)
 
 
 def test_viewer_history_preserves_cursor(viewer):
-    viewer._cursor = 1
+    viewer._tree.cursor = 1
     viewer._open_detail()
     viewer._back()
-    assert viewer._cursor == 1
+    assert viewer._tree.cursor == 1
 
 
 def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
     # Position on Top concept's pref:en field (scheme at 0, Top at 1)
-    viewer._cursor = 1
+    viewer._tree.cursor = 1
     viewer._open_detail()
     fields = viewer._detail_fields
     pref_idx = next(i for i, f in enumerate(fields) if f.key == "pref:en")
@@ -436,7 +437,7 @@ def test_build_scheme_fields_display_lang_is_first(simple_taxonomy):
 
 def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
     """Opening the scheme row (index 0) loads scheme fields."""
-    viewer._cursor = 0  # scheme row
+    viewer._tree.cursor = 0  # scheme row
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
     assert viewer._detail_uri == BASE + "Scheme"
@@ -445,7 +446,7 @@ def test_viewer_open_scheme_detail(viewer, simple_taxonomy):
 
 def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
     """Editing a scheme_title field updates the scheme label."""
-    viewer._cursor = 0  # scheme row
+    viewer._tree.cursor = 0  # scheme row
     viewer._open_detail()
     title_idx = next(
         i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "scheme_title"
@@ -497,8 +498,8 @@ def test_build_scheme_fields_uri_type(simple_taxonomy):
 def test_add_top_concept_action_enters_create_mode(viewer, simple_taxonomy):
     """add_top_concept action from scheme detail enters CREATE mode (choose step)."""
     scheme_uri = BASE + "Scheme"
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == scheme_uri)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == scheme_uri)
+    viewer._tree.cursor = scheme_idx
     viewer._open_detail()
     assert viewer._detail_uri == scheme_uri
     viewer._trigger_action("add_top_concept")
@@ -510,8 +511,8 @@ def test_add_top_concept_action_enters_create_mode(viewer, simple_taxonomy):
 def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
     """Submitting the create form from scheme detail makes a top concept."""
     scheme_uri = BASE + "Scheme"
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == scheme_uri)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == scheme_uri)
+    viewer._tree.cursor = scheme_idx
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
@@ -543,8 +544,8 @@ def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
 def test_add_top_concept_uses_scheme_base_uri(viewer, simple_taxonomy):
     """Concept URI is built from the scheme's base_uri, not the primary scheme."""
     scheme_uri = BASE + "Scheme"
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == scheme_uri)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == scheme_uri)
+    viewer._tree.cursor = scheme_idx
     viewer._open_detail()
     viewer._trigger_action("add_top_concept")
 
@@ -751,46 +752,46 @@ def test_flatten_tree_fold_leaf_has_no_effect(simple_taxonomy):
 def test_viewer_fold_unfold_via_space(viewer, simple_taxonomy):
     """Pressing space on a concept with children toggles fold state."""
     # Find cursor position of Top concept in the flat list
-    top_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
-    viewer._cursor = top_idx
-    n_before = len(viewer._flat)
+    top_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Top")
+    viewer._tree.cursor = top_idx
+    n_before = len(viewer._tree.flat)
 
     viewer._on_tree(ord(" "), 24)  # fold
-    assert BASE + "Top" in viewer._folded
+    assert BASE + "Top" in viewer._tree.folded
     # Children should no longer appear
-    uris = [l.uri for l in viewer._flat]
+    uris = [l.uri for l in viewer._tree.flat]
     assert BASE + "Child1" not in uris
-    assert len(viewer._flat) < n_before
+    assert len(viewer._tree.flat) < n_before
     # Cursor should still be on Top
-    assert viewer._flat[viewer._cursor].uri == BASE + "Top"
+    assert viewer._tree.flat[viewer._tree.cursor].uri == BASE + "Top"
 
     viewer._on_tree(ord(" "), 24)  # unfold
-    assert BASE + "Top" not in viewer._folded
-    uris = [l.uri for l in viewer._flat]
+    assert BASE + "Top" not in viewer._tree.folded
+    uris = [l.uri for l in viewer._tree.flat]
     assert BASE + "Child1" in uris
-    assert len(viewer._flat) == n_before
+    assert len(viewer._tree.flat) == n_before
 
 
 def test_viewer_space_on_leaf_does_nothing(viewer, simple_taxonomy):
     """Space on a leaf concept (no children) does not fold anything."""
-    child2_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Child2")
-    viewer._cursor = child2_idx
-    n_before = len(viewer._flat)
+    child2_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Child2")
+    viewer._tree.cursor = child2_idx
+    n_before = len(viewer._tree.flat)
     viewer._on_tree(ord(" "), 24)
-    assert BASE + "Child2" not in viewer._folded
-    assert len(viewer._flat) == n_before
+    assert BASE + "Child2" not in viewer._tree.folded
+    assert len(viewer._tree.flat) == n_before
 
 
 def test_viewer_space_on_scheme_folds_scheme(viewer, simple_taxonomy):
     """Space on a scheme row folds the whole scheme."""
     scheme_uri = BASE + "Scheme"
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.uri == scheme_uri)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == scheme_uri)
+    viewer._tree.cursor = scheme_idx
     viewer._on_tree(ord(" "), 24)
-    assert scheme_uri in viewer._folded
-    uris = [l.uri for l in viewer._flat]
+    assert scheme_uri in viewer._tree.folded
+    uris = [l.uri for l in viewer._tree.flat]
     assert BASE + "Top" not in uris
-    scheme_line = viewer._flat[viewer._cursor]
+    scheme_line = viewer._tree.flat[viewer._tree.cursor]
     assert scheme_line.is_folded
     assert scheme_line.hidden_count > 0
 
@@ -800,7 +801,7 @@ def test_viewer_space_on_scheme_folds_scheme(viewer, simple_taxonomy):
 
 def test_detail_footer_hint_narrower(viewer, simple_taxonomy):
     """Detail footer says 'Enter: open concept' when cursor is on a narrower field."""
-    viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
+    viewer._tree.cursor = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     # Find a narrower field
     narrower_idx = next(
@@ -813,7 +814,7 @@ def test_detail_footer_hint_narrower(viewer, simple_taxonomy):
 
 def test_detail_footer_hint_action(viewer, simple_taxonomy):
     """Detail footer says 'Enter: execute' when cursor is on an action field."""
-    viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
+    viewer._tree.cursor = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     action_idx = next(
         i for i, f in enumerate(viewer._detail_fields) if f.meta.get("type") == "action"
@@ -825,7 +826,7 @@ def test_detail_footer_hint_action(viewer, simple_taxonomy):
 
 def test_enter_on_narrower_navigates(viewer, simple_taxonomy):
     """Pressing Enter on a narrower field opens the child concept's detail."""
-    viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
+    viewer._tree.cursor = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
 
@@ -850,7 +851,7 @@ def test_enter_on_narrower_missing_uri_does_nothing(viewer, simple_taxonomy):
     """Enter on a narrower field whose URI is not in taxonomy does nothing."""
     from ster.nav import DetailField
 
-    viewer._cursor = next(i for i, l in enumerate(viewer._flat) if l.uri == BASE + "Top")
+    viewer._tree.cursor = next(i for i, l in enumerate(viewer._tree.flat) if l.uri == BASE + "Top")
     viewer._open_detail()
     # Inject a broken narrower field
     ghost_field = DetailField(
@@ -886,7 +887,7 @@ def test_tree_footer_contains_space_fold_hint(viewer, simple_taxonomy):
 
 def test_flat_first_row_is_scheme(viewer, simple_taxonomy):
     """After _rebuild(), flat[0] is the scheme row."""
-    assert viewer._flat[0].is_scheme
+    assert viewer._tree.flat[0].is_scheme
 
 
 def test_tree_footer_add_hint(viewer):
@@ -897,8 +898,8 @@ def test_tree_footer_add_hint(viewer):
 
 def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
     """Pressing + on a scheme row launches CREATE mode for a top concept."""
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.is_scheme)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.is_scheme)
+    viewer._tree.cursor = scheme_idx
     viewer._on_tree(ord("+"), 24)
     assert isinstance(viewer._state, CreateState)
     assert viewer._state.parent_uri == BASE + "Scheme"
@@ -906,11 +907,13 @@ def test_plus_on_scheme_row_enters_create_mode(viewer, simple_taxonomy):
 
 def test_plus_on_concept_row_enters_create_mode(viewer, simple_taxonomy):
     """Pressing + on a concept row launches CREATE mode for a narrower concept."""
-    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_file)
-    viewer._cursor = concept_idx
+    concept_idx = next(
+        i for i, l in enumerate(viewer._tree.flat) if not l.is_scheme and not l.is_file
+    )
+    viewer._tree.cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
     assert isinstance(viewer._state, CreateState)
-    assert viewer._state.parent_uri == viewer._flat[concept_idx].uri
+    assert viewer._state.parent_uri == viewer._tree.flat[concept_idx].uri
 
 
 # ── scheme URI and base URI editability ───────────────────────────────────────
@@ -933,7 +936,7 @@ def test_scheme_base_uri_field_editable(simple_taxonomy):
 
 def test_commit_scheme_base_uri_edit(viewer, simple_taxonomy):
     """Editing base_uri field updates scheme.base_uri."""
-    viewer._cursor = 0  # scheme row
+    viewer._tree.cursor = 0  # scheme row
     viewer._open_detail()
     base_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "base_uri")
     viewer._field_cursor = base_idx
@@ -961,9 +964,11 @@ def test_add_top_concept_display_uses_emoji(simple_taxonomy):
 def test_cancel_create_from_tree_returns_to_tree(viewer, simple_taxonomy):
     """Esc from CREATE mode entered via '+' from the tree returns to TREE, not DETAIL."""
     # Navigate to a concept row and press +
-    concept_idx = next(i for i, l in enumerate(viewer._flat) if not l.is_scheme and not l.is_file)
+    concept_idx = next(
+        i for i, l in enumerate(viewer._tree.flat) if not l.is_scheme and not l.is_file
+    )
     viewer._state = TreeState()
-    viewer._cursor = concept_idx
+    viewer._tree.cursor = concept_idx
     viewer._on_tree(ord("+"), 24)
     assert isinstance(viewer._state, CreateState)
     # Esc should go back to TREE, not DETAIL
@@ -983,8 +988,8 @@ def test_cancel_scheme_create_from_tree_returns_to_tree(viewer):
 
 def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
     """Esc from CREATE mode entered via detail panel returns to DETAIL."""
-    scheme_idx = next(i for i, l in enumerate(viewer._flat) if l.is_scheme)
-    viewer._cursor = scheme_idx
+    scheme_idx = next(i for i, l in enumerate(viewer._tree.flat) if l.is_scheme)
+    viewer._tree.cursor = scheme_idx
     viewer._open_detail()
     assert isinstance(viewer._state, DetailState)
     viewer._trigger_action("add_top_concept")
@@ -998,7 +1003,7 @@ def test_cancel_create_from_detail_returns_to_detail(viewer, simple_taxonomy):
 
 def test_scheme_uri_not_editable_in_detail(viewer, simple_taxonomy):
     """Pressing Enter on the URI field in scheme detail must not enter EDIT mode."""
-    viewer._cursor = 0  # scheme row
+    viewer._tree.cursor = 0  # scheme row
     viewer._open_detail()
     uri_idx = next(i for i, f in enumerate(viewer._detail_fields) if f.key == "scheme_uri")
     viewer._field_cursor = uri_idx
@@ -1162,58 +1167,51 @@ def _make_viewer(taxonomy, tmp_path):
     return TaxonomyViewer(taxonomy, f, lang="en")
 
 
-def test_apply_line_edit_printable(simple_taxonomy, tmp_path):
+def test_apply_line_edit_printable():
     """Printable char inserts at cursor position."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("ab", 1, ord("X"))
+    buf, pos = _apply_line_edit("ab", 1, ord("X"))
     assert buf == "aXb"
     assert pos == 2
 
 
-def test_apply_line_edit_backspace(simple_taxonomy, tmp_path):
+def test_apply_line_edit_backspace():
     """Backspace removes the char before the cursor."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("abc", 2, 127)
+    buf, pos = _apply_line_edit("abc", 2, 127)
     assert buf == "ac"
     assert pos == 1
 
 
-def test_apply_line_edit_ctrl_a(simple_taxonomy, tmp_path):
+def test_apply_line_edit_ctrl_a():
     """Ctrl+A moves cursor to start."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("hello", 4, 1)
+    buf, pos = _apply_line_edit("hello", 4, 1)
     assert buf == "hello"
     assert pos == 0
 
 
-def test_apply_line_edit_ctrl_e(simple_taxonomy, tmp_path):
+def test_apply_line_edit_ctrl_e():
     """Ctrl+E moves cursor to end."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("hello", 2, 5)
+    buf, pos = _apply_line_edit("hello", 2, 5)
     assert buf == "hello"
     assert pos == 5
 
 
-def test_apply_line_edit_ctrl_k(simple_taxonomy, tmp_path):
+def test_apply_line_edit_ctrl_k():
     """Ctrl+K kills text from cursor to end of line."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("hello world", 5, 11)
+    buf, pos = _apply_line_edit("hello world", 5, 11)
     assert buf == "hello"
     assert pos == 5
 
 
-def test_apply_line_edit_ctrl_w(simple_taxonomy, tmp_path):
+def test_apply_line_edit_ctrl_w():
     """Ctrl+W deletes the word before the cursor."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("foo bar", 7, 23)
+    buf, pos = _apply_line_edit("foo bar", 7, 23)
     assert buf == "foo "
     assert pos == 4
 
 
-def test_apply_line_edit_unknown_key(simple_taxonomy, tmp_path):
+def test_apply_line_edit_unknown_key():
     """Unknown keys leave buffer and position unchanged."""
-    v = _make_viewer(simple_taxonomy, tmp_path)
-    buf, pos = v._apply_line_edit("abc", 1, 999)
+    buf, pos = _apply_line_edit("abc", 1, 999)
     assert buf == "abc"
     assert pos == 1
 

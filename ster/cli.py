@@ -817,7 +817,7 @@ def _launch_ai_config(found: list[Path]) -> None:
     else:
         taxonomy = Taxonomy()
 
-    from .git_manager import GitManager
+    from .git.manager import GitManager
 
     gm = GitManager(primary)
 
@@ -836,7 +836,7 @@ def _launch_ai_config(found: list[Path]) -> None:
 
 def _launch_query(found: list[Path]) -> None:
     """Open the TUI in SPARQL query mode for the given files."""
-    from .git_manager import GitManager
+    from .git.manager import GitManager
     from .nav import TaxonomyViewer
     from .workspace import TaxonomyWorkspace
 
@@ -874,7 +874,7 @@ def _open_viewer(
     workspace: TaxonomyWorkspace | None = None,
 ) -> None:
     """Open the interactive taxonomy viewer for *taxonomy_file* and handle git."""
-    from .git_manager import GitManager, render_diff
+    from .git.manager import GitManager, render_diff
     from .nav import TaxonomyViewer
 
     taxonomy = _load(taxonomy_file)
@@ -901,9 +901,9 @@ def _open_viewer(
 
     if jump_concept:
         uri = _resolve(taxonomy, jump_concept)
-        for i, line in enumerate(viewer._flat):
+        for i, line in enumerate(viewer._tree.flat):
             if line.uri == uri:
-                viewer._cursor = i
+                viewer._tree.cursor = i
                 break
     viewer.run()
 
@@ -1199,7 +1199,7 @@ def cmd_log(
 
     Keys: ↑↓/jk navigate  Tab/d focus diff  r revert  o restore file  ? help  q quit
     """
-    from .git_log import launch_git_log
+    from .git.log import launch_git_log
 
     # Auto-detect file if not given
     if file is None:
@@ -1686,7 +1686,7 @@ def main() -> None:
         return
 
     # ── Bare invocation → interactive home screen loop ────────────────────────
-    from .git_log import launch_git_log
+    from .git.log import launch_git_log
 
     while True:
         _print_welcome()

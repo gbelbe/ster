@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import ster.git_manager as gm
-from ster.git_manager import (
+import ster.git.manager as gm
+from ster.git.manager import (
     GitManager,
     _git_available,
     _load_global_config,
@@ -145,7 +145,7 @@ def test_repo_returns_none_when_path_missing(tmp_path):
 
 def test_stage_file_calls_git_add(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mock_git.return_value = MagicMock(returncode=0)
         mgr.stage_file()
     mock_git.assert_called_once_with("add", str(mgr.taxonomy_path), cwd=tmp_path)
@@ -153,7 +153,7 @@ def test_stage_file_calls_git_add(tmp_path):
 
 def test_stage_file_skips_when_no_repo(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mgr.stage_file()
     mock_git.assert_not_called()
 
@@ -161,7 +161,7 @@ def test_stage_file_skips_when_no_repo(tmp_path):
 def test_stage_path_calls_git_add(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     some_file = tmp_path / "other.ttl"
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mock_git.return_value = MagicMock(returncode=0)
         mgr.stage_path(some_file)
     mock_git.assert_called_once_with("add", str(some_file), cwd=tmp_path)
@@ -169,7 +169,7 @@ def test_stage_path_calls_git_add(tmp_path):
 
 def test_stage_path_skips_when_no_repo(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mgr.stage_path(tmp_path / "x.ttl")
     mock_git.assert_not_called()
 
@@ -180,14 +180,14 @@ def test_stage_path_skips_when_no_repo(tmp_path):
 def test_has_staged_changes_true(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     mock_result = MagicMock(returncode=0, stdout="tax.ttl\n")
-    with patch("ster.git_manager._git", return_value=mock_result):
+    with patch("ster.git.manager._git", return_value=mock_result):
         assert mgr.has_staged_changes() is True
 
 
 def test_has_staged_changes_false_empty(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     mock_result = MagicMock(returncode=0, stdout="")
-    with patch("ster.git_manager._git", return_value=mock_result):
+    with patch("ster.git.manager._git", return_value=mock_result):
         assert mgr.has_staged_changes() is False
 
 
@@ -199,7 +199,7 @@ def test_has_staged_changes_false_no_repo(tmp_path):
 def test_has_staged_changes_false_on_error(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     mock_result = MagicMock(returncode=128, stdout="")
-    with patch("ster.git_manager._git", return_value=mock_result):
+    with patch("ster.git.manager._git", return_value=mock_result):
         assert mgr.has_staged_changes() is False
 
 
@@ -211,7 +211,7 @@ def test_record_head_saves_sha(tmp_path, monkeypatch):
     monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     mock_result = MagicMock(returncode=0, stdout="abc123\n")
-    with patch("ster.git_manager._git", return_value=mock_result):
+    with patch("ster.git.manager._git", return_value=mock_result):
         mgr.record_head()
     assert mgr._cfg.get("last_commit") == "abc123"
 
@@ -219,14 +219,14 @@ def test_record_head_saves_sha(tmp_path, monkeypatch):
 def test_record_head_skips_on_failure(tmp_path):
     mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
     mock_result = MagicMock(returncode=1, stdout="")
-    with patch("ster.git_manager._git", return_value=mock_result):
+    with patch("ster.git.manager._git", return_value=mock_result):
         mgr.record_head()
     assert "last_commit" not in mgr._cfg
 
 
 def test_record_head_no_repo(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mgr.record_head()
     mock_git.assert_not_called()
 
@@ -254,7 +254,7 @@ def test_pre_edit_check_up_to_date(tmp_path):
             return MagicMock(returncode=0, stdout="0\n")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr.pre_edit_check()
     assert result is None
 
@@ -265,7 +265,7 @@ def test_pre_edit_check_rev_list_error(tmp_path):
     def git_side(*args, **kwargs):
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr.pre_edit_check()
     assert result is None
 
@@ -281,7 +281,7 @@ def test_commit_new_taxonomy_success(tmp_path, monkeypatch):
     def git_side(*args, **kwargs):
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr.commit_new_taxonomy("Initial commit")
 
 
@@ -293,7 +293,7 @@ def test_commit_new_taxonomy_nothing_to_commit(tmp_path):
             return MagicMock(returncode=1, stdout="nothing to commit", stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr.commit_new_taxonomy("Initial commit")  # no crash
 
 
@@ -305,13 +305,13 @@ def test_commit_new_taxonomy_commit_error(tmp_path):
             return MagicMock(returncode=1, stdout="", stderr="some error")
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr.commit_new_taxonomy("Initial commit")  # no crash
 
 
 def test_commit_new_taxonomy_no_repo(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mgr.commit_new_taxonomy("msg")
     mock_git.assert_not_called()
 
@@ -321,13 +321,13 @@ def test_commit_new_taxonomy_no_repo(tmp_path):
 
 def test_push_direct_success(tmp_path):
     mgr = _make_manager(tmp_path)
-    with patch("ster.git_manager._git", return_value=MagicMock(returncode=0, stderr="")):
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=0, stderr="")):
         mgr._push_direct(tmp_path, "main")
 
 
 def test_push_direct_failure(tmp_path):
     mgr = _make_manager(tmp_path)
-    with patch("ster.git_manager._git", return_value=MagicMock(returncode=1, stderr="rejected")):
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=1, stderr="rejected")):
         mgr._push_direct(tmp_path, "main")  # no crash, prints error
 
 
@@ -365,7 +365,7 @@ def test_parse_empty_returns_none():
 def test_get_remote_url_success(tmp_path):
     mgr = _make_manager(tmp_path)
     mock = MagicMock(returncode=0, stdout="https://github.com/u/r\n")
-    with patch("ster.git_manager._git", return_value=mock):
+    with patch("ster.git.manager._git", return_value=mock):
         url = mgr._get_remote_url(tmp_path)
     assert url == "https://github.com/u/r"
 
@@ -373,7 +373,7 @@ def test_get_remote_url_success(tmp_path):
 def test_get_remote_url_none_on_error(tmp_path):
     mgr = _make_manager(tmp_path)
     mock = MagicMock(returncode=128, stdout="")
-    with patch("ster.git_manager._git", return_value=mock):
+    with patch("ster.git.manager._git", return_value=mock):
         url = mgr._get_remote_url(tmp_path)
     assert url is None
 
@@ -389,7 +389,7 @@ def test_detect_main_branch_main(tmp_path):
             return MagicMock(returncode=0, stdout="main\n")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr._detect_main_branch(tmp_path)
     assert mgr._cfg.get("main_branch") == "main"
 
@@ -402,7 +402,7 @@ def test_detect_main_branch_master(tmp_path):
             return MagicMock(returncode=0, stdout="master\n")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr._detect_main_branch(tmp_path)
     assert mgr._cfg.get("main_branch") == "master"
 
@@ -415,7 +415,7 @@ def test_detect_main_branch_fallback(tmp_path):
             return MagicMock(returncode=0, stdout="develop\n")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr._detect_main_branch(tmp_path)
     # Should fall through to branch --show-current
     assert mgr._cfg.get("main_branch") in ("develop", "main")
@@ -427,7 +427,7 @@ def test_detect_main_branch_fallback(tmp_path):
 def test_find_repo_root_found(tmp_path):
     mgr = _make_manager(tmp_path)
     mock = MagicMock(returncode=0, stdout=str(tmp_path) + "\n")
-    with patch("ster.git_manager._git", return_value=mock):
+    with patch("ster.git.manager._git", return_value=mock):
         result = mgr._find_repo_root()
     assert result == tmp_path
 
@@ -435,7 +435,7 @@ def test_find_repo_root_found(tmp_path):
 def test_find_repo_root_not_found(tmp_path):
     mgr = _make_manager(tmp_path)
     mock = MagicMock(returncode=128, stdout="")
-    with patch("ster.git_manager._git", return_value=mock):
+    with patch("ster.git.manager._git", return_value=mock):
         result = mgr._find_repo_root()
     assert result is None
 
@@ -467,7 +467,7 @@ def test_link_existing_repo(tmp_path, monkeypatch):
             return MagicMock(returncode=0, stdout="main\n")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         mgr._link_existing_repo(tmp_path)
 
     assert mgr._cfg["repo_path"] == str(tmp_path)
@@ -484,7 +484,7 @@ def test_ensure_on_branch_already_current(tmp_path):
         calls.append(args[0])
         return MagicMock(returncode=0, stdout="main\n")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         GitManager._ensure_on_branch(tmp_path, "main")
     # Only one git call (branch --show-current); no checkout
     assert "checkout" not in calls
@@ -501,7 +501,7 @@ def test_ensure_on_branch_exists_checks_out(tmp_path):
             return MagicMock(returncode=0, stdout="")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         GitManager._ensure_on_branch(tmp_path, "main")
     assert any(a[0] == "checkout" and "-b" not in a for a in calls)
 
@@ -517,7 +517,7 @@ def test_ensure_on_branch_creates_new(tmp_path):
             return MagicMock(returncode=1, stdout="")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         GitManager._ensure_on_branch(tmp_path, "main")
     assert any(a[0] == "checkout" and "-b" in a for a in calls)
 
@@ -533,7 +533,7 @@ def test_detect_remote_default_branch_from_show(tmp_path):
             return MagicMock(returncode=0, stdout="  HEAD branch: develop\n")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._detect_remote_default_branch(tmp_path)
     assert result == "develop"
 
@@ -548,14 +548,14 @@ def test_detect_remote_default_branch_fallback_main(tmp_path):
             return MagicMock(returncode=0, stdout="")
         return MagicMock(returncode=1, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._detect_remote_default_branch(tmp_path)
     assert result == "main"
 
 
 def test_detect_remote_default_branch_final_fallback(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git", return_value=MagicMock(returncode=1, stdout="")):
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=1, stdout="")):
         result = mgr._detect_remote_default_branch(tmp_path)
     assert result == "main"
 
@@ -564,13 +564,13 @@ def test_detect_remote_default_branch_final_fallback(tmp_path):
 
 
 def test_local_branch_returns_current(tmp_path):
-    with patch("ster.git_manager._git", return_value=MagicMock(returncode=0, stdout="feature\n")):
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=0, stdout="feature\n")):
         result = GitManager._local_branch(tmp_path)
     assert result == "feature"
 
 
 def test_local_branch_fallback_main_when_empty(tmp_path):
-    with patch("ster.git_manager._git", return_value=MagicMock(returncode=0, stdout="")):
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=0, stdout="")):
         result = GitManager._local_branch(tmp_path)
     assert result == "main"
 
@@ -700,7 +700,7 @@ def test_pre_edit_check_invalid_behind_count(tmp_path, monkeypatch):
 
 
 def test_git_function_runs_subprocess(tmp_path):
-    from ster.git_manager import _git
+    from ster.git.manager import _git
 
     r = _git("rev-parse", "--show-toplevel", cwd=tmp_path)
     assert hasattr(r, "returncode")
@@ -712,14 +712,14 @@ def test_git_function_runs_subprocess(tmp_path):
 
 def test_setup_git_not_available(tmp_path):
     mgr = _make_manager(tmp_path)
-    with patch("ster.git_manager._git_available", return_value=False):
+    with patch("ster.git.manager._git_available", return_value=False):
         result = mgr.setup()
     assert result is False
 
 
 def test_setup_not_enabled(tmp_path):
     mgr = _make_manager(tmp_path, {"git_enabled": False})
-    with patch("ster.git_manager._git_available", return_value=True):
+    with patch("ster.git.manager._git_available", return_value=True):
         result = mgr.setup()
     assert result is False
 
@@ -730,7 +730,7 @@ def test_setup_auto_links_existing_repo(tmp_path, monkeypatch):
     mgr = _make_manager(tmp_path, {})
 
     with (
-        patch("ster.git_manager._git_available", return_value=True),
+        patch("ster.git.manager._git_available", return_value=True),
         patch.object(mgr, "_find_repo_root", return_value=tmp_path),
         patch.object(mgr, "_link_existing_repo"),
         patch.object(mgr, "_ask_branch_strategy"),
@@ -748,7 +748,7 @@ def test_setup_auto_links_asks_strategy_if_missing(tmp_path, monkeypatch):
     asked = []
 
     with (
-        patch("ster.git_manager._git_available", return_value=True),
+        patch("ster.git.manager._git_available", return_value=True),
         patch.object(mgr, "_find_repo_root", return_value=tmp_path),
         patch.object(mgr, "_link_existing_repo"),
         patch.object(mgr, "_ask_branch_strategy", side_effect=lambda: asked.append(1)),
@@ -800,7 +800,7 @@ def test_pre_edit_check_pull_succeeds_no_diff(tmp_path, monkeypatch):
 
 def test_commit_and_push_not_configured(tmp_path):
     mgr = _make_manager(tmp_path, {})
-    with patch("ster.git_manager._git") as mock_git:
+    with patch("ster.git.manager._git") as mock_git:
         mgr.commit_and_push()
     mock_git.assert_not_called()
 
@@ -822,7 +822,7 @@ def test_commit_and_push_commit_fails(tmp_path, monkeypatch):
 
     with (
         patch.object(mgr, "has_staged_changes", return_value=True),
-        patch("ster.git_manager._git", side_effect=git_side),
+        patch("ster.git.manager._git", side_effect=git_side),
     ):
         mgr.commit_and_push()  # no crash
 
@@ -836,7 +836,7 @@ def test_commit_and_push_direct_no_remote(tmp_path, monkeypatch):
 
     with (
         patch.object(mgr, "has_staged_changes", return_value=True),
-        patch("ster.git_manager._git", side_effect=git_side),
+        patch("ster.git.manager._git", side_effect=git_side),
     ):
         mgr.commit_and_push()  # commits locally; no push
 
@@ -864,7 +864,7 @@ def test_commit_and_push_direct_push(tmp_path, monkeypatch):
 
     with (
         patch.object(mgr, "has_staged_changes", return_value=True),
-        patch("ster.git_manager._git", side_effect=git_side),
+        patch("ster.git.manager._git", side_effect=git_side),
     ):
         mgr.commit_and_push()
     assert push_called
@@ -883,7 +883,7 @@ def test_pull_remote_into_dir_branch_not_exists(tmp_path):
             return MagicMock(returncode=1, stdout="")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._pull_remote_into_dir(tmp_path, "main")
     assert result is True
     assert any("-b" in a for a in calls)
@@ -899,7 +899,7 @@ def test_pull_remote_into_dir_branch_exists_ff_ok(tmp_path):
             return MagicMock(returncode=0, stdout="")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._pull_remote_into_dir(tmp_path, "main")
     assert result is True
     assert any("--ff-only" in a for a in calls)
@@ -917,7 +917,7 @@ def test_pull_remote_into_dir_ff_fails_fallback(tmp_path):
             return MagicMock(returncode=1, stdout="", stderr="diverged")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._pull_remote_into_dir(tmp_path, "main")
     assert result is True
     assert any("--allow-unrelated-histories" in a for a in calls)
@@ -933,7 +933,7 @@ def test_pull_remote_into_dir_all_pull_fail(tmp_path):
             return MagicMock(returncode=1, stdout="", stderr="err")
         return MagicMock(returncode=0, stdout="")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._pull_remote_into_dir(tmp_path, "main")
     assert result is False
 
@@ -951,7 +951,7 @@ def test_push_local_to_remote_success_no_staged(tmp_path):
             return MagicMock(returncode=0, stdout="")  # nothing staged
         return MagicMock(returncode=0, stdout="main\n")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._push_local_to_remote(tmp_path, "main", force=False)
     assert result is True
     assert any("push" in a for a in calls)
@@ -967,7 +967,7 @@ def test_push_local_to_remote_success_with_staged(tmp_path):
             return MagicMock(returncode=0, stdout="file.ttl\n")  # staged
         return MagicMock(returncode=0, stdout="main\n")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._push_local_to_remote(tmp_path, "main", force=False)
     assert result is True
     assert any(a[0] == "commit" for a in calls)
@@ -983,7 +983,7 @@ def test_push_local_to_remote_force(tmp_path):
             return MagicMock(returncode=0, stdout="")
         return MagicMock(returncode=0, stdout="main\n")
 
-    with patch("ster.git_manager._git", side_effect=git_side):
+    with patch("ster.git.manager._git", side_effect=git_side):
         result = mgr._push_local_to_remote(tmp_path, "main", force=True)
     assert result is True
     assert any("--force" in a for a in calls)
@@ -1002,7 +1002,7 @@ def test_push_local_to_remote_push_fails(tmp_path):
         return MagicMock(returncode=0, stdout="main\n")
 
     with (
-        patch("ster.git_manager._git", side_effect=git_side),
+        patch("ster.git.manager._git", side_effect=git_side),
         patch("rich.prompt.Confirm.ask", return_value=False),
     ):
         result = mgr._push_local_to_remote(tmp_path, "main", force=False)

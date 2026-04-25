@@ -5,8 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-from .handles import assign_handles
-from .model import Concept, LabelType, OWLIndividual, OWLProperty, RDFClass, Taxonomy
+from ..handles import assign_handles
+from ..model import Concept, LabelType, OWLIndividual, OWLProperty, RDFClass, Taxonomy
 
 # ──────────────────────────── data model ─────────────────────────────────────
 

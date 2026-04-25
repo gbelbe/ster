@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 
-from .model import LabelType, Taxonomy
-from .owl_analysis import compute_owl_analysis
-from .taxonomy_analysis import ISSUE_DISPLAY_NAMES, SchemeAnalysis, compute_completions
-from .workspace import TaxonomyWorkspace
+from ..model import LabelType, Taxonomy
+from ..owl_analysis import compute_owl_analysis
+from ..taxonomy_analysis import ISSUE_DISPLAY_NAMES, SchemeAnalysis, compute_completions
+from ..workspace import TaxonomyWorkspace
 
 # ──────────────────────────── tree helpers ────────────────────────────────────
 
