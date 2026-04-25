@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 
-from .nav_logic import DetailField, TreeLine
+from .logic import DetailField, TreeLine
 
 # ── Search state (embedded in TreeState) ──────────────────────────────────────
 
@@ -434,6 +434,7 @@ def navigate_tree(state: TreeState, key: int, list_h: int) -> TreeState:
         scroll=scroll,
         folded=state.folded,
         search=state.search,
+        view_mode=state.view_mode,
     )
 
 
@@ -459,6 +460,7 @@ def search_update(state: TreeState, key: int) -> TreeState:
             scroll=state.scroll,
             folded=state.folded,
             search=new_search,
+            view_mode=state.view_mode,
         )
 
     if key in (KEY_BACKSPACE, 127, 8):
@@ -528,6 +530,7 @@ def update_search_results(
         search=SearchState(
             query=s.query, active=s.active, matches=matches, current_idx=new_idx, pattern=pattern
         ),
+        view_mode=state.view_mode,
     )
 
 
@@ -582,6 +585,7 @@ def _replace_search(state: TreeState, new_search: SearchState) -> TreeState:
         scroll=state.scroll,
         folded=state.folded,
         search=new_search,
+        view_mode=state.view_mode,
     )
 
 
@@ -604,4 +608,5 @@ def _search_jump(state: TreeState, direction: int) -> TreeState:
             current_idx=new_idx,
             pattern=s.pattern,
         ),
+        view_mode=state.view_mode,
     )

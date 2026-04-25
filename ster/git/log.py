@@ -23,8 +23,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import store
-from .git_log_logic import (
+from .. import store
+from ..model import Taxonomy
+from ..nav import (
+    TreeLine,
+    flatten_tree,
+    render_tree_col,
+)
+from ..nav import (
+    _init_colors as _nav_init_colors,
+)
+from .log_logic import (
     ConceptChange,
     FieldDiff,
     LogEntry,
@@ -32,15 +41,6 @@ from .git_log_logic import (
     build_diff_taxonomy,
     compute_auto_fold,
     compute_taxonomy_diff,
-)
-from .model import Taxonomy
-from .nav import (
-    TreeLine,
-    flatten_tree,
-    render_tree_col,
-)
-from .nav import (
-    _init_colors as _nav_init_colors,
 )
 
 # ──────────────────────────── git log color pairs ─────────────────────────────

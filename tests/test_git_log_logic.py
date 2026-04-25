@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ster.git_log_logic import (
+from ster.git.log_logic import (
     ConceptChange,
     FieldDiff,
     _concept_field_diffs,

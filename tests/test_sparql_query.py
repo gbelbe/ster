@@ -219,7 +219,7 @@ def test_detect_query_type(sparql: str, expected: str) -> None:
 
 
 def test_query_state_defaults() -> None:
-    from ster.nav_state import QueryState
+    from ster.nav.state import QueryState
 
     qs = QueryState()
     assert qs.panel == "editor"

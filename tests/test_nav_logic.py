@@ -10,7 +10,7 @@ from ster.model import (
     LabelType,
     Taxonomy,
 )
-from ster.nav_logic import (
+from ster.nav.logic import (
     _available_langs,
     _breadcrumb,
     _children,
@@ -148,7 +148,7 @@ def test_flatten_tree_multi_file_folded_file(simple_taxonomy, tmp_path):
     t2.schemes[s2.uri] = s2
     assign_handles(t2)
 
-    from ster.nav_logic import _file_sentinel
+    from ster.nav.logic import _file_sentinel
 
     ws = TaxonomyWorkspace({fp1: simple_taxonomy, fp2: t2})
     folded = {_file_sentinel(fp1)}
@@ -389,7 +389,7 @@ def _owl_taxonomy() -> Taxonomy:
 
 
 def test_flatten_ontology_tree_roots():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = _owl_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -398,7 +398,7 @@ def test_flatten_ontology_tree_roots():
 
 
 def test_flatten_ontology_tree_children_depth():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = _owl_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -408,7 +408,7 @@ def test_flatten_ontology_tree_children_depth():
 
 
 def test_flatten_ontology_tree_node_type_class():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_ontology_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
 
     t = _owl_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -419,7 +419,7 @@ def test_flatten_ontology_tree_node_type_class():
 
 def test_flatten_ontology_tree_node_type_promoted():
     from ster.model import Concept, RDFClass
-    from ster.nav_logic import _is_ontology_sentinel, flatten_ontology_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
 
     BASE_O = "https://example.org/onto/"
     t = Taxonomy()
@@ -431,7 +431,7 @@ def test_flatten_ontology_tree_node_type_promoted():
 
 
 def test_flatten_ontology_tree_empty():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = Taxonomy()
     assert flatten_ontology_tree(t) == []
@@ -461,7 +461,7 @@ def test_taxonomy_treeline_node_type_promoted(simple_taxonomy):
 
 def test_build_rdf_class_detail_identity():
     from ster.model import Definition, RDFClass
-    from ster.nav_logic import build_rdf_class_detail
+    from ster.nav.logic import build_rdf_class_detail
 
     BASE_O = "https://example.org/onto/"
     t = Taxonomy()
@@ -478,7 +478,7 @@ def test_build_rdf_class_detail_identity():
 
 def test_build_rdf_class_detail_subclassof():
     from ster.model import RDFClass
-    from ster.nav_logic import build_rdf_class_detail
+    from ster.nav.logic import build_rdf_class_detail
 
     BASE_O = "https://example.org/onto/"
     t = Taxonomy()
@@ -490,7 +490,7 @@ def test_build_rdf_class_detail_subclassof():
 
 
 def test_build_rdf_class_detail_missing():
-    from ster.nav_logic import build_rdf_class_detail
+    from ster.nav.logic import build_rdf_class_detail
 
     t = Taxonomy()
     assert build_rdf_class_detail(t, "https://x.org/Missing", "en") == []
@@ -523,7 +523,7 @@ def _mixed_taxonomy() -> Taxonomy:
 
 
 def test_flatten_mixed_tree_includes_skos():
-    from ster.nav_logic import flatten_mixed_tree
+    from ster.nav.logic import flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -532,7 +532,7 @@ def test_flatten_mixed_tree_includes_skos():
 
 
 def test_flatten_mixed_tree_includes_owl_section_header():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -540,7 +540,7 @@ def test_flatten_mixed_tree_includes_owl_section_header():
 
 
 def test_flatten_mixed_tree_header_has_label():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -549,7 +549,7 @@ def test_flatten_mixed_tree_header_has_label():
 
 
 def test_flatten_mixed_tree_owl_classes_after_skos():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -561,7 +561,7 @@ def test_flatten_mixed_tree_owl_classes_after_skos():
 
 
 def test_flatten_mixed_tree_pure_classes_node_type():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -575,7 +575,7 @@ def test_flatten_mixed_tree_pure_classes_node_type():
 
 def test_flatten_mixed_tree_owl_only_no_header():
     from ster.model import RDFClass
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     t = Taxonomy()
     t.owl_classes["https://x.org/A"] = RDFClass(uri="https://x.org/A")
@@ -586,7 +586,7 @@ def test_flatten_mixed_tree_owl_only_no_header():
 
 
 def test_flatten_mixed_tree_no_owl_no_header():
-    from ster.nav_logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
 
     lines = flatten_mixed_tree(simple_taxonomy())
     assert not any(_is_ontology_sentinel(l.uri) for l in lines)
@@ -634,7 +634,7 @@ def _promoted_taxonomy() -> Taxonomy:
 
 
 def test_build_promoted_detail_has_both_sections():
-    from ster.nav_logic import build_promoted_detail
+    from ster.nav.logic import build_promoted_detail
 
     t = _promoted_taxonomy()
     uri = "https://example.org/promo/Dog"
@@ -645,7 +645,7 @@ def test_build_promoted_detail_has_both_sections():
 
 
 def test_build_promoted_detail_type_stat():
-    from ster.nav_logic import build_promoted_detail
+    from ster.nav.logic import build_promoted_detail
 
     t = _promoted_taxonomy()
     uri = "https://example.org/promo/Dog"
@@ -656,7 +656,7 @@ def test_build_promoted_detail_type_stat():
 
 
 def test_build_promoted_detail_fallback_concept_only():
-    from ster.nav_logic import build_promoted_detail
+    from ster.nav.logic import build_promoted_detail
 
     t = Taxonomy()
     BASE_P = "https://example.org/promo/"
@@ -668,7 +668,7 @@ def test_build_promoted_detail_fallback_concept_only():
 
 def test_build_promoted_detail_fallback_class_only():
     from ster.model import RDFClass
-    from ster.nav_logic import build_promoted_detail
+    from ster.nav.logic import build_promoted_detail
 
     t = Taxonomy()
     BASE_P = "https://example.org/promo/"
@@ -712,7 +712,7 @@ def test_individual_handle_assigned():
 
 
 def test_individual_appears_under_class_in_ontology_tree():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = _individual_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -721,7 +721,7 @@ def test_individual_appears_under_class_in_ontology_tree():
 
 
 def test_individual_node_type_in_tree_line():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = _individual_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -730,7 +730,7 @@ def test_individual_node_type_in_tree_line():
 
 
 def test_individual_under_dog_not_animal():
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     t = _individual_taxonomy()
     lines = flatten_ontology_tree(t)
@@ -742,7 +742,7 @@ def test_individual_under_dog_not_animal():
 
 
 def test_individual_appears_in_mixed_tree():
-    from ster.nav_logic import flatten_mixed_tree
+    from ster.nav.logic import flatten_mixed_tree
 
     t = _individual_taxonomy()
     lines = flatten_mixed_tree(t)
@@ -760,7 +760,7 @@ def test_individual_appears_under_multiple_classes():
     t.owl_individuals[BASE_I + "Whiskers"] = ind
     assign_handles(t)
 
-    from ster.nav_logic import flatten_ontology_tree
+    from ster.nav.logic import flatten_ontology_tree
 
     lines = flatten_ontology_tree(t)
     uris = [l.uri for l in lines]
@@ -770,7 +770,7 @@ def test_individual_appears_under_multiple_classes():
 
 
 def test_build_individual_detail_sections():
-    from ster.nav_logic import build_individual_detail
+    from ster.nav.logic import build_individual_detail
 
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "en")
@@ -781,7 +781,7 @@ def test_build_individual_detail_sections():
 
 
 def test_build_individual_detail_class_membership():
-    from ster.nav_logic import build_individual_detail
+    from ster.nav.logic import build_individual_detail
 
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "en")
@@ -791,7 +791,7 @@ def test_build_individual_detail_class_membership():
 
 
 def test_build_individual_detail_add_label_action():
-    from ster.nav_logic import build_individual_detail
+    from ster.nav.logic import build_individual_detail
 
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "fr")
