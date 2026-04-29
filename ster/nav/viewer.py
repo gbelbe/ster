@@ -2024,6 +2024,25 @@ class TaxonomyViewer:
             self._commit_scheme_edit(f, new_value)
             return
 
+        # ── new OWL individual (action-triggered from a class detail panel) ─────
+        if f.meta.get("type") == "new_owl_individual_uri":
+            if new_value and new_value not in self.taxonomy.owl_individuals:
+                class_uri = f.meta.get("class_uri", "")
+                self.taxonomy.owl_individuals[new_value] = OWLIndividual(
+                    uri=new_value,
+                    types=[class_uri] if class_uri else [],
+                )
+                from ..handles import assign_handles
+
+                assign_handles(self.taxonomy)
+                self._rebuild()
+                self._save_file()
+            self._detail_uri = new_value
+            self._detail_fields = self._bidf(new_value)
+            self._field_cursor = 0
+            self._state = DetailState()
+            return
+
         # ── OWL class field editing ───────────────────────────────────────────
         if self._detail_uri in self.taxonomy.owl_classes:
             self._commit_owl_class_edit(f, new_value)
@@ -2215,7 +2234,7 @@ class TaxonomyViewer:
 
             if new_value not in self.taxonomy.owl_classes:
                 self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
@@ -2232,7 +2251,7 @@ class TaxonomyViewer:
 
             if new_value not in self.taxonomy.owl_properties:
                 self.taxonomy.owl_properties[new_value] = OWLProperty(uri=new_value)
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
@@ -2251,7 +2270,7 @@ class TaxonomyViewer:
                     uri=new_value,
                     types=[class_uri] if class_uri else [],
                 )
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
