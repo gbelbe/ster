@@ -2024,6 +2024,25 @@ class TaxonomyViewer:
             self._commit_scheme_edit(f, new_value)
             return
 
+        # ── new OWL individual (action-triggered from a class detail panel) ─────
+        if f.meta.get("type") == "new_owl_individual_uri":
+            if new_value and new_value not in self.taxonomy.owl_individuals:
+                class_uri = f.meta.get("class_uri", "")
+                self.taxonomy.owl_individuals[new_value] = OWLIndividual(
+                    uri=new_value,
+                    types=[class_uri] if class_uri else [],
+                )
+                from ..handles import assign_handles
+
+                assign_handles(self.taxonomy)
+                self._rebuild()
+                self._save_file()
+            self._detail_uri = new_value
+            self._detail_fields = self._bidf(new_value)
+            self._field_cursor = 0
+            self._state = DetailState()
+            return
+
         # ── OWL class field editing ───────────────────────────────────────────
         if self._detail_uri in self.taxonomy.owl_classes:
             self._commit_owl_class_edit(f, new_value)
@@ -2211,11 +2230,11 @@ class TaxonomyViewer:
         elif ftype == "new_owl_class_uri":
             if not new_value:
                 return
-            from .model import RDFClass
+            from ..model import RDFClass
 
             if new_value not in self.taxonomy.owl_classes:
                 self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
@@ -2228,11 +2247,11 @@ class TaxonomyViewer:
         elif ftype == "new_owl_property_uri":
             if not new_value:
                 return
-            from .model import OWLProperty
+            from ..model import OWLProperty
 
             if new_value not in self.taxonomy.owl_properties:
                 self.taxonomy.owl_properties[new_value] = OWLProperty(uri=new_value)
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
@@ -2251,7 +2270,7 @@ class TaxonomyViewer:
                     uri=new_value,
                     types=[class_uri] if class_uri else [],
                 )
-                from .handles import assign_handles
+                from ..handles import assign_handles
 
                 assign_handles(self.taxonomy)
                 self._rebuild()
@@ -2318,7 +2337,7 @@ class TaxonomyViewer:
         tgt_info = self._workspace.concept_for(tgt_uri)
         if tgt_info is not None:
             tgt_path, tgt_concept = tgt_info
-            from .workspace_ops import _ATTR, _INVERSE
+            from ..workspace_ops import _ATTR, _INVERSE
 
             inv_list: list = getattr(tgt_concept, _ATTR[_INVERSE[skos_type]])
             if self._detail_uri in inv_list:
@@ -4184,7 +4203,7 @@ class TaxonomyViewer:
         """Handle keys on the context-review step (editable definition)."""
         if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             from .. import ai as _ai
-            from .model import Definition
+            from ..model import Definition
 
             taxonomy_name, taxonomy_desc, parent_label, _orig_def = self._build_ai_context(cs)
             # Use the (possibly edited) definition from the buffer
@@ -5236,7 +5255,7 @@ class TaxonomyViewer:
     # ──────────────── INDIVIDUAL → CLASS confirmation ────────────────────────
 
     def _do_individual_to_class(self, uri: str) -> None:
-        from .model import RDFClass
+        from ..model import RDFClass
 
         individual = self.taxonomy.owl_individuals.get(uri)
         if not individual:
@@ -5785,7 +5804,7 @@ class TaxonomyViewer:
         Subclasses are indented under their parent with two spaces per level.
         The root class is always shown even if not explicitly in owl_classes.
         """
-        from .model import OWLProperty as _OWLProp
+        from ..model import OWLProperty as _OWLProp
 
         range_roots: list[str] = (
             list(prop.ranges)
@@ -5865,7 +5884,7 @@ class TaxonomyViewer:
         then its subclass groups recursively.  Individuals that belong to multiple
         classes only appear under their most-specific (deepest) class.
         """
-        from .model import OWLProperty as _OWLProp
+        from ..model import OWLProperty as _OWLProp
 
         range_roots: list[str] = (
             list(prop.ranges)  # type: ignore[union-attr]
@@ -6728,7 +6747,7 @@ class TaxonomyViewer:
             mcp.scroll = 0
 
     def _confirm_mapping(self, target_uri: str) -> None:
-        from .workspace_ops import add_mapping
+        from ..workspace_ops import add_mapping
 
         if not isinstance(self._state, MapConceptPickState):
             return
