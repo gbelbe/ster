@@ -533,6 +533,7 @@ def test_validated_sparql_repairs(monkeypatch):
 
     monkeypatch.setattr(ai_module, "_validate_sparql_syntax", mock_validate)
     monkeypatch.setattr(ai_module, "_repair_sparql", lambda q, e: "REPAIRED")
+    monkeypatch.setattr(ai_module, "is_copypaste", lambda: False)
     result = _validated_sparql("BAD QUERY")
     assert result == "REPAIRED"
 
