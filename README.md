@@ -21,6 +21,7 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
+  v0.3.3
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.

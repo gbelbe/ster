@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
 from . import operations, store
+from ._version import __version__ as _VERSION
 from .display import console, render_handle_list, render_tree
 from .exceptions import SkostaxError
 from .model import LabelType, Taxonomy
@@ -31,13 +32,27 @@ app = typer.Typer(
 err = Console(stderr=True)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"ster v{_VERSION}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def _app_callback(ctx: typer.Context) -> None:
+def _app_callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(  # noqa: ARG001
+        None,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
     """Suppress Typer's default no-args behaviour; main() handles it."""
-    pass
 
 
-_VERSION = "0.3.1"
 _AUTHOR = "ster contributors"
 
 _PYPI_URL = "https://pypi.org/pypi/ster/json"

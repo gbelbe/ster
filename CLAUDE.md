@@ -28,6 +28,16 @@ Run `uv run ruff check --fix . && uv run ruff format .` to auto-fix most lint/fo
 - Private attr on third-party type → add `# type: ignore[attr-defined]`
 - Every new `.py` file must start with `from __future__ import annotations`
 
+## Feature development workflow (mandatory)
+
+Before writing any implementation code for a new feature, you MUST:
+
+1. List every test case you plan to add — happy path, edge cases, error paths
+2. Show which test file(s) will receive them and the test function names
+3. Wait for explicit user confirmation before writing any code
+
+Only after the user approves the test plan should you proceed: write the tests first, then the implementation.
+
 ## Project conventions
 
 - State machine pattern: one dataclass per viewer mode in `nav_state.py`, pure `_draw_*` / `_on_*` methods in `nav.py`
