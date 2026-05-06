@@ -291,13 +291,30 @@ class GitManager:
             console.print("[dim]No staged changes — nothing to commit.[/dim]")
             return
 
-        from rich.prompt import Prompt
+        from rich.prompt import Confirm, Prompt
+
+        from ..lint_runner import (
+            display_violations,
+            has_blocking_violations,
+            lint_files,
+            load_config,
+        )
 
         repo = self._repo()
         if repo is None:
             return
         main = self._cfg.get("main_branch", "main")
         strat = self._cfg.get("branch_strategy", "direct")
+
+        # Run lint now so we can block if needed; results are displayed after push.
+        cfg, fail_on = load_config(repo)
+        violations = lint_files([self.taxonomy_path], cfg)
+
+        if has_blocking_violations(violations, fail_on):
+            display_violations(violations, fail_on)
+            if not Confirm.ask("Issues found. Commit anyway?", default=False, console=console):
+                console.print("[dim]Commit cancelled.[/dim]")
+                return
 
         # ── commit message ────────────────────────────────────────────────────
         default_msg = f"Update {self.taxonomy_path.name}"
@@ -306,6 +323,7 @@ class GitManager:
             msg = Prompt.ask(
                 "[bold]Commit message[/bold]",
                 default=default_msg,
+                console=console,
             )
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Commit cancelled.[/dim]")
@@ -318,6 +336,7 @@ class GitManager:
         console.print(f"[green]✓ Committed:[/green] {msg}")
 
         if not self._cfg.get("remote_url"):
+            display_violations(violations, fail_on)
             console.print("[dim]No remote configured — changes committed locally.[/dim]")
             return
 
@@ -329,20 +348,25 @@ class GitManager:
         )
         default_choice = "1" if strat == "direct" else "2"
         try:
-            choice = Prompt.ask("Choose", choices=["1", "2"], default=default_choice)
+            choice = Prompt.ask(
+                "Choose", choices=["1", "2"], default=default_choice, console=console
+            )
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Push cancelled.[/dim]")
             return
 
         if choice == "1":
             self._push_direct(repo, main)
-            # Remember preference
             self._cfg["branch_strategy"] = "direct"
             self._persist()
         else:
             self._push_pr(repo, main, msg)
             self._cfg["branch_strategy"] = "pr"
             self._persist()
+
+        # Show lint results after push so they are the last thing visible.
+        if not has_blocking_violations(violations, fail_on):
+            display_violations(violations, fail_on)
 
     # ── private: setup helpers ────────────────────────────────────────────────
 

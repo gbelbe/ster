@@ -186,6 +186,7 @@ _SUBCOMMANDS = frozenset(
         "validate",
         "nav",
         "log",
+        "init-ci",
     }
 )
 
@@ -201,6 +202,7 @@ _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
+_ci_check_done: bool = False  # guard: prompt at most once per process
 
 
 # ──────────────────────────── session / file resolution ──────────────────────
@@ -238,7 +240,19 @@ def _resolve_file(path: Path | None) -> Path:
       3. Persisted session cache (temp file keyed on CWD).
       4. Auto-discovery: single file → confirm; multiple → interactive picker.
     """
-    global _session_file
+    global _session_file, _ci_check_done
+
+    if not _ci_check_done:
+        _ci_check_done = True
+        from .init_ci import prompt_if_missing
+        from .project import _git_root as _find_git_root
+
+        _root = _find_git_root(Path.cwd())
+        if _root and prompt_if_missing(_root):
+            console.print(
+                "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
+                "commit and push to activate CI\n"
+            )
 
     if path is not None:
         _session_file = path
@@ -923,7 +937,14 @@ def _open_viewer(
     viewer.run()
 
     if gm.is_enabled() and gm.is_configured():
-        gm.commit_and_push()
+        try:
+            gm.commit_and_push()
+        except Exception as exc:
+            console.print(f"\n[red]Commit error:[/red] {exc}")
+        try:
+            input("\nPress Enter to return to the menu…")
+        except (KeyboardInterrupt, EOFError):
+            pass
     elif gm.is_enabled() and not gm.is_configured():
         try:
             want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
@@ -1679,6 +1700,30 @@ def _run_html_export_interactive(files: list[Path]) -> None:
         pass
 
 
+@app.command("init-ci")
+def cmd_init_ci(
+    dest: Path = typer.Argument(Path("."), help="Project root directory (default: current dir)."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing files."),
+    config: bool = typer.Option(
+        True, "--config/--no-config", help="Also write onto-ci.yml config template."
+    ),
+) -> None:
+    """Scaffold a GitHub Actions CI workflow for this taxonomy/ontology project."""
+    from .init_ci import scaffold
+
+    dest = dest.resolve()
+    workflow_written, config_written = scaffold(dest, force=force, include_config=config)
+    workflow_rel = Path(".github") / "workflows" / "taxonomy-ci.yml"
+
+    if not workflow_written:
+        console.print(f"[yellow]already exists:[/yellow] {workflow_rel}")
+        console.print("[dim]Use --force to overwrite.[/dim]")
+    else:
+        console.print(f"[green]created:[/green] {workflow_rel}")
+    if config_written:
+        console.print("[green]created:[/green] onto-ci.yml")
+
+
 def main() -> None:
     """Entry point.
 
@@ -1705,6 +1750,19 @@ def main() -> None:
 
     while True:
         _print_welcome()
+
+        global _ci_check_done
+        if not _ci_check_done:
+            _ci_check_done = True
+            from .init_ci import prompt_if_missing
+            from .project import _git_root as _find_git_root
+
+            _root = _find_git_root(Path.cwd())
+            if _root and prompt_if_missing(_root):
+                console.print(
+                    "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
+                    "commit and push to activate CI\n"
+                )
 
         found: list[Path] = []
         for pattern in _TAXONOMY_GLOBS:

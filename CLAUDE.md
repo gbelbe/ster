@@ -28,6 +28,32 @@ Run `uv run ruff check --fix . && uv run ruff format .` to auto-fix most lint/fo
 - Private attr on third-party type → add `# type: ignore[attr-defined]`
 - Every new `.py` file must start with `from __future__ import annotations`
 
+## TDD + BDD workflow (mandatory)
+
+This project follows strict TDD with BDD for behaviour specification.
+
+**Before writing any implementation code for a new feature, you MUST:**
+
+1. Write the Gherkin `.feature` file under `tests/features/`
+2. List every unit test case — happy path, edge cases, error paths
+3. Show which files will receive them and the function names
+4. Wait for explicit user confirmation
+
+**Only after approval:**
+- Write the `pytest-bdd` step definitions under `tests/step_defs/`
+- Write the unit tests under `tests/unit/`
+- Write the implementation
+
+## BDD conventions
+
+- Feature files live in `tests/features/<domain>/` (e.g. `ci/`, `model/`)
+- Step definitions live in `tests/step_defs/test_<domain>.py`
+- Unit tests live in `tests/unit/test_<module>.py`
+- One `.feature` file per feature domain
+- Scenario names must be human-readable business descriptions
+- Use `@pytest.fixture` for shared setup (avoid duplication across step files)
+- Shared `@given` / `@then` steps go in `tests/step_defs/conftest.py`
+
 ## Feature development workflow (mandatory)
 
 Before writing any implementation code for a new feature, you MUST:

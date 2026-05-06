@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# onto-ci.yml  —  semanticlint configuration
+# Place this file at the root of your ontology / taxonomy project.
+# All keys are optional; uncomment and adjust as needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Minimum severity that fails CI and blocks ster commits.
+# error   — only hard errors fail  (default, good for new projects)
+# warning — warnings also fail     (recommended for mature projects)
+# info    — everything fails
+# fail_on: error
+
+# Check IDs or prefixes to run. Empty = run all checks.
+# Prefixes: SKO (SKOS), OWL, RDS (RDFS), QUA (quality), LNT (lint/syntax)
+# select:
+#   - SKO
+#   - QUA
+
+# Check IDs to skip entirely.
+# ignore:
+#   - SKO003   # label-disjointness — too strict for our data
+
+# Quality thresholds (0.0 – 1.0)
+# quality:
+#   min_label_coverage: 1.0          # QUA001 — fraction of skos:Concept with prefLabel
+#   min_definition_coverage: 0.5     # QUA002 — fraction of skos:Concept with definition
+#   min_class_label_coverage: 1.0    # QUA004 — fraction of owl:Class with rdfs:label
+#   min_property_label_coverage: 1.0 # QUA005 — fraction of OWL properties with rdfs:label
+#   languages:                       # QUA003 — required language tags on prefLabels
+#     - en

@@ -1,0 +1,125 @@
+"""Run semanticlint checks inline and display results with Rich."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+import semanticlint  # noqa: F401 — registers all built-in checks
+from semanticlint.checks.base import CheckConfig, Severity, Violation
+from semanticlint.checks.lint.syntax import lint_syntax
+from semanticlint.checks.registry import CheckRegistry
+from semanticlint.detect import detect_vocab_type
+
+_SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
+
+_SEVERITY_STYLE = {
+    Severity.ERROR: "bold red",
+    Severity.WARNING: "yellow",
+    Severity.INFO: "blue",
+}
+
+
+def load_config(search_dir: Path) -> tuple[CheckConfig, Severity]:
+    """Load onto-ci.yml from *search_dir*. Returns (CheckConfig, fail_on_severity)."""
+    candidate = search_dir / "onto-ci.yml"
+    if candidate.exists():
+        import yaml
+
+        with open(candidate) as f:
+            data = yaml.safe_load(f) or {}
+        cfg = CheckConfig(
+            select=data.get("select", []),
+            ignore=data.get("ignore", []),
+            quality=data.get("quality", {}),
+        )
+        try:
+            fail_on = Severity(data.get("fail_on", "error"))
+        except ValueError:
+            fail_on = Severity.ERROR
+        return cfg, fail_on
+    return CheckConfig(), Severity.ERROR
+
+
+def lint_files(paths: list[Path], cfg: CheckConfig) -> list[Violation]:
+    """Run all semanticlint checks on *paths*. Returns all violations."""
+    all_violations: list[Violation] = []
+    for path in paths:
+        graph, syntax_violations = lint_syntax(path)
+        violations: list[Violation] = list(syntax_violations)
+        if graph is not None and len(graph) > 0:
+            vtype = detect_vocab_type(graph)
+            for check_cls in CheckRegistry.for_vocab(vtype):
+                violations.extend(check_cls().run(graph, cfg))
+        all_violations.extend(violations)
+    return all_violations
+
+
+def has_blocking_violations(violations: list[Violation], fail_on: Severity) -> bool:
+    """Return True if any violation meets or exceeds the *fail_on* threshold."""
+    threshold = _SEVERITY_ORDER[fail_on]
+    return any(_SEVERITY_ORDER[v.severity] >= threshold for v in violations)
+
+
+def display_violations(violations: list[Violation], fail_on: Severity) -> None:
+    """Print violation details and summary using Rich."""
+    from rich.console import Console
+    from rich.rule import Rule
+
+    out = Console()
+
+    out.print()
+    out.print(Rule("[bold]semanticlint[/bold]", style="dim"))
+
+    if not violations:
+        out.print("  [green]✓[/green] No issues found.")
+        out.print()
+        return
+
+    for v in violations:
+        style = _SEVERITY_STYLE[v.severity]
+        label = f"[{style}]{v.severity.value.upper():7}[/{style}]"
+        subj = f" {str(v.subject).split('/')[-1].split('#')[-1]}" if v.subject else ""
+        out.print(f"  {label} [{v.check_id}]{subj}: {v.message}")
+
+    out.print()
+    errors = sum(1 for v in violations if v.severity == Severity.ERROR)
+    warnings = sum(1 for v in violations if v.severity == Severity.WARNING)
+    infos = sum(1 for v in violations if v.severity == Severity.INFO)
+
+    parts = []
+    if errors:
+        parts.append(f"[bold red]{errors} error{'s' if errors != 1 else ''}[/]")
+    if warnings:
+        parts.append(f"[yellow]{warnings} warning{'s' if warnings != 1 else ''}[/]")
+    if infos:
+        parts.append(f"[blue]{infos} info[/]")
+
+    blocking = has_blocking_violations(violations, fail_on)
+    icon = "[bold red]✗[/]" if blocking else "[yellow]⚠[/]"
+    out.print(f"  {icon}  {', '.join(parts)}  [dim](fail-on: {fail_on.value})[/dim]")
+    out.print()
+
+
+def run_pre_commit_lint(
+    taxonomy_path: Path,
+    repo_dir: Path,
+    confirm_fn: Callable[[str], bool] | None = None,
+) -> bool:
+    """Run lint, display results, prompt if blocking. Returns True if commit should proceed.
+
+    *confirm_fn* receives the prompt message and returns bool. Defaults to Rich Confirm.ask.
+    """
+    cfg, fail_on = load_config(repo_dir)
+    violations = lint_files([taxonomy_path], cfg)
+    display_violations(violations, fail_on)
+
+    if not has_blocking_violations(violations, fail_on):
+        return True
+
+    if confirm_fn is None:
+        from rich.prompt import Confirm
+
+        confirm_fn = lambda msg: Confirm.ask(msg, default=False)  # noqa: E731
+
+    return confirm_fn("Issues found. Commit anyway?")
