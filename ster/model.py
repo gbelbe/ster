@@ -224,6 +224,8 @@ class Taxonomy:
     ontology_label: str | None = field(default=None)  # rdfs:label of the ontology
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
+    # prefix → namespace URL (from source file; used for round-trip serialisation)
+    namespace_bindings: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
 

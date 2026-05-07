@@ -198,22 +198,26 @@ def build_graph(taxonomy: Taxonomy) -> dict:
                 }
             )
 
+    from .ontology_imports import is_external_uri, prefix_label
+
     # Classes
     for uri, cls in taxonomy.owl_classes.items():
+        ext = is_external_uri(uri, taxonomy)
         add_node(
             uri,
-            cls.label("en"),
-            "class",
+            prefix_label(uri, taxonomy) if ext else cls.label("en"),
+            "external-class" if ext else "class",
             cls.schema_images[0] if cls.schema_images else "",
             _detail_class(cls, taxonomy),
         )
 
     # Individuals
     for uri, ind in taxonomy.owl_individuals.items():
+        ext = is_external_uri(uri, taxonomy)
         add_node(
             uri,
-            ind.label("en"),
-            "individual",
+            prefix_label(uri, taxonomy) if ext else ind.label("en"),
+            "external-individual" if ext else "individual",
             ind.schema_images[0] if ind.schema_images else "",
             _detail_individual(ind, taxonomy),
         )
@@ -431,6 +435,10 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:f
 #canvas{flex:1;height:100vh;display:block}
 #detail-panel{width:25vw;min-width:200px;max-width:380px;height:100vh;overflow-y:auto;
               background:#161b22;border-left:1px solid #30363d;flex-shrink:0}
+#panel-close{position:fixed;top:8px;right:8px;background:#161b22;border:1px solid #30363d;
+             color:#6b7280;cursor:pointer;font-size:16px;line-height:1;padding:3px 8px;
+             border-radius:4px;z-index:20}
+#panel-close:hover{background:#21262d;color:#e6edf3}
 /* node / link structural styles */
 .node-class rect,.node-scheme rect{stroke-width:1.5px}
 .node-individual ellipse,.node-concept ellipse{stroke-width:1.5px}
@@ -456,7 +464,12 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:f
        font-size:11px;color:#8b949e;background:#161b22;padding:4px 12px;
        border-radius:20px;border:1px solid #30363d}
 #hint{position:fixed;bottom:10px;left:12px;font-size:10px;color:#4b5563;
-      background:#161b22;padding:3px 8px;border-radius:10px;border:1px solid #30363d}
+      background:#161b22;padding:3px 8px;border-radius:10px;border:1px solid #30363d;
+      display:flex;align-items:center;gap:8px}
+.ftbtn{background:none;border:1px solid #374151;color:#6b7280;border-radius:6px;
+       cursor:pointer;font-size:10px;padding:1px 6px}
+.ftbtn.active{color:#9ca3af;border-color:#4b5563}
+.ftbtn:hover{background:#21262d}
 #tip{position:fixed;pointer-events:none;background:#161b22;border:1px solid #30363d;
      border-radius:6px;padding:6px 10px;font-size:11px;color:#c9d1d9;
      max-width:280px;word-break:break-all;display:none;z-index:99}
@@ -516,8 +529,9 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:f
 <body>
 <svg id="canvas"></svg>
 <div id="detail-panel"></div>
+<button id="panel-close" title="Close panel (Esc)">×</button>
 <div id="stats"></div>
-<div id="hint">drag top-concept → moves whole tree · dbl-click to unpin · click: details · f: re-layout · esc: back</div>
+<div id="hint"><span>drag root → moves tree · dbl-click: unpin · click: details · f: re-layout · esc: close</span><span style="color:#374151">│</span><button class="ftbtn active" id="ft-instanceOf" onclick="toggleLinkType('instanceOf')">rdf:type</button><button class="ftbtn active" id="ft-inScheme" onclick="toggleLinkType('inScheme')">inScheme</button></div>
 <div id="tip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
@@ -527,8 +541,10 @@ const graphData = "__GRAPH_DATA__";
 const taxoMeta  = "__TAXO_META__";
 
 const panelEl = document.getElementById('detail-panel');
-const W = window.innerWidth - panelEl.offsetWidth;
+let panelVisible = true;
+let W = window.innerWidth - panelEl.offsetWidth;
 const H = window.innerHeight;
+document.getElementById('stats').style.left = (W/2)+'px';
 const svg = d3.select("#canvas");
 
 const defs = svg.append("defs");
@@ -562,7 +578,7 @@ function isRootClass(d){
 }
 function nodeRadius(d){
   if(isRootClass(d)) return Math.sqrt((CLS_W/2+10)**2+(CLS_H/2+10)**2);
-  if(d.type==="class"||d.type==="scheme") return Math.sqrt((CLS_W/2)**2+(CLS_H/2)**2);
+  if(d.type==="class"||d.type==="scheme"||d.type==="external-class") return Math.sqrt((CLS_W/2)**2+(CLS_H/2)**2);
   if(d.type==="topconcept") return Math.max(TC_RX,TC_RY);
   return Math.max(IND_RX,IND_RY);
 }
@@ -579,7 +595,7 @@ links.forEach(l=>{
 links.forEach(l=>{
   const k=[l.source,l.target].sort().join("\x00");
   pairIdx[k]=(pairIdx[k]||0);
-  l._arc=(pairIdx[k]-(pairCount[k]-1)/2)*40;
+  l._arc=(pairIdx[k]-(pairCount[k]-1)/2)*60;
   pairIdx[k]++;
 });
 
@@ -665,6 +681,8 @@ topConcepts.forEach((tc,i)=>{
 
 function nodeFill(d){
   if(d.type==="scheme") return "#6b21a8";
+  if(d.type==="external-class") return "#3b1259";
+  if(d.type==="external-individual") return "#1c1c2e";
   if(d.type==="class"){
     const rr=isRootClass(d);
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
@@ -681,6 +699,8 @@ function nodeFill(d){
 }
 function nodeStroke(d){
   if(d.type==="scheme") return "#c084fc";
+  if(d.type==="external-class") return "#a78bfa";
+  if(d.type==="external-individual") return "#6b7280";
   if(d.type==="class"){
     const rr=isRootClass(d);
     const hue=d._owlCluster!=null?classTreeHue[d._owlCluster]:null;
@@ -754,7 +774,7 @@ if(hasClusters){
 }
 
 const owlCircleR=!hasClusters&&rootClasses.length>0
-  ?Math.min(W,H)*(0.28+0.05*Math.min(rootClasses.length,8)):0;
+  ?Math.min(W,H)*(0.38+0.06*Math.min(rootClasses.length,8)):0;
 if(!hasClusters){
   rootClasses.forEach((rc,i)=>{
     const a=2*Math.PI*i/Math.max(rootClasses.length,1)-Math.PI/2;
@@ -832,7 +852,8 @@ function edgePath(d){
 }
 
 const sim=d3.forceSimulation()
-  .force("collide",d3.forceCollide(d=>nodeRadius(d)+18));
+  .alphaDecay(0.016)
+  .force("collide",d3.forceCollide(d=>nodeRadius(d)+38).iterations(2));
 
 if(hasClusters){
   sim.force("link",d3.forceLink().id(d=>d.id)
@@ -844,9 +865,9 @@ if(hasClusters){
   .force("cy",d3.forceY(d=>tierY(d)).strength(d=>tierYStr(d)));
 } else {
   sim.force("link",d3.forceLink().id(d=>d.id)
-    .distance(120).strength(0.3))
+    .distance(200).strength(0.25))
   .force("charge",d3.forceManyBody().strength(d=>
-    isRootClass(d)?-4000:-320))
+    isRootClass(d)?-4000:-600))
   .force("cx",d3.forceX(W/2).strength(0.01))
   .force("cy",d3.forceY(H/2).strength(0.01))
   .force("owlCluster",owlClusterForce);
@@ -905,6 +926,47 @@ function updatePinMarker(sel){ sel.classed("node-pinned",d=>d.fx!=null); }
 
 updateStats(nodes,links);
 
+const hiddenLinkTypes=new Set();
+const instanceOfCount=links.filter(l=>l.type==="instanceOf").length;
+const inSchemeCount=links.filter(l=>l.type==="inScheme").length;
+if(instanceOfCount>20){ hiddenLinkTypes.add("instanceOf"); document.getElementById("ft-instanceOf").classList.remove("active"); }
+if(inSchemeCount>20){ hiddenLinkTypes.add("inScheme"); document.getElementById("ft-inScheme").classList.remove("active"); }
+
+function applyLinkVisibility(){
+  linkSel.style("display",d=>hiddenLinkTypes.has(d.type)?"none":null);
+  linkLabelSel.style("display",d=>hiddenLinkTypes.has(d.type)?"none":null);
+}
+
+function toggleLinkType(type){
+  const btn=document.getElementById("ft-"+type);
+  if(hiddenLinkTypes.has(type)){ hiddenLinkTypes.delete(type); btn.classList.add("active"); }
+  else{ hiddenLinkTypes.add(type); btn.classList.remove("active"); }
+  applyLinkVisibility();
+}
+
+function togglePanel(show){
+  const was=panelVisible;
+  panelVisible=show!==undefined?show:!panelVisible;
+  if(panelVisible===was) return;
+  panelEl.style.display=panelVisible?"":"none";
+  document.getElementById("panel-close").style.display=panelVisible?"":"none";
+  W=window.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:0);
+  if(hasClusters){
+    const lw=W/(topConcepts.length+1);
+    topConcepts.forEach((tc,i)=>{ tc._laneX=lw*(i+1); });
+    nodes.forEach(n=>{
+      if(n.type==="scheme") n._laneX=W/2;
+      else if(n._cluster) n._laneX=(nodeById[n._cluster]||{})._laneX||W/2;
+      else n._laneX=W/2;
+    });
+    sim.force("cx",d3.forceX(d=>d._laneX||W/2).strength(d=>d.type==="scheme"?0.04:0.35));
+  } else {
+    sim.force("cx",d3.forceX(W/2).strength(0.01));
+  }
+  document.getElementById("stats").style.left=(W/2)+"px";
+  sim.alpha(0.4).restart();
+}
+
 linkSel=linkG.selectAll("path")
   .data(links,d=>`${d.source}|${d.target}|${d.type}`)
   .join("path")
@@ -919,6 +981,8 @@ linkSel=linkG.selectAll("path")
 linkLabelSel=linkG.selectAll("text")
   .data(links.filter(d=>d.label),d=>`${d.source}|${d.target}|${d.type}`)
   .join("text").attr("class","link-label").text(d=>d.label);
+
+applyLinkVisibility();
 
 nodeSel=nodeG.selectAll("g")
   .data(nodes,d=>d.id)
@@ -949,7 +1013,7 @@ nodeSel=nodeG.selectAll("g")
         const newHl=highlighted===d.id?null:d.id;
         highlighted=newHl;
         applyHighlight();
-        if(newHl) showDetail(d); else showDefault();
+        if(newHl){ togglePanel(true); showDetail(d); } else showDefault();
       })
       .on("dblclick",(_,d)=>{
         (d.type==="topconcept"?getSubtree(d.id):[d])
@@ -962,7 +1026,7 @@ nodeSel=nodeG.selectAll("g")
     g.each(function(d){
       const s=d3.select(this);
       const fill=nodeFill(d), stroke=nodeStroke(d);
-      if(d.type==="class"||d.type==="scheme"){
+      if(d.type==="class"||d.type==="scheme"||d.type==="external-class"){
         const rr=isRootClass(d);
         if(rr){
           s.append("rect").attr("x",-CLS_W/2-9).attr("y",-CLS_H/2-9)
@@ -974,6 +1038,12 @@ nodeSel=nodeG.selectAll("g")
           .attr("width",CLS_W).attr("height",CLS_H).attr("rx",7)
           .style("fill",fill).style("stroke",stroke)
           .style("stroke-width",rr?"3px":"1.5px");
+        if(d.type==="external-class"){
+          s.append("rect").attr("x",-CLS_W/2+3).attr("y",-CLS_H/2+3)
+            .attr("width",CLS_W-6).attr("height",CLS_H-6).attr("rx",4)
+            .attr("fill","none").attr("stroke",stroke).attr("stroke-width","0.5px")
+            .attr("stroke-dasharray","3 2").attr("opacity",0.5);
+        }
       } else if(d.type==="topconcept"){
         s.append("ellipse").attr("rx",TC_RX+6).attr("ry",TC_RY+6)
           .attr("fill","none").attr("stroke",stroke).attr("stroke-width",1)
@@ -1024,7 +1094,8 @@ sim.on("tick",()=>{
 
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
-    highlighted=null; applyHighlight(); showDefault();
+    if(highlighted){ highlighted=null; applyHighlight(); showDefault(); }
+    else togglePanel();
   }
   if(e.key==="f"){
     nodes.forEach(n=>{ n.fx=null; n.fy=null; });
@@ -1128,13 +1199,15 @@ function showDefault(){
     const hasRootCls=nodes.some(n=>n.type==="class"&&!subClassOfParentMap[n.id]);
     const hasSubCls=nodes.some(n=>n.type==="class"&&!!subClassOfParentMap[n.id]);
     const NT=[
-      ['class-root','<svg class="lsvg" width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="4" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.7"/><rect x="5" y="3" width="24" height="10" rx="2" fill="#2563eb" stroke="#93c5fd" stroke-width="2"/></svg>','Root Class'],
-      ['class-sub', '<svg class="lsvg" width="34" height="16"><rect x="1" y="3" width="32" height="10" rx="2" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/></svg>','Class'],
-      ['scheme',    '<svg class="lsvg" width="34" height="16"><rect x="1" y="4" width="32" height="8" rx="4" fill="#6b21a8" stroke="#c084fc" stroke-width="1.5"/></svg>','Scheme'],
-      ['topconcept','<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#0e7490" stroke="#22d3ee" stroke-width="2"/></svg>','Top Concept'],
-      ['concept',   '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="13" ry="6.5" fill="#166534" stroke="#4ade80" stroke-width="1.5"/></svg>','Concept'],
-      ['individual','<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#b45309" stroke="#fcd34d" stroke-width="1.5"/></svg>','Individual'],
-      ['property',  '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#374151" stroke="#9ca3af" stroke-width="1.5"/></svg>','Property'],
+      ['class-root',        '<svg class="lsvg" width="34" height="16"><rect x="1" y="1" width="32" height="14" rx="4" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.7"/><rect x="5" y="3" width="24" height="10" rx="2" fill="#2563eb" stroke="#93c5fd" stroke-width="2"/></svg>','Root Class'],
+      ['class-sub',         '<svg class="lsvg" width="34" height="16"><rect x="1" y="3" width="32" height="10" rx="2" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/></svg>','Class'],
+      ['external-class',    '<svg class="lsvg" width="34" height="16"><rect x="1" y="3" width="32" height="10" rx="2" fill="#3b1259" stroke="#a78bfa" stroke-width="1.5"/><rect x="4" y="5" width="26" height="6" rx="1" fill="none" stroke="#a78bfa" stroke-width="0.5" stroke-dasharray="3 2" opacity="0.5"/></svg>','External Class'],
+      ['scheme',            '<svg class="lsvg" width="34" height="16"><rect x="1" y="4" width="32" height="8" rx="4" fill="#6b21a8" stroke="#c084fc" stroke-width="1.5"/></svg>','Scheme'],
+      ['topconcept',        '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#0e7490" stroke="#22d3ee" stroke-width="2"/></svg>','Top Concept'],
+      ['concept',           '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="13" ry="6.5" fill="#166534" stroke="#4ade80" stroke-width="1.5"/></svg>','Concept'],
+      ['individual',        '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#b45309" stroke="#fcd34d" stroke-width="1.5"/></svg>','Individual'],
+      ['external-individual','<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#1c1c2e" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2"/></svg>','External Individual'],
+      ['property',          '<svg class="lsvg" width="34" height="16"><ellipse cx="17" cy="8" rx="11" ry="5.5" fill="#374151" stroke="#9ca3af" stroke-width="1.5"/></svg>','Property'],
     ];
     const LT=[
       ['subClassOf',    'border-top:2px dashed #475569', 'subClassOf'],
@@ -1230,6 +1303,9 @@ function selectNode(uri){
 window.playVideo=playVideo;
 window.selectNode=selectNode;
 window.dpBack=function(){highlighted=null;applyHighlight();showDefault();};
+window.toggleLinkType=toggleLinkType;
+
+document.getElementById("panel-close").addEventListener("click",()=>togglePanel(false));
 
 showDefault();
 

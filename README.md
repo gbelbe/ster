@@ -21,7 +21,7 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.3.3
+  v0.4.0
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.
@@ -55,6 +55,9 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 - Visual `⇔` indicator for concepts with cross-scheme mapping links
 - Fold / unfold subtrees; hidden-concept count shown
 - Scheme dashboard: completion rates, quality issues, concept counts at a glance
+- **OWL class quality stats**: label/comment coverage, instance count, and property fill rates displayed inline on each class node — mirrors SKOS completion labels
+- **Ontology root node**: selectable in the tree; selecting it opens the ontology overview panel
+- **Smart startup**: opening a pure-OWL file goes directly to the ontology overview, skipping the global view
 
 ### D3 force graph visualisation
 
@@ -65,6 +68,9 @@ Open any ontology or taxonomy as an interactive force graph in the browser:
 - Representative images embedded inside nodes when `schema:image` is set
 - Drag, zoom, and pin nodes; hover tooltips; highlight neighbourhoods on click
 - Lane-based hierarchical layout option for SKOS concept trees
+- **Closeable detail panel**: `×` button or Escape hides the right panel; canvas expands to fill the full window; Escape again re-opens it
+- **Link-type toggles**: `rdf:type` and `inScheme` link families can be hidden/shown from the toolbar; auto-hidden on startup when there are more than 20 of either type
+- **Cleaner default layout**: stronger node repulsion, wider collision radius, longer link distances, and a larger initial spread for root classes
 
 ### AI-assisted concept creation
 
@@ -175,7 +181,8 @@ Use arrow keys to navigate the action menu, then press **Enter** to confirm.
     4  ⎇  Browse git history
     5  🔍 Query Graph SPARQL (Beta)
     6  ⚙  Setup / Options
-    7  ✕  Quit
+    7  📥 Import External Ontology
+    8  ✕  Quit
 ```
 
 ### Keyboard shortcuts (TUI)
@@ -327,6 +334,16 @@ pre-commit install
 ---
 
 ## Changelog
+
+### 0.4.0
+- **OWL class quality stats**: label/comment coverage, instance count, and property fill rates shown inline on each class node in the OWL hierarchy — mirrors SKOS completion labels on concept trees
+- **Ontology root selectable**: the ontology name node in the tree view is now navigable; selecting it opens the ontology overview panel
+- **Smart startup panel**: opening a pure-OWL file now shows the ontology overview directly on startup
+- **Welcome screen**: replaced keyboard-shortcut content with the ster logo, installed version, and a yellow PyPI update notice when a newer release is available
+- **D3 graph — closeable detail panel**: `×` button or Escape hides the right panel; the canvas expands to fill the full window; Escape again re-opens it
+- **D3 graph — link-type toggles**: `rdf:type` and `inScheme` links can be toggled on/off from the bottom bar; auto-hidden at startup when there are more than 20 of either type
+- **D3 graph — cleaner default layout**: stronger node repulsion (`−600`), wider collision radius, longer link distances (`200`), larger initial root-class circle, slower alpha decay for better final spread
+- **Menu**: renamed "External Ontologies" → "Import External Ontology"
 
 ### 0.3.2
 - Show update notice with release notes summary when a new version is available on PyPI

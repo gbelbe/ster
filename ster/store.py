@@ -309,6 +309,13 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
     # ── Normalize hierarchy (handle graphs that only declare one direction) ──
     _normalize_hierarchy(taxonomy)
 
+    # ── Capture prefix bindings from source file ──────────────────────────────
+    _BUILTIN_PREFIXES = {"rdf", "rdfs", "owl", "xsd", "skos", "dcterms", "void", "schema", "wv", ""}
+    for raw_prefix, raw_ns in g.namespace_manager.namespaces():
+        p, n = str(raw_prefix), str(raw_ns)  # type: ignore[assignment]
+        if p not in _BUILTIN_PREFIXES:
+            taxonomy.namespace_bindings[p] = n  # type: ignore[index]
+
     return taxonomy
 
 
@@ -321,6 +328,10 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     g.bind("rdfs", RDFS)
     g.bind("owl", OWL)
     g.bind("schema", SCHEMA)
+
+    # Re-bind any namespaces captured from the source file (enables round-trip of foaf:, kai:, etc.)
+    for prefix, ns in taxonomy.namespace_bindings.items():
+        g.bind(prefix, Namespace(ns))
 
     # Try to bind a short prefix for the primary namespace
     _bind_namespace(g, taxonomy)

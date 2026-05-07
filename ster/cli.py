@@ -630,7 +630,7 @@ def _multi_file_picker(
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL (Beta)"),
         (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
-        (_EXT_ONT_SENTINEL, "🔗 External Ontologies"),
+        (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -646,7 +646,7 @@ def _multi_file_picker(
         console.print("  [cyan] 4[/cyan]  [magenta]⎇  Browse git history[/magenta]")
         console.print("  [cyan] 5[/cyan]  [green]🔍 Query Graph SPARQL (Beta)[/green]")
         console.print("  [cyan] 6[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan] 7[/cyan]  [magenta]🔗 External Ontologies[/magenta]")
+        console.print("  [cyan] 7[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
         console.print("  [cyan] 8[/cyan]  [red]✕  Quit[/red]")
         console.print()
         choice = Prompt.ask("Action (1–8)", default="1")
