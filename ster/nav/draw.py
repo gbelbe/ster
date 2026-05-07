@@ -213,9 +213,27 @@ def render_tree_col(
         # ── scheme header row ─────────────────────────────────────────────
         if line.is_scheme:
             if line.label:
-                # Synthetic section header (e.g. "OWL Classes" in mixed view)
-                text = f"{line.prefix}◦ {line.label}"
-                base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
+                if line.node_type == "ontology":
+                    # Selectable ontology root — cursor-aware rendering
+                    n_classes = len(taxonomy.owl_classes)
+                    n_inds = len(taxonomy.owl_individuals)
+                    parts = [f"{n_classes} class{'es' if n_classes != 1 else ''}"]
+                    if n_inds:
+                        parts.append(f"{n_inds} individual{'s' if n_inds != 1 else ''}")
+                    count_str = "  ·  " + ", ".join(parts) if parts else ""
+                    fold_marker = "▶" if line.is_folded else " "
+                    hidden_str = f"  (+{line.hidden_count} hidden)" if line.is_folded else ""
+                    text = f"{line.prefix}◉{fold_marker} {line.label}{count_str}{hidden_str}"
+                    if is_cursor:
+                        base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                    elif is_detail:
+                        base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
+                    else:
+                        base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
+                else:
+                    # Non-selectable synthetic section header
+                    text = f"{line.prefix}◦ {line.label}"
+                    base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
                 try:
                     stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
                 except curses.error:

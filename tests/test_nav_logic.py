@@ -437,6 +437,33 @@ def test_flatten_ontology_tree_empty():
     assert flatten_ontology_tree(t) == []
 
 
+def test_flatten_ontology_tree_root_has_node_type_ontology():
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    root = next(l for l in lines if _is_ontology_sentinel(l.uri))
+    assert root.node_type == "ontology"
+
+
+def test_flatten_ontology_tree_root_is_scheme():
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    root = next(l for l in lines if _is_ontology_sentinel(l.uri))
+    assert root.is_scheme is True
+
+
+def test_flatten_ontology_tree_root_has_label():
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+
+    t = _owl_taxonomy()
+    lines = flatten_ontology_tree(t)
+    root = next(l for l in lines if _is_ontology_sentinel(l.uri))
+    assert root.label  # non-empty display name
+
+
 # ── node_type on taxonomy TreeLines ──────────────────────────────────────────
 
 
