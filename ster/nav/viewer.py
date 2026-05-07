@@ -201,9 +201,16 @@ class TaxonomyViewer:
         self._last_query_buffer: str = ""  # persist query across mode switches
 
         self._rebuild()
-        # Start with the global overview panel; cursor moves will update to item-specific detail
-        self._detail_uri = _GLOBAL_URI
-        self._detail_fields = self._bgf()
+        # For pure-ontology workspaces, open the ontology overview immediately.
+        # Otherwise start with the global overview panel.
+        if self._tree.view_mode == "ontology" and not any(
+            bool(tax.schemes or tax.concepts) for tax in self._workspace.taxonomies.values()
+        ):
+            self._detail_uri = _ontology_sentinel(file_path)
+            self._detail_fields = self._boof(file_path)
+        else:
+            self._detail_uri = _GLOBAL_URI
+            self._detail_fields = self._bgf()
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
