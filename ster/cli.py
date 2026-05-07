@@ -157,11 +157,22 @@ def _print_welcome() -> None:
     else:
         update_section = ""
 
+    _LOGO = (
+        "[bold cyan]   _____ ______ ______ ____  [/bold cyan]\n"
+        "[bold cyan]  / ___//_  __// ____// __ \\ [/bold cyan]\n"
+        "[bold cyan]  \\__ \\  / /  / __/  / /_/ / [/bold cyan]\n"
+        "[bold cyan] ___/ / / /  / /___ / _, _/  [/bold cyan]\n"
+        "[bold cyan]/____/ /_/  /_____//_/ |_|   [/bold cyan]"
+    )
     console.print()
     console.print(
         Panel(
-            f"[bold cyan]ster[/bold cyan]  [dim]v{_VERSION}[/dim]{update_section}\n\n"
-            "[dim]Semantic knowledge editor — SKOS · OWL · D3 · Site generator[/dim]\n\n"
+            f"{_LOGO}\n\n"
+            f'[dim][ Breton: "Meaning" or "Sense" ][/dim]\n'
+            f"[dim][  Semantic Knowledge Editor  ][/dim]  "
+            f"[dim]v{_VERSION}[/dim]"
+            f"{update_section}\n\n"
+            "[dim]terminal tool for building and exploring SKOS taxonomies and OWL ontologies[/dim]\n\n"
             "[dim]Select a file to open, or use the menu to generate a site or graph.[/dim]\n"
             "[dim]Press [bold]Ctrl+C[/bold] at the menu to exit.[/dim]",
             border_style="cyan",
@@ -199,6 +210,7 @@ _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
+_EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
@@ -618,6 +630,7 @@ def _multi_file_picker(
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL (Beta)"),
         (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
+        (_EXT_ONT_SENTINEL, "🔗 External Ontologies"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -633,9 +646,10 @@ def _multi_file_picker(
         console.print("  [cyan] 4[/cyan]  [magenta]⎇  Browse git history[/magenta]")
         console.print("  [cyan] 5[/cyan]  [green]🔍 Query Graph SPARQL (Beta)[/green]")
         console.print("  [cyan] 6[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan] 7[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 7[/cyan]  [magenta]🔗 External Ontologies[/magenta]")
+        console.print("  [cyan] 8[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–7)", default="1")
+        choice = Prompt.ask("Action (1–8)", default="1")
         s = choice.strip().lower()
         if s == "1" or s == "all":
             return list(found)
@@ -650,6 +664,8 @@ def _multi_file_picker(
         if s == "6":
             return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
         if s == "7":
+            return _EXT_ONT_SENTINEL  # type: ignore[return-value]
+        if s == "8":
             return _QUIT_SENTINEL  # type: ignore[return-value]
         return list(found)
 
@@ -687,6 +703,8 @@ def _multi_file_picker(
             return CY
         if sentinel == _QUERY_SENTINEL:
             return GR  # green
+        if sentinel == _EXT_ONT_SENTINEL:
+            return MG  # magenta
         return CY  # "open tree view"
 
     def render(first: bool = False) -> None:
@@ -1806,6 +1824,12 @@ def main() -> None:
 
         if selected is _QUERY_SENTINEL:
             _launch_query(found)
+            continue
+
+        if selected is _EXT_ONT_SENTINEL:
+            from .ext_ontologies_ui import run_ext_ontologies_screen
+
+            run_ext_ontologies_screen(taxonomy=None)
             continue
 
         if not selected:
