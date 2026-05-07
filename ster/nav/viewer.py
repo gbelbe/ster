@@ -956,40 +956,54 @@ class TaxonomyViewer:
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
     def _draw_welcome(self, stdscr: curses.window, rows: int, cols: int) -> None:
-        """Draw a centred floating help overlay."""
-        from .help import SECTIONS
+        """Draw a centred floating welcome overlay."""
+        _LOGO = [
+            "   _____ ______ ______ ____  ",
+            "  / ___//_  __// ____// __ \\ ",
+            "  \\__ \\  / /  / __/  / /_/ / ",
+            " ___/ / / /  / /___ / _, _/  ",
+            "/____/ /_/  /_____//_/ |_|   ",
+        ]
+        _SUBTITLES = [
+            '  [ Breton: "Meaning" or "Sense" ]',
+            "  [  Semantic Knowledge Editor   ]",
+        ]
+        _DESC = "  terminal tool for building and exploring SKOS taxonomies and OWL ontologies"
 
+        # File info line
         scheme = self.taxonomy.primary_scheme()
-        title = scheme.title(self.lang) if scheme else self.file_path.stem
-        n_concepts = len(self.taxonomy.concepts)
-
-        KEY_W = 26  # key column width inside the box
+        n_classes = len(self.taxonomy.owl_classes)
+        if scheme:
+            title = scheme.title(self.lang)
+            n = len(self.taxonomy.concepts)
+            noun = f"{n} concept{'s' if n != 1 else ''}"
+        elif n_classes:
+            title = self.file_path.stem
+            noun = f"{n_classes} class{'es' if n_classes != 1 else ''}"
+        else:
+            title = self.file_path.stem
+            noun = ""
+        file_info = f"  {title}" + (f"  ·  {noun}" if noun else "") + f"  ·  lang: {self.lang}"
 
         # Build content rows: list of (text, kind)
-        # kind: "info" | "blank" | "header" | "entry"
+        # kind: "logo" | "subtitle" | "desc" | "info" | "blank"
         content: list[tuple[str, str]] = [
-            (
-                f"  {title}  ·  {n_concepts} concept{'s' if n_concepts != 1 else ''}  ·  lang: {self.lang}",
-                "info",
-            ),
             ("", "blank"),
+            *[(_LOGO[i], "logo") for i in range(len(_LOGO))],
+            ("", "blank"),
+            *[(_SUBTITLES[i], "subtitle") for i in range(len(_SUBTITLES))],
+            ("", "blank"),
+            (_DESC, "desc"),
+            ("", "blank"),
+            (file_info, "info"),
         ]
-        for section_title, entries in SECTIONS:
-            content.append((f"  {section_title}", "header"))
-            for keys, desc in entries:
-                content.append((f"  {keys:<{KEY_W}}{desc}", "entry"))
-            content.append(("", "blank"))
 
         box_w = min(cols - 4, 70)
-        # title bar + hint bar + content rows + bottom padding bar
         box_h = min(rows - 2, len(content) + 3)
         box_y = max(0, (rows - box_h) // 2)
         box_x = max(0, (cols - box_w) // 2)
 
-        # Row 0: title bar
-        _draw_bar(stdscr, box_y, box_x, box_w, " ster — Keyboard Shortcuts & Help ", dim=False)
-
-        # Row 1: hint (dim reverse)
+        _draw_bar(stdscr, box_y, box_x, box_w, " ster ", dim=False)
         _draw_bar(
             stdscr,
             box_y + 1,
@@ -999,40 +1013,24 @@ class TaxonomyViewer:
             dim=True,
         )
 
-        # Content rows
-        visible = box_h - 3  # rows available between hint and bottom bar
+        visible = box_h - 3
         for i, (text, kind) in enumerate(content[:visible]):
             y = box_y + 2 + i
             if y >= rows - 1:
                 break
             clipped = text[: box_w - 1].ljust(box_w - 1)
-            if kind == "header":
-                try:
-                    stdscr.addstr(
-                        y, box_x, clipped, curses.color_pair(_C_HELP_SECTION) | curses.A_BOLD
-                    )
-                except curses.error:
-                    pass
-            elif kind == "info":
+            if kind == "logo":
                 try:
                     stdscr.addstr(
                         y, box_x, clipped, curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
                     )
                 except curses.error:
                     pass
-            elif kind == "entry":
-                key_end = 2 + KEY_W  # indent(2) + key column
-                key_part = text[:key_end]
-                desc_part = text[key_end : box_w - 1]
+            elif kind in ("subtitle", "info"):
                 try:
                     stdscr.addstr(
-                        y,
-                        box_x,
-                        key_part[: box_w - 1],
-                        curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+                        y, box_x, clipped, curses.color_pair(_C_HELP_SECTION) | curses.A_BOLD
                     )
-                    if desc_part:
-                        stdscr.addstr(y, box_x + key_end, desc_part)
                 except curses.error:
                     pass
             else:
@@ -1041,7 +1039,6 @@ class TaxonomyViewer:
                 except curses.error:
                     pass
 
-        # Bottom bar
         _draw_bar(stdscr, box_y + box_h - 1, box_x, box_w, "", dim=True)
 
     # ─────────────────────────── search ──────────────────────────────────────
