@@ -104,6 +104,8 @@ err = Console(stderr=True)
 # ──────────────────────────── colors & draw primitives ──────────────────────
 
 from .draw import (  # noqa: F401
+    _C_ACTION_ADD,
+    _C_ACTION_DEL,
     _C_BROKEN_MAP,
     _C_BROKEN_REF,
     _C_DETAIL_CURSOR,
@@ -112,6 +114,7 @@ from .draw import (  # noqa: F401
     _C_DIFF_DEL,
     _C_DIM,
     _C_EDIT_BAR,
+    _C_EXT_NODE,
     _C_FIELD_LABEL,
     _C_FIELD_VAL,
     _C_FILE_NODE,
@@ -122,6 +125,7 @@ from .draw import (  # noqa: F401
     _C_SEARCH_MATCH,
     _C_SEL,
     _C_SEL_NAV,
+    _C_SEP_DANGER,
     _C_SH_FUNCTION,
     _C_SH_KEYWORD,
     _C_SH_NS,
@@ -736,6 +740,22 @@ class TaxonomyViewer:
                         curses.update_lines_cols()
                         continue
                     self._on_owl_pick(key, rows, replace=True)
+                elif ms.pick_type == "ext_ns_pick":
+                    self._draw_move(stdscr, rows, cols, title=" 🌐 Select external ontology ")
+                    stdscr.refresh()
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_ext_ns_pick(key, rows)
+                elif ms.pick_type == "ext_class_pick":
+                    self._draw_move(stdscr, rows, cols, title=" 🌐 Select external class ")
+                    stdscr.refresh()
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_ext_class_pick(key, rows)
                 elif ms.pick_type == "add_prop_domain":
                     self._draw_move(stdscr, rows, cols, title=" → Add domain class ")
                     stdscr.refresh()
@@ -1570,14 +1590,24 @@ class TaxonomyViewer:
             sel = idx == self._field_cursor
 
             is_sep = f.meta.get("type") == "separator"
+            is_sep_danger = f.meta.get("type") == "separator_danger"
             is_mapping = f.meta.get("type") == "mapping"
             is_map_remove = f.meta.get("type") == "mapping_remove"
             is_navigable = f.meta.get("nav") is True and not is_mapping
             is_action = f.meta.get("type") == "action"
+            is_action_add = f.meta.get("type") == "action_add"
+            is_action_del = f.meta.get("type") == "action_del"
             # Actions and separator labels can exceed lbl_w — use full display
             fl = (
                 f.display
-                if (is_action or is_sep or is_map_remove)
+                if (
+                    is_action
+                    or is_action_add
+                    or is_action_del
+                    or is_sep
+                    or is_sep_danger
+                    or is_map_remove
+                )
                 else f.display[:lbl_w].ljust(lbl_w)
             )
             fv = (
@@ -1595,6 +1625,13 @@ class TaxonomyViewer:
                     stdscr.addstr(
                         y, x0, line[: width - 1], curses.color_pair(_C_DIM) | curses.A_DIM
                     )
+                elif is_sep_danger:
+                    # Danger zone header: " ⚠  Label ──────────" in red bold
+                    hdr = f" ⚠  {f.display} "
+                    line = hdr + "─" * max(0, width - len(hdr) - 1)
+                    stdscr.addstr(
+                        y, x0, line[: width - 1], curses.color_pair(_C_SEP_DANGER) | curses.A_BOLD
+                    )
                 elif sel:
                     line = f"  {fl}  {fv}"
                     stdscr.addstr(
@@ -1606,6 +1643,12 @@ class TaxonomyViewer:
                 elif is_action:
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD)
+                elif is_action_add:
+                    stdscr.addstr(y, x0, "  ")
+                    stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_ACTION_ADD) | curses.A_BOLD)
+                elif is_action_del:
+                    stdscr.addstr(y, x0, "  ")
+                    stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_ACTION_DEL))
                 elif is_map_remove:
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_DIFF_DEL))
@@ -1722,7 +1765,7 @@ class TaxonomyViewer:
         is_scheme_detail = bool(self._detail_uri and self._detail_uri in self.taxonomy.schemes)
         if 0 <= self._field_cursor < n:
             f = self._detail_fields[self._field_cursor]
-            if f.meta.get("type") == "action":
+            if f.meta.get("type") in ("action", "action_add", "action_del"):
                 edit_hint = "Enter: execute"
             elif f.editable and not is_scheme_detail:
                 edit_hint = "i/Enter: edit  -: delete val"
@@ -1738,7 +1781,7 @@ class TaxonomyViewer:
                 edit_hint = "Enter: open  e: edit value"
             elif f.meta.get("nav"):
                 edit_hint = "Enter: open concept"
-            elif f.meta.get("type") == "separator":
+            elif f.meta.get("type") in ("separator", "separator_danger"):
                 edit_hint = ""
             elif f.meta.get("type") == "issue_nav" and f.meta.get("uri"):
                 edit_hint = "Enter: jump to concept"
@@ -1759,10 +1802,9 @@ class TaxonomyViewer:
     def _skip_sep(self, direction: int) -> None:
         """Advance cursor past any separator rows in the given direction (+1/-1)."""
         n = len(self._detail_fields)
-        while (
-            0 <= self._field_cursor < n
-            and self._detail_fields[self._field_cursor].meta.get("type") == "separator"
-        ):
+        while 0 <= self._field_cursor < n and self._detail_fields[self._field_cursor].meta.get(
+            "type"
+        ) in ("separator", "separator_danger"):
             new_cursor = max(0, min(n - 1, self._field_cursor + direction))
             if new_cursor == self._field_cursor:
                 break  # hit the boundary — no non-separator row in this direction
@@ -1800,7 +1842,7 @@ class TaxonomyViewer:
         if key in (curses.KEY_ENTER, ord("\n"), ord("\r"), ord("i"), ord("e")):
             if 0 <= self._field_cursor < n:
                 f = self._detail_fields[self._field_cursor]
-                if f.meta.get("type") == "action":
+                if f.meta.get("type") in ("action", "action_add", "action_del"):
                     self._trigger_action(f.meta.get("action", ""), f.meta)
                 elif f.meta.get("type") == "repair_mapping":
                     self._repair_mapping_field(f)
@@ -2585,15 +2627,17 @@ class TaxonomyViewer:
                 individual = self.taxonomy.owl_individuals[self._detail_uri]
                 # Step 1: pick a property (object properties where this individual's class is domain)
                 candidates: list[tuple[str, str]] = []  # type: ignore[no-redef]
-                for p_uri, prop in sorted(
-                    self.taxonomy.owl_properties.items(), key=lambda kv: kv[1].label(self.lang)
+                from ..ontology_imports import suggest_external_properties
+
+                for prop in sorted(
+                    suggest_external_properties(self.taxonomy, individual.types),
+                    key=lambda p: p.label(self.lang),
                 ):
-                    if prop.prop_type not in ("ObjectProperty", "Property"):
-                        continue
-                    eff = _effective_types(self.taxonomy, individual.types)
-                    if prop.domains and not any(t in prop.domains for t in eff):
-                        continue
-                    h = self.taxonomy.uri_to_handle(p_uri) or "?"
+                    p_uri = prop.uri
+                    h = (
+                        self.taxonomy.uri_to_handle(p_uri)
+                        or p_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+                    )
                     lbl = prop.label(self.lang)
                     range_classes = [
                         self.taxonomy.owl_classes[r].label(self.lang)
@@ -5442,10 +5486,16 @@ class TaxonomyViewer:
                 continue
             owl_cls = self.taxonomy.owl_classes.get(line.uri)
             if owl_cls is not None:
+                from ..ontology_imports import is_external_uri, prefix_label
+
                 handle = self.taxonomy.uri_to_handle(line.uri) or "?"
-                label = owl_cls.label(self.lang) or line.uri
+                if is_external_uri(line.uri, self.taxonomy):
+                    label = prefix_label(line.uri, self.taxonomy)
+                else:
+                    label = owl_cls.label(self.lang) or line.uri
                 indent = "  " * line.depth
                 candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
+        candidates.append(("__BROWSE_EXT__", "  🌐  Browse external ontology…"))
         return candidates
 
     def _confirm_owl_reparent(self, new_parent_uri: str | None, replace: bool) -> None:
@@ -5473,6 +5523,65 @@ class TaxonomyViewer:
         self._field_cursor = 0
         self._history.clear()
         self._state = DetailState()
+
+    def _make_ext_ns_pick_state(self, source_uri: str) -> MovePickState:
+        """Return a MovePickState for the external-namespace picker."""
+        from ..ontology_imports import COMMON_ONTOLOGIES
+
+        candidates: list[tuple[str, str]] = [
+            (ns, f"  {name}  ({prefix}:)") for name, prefix, ns in COMMON_ONTOLOGIES
+        ]
+        return MovePickState(
+            source_uri=source_uri,
+            pick_type="ext_ns_pick",
+            candidates=candidates,
+            filter_text="",
+            cursor=0,
+            scroll=0,
+        )
+
+    def _make_ext_class_pick_state(self, source_uri: str, ns_url: str) -> MovePickState:
+        """Fetch *ns_url*, extract classes, return a MovePickState for class selection."""
+        import rdflib
+
+        from ..ontology_imports import fetch_ontology, suggest_prefix
+
+        ns_prefix = suggest_prefix(ns_url)
+        for pfx, bound in self.taxonomy.namespace_bindings.items():
+            if bound == ns_url:
+                ns_prefix = pfx
+                break
+
+        g = fetch_ontology(ns_url)
+        OWL = rdflib.OWL
+        RDF = rdflib.RDF
+        RDFS = rdflib.RDFS
+
+        class_uris: list[str] = []
+        for s in g.subjects(RDF.type, OWL.Class):
+            uri = str(s)
+            if uri.startswith(ns_url):
+                class_uris.append(uri)
+        class_uris.sort()
+
+        candidates: list[tuple[str, str]] = []
+        for uri in class_uris:
+            local = uri[len(ns_url) :]
+            labels_raw = list(g.objects(rdflib.URIRef(uri), RDFS.label))
+            lbl = str(labels_raw[0]) if labels_raw else local
+            candidates.append((uri, f"  {ns_prefix}:{local}  — {lbl}"))
+
+        if not candidates:
+            candidates = [("__NONE__", "  (no classes found in this ontology)")]
+
+        return MovePickState(
+            source_uri=source_uri,
+            pick_type="ext_class_pick",
+            candidates=candidates,
+            filter_text="",
+            cursor=0,
+            scroll=0,
+        )
 
     def _build_move_candidates(self, source_uri: str) -> list[tuple[str, str]]:
         excluded = operations._subtree_uris(self.taxonomy, source_uri)
@@ -5745,7 +5854,10 @@ class TaxonomyViewer:
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if 0 <= ms.cursor < n:
                 uri, _ = filtered[ms.cursor]
-                self._confirm_owl_reparent(None if uri == "__TOP__" else uri, replace=replace)
+                if uri == "__BROWSE_EXT__":
+                    self._state = self._make_ext_ns_pick_state(ms.source_uri)
+                else:
+                    self._confirm_owl_reparent(None if uri == "__TOP__" else uri, replace=replace)
         elif key == 27:  # Esc
             self._detail_uri = ms.source_uri
             self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
@@ -5759,6 +5871,112 @@ class TaxonomyViewer:
             ms.filter_text += chr(key)
             ms.cursor = 0
             ms.scroll = 0
+
+    def _on_ext_ns_pick(self, key: int, rows: int) -> None:
+        """Handle namespace selection in the external-ontology picker."""
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
+        filtered = self._filtered_move_candidates()
+        n = len(filtered)
+        list_h = rows - 3
+
+        if key == curses.KEY_UP:
+            ms.cursor = max(0, ms.cursor - 1)
+        elif key == curses.KEY_DOWN:
+            ms.cursor = max(0, min(n - 1, ms.cursor + 1))
+        elif key == curses.KEY_PPAGE:
+            ms.cursor = max(0, ms.cursor - list_h)
+        elif key == curses.KEY_NPAGE:
+            ms.cursor = max(0, min(n - 1, ms.cursor + list_h))
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= ms.cursor < n:
+                ns_url, _ = filtered[ms.cursor]
+                self._state = self._make_ext_class_pick_state(ms.source_uri, ns_url)
+        elif key == 27:
+            self._state = MovePickState(
+                source_uri=ms.source_uri,
+                pick_type="link_superclass",
+                candidates=self._build_owl_class_candidates(ms.source_uri),
+            )
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
+        elif 32 <= key < 256:
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
+
+    def _on_ext_class_pick(self, key: int, rows: int) -> None:
+        """Handle class selection in the external-ontology class picker."""
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
+        filtered = self._filtered_move_candidates()
+        n = len(filtered)
+        list_h = rows - 3
+        source_uri = ms.source_uri
+
+        if key == curses.KEY_UP:
+            ms.cursor = max(0, ms.cursor - 1)
+        elif key == curses.KEY_DOWN:
+            ms.cursor = max(0, min(n - 1, ms.cursor + 1))
+        elif key == curses.KEY_PPAGE:
+            ms.cursor = max(0, ms.cursor - list_h)
+        elif key == curses.KEY_NPAGE:
+            ms.cursor = max(0, min(n - 1, ms.cursor + list_h))
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= ms.cursor < n:
+                ext_class_uri, _ = filtered[ms.cursor]
+                if ext_class_uri != "__NONE__":
+                    self._apply_ext_superclass(source_uri, ext_class_uri)
+        elif key == 27:
+            self._state = self._make_ext_ns_pick_state(source_uri)
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
+        elif 32 <= key < 256:
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
+
+    def _apply_ext_superclass(self, source_uri: str, ext_class_uri: str) -> None:
+        """Write rdfs:subClassOf *ext_class_uri* onto *source_uri* and save."""
+        from ..model import RDFClass
+        from ..ontology_imports import (
+            add_namespace_to_taxonomy,
+            namespace_url_from_uri,
+            suggest_prefix,
+        )
+
+        rdf_class = self.taxonomy.owl_classes.get(source_uri)
+        if not rdf_class:
+            self._state = DetailState()
+            return
+        if ext_class_uri not in rdf_class.sub_class_of:
+            rdf_class.sub_class_of.append(ext_class_uri)
+
+        # Register the external class as a stub so it appears in the tree
+        if ext_class_uri not in self.taxonomy.owl_classes:
+            self.taxonomy.owl_classes[ext_class_uri] = RDFClass(uri=ext_class_uri)
+
+        # Ensure the namespace prefix is recorded
+        ns = namespace_url_from_uri(ext_class_uri)
+        if ns not in self.taxonomy.namespace_bindings.values():
+            prefix = suggest_prefix(ns)
+            add_namespace_to_taxonomy(ns, prefix, self.taxonomy)
+
+        self._rebuild()
+        self._save_file()
+        self._detail_uri = source_uri
+        self._detail_fields = self._bcdf(source_uri)
+        self._field_cursor = 0
+        self._history.clear()
+        self._state = DetailState()
 
     def _on_related_pick(self, key: int, rows: int) -> None:
         """Handle keypresses in the 'add related' picker."""
@@ -5997,16 +6215,18 @@ class TaxonomyViewer:
         elif key == 27:  # Esc — go back to property selection (step 1)
             individual = self.taxonomy.owl_individuals.get(ind_uri)
             ind_types = individual.types if individual else []
-            eff = _effective_types(self.taxonomy, ind_types)
-            applicable_props = [
-                (p_uri, prop)
-                for p_uri, prop in self.taxonomy.owl_properties.items()
-                if prop.prop_type in ("ObjectProperty", "Property")
-                and (not prop.domains or any(t in prop.domains for t in eff))
-            ]
+            from ..ontology_imports import suggest_external_properties
+
             step1_candidates: list[tuple[str, str]] = []
-            for p_uri, prop in sorted(applicable_props, key=lambda kv: kv[1].label(self.lang)):
-                h = self.taxonomy.uri_to_handle(p_uri) or "?"
+            for prop in sorted(
+                suggest_external_properties(self.taxonomy, ind_types),
+                key=lambda p: p.label(self.lang),
+            ):
+                p_uri = prop.uri
+                h = (
+                    self.taxonomy.uri_to_handle(p_uri)
+                    or p_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+                )
                 lbl = prop.label(self.lang)
                 range_cls_lbls = [
                     self.taxonomy.owl_classes[r].label(self.lang)
@@ -6057,6 +6277,17 @@ class TaxonomyViewer:
                 prop_uri, _ = filtered[ms.cursor]
                 ind_uri = ms.source_uri
                 prop = self.taxonomy.owl_properties.get(prop_uri)
+                if prop is None:
+                    # External property — register it locally so it serialises correctly
+                    from ..model import OWLProperty
+                    from ..ontology_imports import namespace_url_from_uri, suggest_prefix
+
+                    prop = OWLProperty(uri=prop_uri, prop_type="ObjectProperty")
+                    self.taxonomy.owl_properties[prop_uri] = prop
+                    ns = namespace_url_from_uri(prop_uri)
+                    if ns not in self.taxonomy.namespace_bindings.values():
+                        prefix = suggest_prefix(ns)
+                        self.taxonomy.namespace_bindings[prefix] = ns
                 self._state = self._make_class_or_individual_state(
                     ind_uri, prop_uri, prop, ms.replace_val_uri
                 )
@@ -6114,16 +6345,18 @@ class TaxonomyViewer:
         elif key == 27:  # Esc — go back to step 1
             individual = self.taxonomy.owl_individuals.get(ind_uri)
             ind_types = individual.types if individual else []
-            eff = _effective_types(self.taxonomy, ind_types)
-            applicable_props = [
-                (p_uri, prop)
-                for p_uri, prop in self.taxonomy.owl_properties.items()
-                if prop.prop_type in ("ObjectProperty", "Property")
-                and (not prop.domains or any(t in prop.domains for t in eff))
-            ]
+            from ..ontology_imports import suggest_external_properties
+
             candidates: list[tuple[str, str]] = []
-            for p_uri, prop in sorted(applicable_props, key=lambda kv: kv[1].label(self.lang)):
-                h = self.taxonomy.uri_to_handle(p_uri) or "?"
+            for prop in sorted(
+                suggest_external_properties(self.taxonomy, ind_types),
+                key=lambda p: p.label(self.lang),
+            ):
+                p_uri = prop.uri
+                h = (
+                    self.taxonomy.uri_to_handle(p_uri)
+                    or p_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+                )
                 lbl = prop.label(self.lang)
                 range_cls_lbls = [
                     self.taxonomy.owl_classes[r].label(self.lang)

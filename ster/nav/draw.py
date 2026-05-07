@@ -40,6 +40,10 @@ _C_SH_URI = 22  # magenta — <URIs>
 _C_SH_STRING = 23  # green — "string literals"
 _C_SH_FUNCTION = 24  # yellow — built-in functions (COUNT, REGEX…)
 _C_SH_NS = 25  # yellow — namespace prefixes (skos:, rdf:…)
+_C_EXT_NODE = 26  # magenta dim — external (imported) ontology term
+_C_ACTION_ADD = 27  # green bold — constructive action (+ Add …)
+_C_ACTION_DEL = 28  # red — destructive action (⊘ Delete, ✗ Remove)
+_C_SEP_DANGER = 29  # red bold — danger zone separator
 
 
 def _init_colors() -> None:
@@ -70,6 +74,10 @@ def _init_colors() -> None:
         curses.init_pair(_C_SH_STRING, curses.COLOR_GREEN, -1)
         curses.init_pair(_C_SH_FUNCTION, curses.COLOR_YELLOW, -1)
         curses.init_pair(_C_SH_NS, curses.COLOR_YELLOW, -1)
+        curses.init_pair(_C_EXT_NODE, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(_C_ACTION_ADD, curses.COLOR_GREEN, -1)
+        curses.init_pair(_C_ACTION_DEL, curses.COLOR_RED, -1)
+        curses.init_pair(_C_SEP_DANGER, curses.COLOR_RED, -1)
     except Exception:
         pass
 
@@ -149,6 +157,8 @@ def render_tree_col(
     When provided, concepts are coloured accordingly and unchanged concepts are
     rendered dimly.  A ``↵`` hint is appended to changed concepts.
     """
+    from ..ontology_imports import is_external_uri, prefix_label
+
     list_h = rows - 2
     n = len(flat)
     if n and cursor_idx >= 0:
@@ -245,13 +255,18 @@ def render_tree_col(
             individual = taxonomy.owl_individuals.get(line.uri)
             if not individual:
                 continue
-            handle = taxonomy.uri_to_handle(line.uri) or "?"
-            label = individual.label(lang)
-            text = f"{line.prefix}• [{handle}]  {label}"
+            raw_handle = taxonomy.uri_to_handle(line.uri)
+            ext = is_external_uri(line.uri, taxonomy)
+            label = prefix_label(line.uri, taxonomy) if ext else individual.label(lang)
+            ext_badge = "  [ext]" if ext else ""
+            handle_part = f"[{raw_handle}]  " if raw_handle else ""
+            text = f"{line.prefix}• {handle_part}{label}{ext_badge}"
             if is_cursor:
                 base_attr = curses.color_pair(_C_SEL) | curses.A_BOLD
             elif is_detail:
                 base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
+            elif ext:
+                base_attr = curses.color_pair(_C_EXT_NODE) | curses.A_DIM
             else:
                 base_attr = curses.A_DIM
             try:
@@ -267,7 +282,8 @@ def render_tree_col(
         if not concept and not rdf_class:
             continue
 
-        handle = taxonomy.uri_to_handle(line.uri) or "?"
+        raw_handle = taxonomy.uri_to_handle(line.uri)
+        ext = not concept and is_external_uri(line.uri, taxonomy)
         if concept:
             label = concept.pref_label(lang) or line.uri
             n_children = len(concept.narrower)
@@ -275,7 +291,7 @@ def render_tree_col(
         else:
             # Pure OWL class — no SKOS metadata
             assert rdf_class is not None
-            label = rdf_class.label(lang)
+            label = prefix_label(line.uri, taxonomy) if ext else rdf_class.label(lang)
             n_children = sum(1 for c in taxonomy.owl_classes.values() if line.uri in c.sub_class_of)
             is_top = False
         d_status = diff_status.get(line.uri, "unchanged") if diff_status else "unchanged"
@@ -318,7 +334,8 @@ def render_tree_col(
         # OWL node-type indicator: ○ pure class, ⊛ promoted concept+class
         owl_tag = {"class": "  ○", "promoted": "  ⊛"}.get(line.node_type, "")
 
-        text = f"{line.prefix}{nav} [{handle}]  {label}{suffix}{owl_tag}"
+        handle_part = f"[{raw_handle}]  " if raw_handle else ""
+        text = f"{line.prefix}{nav} {handle_part}{label}{suffix}{owl_tag}"
         is_match = bool(search_pattern and search_matches and idx in search_matches)
 
         # Color
@@ -340,6 +357,8 @@ def render_tree_col(
                 base_attr = curses.color_pair(_C_SEL) | curses.A_BOLD
             elif is_detail:
                 base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
+            elif ext:
+                base_attr = curses.color_pair(_C_EXT_NODE) | curses.A_DIM
             elif is_top and n_children:
                 base_attr = curses.color_pair(_C_TOP_CONCEPT) | curses.A_BOLD
             elif is_top:

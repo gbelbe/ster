@@ -385,6 +385,31 @@ def _add_action_field(key: str, label: str, action: str, **extra_meta) -> Detail
     )
 
 
+def _add_action_add_field(key: str, label: str, action: str, **extra_meta) -> DetailField:
+    """Helper for constructive action rows (green)."""
+    return DetailField(
+        key, label, "", editable=False, meta={"type": "action_add", "action": action, **extra_meta}
+    )
+
+
+def _add_action_del_field(key: str, label: str, action: str, **extra_meta) -> DetailField:
+    """Helper for destructive action rows (red)."""
+    return DetailField(
+        key, label, "", editable=False, meta={"type": "action_del", "action": action, **extra_meta}
+    )
+
+
+def _sep_danger(label: str) -> DetailField:
+    """Create a non-selectable danger-zone section-separator row (red bold)."""
+    return DetailField(
+        f"sep_danger:{label}",
+        label,
+        "",
+        editable=False,
+        meta={"type": "separator_danger"},
+    )
+
+
 def _schema_media_display_fields(entity: object, prefix: str) -> list[DetailField]:
     """Display rows for schema:image / schema:video / schema:url if any are set."""
     imgs = getattr(entity, "schema_images", [])
@@ -1493,98 +1518,45 @@ def build_rdf_class_detail(
         )
     )
 
-    # ── Labels (rdfs:label) ──────────────────────────────────────────────────
-    if rdf_class.labels:
-        fields.append(_sep("Labels"))
-        for lbl in sorted(rdf_class.labels, key=lambda l: l.lang):
-            fields.append(
-                DetailField(
-                    f"rdflabel:{lbl.lang}",
-                    f"label [{lbl.lang}]",
-                    lbl.value,
-                    editable=True,
-                    meta={"type": "rdf_label", "lang": lbl.lang},
-                )
+    # ── Labels (rdfs:label) — always shown ──────────────────────────────────
+    fields.append(_sep("Labels"))
+    for lbl in sorted(rdf_class.labels, key=lambda l: l.lang):
+        fields.append(
+            DetailField(
+                f"rdflabel:{lbl.lang}",
+                f"label [{lbl.lang}]",
+                lbl.value,
+                editable=True,
+                meta={"type": "rdf_label", "lang": lbl.lang},
             )
-
-    # ── Notes (rdfs:comment) ─────────────────────────────────────────────────
-    if rdf_class.comments:
-        fields.append(_sep("Notes"))
-        for comment in sorted(rdf_class.comments, key=lambda d: d.lang):
-            fields.append(
-                DetailField(
-                    f"rdfcomment:{comment.lang}",
-                    f"comment [{comment.lang}]",
-                    comment.value,
-                    editable=True,
-                    meta={"type": "rdf_comment", "lang": comment.lang},
-                )
-            )
-
-    # ── Hierarchy ────────────────────────────────────────────────────────────
-    has_hierarchy = bool(
-        rdf_class.sub_class_of or rdf_class.equivalent_class or rdf_class.disjoint_with
-    )
-    if has_hierarchy:
-        fields.append(_sep("Hierarchy"))
-        for parent_uri in rdf_class.sub_class_of:
-            parent_cls = taxonomy.owl_classes.get(parent_uri)
-            label_str = parent_cls.label(lang) if parent_cls else parent_uri
-            fields.append(
-                DetailField(
-                    f"subclassof:{parent_uri}",
-                    "↑ subClassOf",
-                    label_str,
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": parent_uri, "nav": bool(parent_cls)},
-                )
-            )
-        for eq_uri in rdf_class.equivalent_class:
-            eq_cls = taxonomy.owl_classes.get(eq_uri)
-            label_str = eq_cls.label(lang) if eq_cls else eq_uri
-            fields.append(
-                DetailField(
-                    f"equivclass:{eq_uri}",
-                    "⟺ equivalentClass",
-                    label_str,
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": eq_uri, "nav": bool(eq_cls)},
-                )
-            )
-        for dj_uri in rdf_class.disjoint_with:
-            dj_cls = taxonomy.owl_classes.get(dj_uri)
-            label_str = dj_cls.label(lang) if dj_cls else dj_uri
-            fields.append(
-                DetailField(
-                    f"disjoint:{dj_uri}",
-                    "⊥ disjointWith",
-                    label_str,
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": dj_uri, "nav": bool(dj_cls)},
-                )
-            )
-
-    # ── Rich Content (schema.org) ─────────────────────────────────────────────
-    fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
-
-    # ── Actions ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-
-    # Add label / comment for the current language if absent
+        )
     label_langs = {lbl.lang for lbl in rdf_class.labels}
     if lang not in label_langs:
         fields.append(
-            _add_action_field(
+            _add_action_add_field(
                 f"action:add_rdf_label:{lang}",
                 f"+ Add rdfs:label [{lang}]",
                 "add_rdf_label",
                 lang=lang,
             )
         )
+
+    # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
+    fields.append(_sep("Notes"))
+    for comment in sorted(rdf_class.comments, key=lambda d: d.lang):
+        fields.append(
+            DetailField(
+                f"rdfcomment:{comment.lang}",
+                f"comment [{comment.lang}]",
+                comment.value,
+                editable=True,
+                meta={"type": "rdf_comment", "lang": comment.lang},
+            )
+        )
     comment_langs = {cmt.lang for cmt in rdf_class.comments}
     if lang not in comment_langs:
         fields.append(
-            _add_action_field(
+            _add_action_add_field(
                 f"action:add_rdf_comment:{lang}",
                 f"+ Add rdfs:comment [{lang}]",
                 "add_rdf_comment",
@@ -1592,9 +1564,57 @@ def build_rdf_class_detail(
             )
         )
 
-    # Hierarchy mutations
+    # ── Hierarchy — always shown with inline mutations ───────────────────────
+    fields.append(_sep("Hierarchy"))
+    for parent_uri in rdf_class.sub_class_of:
+        parent_cls = taxonomy.owl_classes.get(parent_uri)
+        label_str = parent_cls.label(lang) if parent_cls else parent_uri
+        fields.append(
+            DetailField(
+                f"subclassof:{parent_uri}",
+                "↑ subClassOf",
+                label_str,
+                editable=False,
+                meta={"type": "rdf_relation", "uri": parent_uri, "nav": bool(parent_cls)},
+            )
+        )
+        parent_lbl = parent_cls.label(lang) if parent_cls else parent_uri
+        fields.append(
+            _add_action_del_field(
+                f"action:rm_super:{parent_uri}",
+                f"  ✗ Remove subClassOf {parent_lbl}",
+                "remove_superclass",
+                parent_uri=parent_uri,
+            )
+        )
+    for eq_uri in rdf_class.equivalent_class:
+        eq_cls = taxonomy.owl_classes.get(eq_uri)
+        label_str = eq_cls.label(lang) if eq_cls else eq_uri
+        fields.append(
+            DetailField(
+                f"equivclass:{eq_uri}",
+                "⟺ equivalentClass",
+                label_str,
+                editable=False,
+                meta={"type": "rdf_relation", "uri": eq_uri, "nav": bool(eq_cls)},
+            )
+        )
+    for dj_uri in rdf_class.disjoint_with:
+        dj_cls = taxonomy.owl_classes.get(dj_uri)
+        label_str = dj_cls.label(lang) if dj_cls else dj_uri
+        fields.append(
+            DetailField(
+                f"disjoint:{dj_uri}",
+                "⊥ disjointWith",
+                label_str,
+                editable=False,
+                meta={"type": "rdf_relation", "uri": dj_uri, "nav": bool(dj_cls)},
+            )
+        )
     fields.append(
-        _add_action_field("action:link_super", "↑ Add superclass (subClassOf)", "link_superclass")
+        _add_action_add_field(
+            "action:link_super", "↑ Add superclass (subClassOf)", "link_superclass"
+        )
     )
     if rdf_class.sub_class_of:
         fields.append(
@@ -1602,25 +1622,23 @@ def build_rdf_class_detail(
                 "action:move_class", "↷ Move under different superclass", "move_class"
             )
         )
-        for parent_uri in rdf_class.sub_class_of:
-            parent_cls = taxonomy.owl_classes.get(parent_uri)
-            parent_lbl = parent_cls.label(lang) if parent_cls else parent_uri
-            fields.append(
-                _add_action_field(
-                    f"action:rm_super:{parent_uri}",
-                    f"✗ Remove subClassOf {parent_lbl}",
-                    "remove_superclass",
-                    parent_uri=parent_uri,
-                )
-            )
+
+    # ── Instances ────────────────────────────────────────────────────────────
+    fields.append(_sep("Instances"))
     fields.append(
-        _add_action_field(
+        _add_action_add_field(
             "action:add_individual",
             "+ New individual of this class",
             "add_individual",
         )
     )
-    fields.append(_add_action_field("action:delete_class", "⊘ Delete this class", "delete_class"))
+
+    # ── Rich Content (schema.org) ─────────────────────────────────────────────
+    fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
+    fields.extend(_schema_media_action_fields(rdf_class, "cls:"))
+
+    # ── Danger Zone ──────────────────────────────────────────────────────────
+    fields.append(_sep_danger("Danger Zone"))
     fields.append(
         _add_action_field(
             "action:class_to_individual",
@@ -1628,8 +1646,6 @@ def build_rdf_class_detail(
             "class_to_individual",
         )
     )
-
-    # Promote / demote toggle
     if node_t == "promoted":
         fields.append(
             _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
@@ -1638,8 +1654,9 @@ def build_rdf_class_detail(
         fields.append(
             _add_action_field("action:promote", "↑ Promote to owl:Class", "promote_to_class")
         )
-
-    fields.extend(_schema_media_action_fields(rdf_class, "cls:"))
+    fields.append(
+        _add_action_del_field("action:delete_class", "⊘ Delete this class", "delete_class")
+    )
 
     return fields
 
@@ -1791,25 +1808,85 @@ def build_individual_detail(
         )
     )
 
-    # ── Type links (navigable to each OWL class) ─────────────────────────────
-    if individual.types:
-        fields.append(_sep("Class Membership"))
-        for type_uri in sorted(individual.types):
-            cls = taxonomy.owl_classes.get(type_uri)
-            label_str = cls.label(lang) if cls else type_uri
-            h = taxonomy.uri_to_handle(type_uri) or "?"
-            fields.append(
-                DetailField(
-                    f"ind_type:{type_uri}",
-                    "◈ instanceOf",
-                    f"{label_str}  [{h}]",
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": type_uri, "nav": bool(cls)},
-                )
+    # ── Labels (rdfs:label) — always shown ──────────────────────────────────
+    fields.append(_sep("Labels"))
+    for lbl in sorted(individual.labels, key=lambda l: l.lang):
+        fields.append(
+            DetailField(
+                f"ind_label:{lbl.lang}",
+                f"label [{lbl.lang}]",
+                lbl.value,
+                editable=True,
+                meta={"type": "ind_label", "lang": lbl.lang},
             )
+        )
+    label_langs = {lbl.lang for lbl in individual.labels}
+    if lang not in label_langs:
+        fields.append(
+            _add_action_add_field(
+                f"action:add_ind_label:{lang}",
+                f"+ Add rdfs:label [{lang}]",
+                "add_ind_label",
+                lang=lang,
+            )
+        )
 
-    # ── Property values (object-property assertions) ─────────────────────────
-    # Show all applicable properties (domain matches) with their values or "—".
+    # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
+    fields.append(_sep("Notes"))
+    for comment in sorted(individual.comments, key=lambda d: d.lang):
+        fields.append(
+            DetailField(
+                f"ind_comment:{comment.lang}",
+                f"comment [{comment.lang}]",
+                comment.value,
+                editable=True,
+                meta={"type": "ind_comment", "lang": comment.lang},
+            )
+        )
+    comment_langs = {cmt.lang for cmt in individual.comments}
+    if lang not in comment_langs:
+        fields.append(
+            _add_action_add_field(
+                f"action:add_ind_comment:{lang}",
+                f"+ Add rdfs:comment [{lang}]",
+                "add_ind_comment",
+                lang=lang,
+            )
+        )
+
+    # ── Class Membership — always shown with inline mutations ────────────────
+    fields.append(_sep("Class Membership"))
+    for type_uri in sorted(individual.types):
+        cls = taxonomy.owl_classes.get(type_uri)
+        label_str = cls.label(lang) if cls else type_uri
+        h = taxonomy.uri_to_handle(type_uri) or "?"
+        fields.append(
+            DetailField(
+                f"ind_type:{type_uri}",
+                "◈ instanceOf",
+                f"{label_str}  [{h}]",
+                editable=False,
+                meta={"type": "rdf_relation", "uri": type_uri, "nav": bool(cls)},
+            )
+        )
+        type_lbl = cls.label(lang) if cls else type_uri
+        fields.append(
+            _add_action_del_field(
+                f"action:rm_ind_type:{type_uri}",
+                f"  ✗ Remove instanceOf: {type_lbl}",
+                "remove_ind_type",
+                type_uri=type_uri,
+            )
+        )
+    fields.append(
+        _add_action_add_field(
+            "action:add_ind_type",
+            "+ Add class membership (rdf:type)",
+            "add_ind_type",
+        )
+    )
+
+    # ── Property Values — show applicable properties with inline mutations ───
     eff_types_display = _effective_types(taxonomy, individual.types)
     applicable_display = [
         (p_uri, prop)
@@ -1844,6 +1921,24 @@ def build_individual_detail(
                             },
                         )
                     )
+                    fields.append(
+                        _add_action_field(
+                            f"action:edit_prop_value:{p_uri}::{val_uri}",
+                            f"  ✎ Change → {prop_lbl}: {val_lbl}",
+                            "edit_prop_value",
+                            prop_uri=p_uri,
+                            val_uri=val_uri,
+                        )
+                    )
+                    fields.append(
+                        _add_action_del_field(
+                            f"action:rm_prop_value:{p_uri}::{val_uri}",
+                            f"  ✗ Remove → {prop_lbl}: {val_lbl}",
+                            "remove_prop_value",
+                            prop_uri=p_uri,
+                            val_uri=val_uri,
+                        )
+                    )
             else:
                 fields.append(
                     DetailField(
@@ -1854,117 +1949,20 @@ def build_individual_detail(
                         meta={"type": "stat"},
                     )
                 )
-
-    # ── Labels (rdfs:label) ──────────────────────────────────────────────────
-    if individual.labels:
-        fields.append(_sep("Labels"))
-        for lbl in sorted(individual.labels, key=lambda l: l.lang):
-            fields.append(
-                DetailField(
-                    f"ind_label:{lbl.lang}",
-                    f"label [{lbl.lang}]",
-                    lbl.value,
-                    editable=True,
-                    meta={"type": "ind_label", "lang": lbl.lang},
-                )
-            )
-
-    # ── Notes (rdfs:comment) ─────────────────────────────────────────────────
-    if individual.comments:
-        fields.append(_sep("Notes"))
-        for comment in sorted(individual.comments, key=lambda d: d.lang):
-            fields.append(
-                DetailField(
-                    f"ind_comment:{comment.lang}",
-                    f"comment [{comment.lang}]",
-                    comment.value,
-                    editable=True,
-                    meta={"type": "ind_comment", "lang": comment.lang},
-                )
-            )
-
-    # ── Rich Content (schema.org) ─────────────────────────────────────────────
-    fields.extend(_schema_media_display_fields(individual, "ind:"))
-
-    # ── Actions ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-    label_langs = {lbl.lang for lbl in individual.labels}
-    if lang not in label_langs:
         fields.append(
-            _add_action_field(
-                f"action:add_ind_label:{lang}",
-                f"+ Add rdfs:label [{lang}]",
-                "add_ind_label",
-                lang=lang,
-            )
-        )
-    comment_langs = {cmt.lang for cmt in individual.comments}
-    if lang not in comment_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_ind_comment:{lang}",
-                f"+ Add rdfs:comment [{lang}]",
-                "add_ind_comment",
-                lang=lang,
-            )
-        )
-    # Add / remove class membership (rdf:type)
-    fields.append(
-        _add_action_field(
-            "action:add_ind_type",
-            "+ Add class membership (rdf:type)",
-            "add_ind_type",
-        )
-    )
-    for type_uri in sorted(individual.types):
-        cls = taxonomy.owl_classes.get(type_uri)
-        type_lbl = cls.label(lang) if cls else type_uri
-        fields.append(
-            _add_action_field(
-                f"action:rm_ind_type:{type_uri}",
-                f"✗ Remove instanceOf: {type_lbl}",
-                "remove_ind_type",
-                type_uri=type_uri,
-            )
-        )
-    # Add property value — only if at least one applicable property exists
-    if applicable_display:
-        fields.append(
-            _add_action_field(
+            _add_action_add_field(
                 "action:add_prop_value",
                 "+ Add property value",
                 "add_prop_value",
             )
         )
-    # Edit / Remove individual property values
-    for prop_uri, val_uri in individual.property_values:
-        rm_prop = taxonomy.owl_properties.get(prop_uri)
-        prop_lbl = rm_prop.label(lang) if rm_prop else prop_uri
-        target = taxonomy.owl_individuals.get(val_uri)
-        val_lbl = target.label(lang) if target else val_uri
-        fields.append(
-            _add_action_field(
-                f"action:edit_prop_value:{prop_uri}::{val_uri}",
-                f"✎ Change → {prop_lbl}: {val_lbl}",
-                "edit_prop_value",
-                prop_uri=prop_uri,
-                val_uri=val_uri,
-            )
-        )
-        fields.append(
-            _add_action_field(
-                f"action:rm_prop_value:{prop_uri}::{val_uri}",
-                f"✗ Remove → {prop_lbl}: {val_lbl}",
-                "remove_prop_value",
-                prop_uri=prop_uri,
-                val_uri=val_uri,
-            )
-        )
-    fields.append(
-        _add_action_field(
-            "action:delete_individual", "⊘ Delete this individual", "delete_individual"
-        )
-    )
+
+    # ── Rich Content (schema.org) ─────────────────────────────────────────────
+    fields.extend(_schema_media_display_fields(individual, "ind:"))
+    fields.extend(_schema_media_action_fields(individual, "ind:"))
+
+    # ── Danger Zone ──────────────────────────────────────────────────────────
+    fields.append(_sep_danger("Danger Zone"))
     fields.append(
         _add_action_field(
             "action:individual_to_class",
@@ -1972,7 +1970,11 @@ def build_individual_detail(
             "individual_to_class",
         )
     )
-    fields.extend(_schema_media_action_fields(individual, "ind:"))
+    fields.append(
+        _add_action_del_field(
+            "action:delete_individual", "⊘ Delete this individual", "delete_individual"
+        )
+    )
 
     return fields
 
