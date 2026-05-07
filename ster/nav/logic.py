@@ -768,6 +768,92 @@ def _subtree_concept_uris(taxonomy: Taxonomy, root_uri: str) -> list[str]:
     return result
 
 
+def _subtree_class_uris(taxonomy: Taxonomy, root_uri: str) -> list[str]:
+    """Return all OWL class URIs in the subclass subtree rooted at root_uri (inclusive, BFS, cycle-safe)."""
+    children_of: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
+    for uri, cls in taxonomy.owl_classes.items():
+        for parent in cls.sub_class_of:
+            if parent in children_of:
+                children_of[parent].append(uri)
+    visited: set[str] = set()
+    queue: deque[str] = deque([root_uri])
+    result: list[str] = []
+    while queue:
+        uri = queue.popleft()
+        if uri in visited or uri not in taxonomy.owl_classes:
+            continue
+        visited.add(uri)
+        result.append(uri)
+        for child in children_of.get(uri, []):
+            if child not in visited:
+                queue.append(child)
+    return result
+
+
+def _class_quality_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+    """Quality stats (label/comment coverage, instances, property fill) for a class subtree."""
+    if uri not in taxonomy.owl_classes:
+        return []
+
+    subtree = _subtree_class_uris(taxonomy, uri)
+    subtree_set = set(subtree)
+    n_classes = len(subtree)
+
+    labeled = sum(1 for u in subtree if taxonomy.owl_classes[u].labels)
+    commented = sum(1 for u in subtree if taxonomy.owl_classes[u].comments)
+    label_p = _pct(labeled, n_classes)
+    comment_p = _pct(commented, n_classes)
+
+    n_subtree_inds = sum(
+        1 for ind in taxonomy.owl_individuals.values() if any(t in subtree_set for t in ind.types)
+    )
+
+    fields: list[DetailField] = [_sep("Subtree Quality")]
+    if n_classes > 1:
+        fields.append(_stat("cls:q:n_classes", "classes in subtree", str(n_classes)))
+    fields.append(_stat("cls:q:lbl", "rdfs:label", f"{_pct_bar(label_p)}  {label_p}%"))
+    fields.append(_stat("cls:q:cmt", "rdfs:comment", f"{_pct_bar(comment_p)}  {comment_p}%"))
+    fields.append(_stat("cls:q:inst:subtree", "instances (subtree)", str(n_subtree_inds)))
+
+    fill_fields: list[DetailField] = []
+    for p_uri, prop in sorted(taxonomy.owl_properties.items()):
+        if not prop.domains:
+            continue
+        domain_set = set(prop.domains)
+        if not domain_set & subtree_set:
+            continue
+        domain_inds = [
+            ind_uri
+            for ind_uri, ind in taxonomy.owl_individuals.items()
+            if _effective_types(taxonomy, ind.types) & domain_set
+        ]
+        if not domain_inds:
+            continue
+        range_set: set[str] | None = set(prop.ranges) if prop.ranges else None
+        filled = 0
+        for ind_uri in domain_inds:
+            ind = taxonomy.owl_individuals[ind_uri]
+            for pv_prop_uri, val_uri in ind.property_values:
+                if pv_prop_uri != p_uri:
+                    continue
+                if range_set is None:
+                    filled += 1
+                    break
+                val_ind = taxonomy.owl_individuals.get(val_uri)
+                if val_ind and _effective_types(taxonomy, val_ind.types) & range_set:
+                    filled += 1
+                    break
+        fill_pct = _pct(filled, len(domain_inds))
+        lbl = prop.label(lang) or prop.local_name
+        fill_fields.append(_stat(f"cls:q:fill:{p_uri}", lbl, f"{_pct_bar(fill_pct)}  {fill_pct}%"))
+
+    if fill_fields:
+        fields.append(_sep("Property Fill"))
+        fields.extend(fill_fields)
+
+    return fields
+
+
 def _concept_overview_fields(taxonomy: Taxonomy, uri: str, concept) -> list[DetailField]:
     """Overview stats for a concept's subtree — only call when concept.narrower is non-empty."""
     direct = len([u for u in concept.narrower if u in taxonomy.concepts])
@@ -1677,6 +1763,9 @@ def build_rdf_class_detail(
             "add_individual",
         )
     )
+
+    # ── Subtree quality stats ────────────────────────────────────────────────
+    fields.extend(_class_quality_fields(taxonomy, uri, lang))
 
     # ── Rich Content (schema.org) ─────────────────────────────────────────────
     fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
