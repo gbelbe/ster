@@ -77,7 +77,7 @@ def _init_colors() -> None:
         curses.init_pair(_C_EXT_NODE, curses.COLOR_MAGENTA, -1)
         curses.init_pair(_C_ACTION_ADD, curses.COLOR_GREEN, -1)
         curses.init_pair(_C_ACTION_DEL, curses.COLOR_RED, -1)
-        curses.init_pair(_C_SEP_DANGER, curses.COLOR_RED, -1)
+        curses.init_pair(_C_SEP_DANGER, curses.COLOR_YELLOW, -1)
     except Exception:
         pass
 
