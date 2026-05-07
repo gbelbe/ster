@@ -185,7 +185,8 @@ class TaxonomyViewer:
         # Tree/detail persistent attrs (above) are accessible from all modes for
         # split-view rendering; all other modal data lives inside self._state.
         prefs = _load_prefs()
-        self._state: ViewerState = WelcomeState() if not prefs.get("help_seen") else TreeState()
+        show_welcome = prefs.get("welcome_version") != _VERSION
+        self._state: ViewerState = WelcomeState() if show_welcome else TreeState()
 
         self._history: list[dict] = []
         self._status = ""
@@ -613,7 +614,7 @@ class TaxonomyViewer:
                 if key == curses.KEY_RESIZE:
                     curses.update_lines_cols()
                     continue
-                _save_prefs({"help_seen": True})
+                _save_prefs({"welcome_version": _VERSION})
                 self._state = TreeState()
                 continue
 
