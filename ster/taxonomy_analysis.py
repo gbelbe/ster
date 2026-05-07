@@ -87,6 +87,11 @@ class TaxonomyIssue:
     message: str  # human-readable description (shown in the detail panel)
     extra: dict = field(default_factory=dict)  # e.g. {"attr": "exact_match", "target_uri": "..."}
 
+    @property
+    def entity_uri(self) -> str | None:
+        """Shared interface with analysis_base.Issue used by logic.py helpers."""
+        return self.concept_uri
+
 
 @dataclass
 class SchemeAnalysis:

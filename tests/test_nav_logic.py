@@ -774,7 +774,9 @@ def test_build_individual_detail_sections():
 
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "en")
-    sep_displays = [f.display for f in fields if f.meta.get("type") in ("separator", "separator_danger")]
+    sep_displays = [
+        f.display for f in fields if f.meta.get("type") in ("separator", "separator_danger")
+    ]
     assert "Identity" in sep_displays
     assert "Labels" in sep_displays
     assert "Class Membership" in sep_displays
@@ -797,5 +799,7 @@ def test_build_individual_detail_add_label_action():
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "fr")
     # add_ind_label is now an action_add (constructive action, green)
-    actions = [f.meta.get("action") for f in fields if f.meta.get("type") in ("action", "action_add")]
+    actions = [
+        f.meta.get("action") for f in fields if f.meta.get("type") in ("action", "action_add")
+    ]
     assert "add_ind_label" in actions

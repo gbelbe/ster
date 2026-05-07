@@ -7,8 +7,15 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 
+from ..analysis_base import pct as _pct
+from ..analysis_base import pct_bar as _pct_bar
 from ..model import LabelType, Taxonomy
-from ..owl_analysis import compute_owl_analysis
+from ..owl_analysis import (
+    ONTOLOGY_ISSUE_DISPLAY_NAMES,
+    OntologyAnalysis,
+    compute_ontology_analysis,
+    compute_owl_analysis,
+)
 from ..taxonomy_analysis import ISSUE_DISPLAY_NAMES, SchemeAnalysis, compute_completions
 from ..workspace import TaxonomyWorkspace
 
@@ -362,12 +369,87 @@ def _sep(label: str) -> DetailField:
 # ──────────────────────────── scheme dashboard helpers ───────────────────────
 
 _SEVERITY_ICONS = {"error": "⊘", "warning": "⚠", "info": "ℹ"}
+# _pct_bar and _pct are imported from analysis_base at the top of this file.
 
 
-def _pct_bar(pct: int, width: int = 8) -> str:
-    """Return a compact block progress-bar string, e.g. '████░░░░'."""
-    filled = round(pct * width / 100)
-    return "█" * filled + "░" * (width - filled)
+# ──────────────────── shared rendering helpers (SKOS + OWL) ──────────────────
+
+
+def _coverage_fields(key_prefix: str, comp: object) -> list[DetailField]:
+    """Coverage bar rows for any Coverage or PropertyCompletion object.
+
+    Works with both SKOS (PropertyCompletion) and OWL (Coverage) objects
+    via duck typing: requires .by_language, .total attributes.
+    Change this function to update coverage display for both layers at once.
+    """
+    fields: list[DetailField] = []
+    for lg, count in sorted(getattr(comp, "by_language", {}).items()):
+        total = getattr(comp, "total", 0)
+        p = _pct(count, total)
+        bar = _pct_bar(p)
+        fields.append(
+            DetailField(
+                f"{key_prefix}:{lg}",
+                f"[{lg}]",
+                f"{count}/{total}  {bar}  ({p}%)",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+    return fields
+
+
+def _issue_nav_fields(
+    issues: list,
+    display_names: dict[str, str],
+    key_prefix: str = "issue",
+) -> list[DetailField]:
+    """Issue rows for any Issue or TaxonomyIssue list.
+
+    Works with both SKOS (TaxonomyIssue.entity_uri) and OWL (Issue.entity_uri)
+    via the shared .entity_uri interface.
+    Change this function to update issue display for both layers at once.
+    """
+    if not issues:
+        return [
+            DetailField(
+                f"{key_prefix}:ok", "✓ no issues", "", editable=False, meta={"type": "stat"}
+            )
+        ]
+    fields: list[DetailField] = []
+    for idx, issue in enumerate(issues):
+        icon = _SEVERITY_ICONS.get(issue.severity, "·")
+        name = display_names.get(issue.issue_key, issue.issue_key)
+        entity = issue.entity_uri
+        meta: dict = {"type": "issue_nav", "severity": issue.severity}
+        if entity:
+            meta["uri"] = entity
+        fields.append(
+            DetailField(
+                f"{key_prefix}:{idx}",
+                f"{icon} {name}",
+                issue.message,
+                editable=False,
+                meta=meta,
+            )
+        )
+        if issue.extra.get("attr") and issue.extra.get("target_uri") and entity:
+            target_uri = issue.extra["target_uri"]
+            fields.append(
+                DetailField(
+                    f"repair:{idx}",
+                    "  ↳ remove link",
+                    target_uri,
+                    editable=False,
+                    meta={
+                        "type": "repair_mapping",
+                        "source_uri": entity,
+                        "attr": issue.extra["attr"],
+                        "target_uri": target_uri,
+                    },
+                )
+            )
+    return fields
 
 
 # ──────────────────────────── shared section primitives ──────────────────────
@@ -893,57 +975,17 @@ def _scheme_stats_fields(scheme_analysis) -> list[DetailField]:
 def _scheme_completion_fields(scheme_analysis) -> list[DetailField]:
     if scheme_analysis is None or not scheme_analysis.completions:
         return []
-    fields = []
+    fields: list[DetailField] = []
     for comp in scheme_analysis.completions:
         fields.append(_sep(f"Completion — {comp.display_name}"))
-        for lg, count in sorted(comp.by_language.items()):
-            pct = int(count * 100 / comp.total) if comp.total else 0
-            bar = _pct_bar(pct)
-            fields.append(
-                DetailField(
-                    f"comp:{comp.property_key}:{lg}",
-                    f"[{lg}]",
-                    f"{count}/{comp.total}  {bar}  ({pct}%)",
-                    editable=False,
-                    meta={"type": "stat"},
-                )
-            )
+        fields.extend(_coverage_fields(f"comp:{comp.property_key}", comp))
     return fields
 
 
 def _scheme_issues_fields(scheme_analysis) -> list[DetailField]:
     if scheme_analysis is None:
         return []
-    issues = scheme_analysis.issues
-    if not issues:
-        return [DetailField("issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"})]
-    fields = []
-    for idx, issue in enumerate(issues):
-        icon = _SEVERITY_ICONS.get(issue.severity, "·")
-        name = ISSUE_DISPLAY_NAMES.get(issue.issue_key, issue.issue_key)
-        meta: dict = {"type": "issue_nav", "severity": issue.severity}
-        if issue.concept_uri:
-            meta["uri"] = issue.concept_uri
-        fields.append(
-            DetailField(f"issue:{idx}", f"{icon} {name}", issue.message, editable=False, meta=meta)
-        )
-        if issue.extra.get("attr") and issue.extra.get("target_uri") and issue.concept_uri:
-            target_uri = issue.extra["target_uri"]
-            fields.append(
-                DetailField(
-                    f"repair:{idx}",
-                    "  ↳ remove link",
-                    target_uri,
-                    editable=False,
-                    meta={
-                        "type": "repair_mapping",
-                        "source_uri": issue.concept_uri,
-                        "attr": issue.extra["attr"],
-                        "target_uri": target_uri,
-                    },
-                )
-            )
-    return fields
+    return _issue_nav_fields(scheme_analysis.issues, ISSUE_DISPLAY_NAMES)
 
 
 def _scheme_action_fields() -> list[DetailField]:
@@ -1625,6 +1667,9 @@ def build_rdf_class_detail(
 
     # ── Instances ────────────────────────────────────────────────────────────
     fields.append(_sep("Instances"))
+    n_direct = sum(1 for ind in taxonomy.owl_individuals.values() if uri in ind.types)
+    if n_direct:
+        fields.append(_stat("inst:count", "instances", str(n_direct)))
     fields.append(
         _add_action_add_field(
             "action:add_individual",
@@ -1982,6 +2027,109 @@ def build_individual_detail(
 # ──────────────────────────── ontology overview ──────────────────────────────
 
 
+def _ontology_quality_fields(
+    taxonomy: Taxonomy,
+    analysis: OntologyAnalysis,
+    lang: str,
+) -> list[DetailField]:
+    """Quality stat sections for the ontology overview panel.
+
+    Rendered by the shared _coverage_fields / _issue_nav_fields helpers, so
+    any layout or color change there applies here and to the SKOS dashboard.
+    """
+    fields: list[DetailField] = []
+    st = analysis.stats
+
+    # ── Classes ───────────────────────────────────────────────────────────────
+    fields.append(_sep("Class Quality"))
+    fields.append(_stat("ont:q:classes", "total classes", str(st.total_classes)))
+    fields.append(_stat("ont:q:roots", "root classes", str(st.root_classes)))
+    fields.append(_stat("ont:q:depth", "max depth", str(st.max_depth)))
+    if st.total_classes:
+        fields.append(
+            _stat("ont:q:lbl", "rdfs:label", f"{_pct_bar(st.label_pct)}  {st.label_pct}%")
+        )
+        fields.append(
+            _stat("ont:q:cmt", "rdfs:comment", f"{_pct_bar(st.comment_pct)}  {st.comment_pct}%")
+        )
+
+    # ── By level ──────────────────────────────────────────────────────────────
+    if analysis.level_summaries:
+        fields.append(_sep("By Level"))
+        for ls in analysis.level_summaries:
+            n = ls.n_classes
+            plural = "classes" if n != 1 else "class"
+            fields.append(
+                _stat(
+                    f"ont:q:lvl:{ls.depth}",
+                    f"depth {ls.depth}",
+                    f"{n} {plural}  ·  {_pct_bar(ls.label_pct)}  {ls.label_pct}% labeled",
+                )
+            )
+
+    # ── Individuals ───────────────────────────────────────────────────────────
+    if st.total_individuals:
+        fields.append(_sep("Individual Quality"))
+        fields.append(_stat("ont:q:inds", "total", str(st.total_individuals)))
+        fields.append(
+            _stat(
+                "ont:q:ind_lbl",
+                "labeled",
+                f"{_pct_bar(st.individual_label_pct)}  {st.individual_label_pct}%",
+            )
+        )
+        fields.append(
+            _stat(
+                "ont:q:ind_typed",
+                "typed",
+                f"{_pct_bar(st.individual_typed_pct)}  {st.individual_typed_pct}%",
+            )
+        )
+
+    # ── Properties ────────────────────────────────────────────────────────────
+    if st.total_properties:
+        fields.append(_sep("Property Quality"))
+        fields.append(_stat("ont:q:props", "total", str(st.total_properties)))
+        fields.append(
+            _stat(
+                "ont:q:prop_lbl",
+                "labeled",
+                f"{_pct_bar(st.property_label_pct)}  {st.property_label_pct}%",
+            )
+        )
+        fields.append(
+            _stat(
+                "ont:q:prop_dom",
+                "has domain",
+                f"{_pct_bar(st.property_with_domain_pct)}  {st.property_with_domain_pct}%",
+            )
+        )
+        fields.append(
+            _stat(
+                "ont:q:prop_rng",
+                "has range",
+                f"{_pct_bar(st.property_with_range_pct)}  {st.property_with_range_pct}%",
+            )
+        )
+
+    # ── Property fill rates ────────────────────────────────────────────────────
+    if analysis.property_fill_global:
+        fields.append(_sep("Property Fill Rate"))
+        for p_uri, fill in sorted(analysis.property_fill_global.items(), key=lambda kv: kv[1]):
+            prop = taxonomy.owl_properties.get(p_uri)
+            lbl = prop.label(lang) if prop else p_uri
+            fill_pct = int(fill * 100)
+            fields.append(_stat(f"ont:q:fill:{p_uri}", lbl, f"{_pct_bar(fill_pct)}  {fill_pct}%"))
+
+    # ── Issues ────────────────────────────────────────────────────────────────
+    fields.append(_sep("Issues"))
+    fields.extend(
+        _issue_nav_fields(analysis.issues, ONTOLOGY_ISSUE_DISPLAY_NAMES, key_prefix="owl_issue")
+    )
+
+    return fields
+
+
 def build_ontology_overview_fields(
     taxonomy: Taxonomy,
     file_path: Path | None,
@@ -2163,6 +2311,11 @@ def build_ontology_overview_fields(
                     meta={"type": "prop_nav", "uri": p_uri, "nav": True},
                 )
             )
+
+    # ── Quality stats ─────────────────────────────────────────────────────────
+    if taxonomy.owl_classes or taxonomy.owl_individuals or taxonomy.owl_properties:
+        analysis = compute_ontology_analysis(taxonomy)
+        fields.extend(_ontology_quality_fields(taxonomy, analysis, lang))
 
     return fields
 
