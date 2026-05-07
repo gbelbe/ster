@@ -20,6 +20,8 @@ from pathlib import Path
 from rich.console import Console
 
 from .. import analysis_cache, operations, store
+from .._version import __version__ as _VERSION
+from .._version import check_update as _check_update
 from ..display import console, render_tree
 from ..exceptions import SkostaxError
 from ..model import Definition, Label, LabelType, OWLIndividual, Taxonomy, is_builtin_uri
@@ -985,18 +987,26 @@ class TaxonomyViewer:
             noun = ""
         file_info = f"  {title}" + (f"  ·  {noun}" if noun else "") + f"  ·  lang: {self.lang}"
 
+        newer = _check_update()
+
         # Build content rows: list of (text, kind)
-        # kind: "logo" | "subtitle" | "desc" | "info" | "blank"
+        # kind: "logo" | "subtitle" | "version" | "update" | "desc" | "info" | "blank"
         content: list[tuple[str, str]] = [
             ("", "blank"),
             *[(_LOGO[i], "logo") for i in range(len(_LOGO))],
             ("", "blank"),
             *[(_SUBTITLES[i], "subtitle") for i in range(len(_SUBTITLES))],
+            (f"  v{_VERSION}", "version"),
             ("", "blank"),
             (_DESC, "desc"),
             ("", "blank"),
             (file_info, "info"),
         ]
+        if newer:
+            content += [
+                ("", "blank"),
+                (f"  ↑ v{newer} available — pip install --upgrade ster", "update"),
+            ]
 
         box_w = min(cols - 4, 70)
         box_h = min(rows - 2, len(content) + 3)
@@ -1031,6 +1041,16 @@ class TaxonomyViewer:
                     stdscr.addstr(
                         y, box_x, clipped, curses.color_pair(_C_HELP_SECTION) | curses.A_BOLD
                     )
+                except curses.error:
+                    pass
+            elif kind == "version":
+                try:
+                    stdscr.addstr(y, box_x, clipped, curses.color_pair(_C_DIM))
+                except curses.error:
+                    pass
+            elif kind == "update":
+                try:
+                    stdscr.addstr(y, box_x, clipped, curses.color_pair(_C_DIFF_CHG) | curses.A_BOLD)
                 except curses.error:
                     pass
             else:
