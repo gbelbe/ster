@@ -106,7 +106,7 @@ def _detail_concept(concept: Concept, taxonomy: Taxonomy) -> dict:
 
 def _detail_class(cls: RDFClass, taxonomy: Taxonomy) -> dict:
     labels = [{"lang": lbl.lang, "kind": "label", "value": lbl.value} for lbl in cls.labels]
-    description = cls.comments[0].value if cls.comments else ""
+    comments = [{"lang": c.lang, "value": c.value} for c in cls.comments]
     relations: list[dict] = []
     for u in cls.sub_class_of:
         if not is_builtin_uri(u):
@@ -119,8 +119,9 @@ def _detail_class(cls: RDFClass, taxonomy: Taxonomy) -> dict:
             relations.append({"rel": "disjointWith", "uri": u, "label": _label_for(u, taxonomy)})
     return {
         "labels": labels,
-        "description": description,
+        "description": "",
         "scopeNote": "",
+        "comments": comments,
         "images": cls.schema_images,
         "videos": cls.schema_videos,
         "urls": cls.schema_urls,
@@ -130,7 +131,7 @@ def _detail_class(cls: RDFClass, taxonomy: Taxonomy) -> dict:
 
 def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
     labels = [{"lang": lbl.lang, "kind": "label", "value": lbl.value} for lbl in ind.labels]
-    description = ind.comments[0].value if ind.comments else ""
+    comments = [{"lang": c.lang, "value": c.value} for c in ind.comments]
     relations: list[dict] = []
     for u in ind.types:
         if not is_builtin_uri(u):
@@ -143,8 +144,9 @@ def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
         )
     return {
         "labels": labels,
-        "description": description,
+        "description": "",
         "scopeNote": "",
+        "comments": comments,
         "images": ind.schema_images,
         "videos": ind.schema_videos,
         "urls": ind.schema_urls,
@@ -183,7 +185,11 @@ def build_graph(taxonomy: Taxonomy) -> dict:
     seen_nodes: set[str] = set()
 
     def add_node(
-        uri: str, label: str, node_type: str, img: str = "", detail: dict | None = None
+        uri: str,
+        label: str,
+        node_type: str,
+        img: str = "",
+        detail: dict | None = None,
     ) -> None:
         if uri not in seen_nodes:
             seen_nodes.add(uri)
@@ -253,8 +259,12 @@ def build_graph(taxonomy: Taxonomy) -> dict:
     # rdf:type  (individual → class)
     for uri, ind in taxonomy.owl_individuals.items():
         for type_uri in ind.types:
-            if not is_builtin_uri(type_uri) and type_uri in seen_nodes:
-                links.append({"source": uri, "target": type_uri, "type": "instanceOf", "label": ""})
+            if is_builtin_uri(type_uri):
+                continue
+            if type_uri not in seen_nodes:
+                # Class used as type but not declared owl:Class — add implicit node
+                add_node(type_uri, _local(type_uri), "class", "", {})
+            links.append({"source": uri, "target": type_uri, "type": "instanceOf", "label": ""})
 
     # Object-property assertions  (individual → individual)
     for uri, ind in taxonomy.owl_individuals.items():
@@ -272,7 +282,13 @@ def build_graph(taxonomy: Taxonomy) -> dict:
 
     # SKOS ConceptSchemes
     for uri, scheme in taxonomy.schemes.items():
-        add_node(uri, scheme.title("en"), "scheme", "", _detail_scheme(scheme, taxonomy))
+        add_node(
+            uri,
+            scheme.title("en"),
+            "scheme",
+            "",
+            _detail_scheme(scheme, taxonomy),
+        )
 
     # SKOS Concepts — top concepts get their own type for distinct rendering
     top_concept_uris: set[str] = {uri for uri, c in taxonomy.concepts.items() if c.top_concept_of}
@@ -454,7 +470,7 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:f
 .link-subClassOf{stroke:#475569;stroke-dasharray:7 3}
 .link-equivalentClass{stroke:#0ea5e9;stroke-dasharray:4 2}
 .link-disjointWith{stroke:#ef4444;stroke-dasharray:5 3}
-.link-instanceOf{stroke:#8b5cf6;stroke-dasharray:3 3}
+.link-instanceOf{stroke:#7c5cbf;stroke-width:1px;stroke-dasharray:2 5;stroke-opacity:0.35}
 .link-property{stroke:#10b981}
 .link-broader{stroke-dasharray:6 3}
 .link-related{stroke:#f97316}
@@ -466,9 +482,9 @@ body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:f
 #hint{position:fixed;bottom:10px;left:12px;font-size:10px;color:#4b5563;
       background:#161b22;padding:3px 8px;border-radius:10px;border:1px solid #30363d;
       display:flex;align-items:center;gap:8px}
-.ftbtn{background:none;border:1px solid #374151;color:#6b7280;border-radius:6px;
-       cursor:pointer;font-size:10px;padding:1px 6px}
-.ftbtn.active{color:#9ca3af;border-color:#4b5563}
+.ftbtn{background:none;border:1px solid #374151;color:#4b5563;border-radius:6px;
+       cursor:pointer;font-size:10px;padding:1px 6px;text-decoration:line-through}
+.ftbtn.active{color:#c9d1d9;border-color:#6b7280;text-decoration:none}
 .ftbtn:hover{background:#21262d}
 #tip{position:fixed;pointer-events:none;background:#161b22;border:1px solid #30363d;
      border-radius:6px;padding:6px 10px;font-size:11px;color:#c9d1d9;
@@ -549,21 +565,22 @@ const svg = d3.select("#canvas");
 
 const defs = svg.append("defs");
 [
-  {id:"arr-subClassOf",     color:"#475569"},
-  {id:"arr-equivalentClass",color:"#0ea5e9"},
-  {id:"arr-disjointWith",   color:"#ef4444"},
-  {id:"arr-instanceOf",     color:"#8b5cf6"},
-  {id:"arr-property",       color:"#10b981"},
-  {id:"arr-broader",        color:"#6b7280"},
-  {id:"arr-related",        color:"#f97316"},
-  {id:"arr-inScheme",       color:"#a855f7"},
+  {id:"arr-subClassOf",     color:"#475569", w:6,h:6},
+  {id:"arr-equivalentClass",color:"#0ea5e9", w:6,h:6},
+  {id:"arr-disjointWith",   color:"#ef4444", w:6,h:6},
+  {id:"arr-instanceOf",     color:"#7c5cbf", w:3,h:3},
+  {id:"arr-property",       color:"#10b981", w:6,h:6},
+  {id:"arr-broader",        color:"#6b7280", w:6,h:6},
+  {id:"arr-related",        color:"#f97316", w:6,h:6},
+  {id:"arr-inScheme",       color:"#a855f7", w:6,h:6},
 ].forEach(m=>{
   defs.append("marker")
     .attr("id",m.id).attr("viewBox","0 -4 8 8")
     .attr("refX",8).attr("refY",0)
-    .attr("markerWidth",6).attr("markerHeight",6)
+    .attr("markerWidth",m.w).attr("markerHeight",m.h)
     .attr("orient","auto")
-    .append("path").attr("d","M0,-4L8,0L0,4Z").attr("fill",m.color);
+    .append("path").attr("d","M0,-4L8,0L0,4Z").attr("fill",m.color)
+    .attr("opacity",m.id==="arr-instanceOf"?0.35:1);
 });
 
 const root = svg.append("g");
@@ -613,7 +630,12 @@ const subClassOfChildMap={};
 nodes.forEach(n=>{ subClassOfChildMap[n.id]=[]; });
 links.forEach(l=>{
   if(l.type!=="subClassOf") return;
-  subClassOfParentMap[l.source]=l.target;
+  // Prefer local class nodes over external-class for cluster tracing
+  const existing=subClassOfParentMap[l.source];
+  const newNode=nodeById[l.target];
+  if(!existing||((nodeById[existing]||{}).type==="external-class"&&newNode&&newNode.type!=="external-class")){
+    subClassOfParentMap[l.source]=l.target;
+  }
   (subClassOfChildMap[l.target]=subClassOfChildMap[l.target]||[]).push(l.source);
 });
 
@@ -929,8 +951,7 @@ updateStats(nodes,links);
 const hiddenLinkTypes=new Set();
 const instanceOfCount=links.filter(l=>l.type==="instanceOf").length;
 const inSchemeCount=links.filter(l=>l.type==="inScheme").length;
-if(instanceOfCount>20){ hiddenLinkTypes.add("instanceOf"); document.getElementById("ft-instanceOf").classList.remove("active"); }
-if(inSchemeCount>20){ hiddenLinkTypes.add("inScheme"); document.getElementById("ft-inScheme").classList.remove("active"); }
+if(inSchemeCount>40){ hiddenLinkTypes.add("inScheme"); document.getElementById("ft-inScheme").classList.remove("active"); }
 
 function applyLinkVisibility(){
   linkSel.style("display",d=>hiddenLinkTypes.has(d.type)?"none":null);
@@ -1142,7 +1163,6 @@ function playVideo(idx){
 
 function closeVideo(){}
 
-
 function showDefault(){
   const c=taxoMeta.counts;
   let rows='';
@@ -1213,7 +1233,7 @@ function showDefault(){
       ['subClassOf',    'border-top:2px dashed #475569', 'subClassOf'],
       ['equivalentClass','border-top:2px dashed #0ea5e9','equivalentClass'],
       ['disjointWith',  'border-top:2px dashed #ef4444', 'disjointWith'],
-      ['instanceOf',    'border-top:2px dotted #8b5cf6', 'rdf:type'],
+      ['instanceOf',    'border-top:1px dotted #7c5cbf;opacity:0.4', 'rdf:type'],
       ['property',      'border-top:2px solid #10b981',  'property'],
       ['broader',       'border-top:2px dashed #6b7280', 'broader'],
       ['related',       'border-top:2px solid #f97316',  'related'],
@@ -1252,16 +1272,26 @@ function showDetail(d){
   const allOther=labels.filter(l=>l.kind==='label');
   const showLbls=[...prefs.slice(1),...alts,...allOther];
   if(showLbls.length){
-    h+='<div class="dp-section">';
+    h+='<hr class="dp-hr"><div class="dp-sub">Labels</div>';
     showLbls.forEach(l=>{
-      h+='<div class="dp-lbl"><span class="dp-lang">['+esc(l.lang)+']</span>'
-        +'<span class="'+(l.kind==='pref'?'dp-pref':'dp-alt')+'">'+esc(l.value)+'</span></div>';
+      h+='<div class="dp-lbl">';
+      if(l.lang) h+='<span class="dp-lang">['+esc(l.lang)+']</span>';
+      h+='<span class="'+(l.kind==='alt'?'dp-alt':'dp-pref')+'">'+esc(l.value)+'</span></div>';
     });
-    h+='</div>';
   }
 
   if(det.description) h+='<div class="dp-desc">'+esc(det.description)+'</div>';
   if(det.scopeNote)   h+='<div class="dp-scope">'+esc(det.scopeNote)+'</div>';
+
+  const comments=det.comments||[];
+  if(comments.length){
+    h+='<hr class="dp-hr"><div class="dp-sub">Comments</div>';
+    comments.forEach(c=>{
+      h+='<div class="dp-lbl">';
+      if(c.lang) h+='<span class="dp-lang">['+esc(c.lang)+']</span>';
+      h+=esc(c.value)+'</div>';
+    });
+  }
 
   (det.images||[]).forEach(u=>{ h+='<img class="dp-img" src="'+esc(u)+'" loading="lazy">'; });
   (det.videos||[]).forEach(u=>{ h+=renderVideo(u,d.fullLabel); });

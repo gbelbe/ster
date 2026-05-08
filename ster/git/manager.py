@@ -170,6 +170,61 @@ class GitManager:
             self._ask_branch_strategy()
         return ok
 
+    def fetch_remote(self) -> None:
+        """Fetch from remote. Safe to call from a background thread."""
+        repo = self._repo()
+        if not repo or not self._cfg.get("remote_url"):
+            return
+        _git("fetch", "--quiet", "origin", cwd=repo)
+
+    def check_and_pull(self) -> str | None:
+        """Check if behind remote and offer to pull. Does NOT fetch — call fetch_remote() first."""
+        if not self.is_configured():
+            return None
+        repo = self._repo()
+        if not repo:
+            return None
+        if not self._cfg.get("remote_url"):
+            return None
+
+        main = self._cfg.get("main_branch", "main")
+        behind_r = _git("rev-list", "--count", f"HEAD..origin/{main}", cwd=repo)
+        if behind_r.returncode != 0:
+            return None
+        try:
+            behind = int(behind_r.stdout.strip())
+        except ValueError:
+            return None
+
+        if behind == 0:
+            return None
+
+        from rich.prompt import Confirm
+
+        console.print(
+            f"\n[yellow]⚠  {self.taxonomy_path.name} is "
+            f"{behind} commit{'s' if behind > 1 else ''} behind the remote.[/yellow]"
+        )
+        if not Confirm.ask("Pull latest changes?", default=True):
+            return None
+
+        before_r = _git("rev-parse", "HEAD", cwd=repo)
+        before = before_r.stdout.strip() if before_r.returncode == 0 else None
+
+        pull_r = _git("pull", "--ff-only", "origin", main, cwd=repo)
+        if pull_r.returncode != 0:
+            err.print(f"[red]Pull failed:[/red] {pull_r.stderr.strip()}")
+            return None
+
+        console.print("[green]✓ Updated.[/green]")
+
+        if before:
+            diff_r = _git("diff", before, "HEAD", "--", str(self.taxonomy_path), cwd=repo)
+            if diff_r.returncode == 0 and diff_r.stdout:
+                return diff_r.stdout
+
+        return None
+
     def pre_edit_check(self) -> str | None:
         """Fetch; pull if behind; return diff text (or None) for display."""
         if not self.is_configured():

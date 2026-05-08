@@ -272,7 +272,7 @@ def test_detail_class_comment_and_subclass():
         sub_class_of=[NS + "Animal"],
     )
     detail = _detail_class(cls, tax)
-    assert detail["description"] == "A cat class"
+    assert detail["comments"] == [{"lang": "en", "value": "A cat class"}]
     sub = [r for r in detail["relations"] if r["rel"] == "subClassOf"]
     assert len(sub) == 1
     assert sub[0]["uri"] == NS + "Animal"
@@ -321,7 +321,7 @@ def test_detail_individual_type_relation():
         types=[NS + "Animal"],
     )
     detail = _detail_individual(ind, tax)
-    assert detail["description"] == "A dog named Fido"
+    assert detail["comments"] == [{"lang": "en", "value": "A dog named Fido"}]
     types = [r for r in detail["relations"] if r["rel"] == "type"]
     assert len(types) == 1
     assert types[0]["label"] == "Animal"

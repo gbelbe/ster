@@ -44,6 +44,7 @@ _C_EXT_NODE = 26  # magenta dim — external (imported) ontology term
 _C_ACTION_ADD = 27  # green bold — constructive action (+ Add …)
 _C_ACTION_DEL = 28  # red — destructive action (⊘ Delete, ✗ Remove)
 _C_SEP_DANGER = 29  # red bold — danger zone separator
+_C_OWL_CLASS = 30  # yellow — pure OWL class node (distinct from SKOS cyan/magenta)
 
 
 def _init_colors() -> None:
@@ -78,7 +79,27 @@ def _init_colors() -> None:
         curses.init_pair(_C_ACTION_ADD, curses.COLOR_GREEN, -1)
         curses.init_pair(_C_ACTION_DEL, curses.COLOR_RED, -1)
         curses.init_pair(_C_SEP_DANGER, curses.COLOR_YELLOW, -1)
+        curses.init_pair(_C_OWL_CLASS, curses.COLOR_YELLOW, -1)
     except Exception:
+        pass
+
+
+def _addstr_split(
+    stdscr: curses.window,
+    y: int,
+    x0: int,
+    width: int,
+    prefix_len: int,
+    text: str,
+    rest_attr: int,
+) -> None:
+    """Write tree-prefix in terminal default color and the node label in rest_attr."""
+    padded = text.ljust(width - 1)[: width - 1]
+    try:
+        if prefix_len > 0:
+            stdscr.addstr(y, x0, padded[:prefix_len], curses.color_pair(0))
+        stdscr.addstr(y, x0 + prefix_len, padded[prefix_len:], rest_attr)
+    except curses.error:
         pass
 
 
@@ -284,13 +305,16 @@ def render_tree_col(
             elif is_detail:
                 base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
             elif ext:
-                base_attr = curses.color_pair(_C_EXT_NODE) | curses.A_DIM
+                base_attr = curses.color_pair(_C_EXT_NODE)
             else:
-                base_attr = curses.A_DIM
-            try:
-                stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
-            except curses.error:
-                pass
+                base_attr = curses.A_NORMAL
+            if is_cursor or is_detail:
+                try:
+                    stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
+                except curses.error:
+                    pass
+            else:
+                _addstr_split(stdscr, y, x0, width, len(line.prefix), text, base_attr)
             continue
 
         # ── normal concept / OWL class row ───────────────────────────────
@@ -369,6 +393,7 @@ def render_tree_col(
             else:
                 base_attr = curses.A_DIM
         else:
+            is_owl_only = not concept  # pure OWL class, no SKOS concept
             if is_cursor and n_children:
                 base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
             elif is_cursor:
@@ -376,7 +401,11 @@ def render_tree_col(
             elif is_detail:
                 base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
             elif ext:
-                base_attr = curses.color_pair(_C_EXT_NODE) | curses.A_DIM
+                base_attr = curses.color_pair(_C_EXT_NODE)
+            elif is_owl_only and n_children:
+                base_attr = curses.color_pair(_C_OWL_CLASS) | curses.A_BOLD
+            elif is_owl_only:
+                base_attr = curses.color_pair(_C_OWL_CLASS)
             elif is_top and n_children:
                 base_attr = curses.color_pair(_C_TOP_CONCEPT) | curses.A_BOLD
             elif is_top:
@@ -386,13 +415,29 @@ def render_tree_col(
             else:
                 base_attr = curses.A_NORMAL
 
-        if is_match and not is_cursor:
-            _render_line_with_match(stdscr, y, x0, text, width, base_attr, search_pattern)
-        else:
+        if is_cursor or is_detail:
             try:
                 stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
             except curses.error:
                 pass
+        elif is_match:
+            prefix_len = len(line.prefix)
+            if prefix_len:
+                try:
+                    stdscr.addstr(y, x0, line.prefix, curses.color_pair(0))
+                except curses.error:
+                    pass
+            _render_line_with_match(
+                stdscr,
+                y,
+                x0 + prefix_len,
+                text[prefix_len:],
+                width - prefix_len,
+                base_attr,
+                search_pattern,
+            )
+        else:
+            _addstr_split(stdscr, y, x0, width, len(line.prefix), text, base_attr)
 
         # Overlay the mapping indicator in yellow (skipped when cursor or diff mode)
         if map_tag and not is_cursor and not diff_status:

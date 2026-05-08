@@ -1065,22 +1065,33 @@ class TaxonomyViewer:
     # ─────────────────────────── search ──────────────────────────────────────
 
     def _search_text(self, uri: str) -> str:
-        """Build the full text we search against for one concept."""
+        """Build the full text we search against for one tree line."""
+        # SKOS concept (primary taxonomy)
         concept = self.taxonomy.concepts.get(uri)
-        if not concept:
-            return ""
-        parts: list[str] = []
-        h = self.taxonomy.uri_to_handle(uri)
-        if h:
-            parts.append(h)
-        # local name from URI
+        if concept:
+            parts: list[str] = []
+            h = self.taxonomy.uri_to_handle(uri)
+            if h:
+                parts.append(h)
+            local = uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+            parts.append(local)
+            for lbl in concept.labels:
+                parts.append(lbl.value)
+            for defn in concept.definitions:
+                parts.append(defn.value)
+            return "  ".join(parts)
+
+        # OWL class or individual — search across all workspace taxonomies
         local = uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-        parts.append(local)
-        for lbl in concept.labels:
-            parts.append(lbl.value)
-        for defn in concept.definitions:
-            parts.append(defn.value)
-        return "  ".join(parts)
+        for tax in self._workspace.taxonomies.values():
+            owl_cls = tax.owl_classes.get(uri)
+            if owl_cls:
+                return "  ".join([local] + [lbl.value for lbl in owl_cls.labels])
+            individual = tax.owl_individuals.get(uri)
+            if individual:
+                return "  ".join([local] + [lbl.value for lbl in individual.labels])
+
+        return ""
 
     def _update_search(self) -> None:
         """Recompile pattern and recompute matching lines; jump cursor to first match."""
@@ -1354,10 +1365,10 @@ class TaxonomyViewer:
 
         # ── search: results-visible, navigate matches ─────────────────────────
         if self._tree.search.matches:
-            if key == 9:  # Tab — next match
+            if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
                 self._search_jump(+1)
                 return False
-            if key == curses.KEY_BTAB:  # Shift+Tab — prev match
+            if key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev match
                 self._search_jump(-1)
                 return False
             if key == ord("n"):

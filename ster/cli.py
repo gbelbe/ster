@@ -927,16 +927,25 @@ def _open_viewer(
     taxonomy = _load(taxonomy_file)
 
     gm = GitManager(taxonomy_file)
+    fetch_event: threading.Event | None = None
+
     if gm.is_enabled():
         if not gm.is_configured():
             gm.setup()
         if gm.is_configured():
-            diff = gm.pre_edit_check()
-            if diff:
-                console.print("\n[bold]Changes pulled from remote:[/bold]")
-                render_diff(diff)
-                console.print()
             gm.record_head()
+            fetch_event = threading.Event()
+            _ev = fetch_event
+
+            def _do_fetch() -> None:
+                try:
+                    gm.fetch_remote()
+                except Exception:
+                    pass
+                finally:
+                    _ev.set()
+
+            threading.Thread(target=_do_fetch, daemon=True).start()
 
     viewer = TaxonomyViewer(
         taxonomy,
@@ -955,14 +964,17 @@ def _open_viewer(
     viewer.run()
 
     if gm.is_enabled() and gm.is_configured():
+        if fetch_event is not None:
+            fetch_event.wait(timeout=15)
+            diff = gm.check_and_pull()
+            if diff:
+                console.print("\n[bold]Changes pulled from remote:[/bold]")
+                render_diff(diff)
+                console.print()
         try:
             gm.commit_and_push()
         except Exception as exc:
             console.print(f"\n[red]Commit error:[/red] {exc}")
-        try:
-            input("\nPress Enter to return to the menu…")
-        except (KeyboardInterrupt, EOFError):
-            pass
     elif gm.is_enabled() and not gm.is_configured():
         try:
             want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
@@ -1523,11 +1535,6 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
     except Exception as exc:
         err.print(f"[red]Graph error: {exc}[/red]")
 
-    try:
-        Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
-    except (KeyboardInterrupt, EOFError):
-        pass
-
 
 def _ensure_pylode() -> bool:
     """Return True if pyLODE is importable, offering to install it if not."""
@@ -1711,11 +1718,6 @@ def _run_html_export_interactive(files: list[Path]) -> None:
         entry = next((p for p in all_created if "_en" in p.name), all_created[0])
         webbrowser.open(entry.as_uri())
         console.print(f"  [dim]Opened in browser:[/dim] {entry}")
-
-    try:
-        Prompt.ask("\n[dim]Press Enter to return to the menu[/dim]", default="")
-    except (KeyboardInterrupt, EOFError):
-        pass
 
 
 @app.command("init-ci")

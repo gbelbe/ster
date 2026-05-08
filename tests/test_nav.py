@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ster.handles import assign_handles
-from ster.model import Concept, ConceptScheme, Label, Taxonomy
+from ster.model import Concept, ConceptScheme, Label, OWLIndividual, RDFClass, Taxonomy
 from ster.nav import (
     TaxonomyShell,
     TaxonomyViewer,
@@ -27,6 +27,7 @@ from ster.nav.state import (
     DetailState,
     EditState,
     SchemeCreateState,
+    SearchState,
     TreeState,
     WelcomeState,
 )
@@ -1519,3 +1520,124 @@ def test_suggest_definition_strips_response(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "_call", lambda p, t: "  A concise definition.  \n")
     result = ai.suggest_definition("Concept", "Taxonomy", "", None, "en")
     assert result == "A concise definition."
+
+
+# ── _search_text — OWL ontology ───────────────────────────────────────────────
+
+
+def test_search_text_owl_class_by_local_name(tmp_path):
+    tax = Taxonomy(owl_classes={BASE + "Dog": RDFClass(uri=BASE + "Dog")})
+    v = _make_viewer(tax, tmp_path)
+    assert "Dog" in v._search_text(BASE + "Dog")
+
+
+def test_search_text_owl_class_by_label(tmp_path):
+    tax = Taxonomy(
+        owl_classes={
+            BASE + "Dog": RDFClass(
+                uri=BASE + "Dog", labels=[Label(lang="en", value="Domestic Dog")]
+            )
+        }
+    )
+    v = _make_viewer(tax, tmp_path)
+    assert "Domestic Dog" in v._search_text(BASE + "Dog")
+
+
+def test_search_text_owl_individual_by_local_name(tmp_path):
+    tax = Taxonomy(owl_individuals={BASE + "Fido": OWLIndividual(uri=BASE + "Fido")})
+    v = _make_viewer(tax, tmp_path)
+    assert "Fido" in v._search_text(BASE + "Fido")
+
+
+def test_search_text_owl_individual_by_label(tmp_path):
+    tax = Taxonomy(
+        owl_individuals={
+            BASE + "Fido": OWLIndividual(
+                uri=BASE + "Fido", labels=[Label(lang="en", value="Fido the Dog")]
+            )
+        }
+    )
+    v = _make_viewer(tax, tmp_path)
+    assert "Fido the Dog" in v._search_text(BASE + "Fido")
+
+
+def test_search_text_unknown_uri_returns_empty(tmp_path):
+    v = _make_viewer(Taxonomy(), tmp_path)
+    assert v._search_text(BASE + "NoSuchThing") == ""
+
+
+def test_search_text_skos_concept_still_works(simple_taxonomy, tmp_path):
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    text = v._search_text(BASE + "Top")
+    assert "Top Concept" in text
+
+
+def test_search_text_includes_handle(simple_taxonomy, tmp_path):
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    handle = simple_taxonomy.uri_to_handle(BASE + "Top")
+    assert handle is not None
+    assert handle in v._search_text(BASE + "Top")
+
+
+def test_update_search_handle_case_insensitive(simple_taxonomy, tmp_path):
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    handle = simple_taxonomy.uri_to_handle(BASE + "Top")
+    assert handle is not None
+    # Search with lowercase handle — should still find the concept
+    v._tree.search.query = handle.lower()
+    v._update_search()
+    matched_uris = {v._tree.flat[i].uri for i in v._tree.search.matches}
+    assert BASE + "Top" in matched_uris
+
+
+# ── search result navigation — KEY_DOWN / KEY_UP ──────────────────────────────
+
+KEY_DOWN = 258  # curses.KEY_DOWN
+KEY_UP = 259  # curses.KEY_UP
+
+
+def _viewer_with_matches(simple_taxonomy, tmp_path, match_indices, start_cursor=0):
+    """Return a viewer with pre-set search matches and non-active search state."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    v._tree = TreeState(
+        flat=v._tree.flat,
+        cursor=start_cursor,
+        scroll=0,
+        folded=set(),
+        search=SearchState(
+            query="x",
+            active=False,
+            matches=match_indices,
+            current_idx=0,
+        ),
+        view_mode=v._tree.view_mode,
+    )
+    return v
+
+
+def test_on_tree_down_jumps_to_next_match(simple_taxonomy, tmp_path):
+    """↓ with active search results moves cursor to the next match."""
+    v = _viewer_with_matches(simple_taxonomy, tmp_path, match_indices=[1, 3], start_cursor=1)
+    v._tree.search = SearchState(query="x", active=False, matches=[1, 3], current_idx=0)
+    v._tree.cursor = 1
+    v._on_tree(KEY_DOWN, 24)
+    assert v._tree.cursor == 3
+    assert v._tree.search.current_idx == 1
+
+
+def test_on_tree_up_jumps_to_prev_match(simple_taxonomy, tmp_path):
+    """↑ with active search results moves cursor to the previous match."""
+    v = _viewer_with_matches(simple_taxonomy, tmp_path, match_indices=[1, 3], start_cursor=3)
+    v._tree.search = SearchState(query="x", active=False, matches=[1, 3], current_idx=1)
+    v._tree.cursor = 3
+    v._on_tree(KEY_UP, 24)
+    assert v._tree.cursor == 1
+    assert v._tree.search.current_idx == 0
+
+
+def test_on_tree_down_without_matches_navigates_normally(simple_taxonomy, tmp_path):
+    """↓ with no search results moves cursor by one line."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    v._tree.cursor = 0
+    v._on_tree(KEY_DOWN, 24)
+    assert v._tree.cursor == 1

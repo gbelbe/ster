@@ -1162,15 +1162,7 @@ def build_scheme_detail(
     fields: list[DetailField] = []
 
     # display_lang first (no separator before it — tests rely on fields[0])
-    fields.append(
-        DetailField(
-            "display_lang",
-            "display language",
-            lang,
-            editable=False,
-            meta={"type": "action", "action": "pick_lang"},
-        )
-    )
+    fields.append(_display_lang_field(lang))
 
     # ── Settings ─────────────────────────────────────────────────────────────
     fields.append(_sep("Settings"))
@@ -2235,6 +2227,10 @@ def build_ontology_overview_fields(
 
     fields: list[DetailField] = []
 
+    # ── Setup ────────────────────────────────────────────────────────────────
+    fields.append(_sep("Setup"))
+    fields.append(_display_lang_field(lang))
+
     # ── Ontology metadata ────────────────────────────────────────────────────
     fields.append(_sep("Ontology"))
     if taxonomy.ontology_uri:
@@ -2582,6 +2578,17 @@ def build_detail_fields(
     return build_concept_detail(taxonomy, uri, lang, show_mappings=show_mappings)
 
 
+def _display_lang_field(lang: str) -> DetailField:
+    """Shared 'display language' action field used in every detail panel."""
+    return DetailField(
+        "display_lang",
+        "display language",
+        lang,
+        editable=False,
+        meta={"type": "action", "action": "pick_lang"},
+    )
+
+
 def _available_langs(taxonomy: Taxonomy) -> list[str]:
     """Return sorted list of all language codes present in the taxonomy."""
     langs: set[str] = set()
@@ -2597,6 +2604,15 @@ def _available_langs(taxonomy: Taxonomy) -> list[str]:
             langs.add(lbl.lang)
         for defn in concept.definitions:
             langs.add(defn.lang)
+    for cls in taxonomy.owl_classes.values():
+        for lbl in cls.labels:
+            langs.add(lbl.lang)
+    for ind in taxonomy.owl_individuals.values():
+        for lbl in ind.labels:
+            langs.add(lbl.lang)
+    for prop in taxonomy.owl_properties.values():
+        for lbl in prop.labels:
+            langs.add(lbl.lang)
     return sorted(langs)
 
 
@@ -2658,15 +2674,7 @@ def build_global_fields(
 
     # ── 1. Setup ──────────────────────────────────────────────────────────────
     fields.append(_sep("Setup"))
-    fields.append(
-        DetailField(
-            "display_lang",
-            "display language",
-            lang,
-            editable=False,
-            meta={"type": "action", "action": "pick_lang"},
-        )
-    )
+    fields.append(_display_lang_field(lang))
 
     # ── 2. Keyboard shortcuts ─────────────────────────────────────────────────
     fields.append(_sep("Keyboard Shortcuts"))

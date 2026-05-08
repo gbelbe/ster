@@ -1112,6 +1112,116 @@ def test_get_github_token_none_when_skipped(tmp_path, monkeypatch):
     assert token is None
 
 
+# ── fetch_remote ─────────────────────────────────────────────────────────────
+
+
+def test_fetch_remote_calls_git_fetch(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://x.com/r"})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        mgr.fetch_remote()
+    assert any(a[0] == "fetch" and "--quiet" in a and "origin" in a for a in calls)
+
+
+def test_fetch_remote_noop_when_no_remote_url(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    with patch("ster.git.manager._git") as mock_git:
+        mgr.fetch_remote()
+    mock_git.assert_not_called()
+
+
+def test_fetch_remote_noop_when_no_repo(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with patch("ster.git.manager._git") as mock_git:
+        mgr.fetch_remote()
+    mock_git.assert_not_called()
+
+
+# ── check_and_pull ────────────────────────────────────────────────────────────
+
+
+def test_check_and_pull_not_configured(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    assert mgr.check_and_pull() is None
+
+
+def test_check_and_pull_no_remote(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    assert mgr.check_and_pull() is None
+
+
+def test_check_and_pull_returns_none_when_not_behind(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://x.com/r"})
+
+    def git_side(*args, **kwargs):
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="0\n")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        assert mgr.check_and_pull() is None
+
+
+def test_check_and_pull_returns_diff_after_pull(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://x.com/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="2\n")
+        if "rev-parse" in args:
+            return MagicMock(returncode=0, stdout="abc123\n")
+        if "pull" in args:
+            return MagicMock(returncode=0, stdout="")
+        if "diff" in args:
+            return MagicMock(returncode=0, stdout="+new line\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: True)
+    result = mgr.check_and_pull()
+    assert result is not None
+    assert "new line" in result
+
+
+def test_check_and_pull_skips_fetch_step(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "remote_url": "https://x.com/r"})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="0\n")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        mgr.check_and_pull()
+    assert not any(a[0] == "fetch" for a in calls)
+
+
+def test_check_and_pull_user_declines(tmp_path, monkeypatch):
+    mgr = _make_manager(
+        tmp_path,
+        {"repo_path": str(tmp_path), "remote_url": "https://x.com/r", "main_branch": "main"},
+    )
+
+    def git_side(*args, **kwargs):
+        if "rev-list" in args:
+            return MagicMock(returncode=0, stdout="1\n")
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(gm, "_git", git_side)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", lambda *a, **kw: False)
+    assert mgr.check_and_pull() is None
+
+
 # ── commit_new_taxonomy — remote push ─────────────────────────────────────────
 
 
