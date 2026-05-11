@@ -90,6 +90,7 @@ from .state import (
     MapSchemePickState,
     MovePickState,
     OntologySetupState,
+    PropertyImpactState,
     QueryState,
     SchemeCreateState,
     TreeState,
@@ -723,6 +724,15 @@ class TaxonomyViewer:
                     curses.update_lines_cols()
                     continue
                 self._on_individual_to_class_confirm(key)
+
+            elif isinstance(self._state, PropertyImpactState):
+                self._draw_property_impact(stdscr, rows, cols)
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                self._on_property_impact_confirm(key)
 
             elif isinstance(self._state, MovePickState):
                 ms = self._state
@@ -1699,15 +1709,26 @@ class TaxonomyViewer:
                     stdscr.addstr(y, x0 + 2 + lbl_w + 2, fv, curses.color_pair(_C_MAPPING_NAV))
                 elif is_navigable:
                     stdscr.addstr(y, x0, "  ")
-                    stdscr.addstr(
-                        y,
-                        x0 + 2,
-                        fl[:lbl_w].ljust(lbl_w),
-                        curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
-                    )
-                    stdscr.addstr(
-                        y, x0 + 2 + lbl_w + 2, fv, curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD
-                    )
+                    if fv:
+                        stdscr.addstr(
+                            y,
+                            x0 + 2,
+                            fl[:lbl_w].ljust(lbl_w),
+                            curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+                        )
+                        stdscr.addstr(
+                            y,
+                            x0 + 2 + lbl_w + 2,
+                            fv,
+                            curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD,
+                        )
+                    else:
+                        stdscr.addstr(
+                            y,
+                            x0 + 2,
+                            f.display[: width - 3],
+                            curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+                        )
                 elif f.editable:
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_FIELD_LABEL))
@@ -1910,7 +1931,12 @@ class TaxonomyViewer:
                             self._detail_uri = dest_uri
                             self._detail_fields = self._bidf(dest_uri)
                             self._reset_detail_cursor()
-                elif f.meta.get("type") == "prop_nav" and f.meta.get("nav"):
+                elif (
+                    f.meta.get("type") == "class_prop_nav"
+                    and f.meta.get("nav")
+                    or f.meta.get("type") == "prop_nav"
+                    and f.meta.get("nav")
+                ):
                     dest_uri = f.meta["uri"]
                     if dest_uri in self.taxonomy.owl_properties:
                         self._push()
@@ -2355,6 +2381,31 @@ class TaxonomyViewer:
                 self._save_file()
             self._detail_uri = new_value
             self._detail_fields = self._bidf(new_value)
+            self._field_cursor = 0
+            self._state = DetailState()
+
+        elif ftype == "new_owl_class_property_uri":
+            if not new_value:
+                return
+            class_uri = f.meta.get("class_uri", "")
+            if new_value not in self.taxonomy.owl_properties:
+                from ..operations import add_owl_property
+
+                add_owl_property(
+                    self.taxonomy,
+                    new_value,
+                    "ObjectProperty",
+                    new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1],
+                    self.lang,
+                    class_uri if class_uri else None,
+                )
+                from ..handles import assign_handles
+
+                assign_handles(self.taxonomy)
+                self._rebuild()
+                self._save_file()
+            self._detail_uri = new_value
+            self._detail_fields = self._bpropf(new_value)
             self._field_cursor = 0
             self._state = DetailState()
 
@@ -2809,15 +2860,33 @@ class TaxonomyViewer:
 
         elif action == "delete_property":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
-                uri = self._detail_uri
-                del self.taxonomy.owl_properties[uri]
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
+                from ..operations import find_individuals_using_property
+
+                prop_uri = self._detail_uri
+                impacted = find_individuals_using_property(self.taxonomy, prop_uri)
+                if impacted:
+                    self._state = PropertyImpactState(
+                        prop_uri=prop_uri,
+                        affected_uris=impacted,
+                        cursor=0,
+                        return_to_uri=prop_uri,
+                    )
+                else:
+                    from ..operations import delete_owl_property
+
+                    delete_owl_property(self.taxonomy, prop_uri)
+                    self._rebuild()
+                    self._save_file()
+                    self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+                    self._detail_uri = _GLOBAL_URI
+                    self._detail_fields = self._bgf()
+                    self._field_cursor = 0
+                    self._state = TreeState()
+
+        elif action == "add_class_property":
+            class_uri = (meta or {}).get("class_uri", "") or self._detail_uri or ""
+            if class_uri:
+                self._trigger_create_class_property(class_uri)
 
         elif action in ("create_owl_class", "create_owl_property"):
             self._trigger_create_owl(action)
@@ -5332,6 +5401,149 @@ class TaxonomyViewer:
         elif key == 27:  # Esc
             self._state = DetailState()
 
+    # ──────────────── PROPERTY IMPACT confirmation ──────────────────────────
+
+    def _draw_property_impact(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        wide = cols >= self._SPLIT_MIN_COLS
+        tree_w = cols // 3 if wide else 0
+        detail_x0 = tree_w
+        detail_w = cols - tree_w
+        if wide:
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr, rows, 0, tree_w, cursor_idx=self._tree.cursor, highlight_uri=None
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+        self._render_property_impact_col(stdscr, rows, detail_x0, detail_w)
+
+    def _render_property_impact_col(
+        self, stdscr: curses.window, rows: int, x0: int, width: int
+    ) -> None:
+        if not isinstance(self._state, PropertyImpactState):
+            return
+        ps = self._state
+        prop = self.taxonomy.owl_properties.get(ps.prop_uri)
+        prop_lbl = (prop.label(self.lang) if prop else None) or ps.prop_uri
+
+        _draw_bar(stdscr, 0, x0, width, " ⚠  Property has values on individuals ", dim=False)
+
+        y = 2
+        try:
+            stdscr.addstr(
+                y,
+                x0,
+                f"  {prop_lbl}"[: width - 1],
+                curses.color_pair(_C_SEL) | curses.A_BOLD,
+            )
+            y += 2
+            n = len(ps.affected_uris)
+            noun = "individual" if n == 1 else "individuals"
+            stdscr.addstr(
+                y,
+                x0,
+                f"  {n} {noun} have values for this property:"[: width - 1],
+                curses.color_pair(_C_FIELD_VAL),
+            )
+            y += 1
+            for ind_uri in ps.affected_uris[:5]:
+                ind = self.taxonomy.owl_individuals.get(ind_uri)
+                ind_lbl = (ind.label(self.lang) if ind else None) or ind_uri
+                ind_h = self.taxonomy.uri_to_handle(ind_uri) or "?"
+                stdscr.addstr(
+                    y,
+                    x0,
+                    f"    • [{ind_h}]  {ind_lbl}"[: width - 1],
+                    curses.color_pair(_C_DIM),
+                )
+                y += 1
+            if n > 5:
+                stdscr.addstr(
+                    y, x0, f"    … and {n - 5} more"[: width - 1], curses.color_pair(_C_DIM)
+                )
+                y += 1
+            y += 1
+
+            options = [
+                "  ✓  Keep values (delete property declaration only)",
+                "  ⊘  Remove values from all individuals",
+                "  ✕  Cancel",
+            ]
+            for i, opt in enumerate(options):
+                sel = i == ps.cursor
+                attr = (
+                    curses.color_pair(_C_SEL) | curses.A_BOLD
+                    if sel
+                    else curses.color_pair(_C_FIELD_VAL)
+                )
+                prefix = "▶" if sel else " "
+                try:
+                    stdscr.addstr(y, x0, f"{prefix}{opt}"[: width - 1], attr)
+                except curses.error:
+                    pass
+                y += 1
+        except curses.error:
+            pass
+
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            " ↑↓: choose   Enter: confirm   Esc: cancel ",
+            dim=True,
+        )
+
+    def _on_property_impact_confirm(self, key: int) -> None:
+        if not isinstance(self._state, PropertyImpactState):
+            return
+        ps = self._state
+
+        if key in (curses.KEY_UP, ord("k")):
+            ps.cursor = max(0, ps.cursor - 1)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            ps.cursor = min(2, ps.cursor + 1)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if ps.cursor == 0:
+                # Keep values — delete property declaration only
+                from ..operations import delete_owl_property
+
+                delete_owl_property(self.taxonomy, ps.prop_uri)
+                self._rebuild()
+                self._save_file()
+                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+                self._detail_uri = _GLOBAL_URI
+                self._detail_fields = self._bgf()
+                self._field_cursor = 0
+                self._state = TreeState()
+            elif ps.cursor == 1:
+                # Remove values then delete
+                from ..operations import clear_property_values, delete_owl_property
+
+                clear_property_values(self.taxonomy, ps.prop_uri)
+                delete_owl_property(self.taxonomy, ps.prop_uri)
+                self._rebuild()
+                self._save_file()
+                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+                self._detail_uri = _GLOBAL_URI
+                self._detail_fields = self._bgf()
+                self._field_cursor = 0
+                self._state = TreeState()
+            else:
+                # Cancel — return to property detail
+                self._detail_uri = ps.return_to_uri
+                self._detail_fields = self._bpropf(ps.return_to_uri)
+                self._field_cursor = 0
+                self._state = DetailState()
+        elif key == 27:  # Esc — cancel
+            self._detail_uri = ps.return_to_uri
+            self._detail_fields = self._bpropf(ps.return_to_uri)
+            self._field_cursor = 0
+            self._state = DetailState()
+
     # ──────────────── INDIVIDUAL → CLASS confirmation ────────────────────────
 
     def _do_individual_to_class(self, uri: str) -> None:
@@ -6587,6 +6799,18 @@ class TaxonomyViewer:
             base_uri,
             editable=True,
             meta={"type": ftype},
+        )
+        self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
+
+    def _trigger_create_class_property(self, class_uri: str) -> None:
+        """Prompt for a local name, then create a property with domain = class_uri."""
+        base_uri = self.taxonomy.base_uri()
+        synthetic = DetailField(
+            "new:owl_class_property",
+            "New property URI",
+            base_uri,
+            editable=True,
+            meta={"type": "new_owl_class_property_uri", "class_uri": class_uri},
         )
         self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
 

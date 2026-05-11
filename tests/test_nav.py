@@ -15,6 +15,7 @@ from ster.nav import (
     _parent_uri,
     build_concept_detail,
     build_detail_fields,
+    build_ontology_overview_fields,
     build_scheme_detail,
     build_scheme_fields,
     flatten_tree,
@@ -1641,3 +1642,71 @@ def test_on_tree_down_without_matches_navigates_normally(simple_taxonomy, tmp_pa
     v._tree.cursor = 0
     v._on_tree(KEY_DOWN, 24)
     assert v._tree.cursor == 1
+
+
+# ── ontology overview — class display not truncated ───────────────────────────
+
+_LONG_LABEL = "AClassWhoseLabelExceedsTwentyCharacters"
+
+
+def _owl_taxonomy_with_long_class() -> Taxonomy:
+    tax = Taxonomy()
+    parent_uri = BASE + "ParentClass"
+    child_uri = BASE + "ChildClass"
+    parent = RDFClass(uri=parent_uri, labels=[Label(lang="en", value=_LONG_LABEL)])
+    child = RDFClass(
+        uri=child_uri,
+        labels=[Label(lang="en", value="AnotherLongChildClassName")],
+        sub_class_of=[parent_uri],
+    )
+    tax.owl_classes[parent_uri] = parent
+    tax.owl_classes[child_uri] = child
+    return tax
+
+
+def test_ontology_overview_parent_class_display_preserves_full_label():
+    """Parent class row (type='action') display must contain the full label."""
+    tax = _owl_taxonomy_with_long_class()
+    fields = build_ontology_overview_fields(tax, None, "en")
+    parent_row = next(f for f in fields if f.meta.get("action") == "toggle_class_fold")
+    assert _LONG_LABEL in parent_row.display
+    assert len(parent_row.display) > 20
+
+
+def test_ontology_overview_leaf_class_display_preserves_full_label():
+    """Leaf class row (type='rdf_relation') display must contain the full label."""
+    tax = Taxonomy()
+    uri = BASE + "StandaloneClass"
+    tax.owl_classes[uri] = RDFClass(uri=uri, labels=[Label(lang="en", value=_LONG_LABEL)])
+    fields = build_ontology_overview_fields(tax, None, "en")
+    leaf_row = next(f for f in fields if f.meta.get("type") == "rdf_relation")
+    assert _LONG_LABEL in leaf_row.display
+    assert len(leaf_row.display) > 20
+
+
+def test_render_detail_col_navigable_empty_value_uses_full_width(tmp_path, monkeypatch):
+    """Navigable row with empty value must not be clipped to lbl_w (20 chars)."""
+    import curses as _curses
+    import unittest.mock as mock
+
+    # curses.color_pair() raises without a terminal; neutralise it so addstr calls proceed
+    monkeypatch.setattr(_curses, "color_pair", lambda n: 0)
+
+    tax = Taxonomy()
+    uri = BASE + "StandaloneClass"
+    tax.owl_classes[uri] = RDFClass(uri=uri, labels=[Label(lang="en", value=_LONG_LABEL)])
+    v = _make_viewer(tax, tmp_path)
+    v._detail_fields = build_ontology_overview_fields(tax, None, "en")
+    from ster.nav.logic import _ontology_sentinel
+
+    v._detail_uri = _ontology_sentinel(tmp_path / "vocab.ttl")
+    v._field_cursor = 0
+    v._detail_scroll = 0
+
+    win = mock.MagicMock()
+    v._render_detail_col(win, rows=40, x0=0, width=80, show_footer=False)
+
+    rendered_strings = [call.args[2] for call in win.addstr.call_args_list if len(call.args) >= 3]
+    assert any(_LONG_LABEL in s for s in rendered_strings), (
+        f"Full label '{_LONG_LABEL}' not found in rendered strings: {rendered_strings}"
+    )
