@@ -133,6 +133,17 @@ class ClassToIndividualState:
 
 
 @dataclass
+class PropertyImpactState:
+    """Confirmation dialog when deleting a property that has values on individuals."""
+
+    prop_uri: str = ""
+    affected_uris: list[str] = dc_field(default_factory=list)
+    # 0 = Keep values (delete declaration only), 1 = Remove values, 2 = Cancel
+    cursor: int = 0
+    return_to_uri: str = ""  # class detail URI to restore on Cancel
+
+
+@dataclass
 class IndividualToClassState:
     """Confirmation dialog when converting an individual that has property-value relations."""
 
@@ -343,6 +354,7 @@ ViewerState = (
     | OntologySetupState
     | ClassToIndividualState
     | IndividualToClassState
+    | PropertyImpactState
     | MovePickState
     | LangPickState
     | MapSchemePickState

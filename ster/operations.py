@@ -11,7 +11,16 @@ from .exceptions import (
     RelatedHierarchyConflictError,
 )
 from .handles import assign_handles, handle_for_uri
-from .model import Concept, ConceptScheme, Definition, Label, LabelType, RDFClass, Taxonomy
+from .model import (
+    Concept,
+    ConceptScheme,
+    Definition,
+    Label,
+    LabelType,
+    OWLProperty,
+    RDFClass,
+    Taxonomy,
+)
 
 # ──────────────────────────── resolve & expand ───────────────────────────────
 
@@ -369,6 +378,57 @@ def create_scheme(
     taxonomy.schemes[uri] = scheme
     assign_handles(taxonomy)
     return scheme
+
+
+# ──────────────────────────── OWL property operations ───────────────────────
+
+
+def add_owl_property(
+    taxonomy: Taxonomy,
+    uri: str,
+    prop_type: str,
+    label: str,
+    lang: str,
+    domain_uri: str | None = None,
+    range_uri: str | None = None,
+) -> OWLProperty:
+    """Create a new OWL property and register it in *taxonomy*.
+
+    Raises ValueError if *uri* is already taken.
+    """
+    if uri in taxonomy.owl_properties:
+        raise ValueError(f"Property already exists: {uri}")
+    labels = [Label(lang=lang, value=label)] if label else []
+    domains = [domain_uri] if domain_uri else []
+    ranges = [range_uri] if range_uri else []
+    prop = OWLProperty(uri=uri, prop_type=prop_type, labels=labels, domains=domains, ranges=ranges)
+    taxonomy.owl_properties[uri] = prop
+    return prop
+
+
+def find_individuals_using_property(taxonomy: Taxonomy, prop_uri: str) -> list[str]:
+    """Return URIs of all individuals that have at least one value for *prop_uri*."""
+    return [
+        ind_uri
+        for ind_uri, ind in taxonomy.owl_individuals.items()
+        if any(pv_uri == prop_uri for pv_uri, _ in ind.property_values)
+    ]
+
+
+def delete_owl_property(taxonomy: Taxonomy, prop_uri: str) -> list[str]:
+    """Remove *prop_uri* from *taxonomy* and return impacted individual URIs.
+
+    Raises KeyError if the property does not exist.
+    """
+    impacted = find_individuals_using_property(taxonomy, prop_uri)
+    del taxonomy.owl_properties[prop_uri]
+    return impacted
+
+
+def clear_property_values(taxonomy: Taxonomy, prop_uri: str) -> None:
+    """Remove all property-value tuples for *prop_uri* from every individual."""
+    for ind in taxonomy.owl_individuals.values():
+        ind.property_values = [(p, v) for p, v in ind.property_values if p != prop_uri]
 
 
 # ──────────────────────────── OWL promotion ──────────────────────────────────

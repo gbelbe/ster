@@ -1612,6 +1612,47 @@ _NODE_TYPE_DISPLAY = {
 }
 
 
+def _direct_properties(taxonomy: Taxonomy, class_uri: str) -> list:
+    """Return OWLProperty objects whose domain includes *class_uri*."""
+    from ..model import OWLProperty
+
+    return [
+        prop
+        for prop in taxonomy.owl_properties.values()
+        if class_uri in prop.domains
+        if isinstance(prop, OWLProperty)
+    ]
+
+
+def _inherited_properties(taxonomy: Taxonomy, class_uri: str) -> list[tuple]:
+    """Walk rdfs:subClassOf upward, collecting (OWLProperty, ancestor_uri) pairs.
+
+    Direct properties are excluded. Each property appears at most once
+    (diamond inheritance is de-duplicated).
+    """
+    direct_uris = {p.uri for p in _direct_properties(taxonomy, class_uri)}
+    seen_prop_uris: set[str] = set(direct_uris)
+    result: list[tuple] = []
+    visited_classes: set[str] = set()
+
+    def _walk(uri: str) -> None:
+        if uri in visited_classes:
+            return
+        visited_classes.add(uri)
+        cls = taxonomy.owl_classes.get(uri)
+        if not cls:
+            return
+        for parent_uri in cls.sub_class_of:
+            for prop in taxonomy.owl_properties.values():
+                if parent_uri in prop.domains and prop.uri not in seen_prop_uris:
+                    seen_prop_uris.add(prop.uri)
+                    result.append((prop, parent_uri))
+            _walk(parent_uri)
+
+    _walk(class_uri)
+    return result
+
+
 def build_rdf_class_detail(
     taxonomy: Taxonomy,
     uri: str,
@@ -1753,6 +1794,40 @@ def build_rdf_class_detail(
             "action:add_individual",
             "+ New individual of this class",
             "add_individual",
+        )
+    )
+
+    # ── Properties ───────────────────────────────────────────────────────────
+    fields.append(_sep("Properties"))
+    direct_props = sorted(_direct_properties(taxonomy, uri), key=lambda p: p.label(lang))
+    for prop in direct_props:
+        fields.append(
+            DetailField(
+                f"classprop:{prop.uri}",
+                prop.label(lang),
+                f"owl:{prop.prop_type}",
+                editable=False,
+                meta={"type": "class_prop_nav", "uri": prop.uri, "nav": True},
+            )
+        )
+    for prop, parent_uri in _inherited_properties(taxonomy, uri):
+        parent_cls = taxonomy.owl_classes.get(parent_uri)
+        parent_lbl = parent_cls.label(lang) if parent_cls else parent_uri
+        fields.append(
+            DetailField(
+                f"inherited_prop:{prop.uri}:{parent_uri}",
+                f"  → from {parent_lbl}: {prop.label(lang)}",
+                f"owl:{prop.prop_type}",
+                editable=False,
+                meta={"type": "inherited_prop", "uri": prop.uri, "parent_uri": parent_uri},
+            )
+        )
+    fields.append(
+        _add_action_add_field(
+            "action:add_class_property",
+            "+ Add property for this class",
+            "add_class_property",
+            class_uri=uri,
         )
     )
 
