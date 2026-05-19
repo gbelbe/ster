@@ -251,6 +251,19 @@ def render_tree_col(
                         base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
                     else:
                         base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
+                elif line.node_type == "section":
+                    # Foldable section header (Properties, etc.)
+                    n_props = len(taxonomy.owl_properties)
+                    count_str = f"  ·  {n_props} propert{'ies' if n_props != 1 else 'y'}"
+                    fold_marker = "▶" if line.is_folded else "▼"
+                    hidden_str = f"  (+{line.hidden_count} hidden)" if line.is_folded else ""
+                    text = f"{line.prefix}◉{fold_marker} {line.label}{count_str}{hidden_str}"
+                    if is_cursor:
+                        base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+                    elif is_detail:
+                        base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
+                    else:
+                        base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
                 else:
                     # Non-selectable synthetic section header
                     text = f"{line.prefix}◦ {line.label}"
@@ -281,6 +294,39 @@ def render_tree_col(
 
             if is_cursor:
                 base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+            else:
+                base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
+            try:
+                stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
+            except curses.error:
+                pass
+            continue
+
+        # ── action row (e.g. "+ Add property") ───────────────────────────
+        if line.is_action:
+            text = f"{line.prefix}{line.label}"
+            if is_cursor:
+                base_attr = curses.color_pair(_C_SEL) | curses.A_BOLD
+            else:
+                base_attr = curses.color_pair(_C_ACTION_ADD) | curses.A_BOLD
+            try:
+                stdscr.addstr(y, x0, text.ljust(width - 1)[: width - 1], base_attr)
+            except curses.error:
+                pass
+            continue
+
+        # ── OWL property row ──────────────────────────────────────────────
+        if line.node_type == "property":
+            prop = taxonomy.owl_properties.get(line.uri)
+            if not prop:
+                continue
+            label = prop.label(lang) or line.uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+            prop_tag = f"  [{prop.prop_type[:3]}]" if prop.prop_type else ""
+            text = f"{line.prefix}◈ {label}{prop_tag}"
+            if is_cursor:
+                base_attr = curses.color_pair(_C_SEL_NAV) | curses.A_BOLD
+            elif is_detail:
+                base_attr = curses.color_pair(_C_SEL) | curses.A_DIM
             else:
                 base_attr = curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
             try:

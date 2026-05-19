@@ -11,6 +11,8 @@ from semanticlint.checks.lint.syntax import lint_syntax
 from semanticlint.checks.registry import CheckRegistry
 from semanticlint.detect import detect_vocab_type
 
+import ster.ster_checks  # noqa: F401 — registers ster-specific checks
+
 _SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
 
 _SEVERITY_STYLE = {

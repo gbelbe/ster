@@ -29,12 +29,14 @@ from ..taxonomy_analysis import SchemeAnalysis
 from ..workspace import TaxonomyWorkspace
 from .editor import _apply_line_edit, _word_start_left, _word_start_right
 from .logic import (  # noqa: F401
+    _ACTION_ADD_PROPERTY,
     _ACTION_ADD_SCHEME,
     _FILE_URI_PREFIX,
     _GLOBAL_URI,
     _OWL_ONTOLOGY_PREFIX,
     _OWL_SECTION_URI,
     _UNATTACHED_INDS_URI,
+    SECTION_PROPERTIES,
     DetailField,
     TreeLine,
     _available_langs,
@@ -56,6 +58,7 @@ from .logic import (  # noqa: F401
     build_individual_detail,
     build_ontology_overview_fields,
     build_promoted_detail,
+    build_properties_section_fields,
     build_property_detail,
     build_rdf_class_detail,
     build_scheme_dashboard_fields,
@@ -175,6 +178,7 @@ class TaxonomyViewer:
 
         # ── persistent tree state (cursor, flat list, search, view mode) ───────
         self._tree = TreeState(view_mode=self._default_view_mode())
+        self._tree.folded.add(SECTION_PROPERTIES)
 
         self._detail_uri: str | None = None
         self._detail_fields: list[DetailField] = []
@@ -192,6 +196,7 @@ class TaxonomyViewer:
         self._history: list[dict] = []
         self._status = ""
         self._overview_folded: set[str] = set()
+        self._search_saved_folded: set[str] | None = None  # fold state saved on search open
         # scheme_uri → SchemeAnalysis; populated on first run() call
         self._analysis: dict[str, SchemeAnalysis] | None = None
         # AI install threading state
@@ -215,6 +220,12 @@ class TaxonomyViewer:
         else:
             self._detail_uri = _GLOBAL_URI
             self._detail_fields = self._bgf()
+        # Align initial cursor to whichever flat node matches the detail panel so
+        # cursor and detail highlights don't land on different rows at startup.
+        for _i, _ln in enumerate(self._tree.flat):
+            if _ln.uri == self._detail_uri:
+                self._tree.cursor = _i
+                break
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -272,6 +283,12 @@ class TaxonomyViewer:
         uri = line.uri
         if uri in (_OWL_SECTION_URI, _UNATTACHED_INDS_URI):
             return  # synthetic header — no detail panel
+        if uri == SECTION_PROPERTIES:
+            if self._detail_uri != SECTION_PROPERTIES:
+                self._detail_uri = SECTION_PROPERTIES
+                self._detail_fields = build_properties_section_fields(self.taxonomy, self.lang)
+                self._reset_detail_cursor()
+            return
         if uri == self._detail_uri:
             return  # already previewing this concept
         self._detail_uri = uri
@@ -435,7 +452,7 @@ class TaxonomyViewer:
             if self._git_manager:
                 self._git_manager.stage_file()  # type: ignore[attr-defined]
             self._refresh_analysis(target_path)
-            from .. import viz as _viz
+            from .. import viz_vowl as _viz
 
             _viz.push_update(target_tax)
         except Exception as exc:
@@ -447,6 +464,15 @@ class TaxonomyViewer:
         line = self._tree.flat[self._tree.cursor]
         if line.uri in (_OWL_SECTION_URI, _UNATTACHED_INDS_URI):
             return  # synthetic header — no detail panel
+        if line.uri == SECTION_PROPERTIES:
+            # Ensure the right panel is populated before entering detail mode
+            if self._detail_uri != SECTION_PROPERTIES:
+                self._detail_uri = SECTION_PROPERTIES
+                self._detail_fields = build_properties_section_fields(self.taxonomy, self.lang)
+                self._reset_detail_cursor()
+            self._push()
+            self._state = DetailState()
+            return
         self._push()
         if self._detail_uri != line.uri:
             self._detail_uri = line.uri
@@ -752,6 +778,14 @@ class TaxonomyViewer:
                         curses.update_lines_cols()
                         continue
                     self._on_owl_pick(key, rows, replace=False)
+                elif ms.pick_type == "link_subclass":
+                    self._draw_move(stdscr, rows, cols, title=" ↓ Add subclass ")
+                    stdscr.refresh()
+                    key = stdscr.getch()
+                    if key == curses.KEY_RESIZE:
+                        curses.update_lines_cols()
+                        continue
+                    self._on_subclass_pick(key, rows)
                 elif ms.pick_type == "move_class":
                     self._draw_move(stdscr, rows, cols, title=" ↷ Move under different superclass ")
                     stdscr.refresh()
@@ -1100,6 +1134,9 @@ class TaxonomyViewer:
             individual = tax.owl_individuals.get(uri)
             if individual:
                 return "  ".join([local] + [lbl.value for lbl in individual.labels])
+            prop = tax.owl_properties.get(uri)
+            if prop:
+                return "  ".join([local] + [lbl.value for lbl in prop.labels])
 
         return ""
 
@@ -1359,8 +1396,17 @@ class TaxonomyViewer:
 
         # ── search: typing mode — delegate to search_update() ─────────────────
         if self._tree.search.active:
+            if key == 27:  # Esc — restore fold state before clearing search
+                if self._search_saved_folded is not None:
+                    self._tree.folded = self._search_saved_folded
+                    self._search_saved_folded = None
+                    self._rebuild()
+                new_ts = search_update(self._tree, key)
+                self._tree = new_ts
+                return False
             if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-                # Commit: deactivate search, then open detail
+                # Commit: deactivate search, keep expanded state, open detail
+                self._search_saved_folded = None
                 new_ts = search_update(self._tree, key)
                 self._tree = new_ts
                 self._open_detail()
@@ -1411,6 +1457,9 @@ class TaxonomyViewer:
 
         # ── search trigger ────────────────────────────────────────────────────
         if key == ord("/"):
+            self._search_saved_folded = set(self._tree.folded)
+            self._tree.folded.clear()
+            self._rebuild()
             self._tree.search.active = True
             self._tree.search.query = ""
             self._tree.search.matches = []
@@ -1432,6 +1481,18 @@ class TaxonomyViewer:
                 line = self._tree.flat[self._tree.cursor]
                 if uri == _OWL_SECTION_URI:
                     return False  # synthetic header, not foldable
+                if uri == SECTION_PROPERTIES:
+                    if uri in self._tree.folded:
+                        self._tree.folded.discard(uri)
+                    else:
+                        self._tree.folded.add(uri)
+                    self._rebuild()
+                    for i, tl in enumerate(self._tree.flat):
+                        if tl.uri == uri:
+                            self._tree.cursor = i
+                            break
+                    self._update_tree_preview()
+                    return False
                 has_children = False
                 if uri == _UNATTACHED_INDS_URI:
                     has_children = any(
@@ -1473,12 +1534,21 @@ class TaxonomyViewer:
                     self._detail_uri = line.uri
                     self._detail_fields = self._bsf(line.uri)
                     self._trigger_action("add_top_concept")
+                elif line.node_type == "class":
+                    self._detail_uri = line.uri
+                    self._detail_fields = self._bcdf(line.uri)
+                    self._trigger_action("link_subclass")
                 elif not line.is_file and not line.is_action:
                     self._detail_uri = line.uri
                     self._detail_fields = self._bdf(line.uri)
                     self._trigger_action("add_narrower")
 
         elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
+            if 0 <= self._tree.cursor < n:
+                line = self._tree.flat[self._tree.cursor]
+                if line.uri == _ACTION_ADD_PROPERTY:
+                    self._trigger_add_global_property()
+                    return False
             self._open_detail()
 
         elif key in (curses.KEY_LEFT, ord("h")):
@@ -1491,7 +1561,7 @@ class TaxonomyViewer:
                             break
 
         elif key == ord("G"):
-            from .. import viz as _viz
+            from .. import viz_vowl as _viz
 
             try:
                 out = _viz.open_in_browser(self.taxonomy, self.file_path)
@@ -1551,6 +1621,7 @@ class TaxonomyViewer:
         is_property_detail = bool(
             self._detail_uri and self._detail_uri in self.taxonomy.owl_properties
         )
+        is_properties_section = self._detail_uri == SECTION_PROPERTIES
 
         if is_global_detail:
             label = "Global Ster View"
@@ -1566,6 +1637,9 @@ class TaxonomyViewer:
         elif is_scheme_detail:
             scheme = self.taxonomy.schemes[self._detail_uri]  # type: ignore[index]
             label = scheme.title(self.lang)
+            handle = None
+        elif is_properties_section:
+            label = "Properties"
             handle = None
         elif is_property_detail:
             prop = self.taxonomy.owl_properties[self._detail_uri]  # type: ignore[index]
@@ -1611,6 +1685,12 @@ class TaxonomyViewer:
         elif is_scheme_detail:
             counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
             title_bar = f" ◉ {label}  [scheme settings]{counter} "
+        elif is_properties_section:
+            n_props = len(self.taxonomy.owl_properties)
+            counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
+            title_bar = (
+                f" ◉ Properties  [{n_props} propert{'ies' if n_props != 1 else 'y'}]{counter} "
+            )
         elif handle:
             counter = f" [{self._field_cursor + 1}/{n_fields}]" if n_fields else ""
             title_bar = f" [{handle}]  {label}{counter} "
@@ -1836,6 +1916,8 @@ class TaxonomyViewer:
                 edit_hint = "Enter/-: remove broken link"
             elif f.meta.get("type") == "ind_prop_val" and f.meta.get("nav"):
                 edit_hint = "Enter: open  e: edit value"
+            elif f.meta.get("type") == "navigate_property":
+                edit_hint = "Enter: jump to property"
             elif f.meta.get("nav"):
                 edit_hint = "Enter: open concept"
             elif f.meta.get("type") in ("separator", "separator_danger"):
@@ -1931,6 +2013,19 @@ class TaxonomyViewer:
                             self._detail_uri = dest_uri
                             self._detail_fields = self._bidf(dest_uri)
                             self._reset_detail_cursor()
+                elif f.meta.get("type") == "navigate_property":
+                    dest_uri = f.meta.get("uri", "")
+                    if dest_uri in self.taxonomy.owl_properties:
+                        self._tree.folded.discard(SECTION_PROPERTIES)
+                        self._rebuild()
+                        for _i, _tl in enumerate(self._tree.flat):
+                            if _tl.uri == dest_uri:
+                                self._tree.cursor = _i
+                                break
+                        self._detail_uri = dest_uri
+                        self._detail_fields = self._bpropf(dest_uri)
+                        self._reset_detail_cursor()
+                        self._state = TreeState()
                 elif (
                     f.meta.get("type") == "class_prop_nav"
                     and f.meta.get("nav")
@@ -2595,6 +2690,14 @@ class TaxonomyViewer:
                     candidates=self._build_owl_class_candidates(self._detail_uri),
                 )
 
+        elif action == "link_subclass":
+            if self._detail_uri:
+                self._state = MovePickState(
+                    source_uri=self._detail_uri,
+                    pick_type="link_subclass",
+                    candidates=self._build_subclass_candidates(self._detail_uri),
+                )
+
         elif action == "move_class":
             if self._detail_uri:
                 self._state = MovePickState(
@@ -2926,13 +3029,24 @@ class TaxonomyViewer:
                     self._save_file()
 
         elif action == "view_ontology_graph":
-            from .. import viz as _viz
+            from .. import viz_vowl as _viz
 
             try:
                 out = _viz.open_in_browser(self.taxonomy, self.file_path)
                 self._status = f"Graph opened in browser — {out}"
             except Exception as exc:
                 self._status = f"Error opening graph: {exc}"
+
+        elif action == "view_focused_graph":
+            from .. import viz_vowl as _viz
+
+            class_uri = (meta or {}).get("uri", "")
+            if class_uri:
+                try:
+                    out = _viz.open_focused_in_browser(self.taxonomy, class_uri, self.file_path)
+                    self._status = f"Focused graph opened — {out}"
+                except Exception as exc:
+                    self._status = f"Error opening focused graph: {exc}"
 
         elif action == "toggle_class_fold":
             uri = (meta or {}).get("uri", "")
@@ -5746,6 +5860,92 @@ class TaxonomyViewer:
         candidates.append(("__BROWSE_EXT__", "  🌐  Browse external ontology…"))
         return candidates
 
+    def _build_subclass_candidates(self, source_uri: str) -> list[tuple[str, str]]:
+        """OWL classes that can become subclasses of source_uri (excludes self and ancestors)."""
+        excluded: set[str] = {source_uri}
+        queue = [source_uri]
+        while queue:
+            u = queue.pop()
+            cls = self.taxonomy.owl_classes.get(u)
+            if cls:
+                for parent_uri in cls.sub_class_of:
+                    if parent_uri not in excluded:
+                        excluded.add(parent_uri)
+                        queue.append(parent_uri)
+
+        candidates: list[tuple[str, str]] = []
+        for line in self._tree.flat:
+            if line.uri in excluded or line.is_scheme or line.is_file or line.is_action:
+                continue
+            owl_cls = self.taxonomy.owl_classes.get(line.uri)
+            if owl_cls is not None:
+                from ..ontology_imports import is_external_uri, prefix_label
+
+                handle = self.taxonomy.uri_to_handle(line.uri) or "?"
+                if is_external_uri(line.uri, self.taxonomy):
+                    label = prefix_label(line.uri, self.taxonomy)
+                else:
+                    label = owl_cls.label(self.lang) or line.uri
+                indent = "  " * line.depth
+                candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
+        return candidates
+
+    def _on_subclass_pick(self, key: int, rows: int) -> None:
+        """Handle keypresses in the 'add subclass' picker."""
+        if not isinstance(self._state, MovePickState):
+            return
+        ms = self._state
+        filtered = self._filtered_move_candidates()
+        n = len(filtered)
+        list_h = rows - 3
+
+        if key == curses.KEY_UP:
+            ms.cursor = max(0, ms.cursor - 1)
+        elif key == curses.KEY_DOWN:
+            ms.cursor = max(0, min(n - 1, ms.cursor + 1))
+        elif key == curses.KEY_PPAGE:
+            ms.cursor = max(0, ms.cursor - list_h)
+        elif key == curses.KEY_NPAGE:
+            ms.cursor = max(0, min(n - 1, ms.cursor + list_h))
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if 0 <= ms.cursor < n:
+                child_uri, _ = filtered[ms.cursor]
+                self._confirm_add_subclass(child_uri)
+        elif key == 27:  # Esc
+            self._detail_uri = ms.source_uri
+            self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
+            self._state = DetailState()
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if ms.filter_text:
+                ms.filter_text = ms.filter_text[:-1]
+                ms.cursor = 0
+                ms.scroll = 0
+        elif 32 <= key < 256:
+            ms.filter_text += chr(key)
+            ms.cursor = 0
+            ms.scroll = 0
+
+    def _confirm_add_subclass(self, child_uri: str) -> None:
+        """Make child_uri a subclass of the source (parent) class, then return to detail."""
+        if not isinstance(self._state, MovePickState):
+            return
+        parent_uri = self._state.source_uri
+        from ..exceptions import CircularHierarchyError, ClassNotFoundError
+        from ..operations import add_subclass_of
+
+        try:
+            add_subclass_of(self.taxonomy, child_uri, parent_uri)
+        except (CircularHierarchyError, ClassNotFoundError):
+            self._state = DetailState()
+            return
+        self._rebuild()
+        self._save_file()
+        self._detail_uri = parent_uri
+        self._detail_fields = self._bcdf(parent_uri)
+        self._field_cursor = 0
+        self._history.clear()
+        self._state = DetailState()
+
     def _confirm_owl_reparent(self, new_parent_uri: str | None, replace: bool) -> None:
         """Set (or add) subClassOf for the source OWL class, then return to detail."""
         if not isinstance(self._state, MovePickState):
@@ -5758,8 +5958,15 @@ class TaxonomyViewer:
         if replace:
             rdf_class.sub_class_of = [new_parent_uri] if new_parent_uri else []
         else:
-            if new_parent_uri and new_parent_uri not in rdf_class.sub_class_of:
-                rdf_class.sub_class_of.append(new_parent_uri)
+            if new_parent_uri:
+                from ..exceptions import CircularHierarchyError, ClassNotFoundError
+                from ..operations import add_subclass_of
+
+                try:
+                    add_subclass_of(self.taxonomy, source_uri, new_parent_uri)
+                except (CircularHierarchyError, ClassNotFoundError):
+                    self._state = DetailState()
+                    return
         self._rebuild()
         self._save_file()
         for i, line in enumerate(self._tree.flat):
@@ -6799,6 +7006,18 @@ class TaxonomyViewer:
             base_uri,
             editable=True,
             meta={"type": ftype},
+        )
+        self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
+
+    def _trigger_add_global_property(self) -> None:
+        """Prompt for a URI and create a new OWL property with no pre-set domain."""
+        base_uri = self.taxonomy.base_uri()
+        synthetic = DetailField(
+            "new:owl_property",
+            "New property URI",
+            base_uri,
+            editable=True,
+            meta={"type": "new_owl_property_uri"},
         )
         self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
 

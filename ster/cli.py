@@ -1155,6 +1155,34 @@ def cmd_move(
     _save(taxonomy, taxonomy_file)
 
 
+# ──────────────────────────── subclass ───────────────────────────────────────
+
+
+@app.command("subclass")
+def cmd_subclass(
+    child: str = typer.Argument(..., help="Class to make a subclass (handle or URI)."),
+    parent: str = typer.Option(..., "--parent", "-p", help="Parent class (handle or URI)."),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
+) -> None:
+    """Add a rdfs:subClassOf link from a class to a parent class.
+
+    Examples:\n
+      ster subclass Dog --parent Animal\n
+      ster subclass PER --parent ORG\n
+    """
+    taxonomy_file = _resolve_file(file)
+    taxonomy = _load(taxonomy_file)
+    child_uri = _resolve(taxonomy, child)
+    parent_uri = _resolve(taxonomy, parent)
+    _run(operations.add_subclass_of, taxonomy, child_uri, parent_uri)
+    child_cls = taxonomy.owl_classes.get(child_uri)
+    parent_cls = taxonomy.owl_classes.get(parent_uri)
+    child_label = child_cls.label("en") if child_cls else child_uri
+    parent_label = parent_cls.label("en") if parent_cls else parent_uri
+    console.print(f"[green]Added[/green] {child_label} subClassOf {parent_label}")
+    _save(taxonomy, taxonomy_file)
+
+
 # ──────────────────────────── label ──────────────────────────────────────────
 
 
@@ -1497,7 +1525,7 @@ def _collect_reachable(taxonomy: Taxonomy, uri: str, visited: set[str]) -> None:
 
 def _run_graph_viz_interactive(files: list[Path]) -> None:
     """Open the graph visualisation for a chosen file."""
-    from . import viz as _viz
+    from . import viz_vowl as _viz
 
     if not files:
         err.print("[red]No taxonomy files found.[/red]")

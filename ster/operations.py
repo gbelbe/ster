@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .exceptions import (
     CircularHierarchyError,
+    ClassNotFoundError,
     ConceptAlreadyExistsError,
     ConceptNotFoundError,
     HandleNotFoundError,
@@ -463,6 +464,29 @@ def demote_from_class(taxonomy: Taxonomy, uri: str) -> None:
     taxonomy.owl_classes.pop(uri, None)
 
 
+# ──────────────────────────── OWL subclass hierarchy ─────────────────────────
+
+
+def add_subclass_of(taxonomy: Taxonomy, child_uri: str, parent_uri: str) -> None:
+    """Add an rdfs:subClassOf link from child_uri to parent_uri.
+
+    Idempotent: calling twice with the same arguments has no effect.
+    Raises ClassNotFoundError if either URI is absent from owl_classes.
+    Raises CircularHierarchyError on self-reference or transitively circular links.
+    """
+    if child_uri not in taxonomy.owl_classes:
+        raise ClassNotFoundError(child_uri)
+    if parent_uri not in taxonomy.owl_classes:
+        raise ClassNotFoundError(parent_uri)
+    if child_uri == parent_uri:
+        raise CircularHierarchyError(child_uri, parent_uri)
+    if _is_class_ancestor(taxonomy, child_uri, parent_uri):
+        raise CircularHierarchyError(parent_uri, child_uri)
+    child = taxonomy.owl_classes[child_uri]
+    if parent_uri not in child.sub_class_of:
+        child.sub_class_of.append(parent_uri)
+
+
 # ──────────────────────────── internal helpers ───────────────────────────────
 
 
@@ -495,6 +519,27 @@ def _is_ancestor(taxonomy: Taxonomy, candidate_uri: str, of_uri: str) -> bool:
         if not concept:
             return False
         for parent_uri in concept.broader:
+            if parent_uri == candidate_uri:
+                return True
+            if check(parent_uri):
+                return True
+        return False
+
+    return check(of_uri)
+
+
+def _is_class_ancestor(taxonomy: Taxonomy, candidate_uri: str, of_uri: str) -> bool:
+    """Return True if candidate_uri is an ancestor of of_uri in the OWL class hierarchy."""
+    visited: set[str] = set()
+
+    def check(uri: str) -> bool:
+        if uri in visited:
+            return False
+        visited.add(uri)
+        cls = taxonomy.owl_classes.get(uri)
+        if not cls:
+            return False
+        for parent_uri in cls.sub_class_of:
             if parent_uri == candidate_uri:
                 return True
             if check(parent_uri):

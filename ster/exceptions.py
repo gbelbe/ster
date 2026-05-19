@@ -50,3 +50,9 @@ class RelatedHierarchyConflictError(SkostaxError):
             f"Cannot add skos:related between {uri_a!r} and {uri_b!r}: "
             "they are already in a hierarchical relationship."
         )
+
+
+class ClassNotFoundError(SkostaxError):
+    def __init__(self, uri: str) -> None:
+        super().__init__(f"OWL class not found: {uri!r}")
+        self.uri = uri

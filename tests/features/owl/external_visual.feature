@@ -26,12 +26,3 @@ Feature: Visual distinction for external ontology terms
     Given a taxonomy with no namespace bindings
     When I call prefix_label for "http://unknown.org/ns#Thing"
     Then the label is "Thing"
-
-  Scenario: GraphViz marks external class with external-class type
-    Given a taxonomy where "foaf:Person" is in owl_classes and namespace_bindings
-    When I call build_graph
-    Then the node for "foaf:Person" has type "external-class"
-
-  Scenario: GraphViz marks local class with class type
-    When I call build_graph
-    Then the node for "kai:Person" has type "class"

@@ -408,25 +408,47 @@ def test_flatten_ontology_tree_children_depth():
 
 
 def test_flatten_ontology_tree_node_type_class():
-    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+    from ster.nav.logic import (
+        _ACTION_ADD_PROPERTY,
+        SECTION_PROPERTIES,
+        _is_ontology_sentinel,
+        flatten_ontology_tree,
+    )
 
     t = _owl_taxonomy()
     lines = flatten_ontology_tree(t)
-    class_lines = [l for l in lines if not _is_ontology_sentinel(l.uri)]
+    class_lines = [
+        l
+        for l in lines
+        if not _is_ontology_sentinel(l.uri)
+        and l.uri not in (SECTION_PROPERTIES, _ACTION_ADD_PROPERTY)
+        and l.node_type not in ("property", "section")
+    ]
     for line in class_lines:
         assert line.node_type == "class"
 
 
 def test_flatten_ontology_tree_node_type_promoted():
     from ster.model import Concept, RDFClass
-    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+    from ster.nav.logic import (
+        _ACTION_ADD_PROPERTY,
+        SECTION_PROPERTIES,
+        _is_ontology_sentinel,
+        flatten_ontology_tree,
+    )
 
     BASE_O = "https://example.org/onto/"
     t = Taxonomy()
     t.concepts[BASE_O + "Dog"] = Concept(uri=BASE_O + "Dog")
     t.owl_classes[BASE_O + "Dog"] = RDFClass(uri=BASE_O + "Dog")
     lines = flatten_ontology_tree(t)
-    class_lines = [l for l in lines if not _is_ontology_sentinel(l.uri)]
+    class_lines = [
+        l
+        for l in lines
+        if not _is_ontology_sentinel(l.uri)
+        and l.uri not in (SECTION_PROPERTIES, _ACTION_ADD_PROPERTY)
+        and l.node_type not in ("section",)
+    ]
     assert class_lines[0].node_type == "promoted"
 
 
@@ -588,14 +610,18 @@ def test_flatten_mixed_tree_owl_classes_after_skos():
 
 
 def test_flatten_mixed_tree_pure_classes_node_type():
-    from ster.nav.logic import _is_ontology_sentinel, flatten_mixed_tree
+    from ster.nav.logic import _ACTION_ADD_PROPERTY, _is_ontology_sentinel, flatten_mixed_tree
 
     t = _mixed_taxonomy()
     lines = flatten_mixed_tree(t)
     owl_lines = [
         l
         for l in lines
-        if not l.is_scheme and not _is_ontology_sentinel(l.uri) and l.uri not in t.concepts
+        if not l.is_scheme
+        and not _is_ontology_sentinel(l.uri)
+        and l.uri not in t.concepts
+        and l.uri != _ACTION_ADD_PROPERTY
+        and l.node_type not in ("property", "section")
     ]
     assert all(l.node_type == "class" for l in owl_lines)
 

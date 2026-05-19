@@ -108,6 +108,7 @@ class OWLProperty:
     ranges: list[str] = field(default_factory=list)  # rdfs:range URIs
     sub_property_of: list[str] = field(default_factory=list)  # rdfs:subPropertyOf
     inverse_of: list[str] = field(default_factory=list)  # owl:inverseOf
+    is_functional: bool = False  # owl:FunctionalProperty
 
     @property
     def local_name(self) -> str:
@@ -251,7 +252,11 @@ class Taxonomy:
         if "://" in handle_or_uri:
             return (
                 handle_or_uri
-                if handle_or_uri in self.concepts or handle_or_uri in self.schemes
+                if handle_or_uri in self.concepts
+                or handle_or_uri in self.schemes
+                or handle_or_uri in self.owl_classes
+                or handle_or_uri in self.owl_individuals
+                or handle_or_uri in self.owl_properties
                 else None
             )
         # 2. Handle lookup (case-insensitive)
@@ -265,10 +270,31 @@ class Taxonomy:
         return None
 
     def base_uri(self) -> str:
-        """Return the base URI for auto-generating concept URIs."""
+        """Return the base URI for auto-generating entity URIs.
+
+        Priority:
+        1. scheme.base_uri (explicit SKOS override)
+        2. ontology_uri (http/https only — file:// is skipped)
+        3. Derived from existing concept URIs (common prefix)
+        4. Derived from scheme URI
+        5. Empty string
+        """
         scheme = self.primary_scheme()
         if scheme and scheme.base_uri:
             return scheme.base_uri
+        # Use ontology URI as base, skipping filesystem URIs
+        if self.ontology_uri and self.ontology_uri.startswith(("http://", "https://")):
+            uri = self.ontology_uri
+            if uri.endswith(("/", "#")):
+                return uri
+            # Detect separator from existing class / property URIs
+            root = uri.rstrip("#/")
+            for existing in list(self.owl_classes) + list(self.owl_properties):
+                if existing.startswith(root) and len(existing) > len(root):
+                    sep = existing[len(root)]
+                    if sep in ("#", "/"):
+                        return root + sep
+            return root + "#"
         # Derive from existing concept URIs (common prefix)
         if self.concepts:
             uris = list(self.concepts)

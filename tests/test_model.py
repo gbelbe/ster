@@ -272,6 +272,11 @@ def test_owl_property_label_fallback_to_local():
     assert p.label("en") == "hasName"
 
 
+def test_owl_property_is_functional_default_false():
+    p = OWLProperty(uri=BASE + "hasName")
+    assert p.is_functional is False
+
+
 # ── OWLIndividual ─────────────────────────────────────────────────────────────
 
 
@@ -386,3 +391,86 @@ def test_taxonomy_base_uri_derived_from_scheme_uri():
 def test_taxonomy_base_uri_empty_fallback():
     t = Taxonomy()
     assert t.base_uri() == ""
+
+
+# ── Taxonomy.base_uri — ontology_uri priority ─────────────────────────────────
+
+
+def test_base_uri_from_ontology_uri_hash_separator():
+    t = Taxonomy(
+        ontology_uri="https://ex.org/onto",
+        owl_classes={"https://ex.org/onto#Person": RDFClass(uri="https://ex.org/onto#Person")},
+    )
+    assert t.base_uri() == "https://ex.org/onto#"
+
+
+def test_base_uri_from_ontology_uri_slash_separator():
+    t = Taxonomy(
+        ontology_uri="https://ex.org/onto",
+        owl_classes={"https://ex.org/onto/Person": RDFClass(uri="https://ex.org/onto/Person")},
+    )
+    assert t.base_uri() == "https://ex.org/onto/"
+
+
+def test_base_uri_from_ontology_uri_already_ends_hash():
+    t = Taxonomy(ontology_uri="https://ex.org/onto#")
+    assert t.base_uri() == "https://ex.org/onto#"
+
+
+def test_base_uri_from_ontology_uri_already_ends_slash():
+    t = Taxonomy(ontology_uri="https://ex.org/onto/")
+    assert t.base_uri() == "https://ex.org/onto/"
+
+
+def test_base_uri_from_ontology_uri_no_entities_defaults_hash():
+    t = Taxonomy(ontology_uri="https://ex.org/onto")
+    assert t.base_uri() == "https://ex.org/onto#"
+
+
+def test_base_uri_from_ontology_uri_properties_as_hint():
+    t = Taxonomy(
+        ontology_uri="https://ex.org/onto",
+        owl_properties={
+            "https://ex.org/onto/hasProp": OWLProperty(uri="https://ex.org/onto/hasProp")
+        },
+    )
+    assert t.base_uri() == "https://ex.org/onto/"
+
+
+def test_base_uri_scheme_explicit_beats_ontology_uri():
+    s = ConceptScheme(uri="https://ex.org/scheme", base_uri="https://ex.org/ns/")
+    t = Taxonomy(
+        schemes={s.uri: s},
+        ontology_uri="https://ex.org/onto",
+    )
+    assert t.base_uri() == "https://ex.org/ns/"
+
+
+def test_base_uri_ontology_uri_beats_concept_derivation():
+    t = Taxonomy(
+        ontology_uri="https://ex.org/onto",
+        concepts={"https://other.org/A": Concept(uri="https://other.org/A")},
+    )
+    assert t.base_uri() == "https://ex.org/onto#"
+
+
+def test_base_uri_ontology_uri_beats_scheme_uri_derivation():
+    s = ConceptScheme(uri="https://ex.org/scheme/MyScheme")
+    t = Taxonomy(schemes={s.uri: s}, ontology_uri="https://ex.org/onto")
+    assert t.base_uri() == "https://ex.org/onto#"
+
+
+def test_base_uri_file_scheme_ontology_uri_is_skipped():
+    t = Taxonomy(ontology_uri="file:///Users/me/onto.owl")
+    assert t.base_uri() == ""
+
+
+def test_base_uri_file_scheme_ontology_uri_falls_through_to_concepts():
+    t = Taxonomy(
+        ontology_uri="file:///Users/me/onto.owl",
+        concepts={
+            "https://ex.org/ns/A": Concept(uri="https://ex.org/ns/A"),
+            "https://ex.org/ns/B": Concept(uri="https://ex.org/ns/B"),
+        },
+    )
+    assert t.base_uri() == "https://ex.org/ns/"

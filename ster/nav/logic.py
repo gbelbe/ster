@@ -29,6 +29,8 @@ _OWL_SECTION_URI = (
 )
 _OWL_ONTOLOGY_PREFIX = "__ster:owl_ontology::"  # prefix for per-file ontology root nodes
 _UNATTACHED_INDS_URI = "__ster:unattached_inds__"  # group node for typeless individuals
+SECTION_PROPERTIES = "__ster:section:properties__"  # collapsible Properties section header
+_ACTION_ADD_PROPERTY = "__ster:add_property__"  # sentinel URI for "Add property" action row
 
 
 def _ontology_sentinel(file_path: Path | None) -> str:
@@ -44,6 +46,52 @@ def _is_ontology_sentinel(uri: str) -> bool:
 
 def _file_sentinel(path: Path) -> str:
     return f"{_FILE_URI_PREFIX}{path}"
+
+
+def _props_section_line(folded: set[str]) -> TreeLine:
+    return TreeLine(
+        uri=SECTION_PROPERTIES,
+        depth=0,
+        prefix="",
+        is_scheme=True,
+        is_folded=SECTION_PROPERTIES in folded,
+        label="Properties",
+        node_type="section",
+    )
+
+
+def _prop_child_lines(taxonomy: Taxonomy) -> list[TreeLine]:
+    """Return sorted property nodes + Add-property action row for the Properties section."""
+    from ..model import OWLProperty as _OWLProperty
+
+    def _local(uri: str) -> str:
+        return uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+
+    props = sorted(
+        [p for p in taxonomy.owl_properties.values() if isinstance(p, _OWLProperty)],
+        key=lambda p: _local(p.uri).lower(),
+    )
+    result: list[TreeLine] = []
+    for prop in props:
+        result.append(
+            TreeLine(
+                uri=prop.uri,
+                depth=1,
+                prefix="├── ",
+                node_type="property",
+            )
+        )
+    result.append(
+        TreeLine(
+            uri=_ACTION_ADD_PROPERTY,
+            depth=1,
+            prefix="└── ",
+            is_action=True,
+            label="+ Add property",
+            node_type="section",
+        )
+    )
+    return result
 
 
 @dataclass
@@ -1243,19 +1291,33 @@ def flatten_mixed_tree(
     taxonomy_or_workspace: Taxonomy | TaxonomyWorkspace,
     folded: set[str] | None = None,
 ) -> list[TreeLine]:
-    """Flatten 'mixed' view: SKOS hierarchy then pure OWL classes appended.
+    """Flatten 'mixed' view: Properties section, then OWL classes, then SKOS concepts.
 
     OWL-only files (no SKOS schemes): renders the OWL hierarchy directly.
-    When both exist: appends a synthetic "OWL Classes" section header row.
+    When both exist: Properties section first, then Classes tree, then Concepts tree.
     """
+    if folded is None:
+        folded = set()
     if isinstance(taxonomy_or_workspace, TaxonomyWorkspace):
         ws = taxonomy_or_workspace
         if len(ws.taxonomies) == 1:
-            tax = next(iter(ws.taxonomies.values()))
+            tax: Taxonomy | None = next(iter(ws.taxonomies.values()))
             fp = next(iter(ws.taxonomies.keys()))
-            return _flatten_mixed(tax, folded, file_path=fp)
-        return _flatten_workspace_mixed(ws, folded)
-    return _flatten_mixed(taxonomy_or_workspace, folded)
+            assert tax is not None
+            inner = _flatten_mixed(tax, folded, file_path=fp)
+        else:
+            tax = None
+            inner = _flatten_workspace_mixed(ws, folded)
+        has_owl = any(bool(t.owl_classes) for t in ws.taxonomies.values())
+    else:
+        tax = taxonomy_or_workspace
+        inner = _flatten_mixed(tax, folded)
+        has_owl = bool(tax.owl_classes)
+    if not has_owl or not inner:
+        return inner
+    section = _props_section_line(folded)
+    children = _prop_child_lines(tax) if tax and SECTION_PROPERTIES not in folded else []
+    return [section] + children + inner
 
 
 def _flatten_mixed(
@@ -1355,7 +1417,7 @@ def _flatten_mixed(
     )
     if not skos_rows:
         return [ont_root] + owl_rows
-    return skos_rows + [ont_root] + owl_rows
+    return [ont_root] + owl_rows + skos_rows
 
 
 def _flatten_workspace_mixed(
@@ -1464,19 +1526,30 @@ def flatten_ontology_tree(
     """Flatten the OWL/RDFS class hierarchy into TreeLine rows.
 
     Uses rdfs:subClassOf instead of skos:broader. Classes with no known
-    parent inside the graph are treated as roots.
+    parent inside the graph are treated as roots. A collapsible Properties
+    section header is prepended before the class tree.
     """
+    if folded is None:
+        folded = set()
     if isinstance(taxonomy_or_workspace, TaxonomyWorkspace):
         ws = taxonomy_or_workspace
         if len(ws.taxonomies) == 1:
             tax = next(iter(ws.taxonomies.values()))
             fp = next(iter(ws.taxonomies.keys()))
-            return _flatten_ontology(tax, folded, file_path=fp)
-        lines: list[TreeLine] = []
-        for fp, tax in ws.taxonomies.items():
-            lines.extend(_flatten_ontology(tax, folded, file_path=fp))
-        return lines
-    return _flatten_ontology(taxonomy_or_workspace, folded)
+            inner = _flatten_ontology(tax, folded, file_path=fp)
+        else:
+            tax = None
+            inner = []
+            for fp, t in ws.taxonomies.items():
+                inner.extend(_flatten_ontology(t, folded, file_path=fp))
+    else:
+        tax = taxonomy_or_workspace
+        inner = _flatten_ontology(tax, folded)
+    if not inner:
+        return inner
+    section = _props_section_line(folded)
+    children = _prop_child_lines(tax) if tax and SECTION_PROPERTIES not in folded else []
+    return [section] + children + inner
 
 
 def _flatten_ontology(
@@ -1678,6 +1751,14 @@ def build_rdf_class_detail(
             meta={"type": "stat"},
         )
     )
+    fields.append(
+        _add_action_field(
+            "action:view_focused_graph",
+            "⊙ Open Graph Viz",
+            "view_focused_graph",
+            uri=uri,
+        )
+    )
 
     # ── Labels (rdfs:label) — always shown ──────────────────────────────────
     fields.append(_sep("Labels"))
@@ -1783,6 +1864,7 @@ def build_rdf_class_detail(
                 "action:move_class", "↷ Move under different superclass", "move_class"
             )
         )
+    fields.append(_add_action_add_field("action:link_sub", "↓ Add subclass", "link_subclass"))
 
     # ── Instances ────────────────────────────────────────────────────────────
     fields.append(_sep("Instances"))
@@ -2636,6 +2718,69 @@ def build_property_detail(
     fields.append(
         _add_action_field("action:delete_property", "⊘ Delete this property", "delete_property")
     )
+
+    return fields
+
+
+def build_properties_section_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
+    """Detail panel for the Properties section header node.
+
+    Shows completeness stats (label / domain / range coverage) and a
+    selectable, alphabetically-sorted list of every OWL property.  Selecting
+    an item navigates the left tree to that property.
+    """
+    props = list(taxonomy.owl_properties.values())
+    n = len(props)
+
+    fields: list[DetailField] = []
+
+    # ── Overview stats ────────────────────────────────────────────────────────
+    fields.append(_sep("Properties"))
+    fields.append(_stat("props:total", "total", str(n)))
+
+    n_data = sum(1 for p in props if p.prop_type == "DatatypeProperty")
+    n_obj = sum(1 for p in props if p.prop_type == "ObjectProperty")
+    n_ann = sum(1 for p in props if p.prop_type == "AnnotationProperty")
+    if n_data:
+        fields.append(_stat("props:data", "data properties", str(n_data)))
+    if n_obj:
+        fields.append(_stat("props:obj", "object properties", str(n_obj)))
+    if n_ann:
+        fields.append(_stat("props:ann", "annotation properties", str(n_ann)))
+
+    # ── Completeness ─────────────────────────────────────────────────────────
+    if n:
+        fields.append(_sep("Completeness"))
+        lbl_pct = _pct(sum(1 for p in props if p.labels), n)
+        dom_pct = _pct(sum(1 for p in props if p.domains), n)
+        rng_pct = _pct(sum(1 for p in props if p.ranges), n)
+        fields.append(_stat("props:cov:label", "rdfs:label", f"{_pct_bar(lbl_pct)}  {lbl_pct}%"))
+        fields.append(_stat("props:cov:domain", "rdfs:domain", f"{_pct_bar(dom_pct)}  {dom_pct}%"))
+        fields.append(_stat("props:cov:range", "rdfs:range", f"{_pct_bar(rng_pct)}  {rng_pct}%"))
+
+    # ── Action (before list so it stays visible) ─────────────────────────────
+    fields.append(_sep("Actions"))
+    fields.append(
+        _add_action_add_field(
+            "action:create_owl_property", "+ New OWL property", "create_owl_property"
+        )
+    )
+
+    # ── Property list ─────────────────────────────────────────────────────────
+    if props:
+        fields.append(_sep("All properties"))
+        for prop in sorted(props, key=lambda p: p.label(lang).lower()):
+            display = prop.label(lang)
+            tag = f"  [{prop.prop_type[:3]}]" if prop.prop_type else ""
+            fields.append(
+                DetailField(
+                    f"prop_nav:{prop.uri}",
+                    display,
+                    prop.uri + tag,
+                    editable=False,
+                    meta={"type": "navigate_property", "uri": prop.uri, "nav": True},
+                )
+            )
 
     return fields
 

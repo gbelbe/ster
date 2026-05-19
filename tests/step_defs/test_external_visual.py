@@ -108,36 +108,3 @@ def when_prefix_label_unknown(ctx):
 @then('the label is "Thing"')
 def then_label_thing(ctx):
     assert ctx["result"] == "Thing"
-
-
-# ── build_graph scenarios ─────────────────────────────────────────────────────
-
-
-@given('a taxonomy where "foaf:Person" is in owl_classes and namespace_bindings')
-def given_taxonomy_with_foaf_class(ctx):
-    from ster.model import RDFClass, Taxonomy
-
-    t = Taxonomy()
-    t.namespace_bindings = {"foaf": _FOAF_NS}
-    t.owl_classes[_KAI_PERSON] = RDFClass(uri=_KAI_PERSON)
-    t.owl_classes[_FOAF_PERSON] = RDFClass(uri=_FOAF_PERSON)
-    ctx["taxonomy"] = t
-
-
-@when("I call build_graph")
-def when_build_graph(ctx):
-    from ster.viz import build_graph
-
-    ctx["result"] = build_graph(ctx["taxonomy"])
-
-
-@then('the node for "foaf:Person" has type "external-class"')
-def then_foaf_external_class(ctx):
-    node = next(n for n in ctx["result"]["nodes"] if n["id"] == _FOAF_PERSON)
-    assert node["type"] == "external-class"
-
-
-@then('the node for "kai:Person" has type "class"')
-def then_kai_class(ctx):
-    node = next(n for n in ctx["result"]["nodes"] if n["id"] == _KAI_PERSON)
-    assert node["type"] == "class"

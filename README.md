@@ -21,11 +21,11 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.4.0
+  v0.4.3
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.
-Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as interactive D3 force graphs, and export HTML documentation — all from your terminal, no database required.
+Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as VOWL-style interactive graphs in the browser, and export HTML documentation — all from your terminal, no database required.
 
 > *ster* is the Breton word for *meaning*, with homonyms for *river* and *star*.
 > Let it guide your semantic voyage, keeping the flow and always following your star.
@@ -37,7 +37,7 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 | Layer | What ster does |
 |---|---|
 | **Edit** | Full-screen TUI for SKOS concepts and OWL classes / individuals / properties |
-| **Visualise** | Interactive D3 v7 force graph — colour-coded clusters, drag, zoom, filter, detail panel |
+| **Visualise** | VOWL-style interactive graph — classes as circles, property edges, per-class individual toggle, drag, zoom, detail panel |
 | **AI assist** | LLM-powered concept suggestions (online or local via Ollama) |
 | **Git** | Stage, commit, push without leaving the terminal |
 | **Export** | pyLODE HTML documentation; SPARQL query runner |
@@ -59,18 +59,18 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 - **Ontology root node**: selectable in the tree; selecting it opens the ontology overview panel
 - **Smart startup**: opening a pure-OWL file goes directly to the ontology overview, skipping the global view
 
-### D3 force graph visualisation
+### VOWL graph visualisation
 
-Open any ontology or taxonomy as an interactive force graph in the browser:
+Open any ontology or taxonomy as an interactive VOWL-style graph in the browser:
 
-- Colour-coded node clusters per root class or top concept
-- Node types rendered distinctly: OWL classes (rectangles), individuals (ellipses), SKOS concepts (small ellipses), schemes (rounded rects)
-- Representative images embedded inside nodes when `schema:image` is set
+- OWL classes as circles, datatype nodes as amber rectangles, SKOS schemes and concepts as circles
+- Object-property edges with floating label boxes; subClassOf rendered with an open hollow arrowhead; datatype properties as amber dashed edges
+- Hierarchical layout auto-selected for OWL-only graphs; force layout for SKOS and mixed ontologies
 - Drag, zoom, and pin nodes; hover tooltips; highlight neighbourhoods on click
-- Lane-based hierarchical layout option for SKOS concept trees
-- **Closeable detail panel**: `×` button or Escape hides the right panel; canvas expands to fill the full window; Escape again re-opens it
-- **Link-type toggles**: `rdf:type` and `inScheme` link families can be hidden/shown from the toolbar; auto-hidden on startup when there are more than 20 of either type
-- **Cleaner default layout**: stronger node repulsion, wider collision radius, longer link distances, and a larger initial spread for root classes
+- **Per-class individual toggle**: click the count badge on a class circle to show/hide its individuals; "Hide/show all individuals" button in the sidebar legend
+- **Cardinality labels**: functional properties display `0..1` on their edge box
+- **Closeable detail panel**: `×` button or Escape hides the right panel; canvas expands to fill the full window
+- **Link-type toggles**: `rdf:type`, `inScheme`, and `datatype` link families can be hidden/shown from the toolbar
 
 ### AI-assisted concept creation
 
@@ -242,7 +242,7 @@ ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses the
     schema:url   <https://en.wikipedia.org/wiki/My_Class> .
 ```
 
-Images appear as thumbnails inside D3 node circles; videos open in a popup window; URLs render as link buttons in the detail panel.
+Images appear as thumbnails in the graph detail panel; videos open in a popup window; URLs render as link buttons in the detail panel.
 
 ---
 
@@ -262,7 +262,8 @@ ster/
 ├── ai.py             — LLM abstraction: model routing, copy-paste mode, Ollama integration
 ├── prompts.py        — All AI prompt templates (string.Template)
 ├── html_export.py    — pyLODE HTML export (VocPub / OntPub profiles)
-├── viz.py            — Standalone D3 graph: writes HTML, opens in browser
+├── viz.py            — Graph helpers: label formatters, node detail builders, metadata
+├── viz_vowl.py       — VOWL-style D3 graph: writes self-contained HTML, opens in browser
 ├── owl_analysis.py   — OWL axiom analysis and statistics
 ├── sparql_query.py   — SPARQL query runner against the loaded taxonomy
 ├── git_manager.py    — Git staging, commit, push
@@ -335,22 +336,30 @@ pre-commit install
 
 ## Changelog
 
+### 0.4.3
+- **VOWL graph visualisation**: replaced the old D3 force graph with a full VOWL-style renderer — classes as circles, object-property edges with floating label boxes, hollow subClassOf arrowhead, light theme
+- **Datatype properties**: amber dashed edges to amber rectangle nodes; functional properties show `0..1` cardinality on their edge box
+- **Per-class individual toggle**: click the count badge on a class circle to show/hide its individuals; "Hide/show all individuals" button in the sidebar; badge enlarges on hover to signal it is clickable
+- **Focused graph from tree view**: select any OWL class and choose "⊙ Open Graph Viz" in the Identity section to open a browser graph centred on that class, showing only its subclasses (transitive) and their individuals
+- **Graph overview panel**: Overview counts (classes, individuals, properties) now reflect what is actually displayed in the current graph rather than the full ontology totals
+- **Hierarchical layout**: OWL-only graphs (full and focused) use a depth-based hierarchical lane layout; force layout for SKOS and mixed ontologies
+
 ### 0.4.0
 - **OWL class quality stats**: label/comment coverage, instance count, and property fill rates shown inline on each class node in the OWL hierarchy — mirrors SKOS completion labels on concept trees
 - **Ontology root selectable**: the ontology name node in the tree view is now navigable; selecting it opens the ontology overview panel
 - **Smart startup panel**: opening a pure-OWL file now shows the ontology overview directly on startup
 - **Welcome screen**: replaced keyboard-shortcut content with the ster logo, installed version, and a yellow PyPI update notice when a newer release is available
-- **D3 graph — closeable detail panel**: `×` button or Escape hides the right panel; the canvas expands to fill the full window; Escape again re-opens it
-- **D3 graph — link-type toggles**: `rdf:type` and `inScheme` links can be toggled on/off from the bottom bar; auto-hidden at startup when there are more than 20 of either type
-- **D3 graph — cleaner default layout**: stronger node repulsion (`−600`), wider collision radius, longer link distances (`200`), larger initial root-class circle, slower alpha decay for better final spread
+- **Graph — closeable detail panel**: `×` button or Escape hides the right panel; the canvas expands to fill the full window; Escape again re-opens it
+- **Graph — link-type toggles**: `rdf:type` and `inScheme` links can be toggled on/off from the bottom bar
+- **Graph — hierarchical layout**: OWL-only graphs use a depth-based lane layout; force layout for SKOS and mixed ontologies
 - **Menu**: renamed "External Ontologies" → "Import External Ontology"
 
 ### 0.3.2
 - Show update notice with release notes summary when a new version is available on PyPI
 - Restructured main menu: new icons (◈ graph, ⎇ git), reordered items, renamed "Configure AI" → "Setup / Options", added "Query Graph SPARQL (Beta)"
 - Tree view auto-detects file content: OWL-only files open in ontology mode, SKOS-only in taxonomy mode
-- D3 graph: root OWL classes visually distinct (brighter fill, glow ring, bolder text); legend adapts to content actually present in the file
-- Fixed: Escape key in graph viz now always returns to global view
+- Graph: root OWL classes visually distinct (outer ring, bolder text); legend adapts to content actually present in the file
+- Fixed: Escape key in graph now always returns to global view
 - Fixed: OWL individuals correctly nested under their parent classes in the tree
 - Fixed: multiline `rdfs:comment` values no longer bleed across TUI panels
 - Fixed: global tree view no longer renders OWL classes twice
@@ -364,7 +373,7 @@ pre-commit install
 
 ### 0.3.0
 - Full-screen TUI for SKOS concept schemes and OWL class hierarchies
-- Interactive D3 force graph visualisation in the browser with entity detail panel
+- Interactive VOWL-style graph visualisation in the browser with entity detail panel
 - AI-assisted concept creation via `llm` library (online and local via Ollama)
 - Git integration: stage, commit, push without leaving the terminal
 - HTML export via pyLODE (VocPub and OntPub profiles)
