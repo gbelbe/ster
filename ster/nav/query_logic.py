@@ -7,6 +7,21 @@ from .state import QueryState
 # Characters that delimit SPARQL identifiers for word-boundary detection
 _SPARQL_WORD_SEPS = frozenset(" \t\n\r{}()<>,;|@?$\"'=!*+/#^&[]\\")
 
+# Keywords that expand to '… {\n  \n}' when inserted from the popup
+_BRACE_EXPAND_KEYWORDS = frozenset(
+    {
+        "WHERE",
+        "OPTIONAL",
+        "UNION",
+        "GRAPH",
+        "MINUS",
+        "SERVICE",
+    }
+)
+
+# Keywords that expand to '…()' when inserted from the popup
+_PAREN_EXPAND_KEYWORDS = frozenset({"FILTER", "BIND"})
+
 
 def _sparql_current_word(buffer: str, pos: int) -> tuple[str, int]:
     """Return *(word, word_start)* for the identifier ending at *pos*."""
@@ -26,11 +41,86 @@ def _sparql_kw_candidates(word: str) -> list[str]:
     return [kw for kw in _sq.SPARQL_KEYWORDS if kw.startswith(wu)][:9]
 
 
+def _clause_expand(keyword: str, indent: int = 0) -> str | None:
+    """Return the expansion string for a SPARQL block keyword, or None.
+
+    ``WHERE`` / ``OPTIONAL`` / ``UNION`` / ``GRAPH`` / ``MINUS`` / ``SERVICE``
+    expand to ``KEYWORD {\\n<indent+2>\\n<indent>}``.
+    ``FILTER`` / ``BIND`` expand to ``KEYWORD()``.
+    All other keywords return ``None``.
+    """
+    kw_upper = keyword.upper()
+    if kw_upper in _BRACE_EXPAND_KEYWORDS:
+        inner = " " * (indent + 2)
+        closing = " " * indent
+        return f"{keyword} {{\n{inner}\n{closing}}}"
+    if kw_upper in _PAREN_EXPAND_KEYWORDS:
+        return f"{keyword}()"
+    return None
+
+
+def _auto_close_bracket(buffer: str, pos: int, ch: str) -> tuple[str, int]:
+    """Insert a bracket pair and position the cursor inside.
+
+    ``{`` inserts ``{\\n<indent+2>\\n<indent>}`` with the cursor on the inner line.
+    ``(`` inserts ``()`` with the cursor between the parens.
+    Any other character is inserted literally.
+    """
+    if ch == "{":
+        line_start = buffer.rfind("\n", 0, pos) + 1
+        line_text = buffer[line_start:pos]
+        indent = len(line_text) - len(line_text.lstrip(" \t"))
+        inner = " " * (indent + 2)
+        closing = " " * indent
+        insert = "{\n" + inner + "\n" + closing + "}"
+        new_buf = buffer[:pos] + insert + buffer[pos:]
+        new_pos = pos + 2 + len(inner)  # past '{\n' + inner indent
+        return new_buf, new_pos
+    if ch == "(":
+        new_buf = buffer[:pos] + "()" + buffer[pos:]
+        return new_buf, pos + 1
+    new_buf = buffer[:pos] + ch + buffer[pos:]
+    return new_buf, pos + 1
+
+
+def _qname_prefix_at_cursor(buffer: str, pos: int, known_prefixes: set[str]) -> str | None:
+    """Return the prefix name if the last character inserted was ``:`` after a known prefix.
+
+    E.g. if ``buffer[..pos]`` ends with ``kai:``, returns ``"kai"``.
+    Returns ``None`` if no known prefix matches.
+    """
+    if pos == 0 or buffer[pos - 1] != ":":
+        return None
+    i = pos - 1  # position of ':'
+    while i > 0 and buffer[i - 1] not in _SPARQL_WORD_SEPS and buffer[i - 1] != ":":
+        i -= 1
+    prefix_name = buffer[i : pos - 1]
+    return prefix_name if prefix_name in known_prefixes else None
+
+
 def _sparql_kw_insert(qs: QueryState, keyword: str) -> None:
-    """Replace the partial word before the cursor with *keyword*."""
+    """Replace the partial word before the cursor with *keyword*.
+
+    Block keywords (WHERE, OPTIONAL, …) are automatically expanded to
+    include an indented brace block; FILTER / BIND get ``()``.
+    """
     _word, word_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
-    qs.query_buffer = qs.query_buffer[:word_start] + keyword + qs.query_buffer[qs.query_pos :]
-    qs.query_pos = word_start + len(keyword)
+    line_start = qs.query_buffer.rfind("\n", 0, word_start) + 1
+    line_text = qs.query_buffer[line_start:word_start]
+    indent = len(line_text) - len(line_text.lstrip(" \t"))
+    expansion = _clause_expand(keyword, indent)
+    if expansion is not None:
+        qs.query_buffer = qs.query_buffer[:word_start] + expansion + qs.query_buffer[qs.query_pos :]
+        if keyword.upper() in _BRACE_EXPAND_KEYWORDS:
+            # cursor on the inner indented line: past 'KEYWORD {\n' + inner indent
+            inner_len = indent + 2
+            qs.query_pos = word_start + len(keyword) + 3 + inner_len  # 3 = ' {\n'
+        else:
+            # FILTER()/BIND(): cursor between the parens
+            qs.query_pos = word_start + len(keyword) + 1
+    else:
+        qs.query_buffer = qs.query_buffer[:word_start] + keyword + qs.query_buffer[qs.query_pos :]
+        qs.query_pos = word_start + len(keyword)
 
 
 def _ac_matches(label: str, q: str) -> bool:

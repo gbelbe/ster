@@ -18,8 +18,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import rdflib
+
+if TYPE_CHECKING:
+    from .model import Taxonomy
 
 # ── Public data types ─────────────────────────────────────────────────────────
 
@@ -428,6 +432,193 @@ def compute_col_widths(columns: list[str], rows: list[list[str]], available: int
     diff = budget - sum(widths)
     widths[-1] = max(4, widths[-1] + diff)
     return widths
+
+
+# ── Editor smart-completion helpers ──────────────────────────────────────────
+
+_STANDARD_PREFIXES: dict[str, str] = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "dcterms": "http://purl.org/dc/terms/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+}
+
+_STANDARD_QNAMES: dict[str, list[str]] = {
+    "rdf": [
+        "List",
+        "Property",
+        "first",
+        "nil",
+        "object",
+        "predicate",
+        "rest",
+        "subject",
+        "type",
+        "value",
+    ],
+    "rdfs": [
+        "Class",
+        "Literal",
+        "Resource",
+        "comment",
+        "domain",
+        "isDefinedBy",
+        "label",
+        "range",
+        "seeAlso",
+        "subClassOf",
+        "subPropertyOf",
+    ],
+    "owl": [
+        "Class",
+        "DatatypeProperty",
+        "FunctionalProperty",
+        "Individual",
+        "NamedIndividual",
+        "Nothing",
+        "ObjectProperty",
+        "Thing",
+        "disjointWith",
+        "equivalentClass",
+        "inverseOf",
+    ],
+    "skos": [
+        "Collection",
+        "Concept",
+        "ConceptScheme",
+        "altLabel",
+        "broadMatch",
+        "broader",
+        "broaderTransitive",
+        "changeNote",
+        "closeMatch",
+        "definition",
+        "editorialNote",
+        "exactMatch",
+        "example",
+        "hasTopConcept",
+        "hiddenLabel",
+        "historyNote",
+        "inScheme",
+        "member",
+        "narrowMatch",
+        "narrower",
+        "narrowerTransitive",
+        "note",
+        "prefLabel",
+        "related",
+        "relatedMatch",
+        "scopeNote",
+        "topConceptOf",
+    ],
+    "dcterms": [
+        "contributor",
+        "coverage",
+        "created",
+        "creator",
+        "description",
+        "format",
+        "identifier",
+        "language",
+        "modified",
+        "publisher",
+        "rights",
+        "source",
+        "subject",
+        "title",
+        "type",
+    ],
+    "xsd": [
+        "anyURI",
+        "boolean",
+        "date",
+        "dateTime",
+        "decimal",
+        "double",
+        "float",
+        "integer",
+        "langString",
+        "string",
+    ],
+}
+
+
+def build_prefix_header(namespace_bindings: dict[str, str]) -> str:
+    """Build a SPARQL PREFIX block from *namespace_bindings* plus standard prefixes.
+
+    Standard prefixes (rdf, rdfs, owl, skos, dcterms, xsd) are always included.
+    Custom bindings are appended after them.  A binding whose prefix name already
+    appears in the standard set keeps the standard URI — no duplicates are emitted.
+    """
+    combined: dict[str, str] = dict(_STANDARD_PREFIXES)
+    for pfx, uri in namespace_bindings.items():
+        if pfx not in combined:
+            combined[pfx] = uri
+    return "\n".join(f"PREFIX {pfx}: <{uri}>" for pfx, uri in combined.items()) + "\n\n"
+
+
+def build_qname_index(taxonomy: Taxonomy) -> dict[str, list[str]]:
+    """Build a ``prefix → [local_name, ...]`` completion index.
+
+    Includes local names extracted from every taxonomy node (classes, individuals,
+    concepts, schemes, properties) plus well-known local names for all six standard
+    prefixes.  Each list is deduplicated and sorted alphabetically.
+    """
+    ns_to_pfx: dict[str, str] = {uri: pfx for pfx, uri in taxonomy.namespace_bindings.items()}
+
+    index: dict[str, list[str]] = {}
+    seen: set[tuple[str, str]] = set()
+
+    def _add_uri(uri: str) -> None:
+        for ns, pfx in ns_to_pfx.items():
+            if uri.startswith(ns):
+                local = uri[len(ns) :]
+                if local and (pfx, local) not in seen:
+                    seen.add((pfx, local))
+                    index.setdefault(pfx, []).append(local)
+                return
+
+    for uri in (
+        *taxonomy.owl_classes,
+        *taxonomy.owl_individuals,
+        *taxonomy.concepts,
+        *taxonomy.schemes,
+        *taxonomy.owl_properties,
+    ):
+        _add_uri(uri)
+
+    for pfx, qnames in _STANDARD_QNAMES.items():
+        for local in qnames:
+            if (pfx, local) not in seen:
+                seen.add((pfx, local))
+                index.setdefault(pfx, []).append(local)
+
+    for pfx in index:
+        index[pfx] = sorted(index[pfx])
+
+    return index
+
+
+def extract_query_variables(buffer: str) -> list[str]:
+    """Return a sorted, deduplicated list of ``?variable`` names in *buffer*."""
+    return sorted(set(re.findall(r"\?([A-Za-z_][A-Za-z0-9_]*)", buffer)))
+
+
+def extract_result_uris(rows: list[list[str]]) -> set[str]:
+    """Collect every URI-like value from SELECT result rows.
+
+    Scans all columns of all rows; any cell that starts with ``http://`` or
+    ``https://`` is treated as a URI.  Returns an empty set for literal-only
+    or empty result sets.
+    """
+    uris: set[str] = set()
+    for row in rows:
+        for cell in row:
+            if cell.startswith("http://") or cell.startswith("https://"):
+                uris.add(cell)
+    return uris
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

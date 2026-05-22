@@ -196,59 +196,6 @@ class MapConceptPickState:
 
 
 @dataclass
-class AiInstallState:
-    """Confirmation overlay: install the llm package, then resume an action."""
-
-    pending_action: str = ""  # action to trigger after successful install
-    installing: bool = False  # True while pip is running
-    done: bool = False  # True after successful install
-    lines: list[str] = dc_field(default_factory=list)  # pip output lines
-    error: str = ""
-
-
-@dataclass
-class AiSetupState:
-    """Guided model setup wizard: mode → provider → model → key? → done.
-
-    online_providers / offline_providers are fetched once when the wizard opens
-    via ai.discover_models() and stored here so navigation is instant.
-    Each entry: (provider_id, display_label, [(model_id, display_label)]).
-    """
-
-    step: str = (
-        "mode"  # "mode" | "provider" | "model" | "key" | "done"  (mode "copypaste" → skips to done)
-    )
-    mode: str = ""  # "online" | "offline"
-    # Pre-fetched provider + model data (populated at wizard open time)
-    online_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
-    offline_providers: list[tuple[str, str, list[tuple[str, str]]]] = dc_field(default_factory=list)
-    # Navigation
-    provider_cursor: int = 0
-    provider_scroll: int = 0
-    model_cursor: int = 0
-    model_scroll: int = 0
-    # Selections
-    selected_provider_id: str = ""
-    selected_model_id: str = ""
-    key_name: str = ""
-    # API key text input
-    buffer: str = ""
-    pos: int = 0
-    error: str = ""
-    pending_action: str = ""  # action to resume after setup completes
-    # Plugin install sub-step (used when step == "install_plugin")
-    available_plugins: list[tuple[str, str, str]] = dc_field(default_factory=list)
-    plugin_cursor: int = 0
-    plugin_scroll: int = 0
-    plugin_installing: bool = False
-    plugin_done: bool = False
-    plugin_error: str = ""
-    plugin_lines: list[str] = dc_field(default_factory=list)
-    selected_plugin_pkg: str = ""
-    selected_plugin_label: str = ""
-
-
-@dataclass
 class BatchConceptDraft:
     """Evolving data for one concept being built in the batch creation wizard."""
 
@@ -340,6 +287,19 @@ class QueryState:
     ac_level: int = 1
     ac_scheme_uri: str = ""
     ac_scheme_label: str = ""
+    # QName completion popup (triggered after 'prefix:')
+    qn_active: bool = False
+    qn_prefix: str = ""
+    qn_filter: str = ""
+    qn_cursor: int = 0
+    qn_scroll: int = 0
+    qn_trigger_pos: int = 0
+    # ?variable suggestion popup (triggered after '?')
+    var_active: bool = False
+    var_filter: str = ""
+    var_cursor: int = 0
+    var_scroll: int = 0
+    var_trigger_pos: int = 0
 
 
 ViewerState = (

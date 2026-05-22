@@ -6,6 +6,7 @@ import curses
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .nav.ai_model_picker import AiModelPickState
     from .nav.logic import DetailField
 
 
@@ -24,6 +25,7 @@ def _config_main(stdscr: curses.window, lang: str) -> None:
     server_url, server_port = load_server_config()
     pending_restart = False
     show_token = False
+    picker: AiModelPickState | None = None
 
     def _fields() -> list[DetailField]:
         return build_global_fields(
@@ -36,33 +38,37 @@ def _config_main(stdscr: curses.window, lang: str) -> None:
             pending_restart=pending_restart,
         )
 
-    # Build index of selectable (non-separator) fields
-    def _selectable(fields: list[DetailField]) -> list[int]:
-        return [
-            i
-            for i, f in enumerate(fields)
-            if f.meta.get("type") not in ("separator",)
-            and f.meta.get("action") is not None
-            or f.meta.get("type") == "action"
-        ]
-
     fields = _fields()
     sel_idx = [i for i, f in enumerate(fields) if f.meta.get("action") is not None]
-    cursor = 0  # index into sel_idx
+    cursor = 0
 
     while True:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+
+        if picker is not None:
+            _draw_picker(stdscr, picker, h, w)
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key == curses.KEY_RESIZE:
+                curses.update_lines_cols()
+                continue
+            from .nav.ai_model_picker import on_key
+
+            picker, done = on_key(picker, key)
+            if done:
+                picker = None
+            continue
+
         fields = _fields()
         sel_idx = [i for i, f in enumerate(fields) if f.meta.get("action") is not None]
-
-        stdscr.erase()
-        h, w = stdscr.getmaxyx()
 
         _draw_config(stdscr, fields, sel_idx, cursor, server_url, server_port, h, w)
         stdscr.refresh()
 
         key = stdscr.getch()
 
-        if key in (27, ord("q"), ord("Q")):  # Esc or q
+        if key in (27, ord("q"), ord("Q")):
             break
 
         elif key in (curses.KEY_UP, ord("k")):
@@ -97,17 +103,142 @@ def _config_main(stdscr: curses.window, lang: str) -> None:
                 show_token = not show_token
 
             elif action == "open_ai_config":
-                curses.endwin()
-                from .ai_config_screen import run_ai_config_screen
+                try:
+                    from .nav.ai_model_picker import AiModelPickState, build_top_items
 
-                run_ai_config_screen(lang)
-                stdscr.refresh()
+                    picker = AiModelPickState(items=build_top_items(), level="top")
+                except Exception:  # noqa: BLE001
+                    _show_message(stdscr, h, w, "Could not open AI config")
 
             elif action == "pick_lang":
                 new_lang = _pick_language(stdscr, h, w, lang)
                 if new_lang:
                     lang = new_lang
                     _save_lang(lang)
+
+
+def _draw_picker(
+    stdscr: curses.window,
+    st: AiModelPickState,
+    h: int,
+    w: int,
+) -> None:
+    try:
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLUE)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        use_color = True
+    except Exception:
+        use_color = False
+
+    # Title (level-aware)
+    _LEVEL_TITLE = {
+        "top": " ster — Configure AI Model ",
+        "local": " ster — Local Model ",
+        "external": " ster — External Model ",
+        "endpoint": " ster — Custom Endpoint ",
+    }
+    title = _LEVEL_TITLE.get(st.level, " ster — Configure AI Model ")
+    try:
+        stdscr.attron(curses.A_BOLD)
+        stdscr.addstr(0, 0, title.center(w)[:w])
+        stdscr.attroff(curses.A_BOLD)
+    except curses.error:
+        pass
+
+    # Show currently configured backend
+    try:
+        from . import ai
+
+        ep = ai.get_endpoint_config()
+        cp = ai.is_copypaste()
+        if cp:
+            active_line = "  Active: copy-paste mode"
+        elif ep.get("url") and ep.get("model"):
+            active_line = f"  Active: {ep['url']}  ({ep['model']})"
+        else:
+            current = ai.get_saved_model()
+            active_line = f"  Active: {current}" if current else "  No model configured yet"
+        if use_color:
+            stdscr.attron(curses.color_pair(1))
+        stdscr.addstr(1, 0, active_line[:w])
+        if use_color:
+            stdscr.attroff(curses.color_pair(1))
+    except Exception:  # noqa: BLE001
+        pass
+
+    list_h = h - 6  # rows available for the scrollable list
+    row = 3
+    for i in range(list_h):
+        idx = st.scroll + i
+        if idx >= len(st.items):
+            break
+        mid, label = st.items[idx]
+        is_sel = idx == st.cursor
+        try:
+            if is_sel:
+                if use_color:
+                    stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+                stdscr.addstr(row, 2, f"▶ {label}"[: w - 2])
+                if use_color:
+                    stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+            else:
+                stdscr.addstr(row, 4, label[: w - 4])
+        except curses.error:
+            pass
+        row += 1
+
+    # Key prompt at bottom
+    if st.key_prompt:
+        try:
+            curses.curs_set(1)
+            label = st.key_name if st.ep_field else f"API key ({st.key_name})"
+            visible = st.key_buffer if st.ep_field else "*" * len(st.key_buffer)
+            prompt_str = f"  {label}: "
+            display = prompt_str + visible
+            if use_color:
+                stdscr.attron(curses.color_pair(2))
+            stdscr.addstr(h - 3, 0, display[:w])
+            if use_color:
+                stdscr.attroff(curses.color_pair(2))
+        except curses.error:
+            pass
+        if st.error:
+            try:
+                if use_color:
+                    stdscr.attron(curses.color_pair(3))
+                stdscr.addstr(h - 2, 2, st.error[:w])
+                if use_color:
+                    stdscr.attroff(curses.color_pair(3))
+            except curses.error:
+                pass
+        hint = "  Enter: save   Esc: back"
+    else:
+        curses.curs_set(0)
+        if st.error:
+            try:
+                if use_color:
+                    stdscr.attron(curses.color_pair(3))
+                stdscr.addstr(h - 2, 2, st.error[:w])
+                if use_color:
+                    stdscr.attroff(curses.color_pair(3))
+            except curses.error:
+                pass
+        if st.level == "top":
+            hint = "  ↑↓  navigate   Enter: select   Esc: close"
+        elif st.level == "endpoint":
+            hint = "  ↑↓  navigate   Enter: edit field / save   Esc: back"
+        else:
+            hint = "  ↑↓  navigate   Enter: select   Esc: back"
+
+    try:
+        if use_color:
+            stdscr.attron(curses.A_DIM)
+        stdscr.addstr(h - 1, 0, hint[:w])
+        if use_color:
+            stdscr.attroff(curses.A_DIM)
+    except curses.error:
+        pass
 
 
 def _draw_config(
@@ -131,7 +262,6 @@ def _draw_config(
 
     selected_field_idx = sel_idx[cursor] if sel_idx and cursor < len(sel_idx) else -1
 
-    # Title bar
     title = " ster — Setup / Options "
     try:
         stdscr.attron(curses.A_BOLD)
@@ -140,7 +270,6 @@ def _draw_config(
     except curses.error:
         pass
 
-    # Full address line just below title
     full_addr = f"  Server address: {server_url}:{server_port}"
     try:
         if use_color:
@@ -209,7 +338,6 @@ def _draw_config(
 
         row += 1
 
-    # Hint bar at bottom
     hint = "  ↑↓  navigate   Enter: edit / toggle   Esc: back"
     try:
         if use_color:
@@ -264,13 +392,22 @@ def _inline_edit(
             pos += 1
 
 
+def _show_message(stdscr: curses.window, h: int, w: int, msg: str) -> None:
+    """Flash a one-line message at the bottom for a single key press."""
+    try:
+        stdscr.addstr(h - 2, 2, msg[: w - 4])
+        stdscr.refresh()
+        stdscr.getch()
+    except curses.error:
+        pass
+
+
 def _pick_language(
     stdscr: curses.window,
     h: int,
     w: int,
     current: str,
 ) -> str | None:
-    """Simple language-code edit prompt."""
     return _inline_edit(stdscr, h, w, "Language code (e.g. en, fr)", current)
 
 

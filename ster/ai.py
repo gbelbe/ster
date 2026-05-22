@@ -70,6 +70,56 @@ def get_saved_model() -> str | None:
     return _load_config().get("model")
 
 
+# ── Ollama auto-detection ──────────────────────────────────────────────────────
+
+
+def detect_ollama_models() -> list[str]:
+    """Probe Ollama at localhost:11434. Returns names of pulled models."""
+    try:
+        import httpx
+
+        resp = httpx.get("http://localhost:11434/api/tags", timeout=0.5)
+        return [m["name"] for m in resp.json().get("models", [])]
+    except Exception:
+        return []
+
+
+# ── Custom endpoint ────────────────────────────────────────────────────────────
+
+
+def get_endpoint_config() -> dict:
+    """Return the saved custom OpenAI-compatible endpoint config, or empty dict."""
+    return _load_config().get("endpoint", {})
+
+
+def save_endpoint(url: str, key: str, model: str) -> None:
+    """Save a custom OpenAI-compatible endpoint as the active AI backend."""
+    cfg = _load_config()
+    cfg["endpoint"] = {"url": url, "key": key, "model": model}
+    cfg.pop("model", None)
+    cfg.pop("copypaste", None)
+    _save_config(cfg)
+
+
+def _call_endpoint(prompt_text: str) -> str:
+    """Call a custom OpenAI-compatible /v1/chat/completions endpoint."""
+    import httpx
+
+    ep = get_endpoint_config()
+    base_url = ep["url"].rstrip("/")
+    api_key = ep.get("key") or "dummy"
+    model = ep["model"]
+    with _safe_stderr():
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt_text}]},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        return str(resp.json()["choices"][0]["message"]["content"])
+
+
 # ── Copy-paste mode ────────────────────────────────────────────────────────────
 
 
@@ -165,8 +215,13 @@ def is_available() -> bool:
 
 
 def is_configured() -> bool:
-    """True if a model has been saved OR copy-paste mode is active."""
-    return is_copypaste() or (is_available() and bool(get_saved_model()))
+    """True if any AI backend is configured (copy-paste, endpoint, or llm model)."""
+    if is_copypaste():
+        return True
+    ep = get_endpoint_config()
+    if ep.get("url") and ep.get("model"):
+        return True
+    return is_available() and bool(get_saved_model())
 
 
 # ── Model discovery ────────────────────────────────────────────────────────────
@@ -373,6 +428,9 @@ def _call(prompt_text: str, task: str) -> str:
     """
     if is_copypaste():
         return _copypaste_interact(prompt_text)
+    ep = get_endpoint_config()
+    if ep.get("url") and ep.get("model"):
+        return _call_endpoint(prompt_text)
     model = get_model_for(task)
     with _safe_stderr():
         return model.prompt(prompt_text).text().strip()

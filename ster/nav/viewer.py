@@ -71,6 +71,9 @@ from .logic import (  # noqa: F401
 from .prefs import _load_lang_pref, _load_prefs, _save_lang_pref, _save_prefs
 from .query_logic import (
     _ac_matches,
+    _auto_close_bracket,
+    _clause_expand,  # noqa: F401 — re-exported for callers
+    _qname_prefix_at_cursor,
     _query_pos_down,
     _query_pos_up,
     _sparql_current_word,
@@ -209,6 +212,7 @@ class TaxonomyViewer:
         self._last_query_buffer: str = ""  # persist query across mode switches
         self._show_bearer_token: bool = False
         self._server_pending_restart: bool = False
+        self._pending_open_config: bool = False
 
         self._rebuild()
         # For pure-ontology workspaces, open the ontology overview immediately.
@@ -634,6 +638,24 @@ class TaxonomyViewer:
         while True:
             stdscr.timeout(500)
             self._heartbeat = True
+
+            if self._pending_open_config:
+                self._pending_open_config = False
+                curses.endwin()
+                try:
+                    from ..config_screen import run_config_screen  # noqa: PLC0415
+
+                    run_config_screen(lang=self.lang)
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    stdscr.refresh()
+                    _init_colors()
+                    stdscr.keypad(True)
+                if self._detail_uri == _GLOBAL_URI:
+                    self._detail_fields = self._bgf()
+                continue
+
             rows, cols = stdscr.getmaxyx()
             stdscr.erase()
 
@@ -3217,11 +3239,19 @@ class TaxonomyViewer:
                         self._field_cursor = _i
                         break
 
+        elif action == "open_ai_config":
+            self._pending_open_config = True
+
         elif action == "open_query":
+            from .. import sparql_query as _sq  # noqa: PLC0415
+
+            buf = self._last_query_buffer
+            if not buf:
+                buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
             self._state = QueryState(
                 file_paths=list(self._workspace.taxonomies.keys()),
-                query_buffer=self._last_query_buffer,
-                query_pos=len(self._last_query_buffer),
+                query_buffer=buf,
+                query_pos=len(buf),
             )
 
         elif action.startswith("map:"):
@@ -7880,13 +7910,31 @@ class TaxonomyViewer:
             self._draw_query_ac(stdscr, rows, cols, qs)
 
         # ── Keyword autocomplete popup (when editor focused and no @ AC) ──────
-        if qs.panel == "editor" and not qs.ac_active and not qs.show_presets:
+        if (
+            qs.panel == "editor"
+            and not qs.ac_active
+            and not qs.qn_active
+            and not qs.var_active
+            and not qs.show_presets
+        ):
             kw_word, _kw_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
             kw_cands = _sparql_kw_candidates(kw_word)
             if kw_cands:
                 self._draw_query_kw_popup(
                     stdscr, rows, cols, qs, kw_cands, cursor_display_line, cursor_col_on_screen
                 )
+
+        # ── QName completion popup ────────────────────────────────────────────
+        if qs.qn_active and qs.panel == "editor":
+            self._draw_query_qname_popup(
+                stdscr, rows, cols, qs, cursor_display_line, cursor_col_on_screen
+            )
+
+        # ── Variable suggestion popup ─────────────────────────────────────────
+        if qs.var_active and qs.panel == "editor":
+            self._draw_query_var_popup(
+                stdscr, rows, cols, qs, cursor_display_line, cursor_col_on_screen
+            )
 
         # ── Footer ────────────────────────────────────────────────────────────
         if qs.show_presets:
@@ -7898,12 +7946,14 @@ class TaxonomyViewer:
                 hint_text = "  ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel  "
             else:
                 hint_text = "  ↑↓: navigate   Tab/Enter: insert URI   Esc: back  "
+        elif qs.qn_active:
+            hint_text = "  ↑↓: navigate   Tab/Enter: insert QName   Esc: cancel  "
+        elif qs.var_active:
+            hint_text = "  ↑↓: navigate   Tab/Enter: insert variable   Esc: cancel  "
         elif qs.panel == "editor":
-            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   Tab: complete/results   Ctrl+L: presets   Esc: back  "
+            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: back  "
         else:
-            hint_text = (
-                "  Tab: editor   Enter: go to concept   A: AI   Ctrl+L: presets   Esc: back  "
-            )
+            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   A: AI   Ctrl+L: presets   Esc: back  "
         _draw_bar(stdscr, rows - 1, 0, cols, hint_text, dim=True)
 
     def _draw_query_presets(
@@ -8047,6 +8097,130 @@ class TaxonomyViewer:
         except curses.error:
             pass
 
+    def _draw_query_qname_popup(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+        cursor_display_line: int,
+        cursor_col: int,
+    ) -> None:
+        """Draw the QName completion popup below the cursor."""
+        from .. import sparql_query as _sq
+
+        qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+        candidates = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+        if not candidates:
+            return
+        n = len(candidates)
+        popup_w = min(max(len(c) for c in candidates) + 4, 40, cols - 2)
+        popup_h = min(n + 1, 10, rows - 3)
+        if popup_h < 2:
+            return
+
+        screen_row = 1 + (cursor_display_line - qs.query_scroll)
+        popup_y = screen_row + 1
+        popup_x = max(0, min(cursor_col, cols - popup_w - 1))
+        if popup_y + popup_h > rows - 1:
+            popup_y = max(1, screen_row - popup_h)
+
+        list_h = popup_h - 1
+        for y in range(popup_h):
+            try:
+                stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        cur = max(0, min(qs.qn_cursor, n - 1))
+        for i in range(list_h):
+            if i >= n:
+                break
+            sel = i == cur
+            text = f" {qs.qn_prefix}:{candidates[i]} "
+            attr = (
+                curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            try:
+                stdscr.addstr(popup_y + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr)
+            except curses.error:
+                pass
+
+        hint = " ↑↓: select   Tab: insert "
+        try:
+            stdscr.addstr(
+                popup_y + popup_h - 1,
+                popup_x,
+                hint.center(popup_w)[:popup_w],
+                curses.color_pair(_C_DIM),
+            )
+        except curses.error:
+            pass
+
+    def _draw_query_var_popup(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+        cursor_display_line: int,
+        cursor_col: int,
+    ) -> None:
+        """Draw the ?variable suggestion popup below the cursor."""
+        from .. import sparql_query as _sq
+
+        var_names = _sq.extract_query_variables(qs.query_buffer)
+        candidates = [v for v in var_names if v.lower().startswith(qs.var_filter.lower())]
+        if not candidates:
+            return
+        n = len(candidates)
+        popup_w = min(max(len(c) + 2 for c in candidates) + 4, 40, cols - 2)
+        popup_h = min(n + 1, 10, rows - 3)
+        if popup_h < 2:
+            return
+
+        screen_row = 1 + (cursor_display_line - qs.query_scroll)
+        popup_y = screen_row + 1
+        popup_x = max(0, min(cursor_col, cols - popup_w - 1))
+        if popup_y + popup_h > rows - 1:
+            popup_y = max(1, screen_row - popup_h)
+
+        list_h = popup_h - 1
+        for y in range(popup_h):
+            try:
+                stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        cur = max(0, min(qs.var_cursor, n - 1))
+        for i in range(list_h):
+            if i >= n:
+                break
+            sel = i == cur
+            text = f" ?{candidates[i]} "
+            attr = (
+                curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            try:
+                stdscr.addstr(popup_y + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr)
+            except curses.error:
+                pass
+
+        hint = " ↑↓: select   Tab: insert "
+        try:
+            stdscr.addstr(
+                popup_y + popup_h - 1,
+                popup_x,
+                hint.center(popup_w)[:popup_w],
+                curses.color_pair(_C_DIM),
+            )
+        except curses.error:
+            pass
+
     def _on_query(self, key: int, rows: int, cols: int) -> bool:
         """Handle a keypress in SPARQL query mode. Returns True to quit the viewer."""
         qs = self._state
@@ -8084,6 +8258,74 @@ class TaxonomyViewer:
         # ── Editor panel ──────────────────────────────────────────────────────
         # Only Ctrl/function keys here — all printable chars pass to the editor.
         if qs.panel == "editor":
+            # ── QName popup intercept ─────────────────────────────────────────
+            if qs.qn_active:
+                from .. import sparql_query as _sq
+
+                qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+                filtered = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+                if key == 27:  # Esc
+                    qs.qn_active = False
+                    return False
+                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
+                    if filtered:
+                        name = filtered[qs.qn_cursor]
+                        qs.query_buffer = (
+                            qs.query_buffer[: qs.qn_trigger_pos]
+                            + name
+                            + qs.query_buffer[qs.query_pos :]
+                        )
+                        qs.query_pos = qs.qn_trigger_pos + len(name)
+                    qs.qn_active = False
+                    return False
+                if key == curses.KEY_UP:
+                    qs.qn_cursor = max(0, qs.qn_cursor - 1)
+                    return False
+                if key == curses.KEY_DOWN:
+                    qs.qn_cursor = min(max(0, len(filtered) - 1), qs.qn_cursor + 1)
+                    return False
+                qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
+                qs.qn_filter = qs.query_buffer[qs.qn_trigger_pos : qs.query_pos]
+                if qs.query_pos <= qs.qn_trigger_pos:
+                    qs.qn_active = False
+                else:
+                    qs.qn_cursor = 0
+                return False
+
+            # ── Variable suggestion popup intercept ───────────────────────────
+            if qs.var_active:
+                from .. import sparql_query as _sq
+
+                var_names = _sq.extract_query_variables(qs.query_buffer)
+                filtered = [v for v in var_names if v.lower().startswith(qs.var_filter.lower())]
+                if key == 27:  # Esc
+                    qs.var_active = False
+                    return False
+                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
+                    if filtered:
+                        name = filtered[qs.var_cursor]
+                        qs.query_buffer = (
+                            qs.query_buffer[: qs.var_trigger_pos]
+                            + name
+                            + qs.query_buffer[qs.query_pos :]
+                        )
+                        qs.query_pos = qs.var_trigger_pos + len(name)
+                    qs.var_active = False
+                    return False
+                if key == curses.KEY_UP:
+                    qs.var_cursor = max(0, qs.var_cursor - 1)
+                    return False
+                if key == curses.KEY_DOWN:
+                    qs.var_cursor = min(max(0, len(filtered) - 1), qs.var_cursor + 1)
+                    return False
+                qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
+                qs.var_filter = qs.query_buffer[qs.var_trigger_pos : qs.query_pos]
+                if qs.query_pos <= qs.var_trigger_pos:
+                    qs.var_active = False
+                else:
+                    qs.var_cursor = 0
+                return False
+
             # ── @ autocomplete intercept ──────────────────────────────────────
             if qs.ac_active:
                 candidates = self._query_ac_candidates(
@@ -8171,6 +8413,8 @@ class TaxonomyViewer:
                 qs.ai_step = "ask"
                 qs.ai_question = ""
                 qs.ai_question_pos = 0
+            elif key == 22:  # Ctrl+V → visualize results
+                self._open_query_result_viz(qs)
             elif key == 9:  # Tab → results (no kw popup active)
                 qs.panel = "results"
             elif key == 12:  # Ctrl+L → presets
@@ -8188,7 +8432,15 @@ class TaxonomyViewer:
                 )
                 qs.query_pos += 1
             else:
-                qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
+                if key in (ord("{"), ord("(")):
+                    ch = chr(key)
+                    qs.query_buffer, qs.query_pos = _auto_close_bracket(
+                        qs.query_buffer, qs.query_pos, ch
+                    )
+                else:
+                    qs.query_buffer, qs.query_pos = _apply_line_edit(
+                        qs.query_buffer, qs.query_pos, key
+                    )
                 qs.kw_cursor = 0  # reset popup selection when word changes
                 # Trigger @ autocomplete when '@' is typed
                 if key == ord("@"):
@@ -8200,6 +8452,27 @@ class TaxonomyViewer:
                     qs.ac_level = 1
                     qs.ac_scheme_uri = ""
                     qs.ac_scheme_label = ""
+                elif key == ord(":"):
+                    from .. import sparql_query as _sq
+
+                    known = set(_sq.build_qname_index(self.taxonomy).keys())
+                    pfx = _qname_prefix_at_cursor(qs.query_buffer, qs.query_pos, known)
+                    if pfx is not None:
+                        qs.qn_active = True
+                        qs.qn_prefix = pfx
+                        qs.qn_filter = ""
+                        qs.qn_cursor = 0
+                        qs.qn_scroll = 0
+                        qs.qn_trigger_pos = qs.query_pos
+                elif key == ord("?"):
+                    from .. import sparql_query as _sq
+
+                    if _sq.extract_query_variables(qs.query_buffer):
+                        qs.var_active = True
+                        qs.var_filter = ""
+                        qs.var_cursor = 0
+                        qs.var_scroll = 0
+                        qs.var_trigger_pos = qs.query_pos
             return False
 
         # ── Results panel ─────────────────────────────────────────────────────
@@ -8233,6 +8506,8 @@ class TaxonomyViewer:
                     qs.running = True
             elif key == 12:  # Ctrl+L → presets
                 qs.show_presets = True
+            elif key == 22:  # Ctrl+V → visualize results
+                self._open_query_result_viz(qs)
             elif key in (ord("a"), ord("A"), 7):  # A or Ctrl+G → AI generate
                 qs.ai_step = "ask"
                 qs.ai_question = ""
@@ -8241,6 +8516,18 @@ class TaxonomyViewer:
                 qs.panel = "editor"
 
         return False
+
+    def _open_query_result_viz(self, qs: QueryState) -> None:
+        """Open a graph viz of the current SPARQL result URIs in the browser."""
+        from .. import sparql_query as _sq
+        from .. import viz_vowl as _viz
+
+        uris = _sq.extract_result_uris(qs.rows)
+        try:
+            url = _viz.open_query_result_in_browser(self.taxonomy, uris, self.file_path)
+            self._status = f"Query result graph opened — {url}"
+        except ValueError as exc:
+            self._status = str(exc)
 
     def _query_navigate_to_concept(self, qs: QueryState) -> None:
         """If the selected result row contains a known concept/scheme URI, jump to it."""

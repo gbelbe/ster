@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Ster — Add Individual",
+  "version": "1.0",
+  "description": "Add a Person individual to your ster knowledge base while browsing.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Add to knowledge base"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ster-add-individual@kai",
+      "strict_min_version": "109.0"
+    }
+  }
+}

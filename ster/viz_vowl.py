@@ -482,6 +482,114 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
     return {"nodes": nodes, "links": links, "layout": "hierarchical"}
 
 
+# ── SPARQL result subgraph ────────────────────────────────────────────────────
+
+
+def build_query_result_graph(taxonomy: Taxonomy, uris: set[str]) -> dict:
+    """Build a VOWL graph containing only the taxonomy nodes in *uris*.
+
+    Links are included only when both their source and target appear in *uris*.
+    Always returns force layout — arbitrary query result subsets have no
+    meaningful hierarchy.
+    """
+    nodes: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(uri: str, label: str, node_type: str, detail: dict | None = None) -> None:
+        if uri in uris and uri not in seen:
+            seen.add(uri)
+            nodes.append(
+                {
+                    "id": uri,
+                    "label": label,
+                    "fullLabel": label,
+                    "type": node_type,
+                    "detail": detail or {},
+                }
+            )
+
+    for uri, cls in taxonomy.owl_classes.items():
+        _add(uri, cls.label("en"), "class", _detail_class(cls, taxonomy))
+
+    for uri, ind in taxonomy.owl_individuals.items():
+        _add(uri, ind.label("en"), "individual", _detail_individual(ind, taxonomy))
+
+    for uri, scheme in taxonomy.schemes.items():
+        _add(uri, scheme.title("en"), "scheme", _detail_scheme(scheme, taxonomy))
+
+    top_concept_uris = {u for u, c in taxonomy.concepts.items() if c.top_concept_of}
+    for uri, concept in taxonomy.concepts.items():
+        _add(
+            uri,
+            concept.pref_label("en"),
+            "topconcept" if uri in top_concept_uris else "concept",
+            _detail_concept(concept, taxonomy),
+        )
+
+    links: list[dict] = []
+
+    for uri, cls in taxonomy.owl_classes.items():
+        if uri not in seen:
+            continue
+        for parent in cls.sub_class_of:
+            if not is_builtin_uri(parent) and parent in seen:
+                links.append({"source": uri, "target": parent, "type": "subClassOf", "label": ""})
+
+    for uri, ind in taxonomy.owl_individuals.items():
+        if uri not in seen:
+            continue
+        for type_uri in ind.types:
+            if not is_builtin_uri(type_uri) and type_uri in seen:
+                links.append({"source": uri, "target": type_uri, "type": "instanceOf", "label": ""})
+
+    for uri, concept in taxonomy.concepts.items():
+        if uri not in seen:
+            continue
+        for broader_uri in concept.broader:
+            if broader_uri in seen:
+                links.append({"source": uri, "target": broader_uri, "type": "broader", "label": ""})
+        if concept.top_concept_of and concept.top_concept_of in seen:
+            links.append(
+                {"source": uri, "target": concept.top_concept_of, "type": "inScheme", "label": ""}
+            )
+
+    return {"nodes": nodes, "links": links, "layout": "force"}
+
+
+def open_query_result_in_browser(
+    taxonomy: Taxonomy,
+    uris: set[str],
+    file_path: Path | None = None,
+) -> str:
+    """Open a VOWL graph of the SPARQL query result nodes in the browser.
+
+    Only taxonomy nodes whose URI appears in *uris* are rendered.
+    Raises ``ValueError`` when none of the URIs match any node.
+    """
+    graph = build_query_result_graph(taxonomy, uris)
+    if not graph["nodes"]:
+        raise ValueError("No taxonomy nodes matched the query result URIs.")
+    title = _ontology_title(taxonomy, file_path) + " — Query results"
+    graph_json = json.dumps(graph, ensure_ascii=False)
+    meta_json = json.dumps(_taxonomy_meta(taxonomy, file_path), ensure_ascii=False)
+    html = (
+        _HTML_TEMPLATE.replace("__TITLE__", title)
+        .replace('"__GRAPH_DATA__"', graph_json)
+        .replace('"__TAXO_META__"', meta_json)
+        .replace("__D3_SCRIPT__", _d3_script_tag())
+        .replace("__API_TOKEN__", "")
+    )
+    cache = Path.home() / ".cache" / "ster"
+    cache.mkdir(parents=True, exist_ok=True)
+    stem = (file_path.stem if file_path else "query") + "_sparql_result"
+    out = cache / f"{stem}_vowl.html"
+    out.write_text(html, encoding="utf-8")
+    port = _ensure_server(out.parent)
+    url = f"http://127.0.0.1:{port}/{out.name}"
+    webbrowser.open(url)
+    return url
+
+
 # ── File output ───────────────────────────────────────────────────────────────
 
 _D3_CDN = "https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"
