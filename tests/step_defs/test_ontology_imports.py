@@ -73,7 +73,7 @@ def _make_taxonomy(
 
 @pytest.fixture
 def ctx(tmp_path):
-    return {
+    data = {
         "cache_dir": tmp_path,
         "taxonomy": None,
         "uri": None,
@@ -82,6 +82,11 @@ def ctx(tmp_path):
         "raises": None,
         "urlopen_mock": None,
     }
+    yield data
+    for patcher in data.get("_patchers", []):
+        patcher.stop()
+    if "_patcher" in data:
+        data["_patcher"].stop()
 
 
 # ── Background ────────────────────────────────────────────────────────────────

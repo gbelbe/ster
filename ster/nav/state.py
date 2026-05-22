@@ -359,8 +359,6 @@ ViewerState = (
     | LangPickState
     | MapSchemePickState
     | MapConceptPickState
-    | AiInstallState
-    | AiSetupState
     | QueryState
 )
 

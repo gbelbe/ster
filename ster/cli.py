@@ -198,6 +198,7 @@ _SUBCOMMANDS = frozenset(
         "nav",
         "log",
         "init-ci",
+        "convert",
     }
 )
 
@@ -215,6 +216,62 @@ _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
 _ci_check_done: bool = False  # guard: prompt at most once per process
+_rdfxml_checked: bool = False  # guard: RDF/XML conversion prompt fires once per process
+_converted_from: Path | None = None  # original RDF/XML path when a TTL was auto-converted
+
+
+# ──────────────────────────── RDF/XML conversion helpers ─────────────────────
+
+
+def _maybe_prompt_rdfxml_convert(resolved: Path) -> Path:
+    """If *resolved* is RDF/XML and not yet checked this session, prompt the user
+    to convert it to Turtle.  Returns the path to use (may be the new .ttl file).
+    """
+    global _rdfxml_checked, _converted_from
+    if _rdfxml_checked or not store.is_rdfxml_path(resolved):
+        return resolved
+    _rdfxml_checked = True
+    original = resolved
+    try:
+        want = Confirm.ask(
+            f"RDF/XML format detected ({resolved.name}), convert to Turtle (.ttl) to use ster?",
+            default=True,
+        )
+    except (KeyboardInterrupt, EOFError):
+        want = False
+    if not want:
+        return resolved
+    ttl_path = store.convert_to_ttl(original)
+    _converted_from = original
+    from rich.panel import Panel
+
+    console.print(
+        Panel(
+            f"All edits will be saved to [bold]{ttl_path.name}[/bold].\n"
+            f"The original [bold]{original.name}[/bold] will not be updated automatically.\n"
+            f"[dim]Use 'ster convert' to convert between formats at any time.[/dim]",
+            title="[yellow]Note[/yellow]",
+            border_style="yellow",
+        )
+    )
+    return ttl_path
+
+
+def _maybe_backconvert(ttl_path: Path, pre_hash: str, original_path: Path) -> None:
+    """After a viewer session: if *ttl_path* changed, offer to convert back to *original_path*."""
+    if store.file_hash(ttl_path) == pre_hash:
+        return
+    try:
+        want = Confirm.ask(
+            f"Changes detected in [bold]{ttl_path.name}[/bold]. "
+            f"Convert back to [bold]{original_path.name}[/bold] and overwrite?",
+            default=False,
+        )
+    except (KeyboardInterrupt, EOFError):
+        want = False
+    if want:
+        store.convert(ttl_path, original_path)
+        console.print(f"[green]✓[/green] Converted {ttl_path.name} → {original_path.name}")
 
 
 # ──────────────────────────── session / file resolution ──────────────────────
@@ -267,6 +324,7 @@ def _resolve_file(path: Path | None) -> Path:
             )
 
     if path is not None:
+        path = _maybe_prompt_rdfxml_convert(path)
         _session_file = path
         _save_session(path)
         return path
@@ -276,7 +334,9 @@ def _resolve_file(path: Path | None) -> Path:
 
     saved = _load_session()
     if saved is not None:
+        saved = _maybe_prompt_rdfxml_convert(saved)
         _session_file = saved
+        _save_session(saved)
         return _session_file
 
     # Discover taxonomy files in CWD
@@ -294,11 +354,13 @@ def _resolve_file(path: Path | None) -> Path:
         console.print(f"[dim]Auto-detected:[/dim] [bold]{found[0].name}[/bold]")
         if not Confirm.ask("Use this file for this session?", default=True):
             raise typer.Abort()
-        _save_session(found[0])
-        _session_file = found[0]
+        found0 = _maybe_prompt_rdfxml_convert(found[0])
+        _save_session(found0)
+        _session_file = found0
         return _session_file
 
     selected = _pick_file(found)
+    selected = _maybe_prompt_rdfxml_convert(selected)
     _save_session(selected)
     _session_file = selected
     return _session_file
@@ -564,12 +626,30 @@ def _arrow_file_picker(
 # ──────────────────────────── helpers ────────────────────────────────────────
 
 
-def _load(path: Path) -> Taxonomy:
+def _load_safe(path: Path) -> Taxonomy | None:
+    """Load *path*, printing errors and returning None on failure (never raises)."""
+    mismatch = store.detect_format_mismatch(path)
+    if mismatch:
+        declared, actual = mismatch
+        console.print(
+            f"[yellow]⚠[/yellow]  [bold]{path.name}[/bold] has a "
+            f"[bold].{path.suffix.lstrip('.')}[/bold] extension but content looks like "
+            f"[bold]{actual}[/bold] format — loading anyway.\n"
+            f"   [dim]Rename the file or use [bold]ster convert[/bold] to fix this.[/dim]"
+        )
     try:
         return store.load(path)
     except Exception as exc:
         err.print(f"[red]Cannot load {path}: {exc}[/red]")
+        return None
+
+
+def _load(path: Path) -> Taxonomy:
+    """Load *path* for CLI commands — exits the process on failure."""
+    taxonomy = _load_safe(path)
+    if taxonomy is None:
         raise typer.Exit(1)
+    return taxonomy
 
 
 def _save(taxonomy: Taxonomy, path: Path) -> None:
@@ -841,41 +921,13 @@ def _load_workspace(
 # ──────────────────────────── AI config launcher ─────────────────────────────
 
 
-def _launch_ai_config(found: list[Path]) -> None:
-    """Open the TUI with the AI model configuration wizard pre-triggered."""
-    from .nav import TaxonomyViewer
-    from .workspace import TaxonomyWorkspace
+def _launch_setup(found: list[Path]) -> None:  # noqa: ARG001
+    """Open the standalone Setup / Options configuration screen."""
+    from .config_screen import run_config_screen
 
-    if found:
-        try:
-            workspace = TaxonomyWorkspace.from_files([found[0]])
-            primary = found[0]
-        except Exception:
-            workspace = TaxonomyWorkspace.from_files([])
-            primary = found[0]
-    else:
-        primary = Path.cwd() / "taxonomy.ttl"
-        workspace = TaxonomyWorkspace.from_files([])
-
-    from .model import Taxonomy
-
-    if found and found[0] in workspace.taxonomies:
-        taxonomy = workspace.taxonomies[found[0]]
-    else:
-        taxonomy = Taxonomy()
-
-    from .git.manager import GitManager
-
-    gm = GitManager(primary)
-
-    viewer = TaxonomyViewer(
-        taxonomy,
-        primary,
-        workspace=workspace,
-        git_manager=gm,
-    )
-    viewer._trigger_action("open_ai_config")
-    viewer.run()
+    project = Project.load(Path.cwd())
+    lang = project.lang if project else "en"
+    run_config_screen(lang=lang)
 
 
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
@@ -924,7 +976,10 @@ def _open_viewer(
     from .git.manager import GitManager, render_diff
     from .nav import TaxonomyViewer
 
-    taxonomy = _load(taxonomy_file)
+    taxonomy = _load_safe(taxonomy_file)
+    if taxonomy is None:
+        return
+    pre_hash = store.file_hash(taxonomy_file) if _converted_from else ""
 
     gm = GitManager(taxonomy_file)
     fetch_event: threading.Event | None = None
@@ -985,6 +1040,9 @@ def _open_viewer(
             if gm.is_configured():
                 msg = _make_taxonomy_commit_msg(taxonomy, taxonomy_file)
                 gm.commit_new_taxonomy(msg)
+
+    if _converted_from:
+        _maybe_backconvert(taxonomy_file, pre_hash, _converted_from)
 
 
 # ──────────────────────────── show ───────────────────────────────────────────
@@ -1331,6 +1389,7 @@ def cmd_nav(
 
     taxonomy_file = _resolve_file(file)
     taxonomy = _load(taxonomy_file)
+    pre_hash = store.file_hash(taxonomy_file) if _converted_from else ""
 
     console.print(
         f"\n[bold cyan]ster nav[/bold cyan]  [dim]{taxonomy_file.name}[/dim]  "
@@ -1341,6 +1400,9 @@ def cmd_nav(
 
     shell = TaxonomyShell(taxonomy, taxonomy_file, lang=lang)
     shell.cmdloop()
+
+    if _converted_from:
+        _maybe_backconvert(taxonomy_file, pre_hash, _converted_from)
 
 
 # ──────────────────────────── handles ────────────────────────────────────────
@@ -1401,6 +1463,43 @@ def cmd_validate(
         console.print(
             f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated."
         )
+
+
+# ──────────────────────────── convert ────────────────────────────────────────
+
+
+@app.command("convert")
+def cmd_convert(
+    input_file: Path = typer.Argument(..., help="Input RDF file (any supported format)."),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output file path. Format detected from extension. Defaults to input stem + .ttl.",
+    ),
+) -> None:
+    """Convert an RDF file to a different serialisation format.
+
+    Input format is inferred from the file extension (.rdf, .owl, .xml, .ttl, .jsonld, .n3).
+    Output defaults to Turtle (.ttl). Pass --output to specify a different path or format.
+
+    Examples:\n
+      ster convert onto.rdf              # → onto.ttl\n
+      ster convert onto.owl              # → onto.ttl\n
+      ster convert onto.ttl -o onto.rdf  # → RDF/XML\n
+    """
+    try:
+        if output is not None:
+            out = store.convert(input_file, output)
+        else:
+            out = store.convert_to_ttl(input_file)
+        console.print(f"[green]✓[/green] {input_file.name} → {out.name}")
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        err.print(f"[red]Cannot convert {input_file}: {exc}[/red]")
+        raise typer.Exit(1)
 
 
 # ──────────────────────────── export ─────────────────────────────────────────
@@ -1555,7 +1654,9 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
             err.print("[red]Invalid choice.[/red]")
             return
 
-    taxonomy = _load(taxonomy_file)
+    taxonomy = _load_safe(taxonomy_file)
+    if taxonomy is None:
+        return
     console.print(f"\n[dim]Opening graph for[/dim] [bold]{taxonomy_file.name}[/bold]…")
     try:
         out = _viz.open_in_browser(taxonomy, taxonomy_file)
@@ -1606,9 +1707,11 @@ def _ensure_pylode() -> bool:
 def _ensure_ontology_uri(taxonomy_file: Path) -> bool:
     """If the file has no owl:Ontology/skos:ConceptScheme URI, prompt for one and save it.
 
-    Returns False if the user cancels.
+    Returns False if the user cancels or the file cannot be loaded.
     """
-    taxonomy = _load(taxonomy_file)
+    taxonomy = _load_safe(taxonomy_file)
+    if taxonomy is None:
+        return False
     if taxonomy.ontology_uri or taxonomy.schemes:
         return True
 
@@ -1652,7 +1755,9 @@ def _run_html_export_interactive(files: list[Path]) -> None:
     console.print()
     for taxonomy_file in files:
         detected = detect_profile(taxonomy_file)
-        taxonomy = _load(taxonomy_file)
+        taxonomy = _load_safe(taxonomy_file)
+        if taxonomy is None:
+            continue
         langs = _available_languages(taxonomy) if detected != "ontpub" else []
         lang_str = (", ".join(langs) if langs else "en") if detected != "ontpub" else "n/a (OWL)"
         profile_str = {"vocpub": "SKOS/VocPub", "ontpub": "OWL/OntPub", "both": "SKOS+OWL"}.get(
@@ -1772,6 +1877,29 @@ def cmd_init_ci(
         console.print("[green]created:[/green] onto-ci.yml")
 
 
+@app.command("serve")
+def cmd_serve(
+    file: Path = typer.Argument(..., help="Ontology file (.ttl / .rdf / .jsonld)."),
+    host: str | None = typer.Option(None, "--host", help="Bind host."),
+    port: int | None = typer.Option(None, "--port", "-p", help="Bind port."),
+) -> None:
+    """Start the live WebVOWL viewer and ontology REST API.
+
+    The browser view auto-refreshes when the file is edited via the ster CLI.
+    API docs are available at http://<host>:<port>/docs.
+
+    Requires: pip install 'ster[api]'
+    """
+    try:
+        from .api_server import serve
+    except ImportError:
+        err.print(
+            "[red]The 'api' extras group is required:[/red] pip install 'ster[api]'",
+        )
+        raise typer.Exit(1)
+    serve(file.resolve(), host=host, port=port)
+
+
 def main() -> None:
     """Entry point.
 
@@ -1849,7 +1977,7 @@ def main() -> None:
             continue
 
         if selected is _AI_CONFIG_SENTINEL:
-            _launch_ai_config(found)
+            _launch_setup(found)
             continue
 
         if selected is _QUERY_SENTINEL:

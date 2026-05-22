@@ -24,8 +24,6 @@ from ster.model import (
 )
 from ster.nav import TaxonomyViewer
 from ster.nav.state import (
-    AiInstallState,
-    AiSetupState,
     BatchConceptDraft,
     BatchCreateState,
     ClassToIndividualState,
@@ -351,58 +349,6 @@ def test_draw_map_concept_pick(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
 def test_draw_lang_pick(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
     viewer._state = LangPickState(options=["en", "fr", "de"])
     viewer._draw_lang_pick(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-# ── AI install / setup ────────────────────────────────────────────────────────
-
-
-def test_draw_ai_install_pending(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiInstallState(pending_action="suggest")
-    viewer._draw_ai_install(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_install_installing(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiInstallState(installing=True, lines=["Collecting llm..."])
-    viewer._draw_ai_install(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_install_done(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiInstallState(done=True)
-    viewer._draw_ai_install(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_install_error(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiInstallState(error="pip failed")
-    viewer._draw_ai_install(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_setup_mode(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiSetupState(step="mode")
-    viewer._draw_ai_setup(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_setup_provider(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiSetupState(
-        step="provider",
-        mode="online",
-        online_providers=[("openai", "OpenAI", [("gpt-4o", "GPT-4o")])],
-    )
-    viewer._draw_ai_setup(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_setup_model(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiSetupState(
-        step="model",
-        mode="online",
-        selected_provider_id="openai",
-        online_providers=[("openai", "OpenAI", [("gpt-4o", "GPT-4o")])],
-    )
-    viewer._draw_ai_setup(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_ai_setup_done(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = AiSetupState(step="done", selected_model_id="gpt-4o")
-    viewer._draw_ai_setup(scr, *_rc(scr))  # type: ignore[arg-type]
 
 
 # ── batch create wizard ───────────────────────────────────────────────────────

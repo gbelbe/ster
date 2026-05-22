@@ -13,16 +13,20 @@ push_update() regenerates the file after any taxonomy mutation.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import http.server
 import json
+import math
 import re
 import socket
 import threading
+import urllib.parse
 import urllib.request
 import webbrowser
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from .model import Taxonomy, is_builtin_uri
 from .viz import (
@@ -30,12 +34,192 @@ from .viz import (
     _detail_concept,
     _detail_individual,
     _detail_scheme,
-    _label,
     _label_for,  # noqa: F401  (re-exported for potential callers)
     _local,
     _ontology_title,
     _taxonomy_meta,
 )
+
+# ── Layout helpers ────────────────────────────────────────────────────────────
+
+_ROOT_CLASS_R = 50  # px radius for root OWL classes in the VOWL renderer
+_SUB_CLASS_R = 40  # px radius for non-root OWL classes
+_INDIVIDUAL_R = 34  # px radius for individual nodes (must match JS nodeRadius default)
+_ORBIT_GAP = 8  # px gap between class circle edge and first orbit ring
+_RING_GAP = 6  # px gap between successive orbit rings
+
+
+def _root_class_order(taxonomy: Taxonomy) -> list[str]:
+    """Return root-class URIs sorted to minimise objectProperty edge crossings.
+
+    Uses the barycenter heuristic (3 passes).  A root class is any OWL class
+    that has no non-builtin parent inside *taxonomy*.
+    """
+    parent_of: dict[str, str] = {}
+    for cls_uri, cls in taxonomy.owl_classes.items():
+        for p in cls.sub_class_of:
+            if not is_builtin_uri(p) and p in taxonomy.owl_classes:
+                parent_of[cls_uri] = p
+                break
+
+    roots = [u for u in taxonomy.owl_classes if u not in parent_of]
+    if len(roots) <= 1:
+        return roots
+
+    def get_root(cls_uri: str, depth: int = 0) -> str | None:
+        if depth > 40:
+            return None
+        if cls_uri not in parent_of:
+            return cls_uri if cls_uri in taxonomy.owl_classes else None
+        return get_root(parent_of[cls_uri], depth + 1)
+
+    # Inter-root adjacency from objectProperty edges
+    adj: dict[str, list[str]] = {r: [] for r in roots}
+    for prop in taxonomy.owl_properties.values():
+        if prop.prop_type != "ObjectProperty":
+            continue
+        for domain_uri in prop.domains:
+            for range_uri in prop.ranges:
+                src_root = get_root(domain_uri)
+                tgt_root = get_root(range_uri)
+                if src_root and tgt_root and src_root != tgt_root:
+                    if src_root in adj:
+                        adj[src_root].append(tgt_root)
+                    if tgt_root in adj:
+                        adj[tgt_root].append(src_root)
+
+    order: dict[str, float] = {r: float(i) for i, r in enumerate(roots)}
+    for _ in range(3):
+        new_order: dict[str, float] = {}
+        for r in roots:
+            peers = adj[r]
+            new_order[r] = (
+                sum(order[p] for p in peers if p in order) / len(peers) if peers else order[r]
+            )
+        sorted_roots = sorted(roots, key=lambda r: new_order[r])
+        order = {r: float(i) for i, r in enumerate(sorted_roots)}
+
+    return sorted(roots, key=lambda r: order[r])
+
+
+def _individual_orbit_data(taxonomy: Taxonomy, root_order: list[str]) -> dict[str, dict]:
+    """Compute per-individual orbital placement data.
+
+    Returns a mapping ``{individual_uri: {angle, orbit_r, class_uri}}``.
+    The angle (radians) points into the largest angular gap around the class —
+    away from its subClassOf parent, children, and objectProperty peers.
+    """
+    # individual → first non-builtin type
+    ind_class: dict[str, str] = {}
+    for ind_uri, ind in taxonomy.owl_individuals.items():
+        for type_uri in ind.types:
+            if not is_builtin_uri(type_uri):
+                ind_class[ind_uri] = type_uri
+                break
+
+    if not ind_class:
+        return {}
+
+    # Class hierarchy maps
+    parent_of: dict[str, str] = {}
+    children_of: dict[str, list[str]] = {}
+    for cls_uri, cls in taxonomy.owl_classes.items():
+        for p in cls.sub_class_of:
+            if not is_builtin_uri(p) and p in taxonomy.owl_classes:
+                parent_of[cls_uri] = p
+                children_of.setdefault(p, []).append(cls_uri)
+                break
+
+    root_index: dict[str, int] = {r: i for i, r in enumerate(root_order)}
+
+    def get_root(cls_uri: str, depth: int = 0) -> str | None:
+        if depth > 40:
+            return None
+        if cls_uri not in parent_of:
+            return cls_uri if cls_uri in taxonomy.owl_classes else None
+        return get_root(parent_of[cls_uri], depth + 1)
+
+    # objectProperty adjacency per class
+    obj_peers: dict[str, list[str]] = {}
+    for prop in taxonomy.owl_properties.values():
+        if prop.prop_type != "ObjectProperty":
+            continue
+        for domain_uri in prop.domains:
+            for range_uri in prop.ranges:
+                if domain_uri != range_uri:
+                    obj_peers.setdefault(domain_uri, []).append(range_uri)
+                    obj_peers.setdefault(range_uri, []).append(domain_uri)
+
+    # Group individuals by class (preserving insertion order for determinism)
+    class_individuals: dict[str, list[str]] = {}
+    for ind_uri, cls_uri in ind_class.items():
+        class_individuals.setdefault(cls_uri, []).append(ind_uri)
+
+    result: dict[str, dict] = {}
+
+    for cls_uri, ind_uris in class_individuals.items():
+        is_root_cls = cls_uri not in parent_of
+        cls_r = _ROOT_CLASS_R if is_root_cls else _SUB_CLASS_R
+        orbit_r = cls_r + _INDIVIDUAL_R + _ORBIT_GAP
+
+        # Collect "busy" directions (radians, screen coords: Y grows downward)
+        busy: list[float] = []
+        if cls_uri in parent_of:
+            busy.append(-math.pi / 2)  # parent is above
+        if cls_uri in children_of:
+            busy.append(math.pi / 2)  # children are below
+
+        my_root = get_root(cls_uri)
+        my_idx = root_index.get(my_root, -1) if my_root else -1
+        for peer_uri in obj_peers.get(cls_uri, []):
+            peer_root = get_root(peer_uri)
+            peer_idx = root_index.get(peer_root, -1) if peer_root else -1
+            if peer_idx < 0 or my_idx < 0 or peer_idx == my_idx:
+                continue
+            busy.append(0.0 if peer_idx > my_idx else math.pi)
+
+        # Find the largest angular gap and its angular size
+        free_center = math.pi / 2  # default: downward
+        max_free_angle = 2 * math.pi  # default: full circle
+        if busy:
+            norm = sorted((a % (2 * math.pi) + 2 * math.pi) % (2 * math.pi) for a in busy)
+            max_gap = 0.0
+            for i, a in enumerate(norm):
+                gap = (norm[0] + 2 * math.pi - a) if i == len(norm) - 1 else (norm[i + 1] - a)
+                if gap > max_gap:
+                    max_gap = gap
+                    free_center = a + gap / 2
+            max_free_angle = max_gap
+
+        # Place individuals into concentric rings.  Each ring packs individuals
+        # at the minimum angular step that prevents overlap (touching is fine).
+        # Overflow individuals move to the next ring at a larger radius.
+        available_arc = max_free_angle * 0.92  # leave a small margin at the edges
+        remaining = list(ind_uris)
+        ring = 0
+        while remaining and ring < 8:
+            ring_r = orbit_r + ring * (2 * _INDIVIDUAL_R + _RING_GAP)
+            # Minimum angular gap between adjacent individual centres on this ring
+            min_step = 2 * math.asin(min(_INDIVIDUAL_R / ring_r, 1.0))
+            # How many individuals fit without overlapping inside available_arc
+            capacity = 1 + int(available_arc / min_step) if available_arc > 0 else 1
+            batch = remaining[:capacity]
+            remaining = remaining[capacity:]
+            n_batch = len(batch)
+            # Arc spread: use exactly the minimum touching distance so individuals
+            # are as compact as possible while never stacking
+            spread = 0.0 if n_batch == 1 else (n_batch - 1) * min_step
+            for i, ind_uri in enumerate(batch):
+                offset = 0.0 if n_batch == 1 else spread * (i / (n_batch - 1) - 0.5)
+                result[ind_uri] = {
+                    "angle": free_center + offset,
+                    "orbit_r": ring_r,
+                    "class_uri": cls_uri,
+                }
+            ring += 1
+
+    return result
+
 
 # ── Data builder ──────────────────────────────────────────────────────────────
 
@@ -52,7 +236,7 @@ def build_vowl_graph(taxonomy: Taxonomy) -> dict:
             nodes.append(
                 {
                     "id": uri,
-                    "label": _label(label, 20),
+                    "label": label,
                     "fullLabel": label,
                     "type": node_type,
                     "detail": detail or {},
@@ -146,7 +330,44 @@ def build_vowl_graph(taxonomy: Taxonomy) -> dict:
 
     has_skos = bool(taxonomy.schemes) or bool(taxonomy.concepts)
     layout = "hierarchical" if (bool(taxonomy.owl_classes) and not has_skos) else "force"
-    return {"nodes": nodes, "links": links, "layout": layout}
+
+    result: dict = {"nodes": nodes, "links": links, "layout": layout}
+
+    if layout == "hierarchical":
+        root_order = _root_class_order(taxonomy)
+        orbit_map = _individual_orbit_data(taxonomy, root_order)
+        result["rootClassOrder"] = root_order
+
+        # Embed orbit data into individual nodes
+        node_by_id = {n["id"]: n for n in nodes}
+        for ind_uri, od in orbit_map.items():
+            node = node_by_id.get(ind_uri)
+            if node:
+                node["orbitAngle"] = od["angle"]
+                node["orbitR"] = od["orbit_r"]
+                node["orbitClassUri"] = od["class_uri"]
+
+        # Add groupRadius to class nodes so the JS collision force reserves
+        # enough space for each class together with its orbiting individuals.
+        non_root = {
+            cls_uri
+            for cls_uri, cls in taxonomy.owl_classes.items()
+            for p in cls.sub_class_of
+            if not is_builtin_uri(p) and p in taxonomy.owl_classes
+        }
+        class_orbit_r: dict[str, int] = {}
+        for od in orbit_map.values():
+            cu = od["class_uri"]
+            class_orbit_r[cu] = max(class_orbit_r.get(cu, 0), od["orbit_r"])
+
+        for node in nodes:
+            if node["type"] != "class":
+                continue
+            cls_r = _SUB_CLASS_R if node["id"] in non_root else _ROOT_CLASS_R
+            orb_r = class_orbit_r.get(node["id"], 0)
+            node["groupRadius"] = (orb_r + _INDIVIDUAL_R) if orb_r else (cls_r + 28)
+
+    return result
 
 
 def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
@@ -185,7 +406,7 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
             nodes.append(
                 {
                     "id": uri,
-                    "label": _label(label, 20),
+                    "label": label,
                     "fullLabel": label,
                     "type": node_type,
                     "detail": detail or {},
@@ -280,12 +501,103 @@ def _d3_script_tag() -> str:
     return f"<script>{d3_path.read_text()}</script>"
 
 
+API_PORT: int = 8765
+
 _out_path: Path | None = None
 _file_path: Path | None = None
 
 # One-per-process HTTP server that serves the ster cache directory.
 _http_server: http.server.HTTPServer | None = None
 _http_port: int | None = None
+
+# FastAPI/SSE-based server — set when ster[api] is available.
+_api_app: Any = None
+_api_broadcaster: Any = None
+_api_loop: Any = None
+_api_running: bool = False
+
+
+def _start_api_server(
+    taxonomy: Taxonomy,
+    file_path: Path | None,
+    on_change_fn: Any = None,
+) -> bool:
+    """Start the FastAPI server in a daemon thread; return True on success."""
+    global _api_app, _api_broadcaster, _api_loop, _api_running
+    if _api_app is not None:
+        _api_app.state._ster["taxonomy"] = taxonomy
+        return True
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError:
+        return False
+    try:
+        from .api import SSEBroadcaster, create_app  # noqa: PLC0415
+    except ImportError:
+        return False
+    try:
+        from .api_server import _load_or_create_token  # noqa: PLC0415
+    except ImportError:
+        return False
+
+    from .api_server import load_server_config  # noqa: PLC0415
+
+    _server_url, _server_port = load_server_config()
+    _server_host = _server_url.split("://", 1)[-1]  # strip scheme for bind address
+
+    token = _load_or_create_token()
+    broadcaster = SSEBroadcaster()
+
+    def html_fn(root_uri: str | None = None) -> str:
+        tax = app.state._ster["taxonomy"]
+        return render_vowl_html(tax, file_path, api_token=token, root_uri=root_uri)
+
+    def save_fn(tax: Taxonomy) -> None:
+        if file_path is not None:
+            from .store import save  # noqa: PLC0415
+
+            save(tax, file_path)
+        if on_change_fn is not None:
+            on_change_fn()
+
+    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn)
+    app.state._ster["broadcaster"] = broadcaster
+
+    _api_app = app
+    _api_broadcaster = broadcaster
+
+    loop_captured: threading.Event = threading.Event()
+
+    def _run() -> None:
+        global _api_loop
+
+        async def _serve() -> None:
+            global _api_loop
+            _api_loop = asyncio.get_running_loop()
+            loop_captured.set()
+            cfg = uvicorn.Config(app, host=_server_host, port=_server_port, log_level="warning")
+            await uvicorn.Server(cfg).serve()
+
+        asyncio.run(_serve())
+
+    threading.Thread(target=_run, daemon=True, name="ster-api-server").start()
+    loop_captured.wait(timeout=10)
+    if _api_loop is None:
+        _api_app = _api_broadcaster = None
+        _api_running = False
+        return False
+
+    import time as _time  # noqa: PLC0415
+
+    for _ in range(100):  # up to 10 s — uvicorn binds socket after loop starts
+        try:
+            with socket.socket() as _s:
+                if _s.connect_ex((_server_host, _server_port)) == 0:
+                    break
+        except OSError:
+            pass
+        _time.sleep(0.1)
+    return True
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -318,42 +630,95 @@ def _graph_path(file_path: Path | None) -> Path:
     return cache / f"{stem}_vowl.html"
 
 
-def _write_html(taxonomy: Taxonomy, file_path: Path | None, out_path: Path) -> None:
+def render_vowl_html(
+    taxonomy: Taxonomy,
+    file_path: Path | None,
+    api_token: str = "",
+    root_uri: str | None = None,
+) -> str:
+    """Return the rendered VOWL HTML string.
+
+    When *api_token* is non-empty the page connects to the SSE stream so the
+    WebVOWL view refreshes automatically whenever the ontology file changes.
+    When *root_uri* is given a focused subgraph centred on that class is rendered.
+    """
     title = _ontology_title(taxonomy, file_path)
-    graph = build_vowl_graph(taxonomy)
+    if root_uri:
+        root_cls = taxonomy.owl_classes.get(root_uri)
+        root_label = root_cls.label("en") if root_cls else _local(root_uri)
+        title = f"{title} — {root_label}"
+        graph = build_focused_vowl_graph(taxonomy, root_uri)
+    else:
+        graph = build_vowl_graph(taxonomy)
     graph_json = json.dumps(graph, ensure_ascii=False)
     meta = _taxonomy_meta(taxonomy, file_path)
     meta_json = json.dumps(meta, ensure_ascii=False)
-    html = (
+    return (
         _HTML_TEMPLATE.replace("__TITLE__", title)
         .replace('"__GRAPH_DATA__"', graph_json)
         .replace('"__TAXO_META__"', meta_json)
         .replace("__D3_SCRIPT__", _d3_script_tag())
+        .replace("__API_TOKEN__", api_token)
     )
-    out_path.write_text(html, encoding="utf-8")
 
 
-def open_in_browser(taxonomy: Taxonomy, file_path: Path | None = None) -> Path:
-    """Write the VOWL HTML and open it via a local HTTP server (avoids file:// security blocks)."""
+def _write_html(taxonomy: Taxonomy, file_path: Path | None, out_path: Path) -> None:
+    out_path.write_text(render_vowl_html(taxonomy, file_path), encoding="utf-8")
+
+
+def open_in_browser(
+    taxonomy: Taxonomy,
+    file_path: Path | None = None,
+    on_change_fn: Any = None,
+) -> str:
+    """Open the VOWL graph in the browser.
+
+    When ster[api] is installed, starts the live FastAPI server (SSE push refresh).
+    Falls back to a static HTTP server otherwise.
+
+    *on_change_fn* (optional) is called after any API mutation (e.g. individual
+    creation) so the caller can rebuild its display tree.
+    """
+    if _start_api_server(taxonomy, file_path, on_change_fn):
+        from .api_server import load_server_config  # noqa: PLC0415
+
+        _url, _port = load_server_config()
+        url = f"{_url}:{_port}/"
+        webbrowser.open(url)
+        return url
+    # Fallback: static file server
     global _out_path, _file_path
     _file_path = file_path
     _out_path = _graph_path(file_path)
     _write_html(taxonomy, file_path, _out_path)
     port = _ensure_server(_out_path.parent)
-    webbrowser.open(f"http://127.0.0.1:{port}/{_out_path.name}")
-    return _out_path
+    url = f"http://127.0.0.1:{port}/{_out_path.name}"
+    webbrowser.open(url)
+    return url
 
 
 def push_update(taxonomy: Taxonomy) -> None:
-    """Regenerate the VOWL HTML if it has been opened before."""
+    """Push an updated taxonomy to all connected viewers."""
+    if _api_app is not None:
+        _api_app.state._ster["taxonomy"] = taxonomy
+        _api_broadcaster.notify(_api_loop)
+        return
     if _out_path is not None:
         _write_html(taxonomy, _file_path, _out_path)
 
 
 def open_focused_in_browser(
     taxonomy: Taxonomy, root_uri: str, file_path: Path | None = None
-) -> Path:
-    """Write a focused VOWL HTML centred on *root_uri* and open it in the browser."""
+) -> str:
+    """Open a focused VOWL graph centred on *root_uri* in the browser."""
+    if _api_app is not None:
+        from .api_server import load_server_config  # noqa: PLC0415
+
+        _url, _port = load_server_config()
+        url = f"{_url}:{_port}/?root={urllib.parse.quote(root_uri, safe='')}"
+        webbrowser.open(url)
+        return url
+    # Fallback: static focused file
     root_cls = taxonomy.owl_classes.get(root_uri)
     root_label = root_cls.label("en") if root_cls else _local(root_uri)
     safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", root_label)
@@ -361,22 +726,11 @@ def open_focused_in_browser(
     cache = Path.home() / ".cache" / "ster"
     cache.mkdir(parents=True, exist_ok=True)
     out = cache / f"{stem}_vowl.html"
-
-    title = _ontology_title(taxonomy, file_path)
-    graph = build_focused_vowl_graph(taxonomy, root_uri)
-    graph_json = json.dumps(graph, ensure_ascii=False)
-    meta = _taxonomy_meta(taxonomy, file_path)
-    meta_json = json.dumps(meta, ensure_ascii=False)
-    html = (
-        _HTML_TEMPLATE.replace("__TITLE__", f"{title} — {root_label}")
-        .replace('"__GRAPH_DATA__"', graph_json)
-        .replace('"__TAXO_META__"', meta_json)
-        .replace("__D3_SCRIPT__", _d3_script_tag())
-    )
-    out.write_text(html, encoding="utf-8")
+    out.write_text(render_vowl_html(taxonomy, file_path, root_uri=root_uri), encoding="utf-8")
     port = _ensure_server(out.parent)
-    webbrowser.open(f"http://127.0.0.1:{port}/{out.name}")
-    return out
+    url = f"http://127.0.0.1:{port}/{out.name}"
+    webbrowser.open(url)
+    return url
 
 
 # ── HTML template ─────────────────────────────────────────────────────────────
@@ -400,6 +754,7 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 .node circle{cursor:grab}
 .node text{pointer-events:none;font-family:system-ui,sans-serif;fill:white;
            text-anchor:middle;dominant-baseline:central}
+.node-individual text{fill:#000}
 .node-pinned .pin-dot{display:block}
 .pin-dot{display:none;pointer-events:none;fill:#f59e0b}
 .link{fill:none}
@@ -560,7 +915,7 @@ links.forEach(l=>{
 links.forEach(l=>{
   const k=[l.source,l.target].sort().join("\x00");
   pairIdx[k]=(pairIdx[k]||0);
-  l._arc=(pairIdx[k]-(pairCount[k]-1)/2)*55;
+  l._arc=(pairIdx[k]-(pairCount[k]-1)/2)*(l.type==="objectProperty"?90:55);
   pairIdx[k]++;
 });
 
@@ -612,6 +967,13 @@ if(isHierarchical&&rootClasses.length>0){
     });
     bfsQ=next;
   }
+  // ── Step 1: order root classes using Python-computed rootClassOrder ──
+  if(graphData.rootClassOrder&&rootClasses.length>1){
+    const rcIdx={};
+    graphData.rootClassOrder.forEach((u,i)=>{ rcIdx[u]=i; });
+    rootClasses.sort((a,b)=>(rcIdx[a.id]??rootClasses.length)-(rcIdx[b.id]??rootClasses.length));
+  }
+  // ── Step 2: assign lanes (uses the now-ordered rootClasses) ──────────────────
   const hierLaneW=W/Math.max(rootClasses.length,1);
   rootClasses.forEach((rc,i)=>{ rc._hierLaneX=hierLaneW*(i+0.5); });
   nodes.forEach(n=>{
@@ -623,10 +985,56 @@ if(isHierarchical&&rootClasses.length>0){
     const rcNode=rootId?nodeById[rootId]:null;
     n._hierLaneX=rcNode?rcNode._hierLaneX:W/2;
   });
+  // ── Step 3: spread siblings within each subtree + align individual lanes ──
+  spreadSubtrees();
 }
 function hierTargetY(d){
+  if(d.orbitClassUri){
+    const dep=owlHierDepth[d.orbitClassUri];
+    if(dep!==undefined) return 70+dep*Math.max((H-160)/(maxHierDepth+2),90);
+  }
   const depth=owlHierDepth[d.id]!==undefined?owlHierDepth[d.id]:maxHierDepth+1;
   return 70+depth*Math.max((H-160)/(maxHierDepth+2),90);
+}
+// Spread sibling class nodes within each subtree lane to minimise subClassOf crossings.
+// Sorts each depth level by the parent's X position and evenly spaces siblings
+// within the lane width, so parent→child edges never interleave.
+function spreadSubtrees(){
+  const laneW=W/Math.max(rootClasses.length,1);
+  rootClasses.forEach(rc=>{
+    const subX={};
+    subX[rc.id]=rc._hierLaneX;
+    // BFS within this subtree, collecting nodes by depth
+    const byDepth=[[rc.id]];
+    const seen=new Set([rc.id]);
+    let front=[rc.id];
+    while(front.length){
+      const next=[];
+      front.forEach(id=>(subClassOfChildMap[id]||[]).forEach(cId=>{
+        if(!seen.has(cId)&&nodeById[cId]&&nodeById[cId].type==="class"){
+          seen.add(cId);next.push(cId);
+        }
+      }));
+      if(next.length) byDepth.push(next);
+      front=next;
+    }
+    byDepth.forEach((depthNodes,d)=>{
+      if(d===0) return;
+      const n=depthNodes.length;
+      // Sort by parent X to preserve parent ordering → no crossing between subtrees
+      depthNodes.sort((a,b)=>(subX[subClassOfParentMap[a]]??rc._hierLaneX)-(subX[subClassOfParentMap[b]]??rc._hierLaneX));
+      const spread=Math.min(laneW*0.88,(n-1)*110);
+      depthNodes.forEach((id,i)=>{
+        subX[id]=n===1?rc._hierLaneX:rc._hierLaneX+(i-(n-1)/2)*(spread/Math.max(n-1,1));
+      });
+    });
+    seen.forEach(id=>{ const nd=nodeById[id]; if(nd) nd._hierLaneX=subX[id]; });
+  });
+  // Re-align each individual to its class's (possibly updated) lane X
+  nodes.forEach(n=>{
+    if(!n.orbitClassUri) return;
+    const cls=nodeById[n.orbitClassUri]; if(cls) n._hierLaneX=cls._hierLaneX||W/2;
+  });
 }
 
 // ── SKOS cluster lane assignment ─────────────────────────────────────────────
@@ -679,11 +1087,62 @@ function nodeRadius(d){
   if(d.type==="class") return isRoot(d)?50:40;
   if(d.type==="scheme") return 44;
   if(d.type==="topconcept") return 36;
-  if(d.type==="individual") return 24;
+  if(d.type==="individual") return d._expandR||34;
   return 28;
 }
-// Slightly larger hitbox for force collision
-function nodeRadiusColl(d){ return nodeRadius(d)+28; }
+// Group footprint for collision: Python pre-computes groupRadius for class nodes
+function nodeRadiusColl(d){ return d.groupRadius||nodeRadius(d)+28; }
+// Render a node label inside a circle of radius r at font size fs.
+// Words wrap greedily to fit the circle width. If all wrapped lines fit
+// vertically the block is centred; if there are more lines than fit the text
+// starts at the top of the circle and the last visible line ends with "…".
+function renderLabel(textEl,label,r,fs){
+  textEl.each(function(){ while(this.firstChild) this.removeChild(this.firstChild); });
+  if(!label) return;
+  const lh=fs*1.3;
+  const pad=4;
+  const charW=fs*0.62;
+  // Maximum chars per line and maximum lines that fit inside the circle
+  const maxCpl=Math.max(Math.floor((r*2-pad*2)*0.88/charW),4);
+  const maxLines=Math.max(Math.floor((r*2-pad*2)/lh),1);
+  const words=label.split(/\\s+/).filter(Boolean);
+  // Pre-truncate each token so no single word ever exceeds one line, then wrap
+  const allLines=[];
+  let cur='';
+  for(const w of words){
+    const tok=w.length>maxCpl?w.slice(0,maxCpl-1)+'…':w;
+    const test=cur?cur+' '+tok:tok;
+    if(cur&&test.length>maxCpl){ allLines.push(cur); cur=tok; }
+    else cur=test;
+  }
+  if(cur) allLines.push(cur);
+  // Clip to maxLines; mark last visible line with "…" when content is cut off
+  const overflow=allLines.length>maxLines;
+  const visLines=overflow?allLines.slice(0,maxLines):[...allLines];
+  if(overflow){
+    let last=visLines[visLines.length-1];
+    if(!last.endsWith('…'))
+      last=last.length>=maxCpl?last.slice(0,maxCpl-1)+'…':last+'…';
+    visLines[visLines.length-1]=last;
+  }
+  const n=visLines.length;
+  if(n===0) return;
+  if(n===1){ textEl.text(visLines[0]); return; }
+  if(overflow){
+    // Top-aligned: first line near the top of the circle
+    const yTop=-(r-pad-lh/2);
+    visLines.forEach((line,i)=>{
+      textEl.append("tspan").attr("x",0).attr("y",yTop+i*lh)
+        .attr("dominant-baseline","central").text(line);
+    });
+  } else {
+    // All lines fit: centre the block vertically
+    visLines.forEach((line,i)=>{
+      textEl.append("tspan").attr("x",0).attr("y",(i-(n-1)/2)*lh)
+        .attr("dominant-baseline","central").text(line);
+    });
+  }
+}
 
 // ── Node colours (VOWL palette) ───────────────────────────────────────────────
 function nodeFill(d){
@@ -734,8 +1193,15 @@ function seedPositions(){
     });
   } else if(isHierarchical){
     nodes.forEach(n=>{
-      n.x=(n._hierLaneX||W/2)+(Math.random()-0.5)*50;
-      n.y=hierTargetY(n)+(Math.random()-0.5)*20;
+      if(n.orbitClassUri){
+        const cls=nodeById[n.orbitClassUri];
+        const cx=cls?(cls._hierLaneX||W/2):W/2;
+        n.x=cx+Math.cos(n.orbitAngle)*(n.orbitR||65);
+        n.y=hierTargetY(n)+Math.sin(n.orbitAngle)*(n.orbitR||65);
+      } else {
+        n.x=(n._hierLaneX||W/2)+(Math.random()-0.5)*50;
+        n.y=hierTargetY(n)+(Math.random()-0.5)*20;
+      }
     });
   } else {
     nodes.forEach(n=>{
@@ -747,9 +1213,33 @@ function seedPositions(){
 seedPositions();
 
 // ── Force simulation ──────────────────────────────────────────────────────────
+// Custom collision for hierarchical OWL layout: skips class ↔ own-individual and
+// same-class individual pairs so the orbit force can hold individuals close to
+// their class without being overridden by the group's own collision radius.
+function hierCollide(alpha){
+  for(let i=0;i<nodes.length;i++){
+    const ni=nodes[i];
+    const ri=ni.orbitClassUri?nodeRadius(ni):(ni.groupRadius||nodeRadius(ni)+28);
+    for(let j=i+1;j<nodes.length;j++){
+      const nj=nodes[j];
+      if(ni.type==="class"&&nj.orbitClassUri===ni.id) continue;
+      if(nj.type==="class"&&ni.orbitClassUri===nj.id) continue;
+      if(ni.orbitClassUri&&ni.orbitClassUri===nj.orbitClassUri) continue;
+      const rj=nj.orbitClassUri?nodeRadius(nj):(nj.groupRadius||nodeRadius(nj)+28);
+      const dx=nj.x-ni.x,dy=nj.y-ni.y,d2=dx*dx+dy*dy;
+      const minD=ri+rj+2;
+      if(d2>0&&d2<minD*minD){
+        const dist=Math.sqrt(d2),k=(minD-dist)/dist*alpha*0.5;
+        const fx=dx*k,fy=dy*k;
+        if(!ni.fx){ni.vx-=fx;ni.vy-=fy;}
+        if(!nj.fx){nj.vx+=fx;nj.vy+=fy;}
+      }
+    }
+  }
+}
 const sim=d3.forceSimulation()
   .alphaDecay(0.016)
-  .force("collide",d3.forceCollide(nodeRadiusColl).iterations(3));
+  .force("collide",isHierarchical?hierCollide:d3.forceCollide(nodeRadiusColl).iterations(3));
 
 if(hasClusters){
   sim.force("link",d3.forceLink().id(d=>d.id)
@@ -759,9 +1249,24 @@ if(hasClusters){
   .force("cy",d3.forceY(d=>tierY(d)).strength(d=>d.type==="scheme"?0.98:d.type==="topconcept"?0.85:0.70));
 } else if(isHierarchical){
   sim.force("link",d3.forceLink().id(d=>d.id).distance(130).strength(0.10))
-  .force("charge",d3.forceManyBody().strength(d=>isRoot(d)?-2000:-600))
-  .force("cx",d3.forceX(d=>d._hierLaneX||W/2).strength(0.45))
-  .force("cy",d3.forceY(d=>hierTargetY(d)).strength(0.75));
+  .force("charge",d3.forceManyBody().strength(d=>d.type==="individual"?-80:isRoot(d)?-2000:-600))
+  // Classes: strong lane forces so subtrees don't drift and cross each other
+  .force("cx",d3.forceX(d=>d._hierLaneX||W/2).strength(d=>d.orbitClassUri?0:0.65))
+  .force("cy",d3.forceY(d=>hierTargetY(d)).strength(d=>d.orbitClassUri?0:0.75))
+  // Individuals: pulled toward their Python-computed orbital position around their class
+  .force("orbit",function(alpha){
+    nodes.forEach(n=>{
+      if(!n.orbitClassUri) return;
+      const cls=nodeById[n.orbitClassUri];
+      if(!cls||cls.x==null||cls.y==null) return;
+      const angle=n._expandAngle!=null?n._expandAngle:n.orbitAngle;
+      const orbitR=n._expandOrbitR!=null?n._expandOrbitR:(n.orbitR||65);
+      const tx=cls.x+Math.cos(angle)*orbitR;
+      const ty=cls.y+Math.sin(angle)*orbitR;
+      n.vx+=(tx-n.x)*0.9*alpha;
+      n.vy+=(ty-n.y)*0.9*alpha;
+    });
+  });
 } else {
   sim.force("link",d3.forceLink().id(d=>d.id).distance(180).strength(0.2))
   .force("charge",d3.forceManyBody().strength(-800))
@@ -779,7 +1284,7 @@ function edgePath(d){
   if(dist<sr+tr) return "";
   const sx=s.x+dx/dist*sr, sy=s.y+dy/dist*sr;
   const tx=t.x-dx/dist*tr, ty=t.y-dy/dist*tr;
-  const arc=d._arc||0;
+  const arc=(d._arc||0)+(d._arcDyn||0);
   if(Math.abs(arc)<1) return `M${sx},${sy}L${tx},${ty}`;
   const mx=(sx+tx)/2-dy/dist*arc, my=(sy+ty)/2+dx/dist*arc;
   return `M${sx},${sy}Q${mx},${my} ${tx},${ty}`;
@@ -787,17 +1292,18 @@ function edgePath(d){
 function propBoxPos(d){
   const s=d.source, t=d.target;
   if(!s||!t) return [0,0];
-  const arc=d._arc||0;
+  const arc=(d._arc||0)+(d._arcDyn||0);
   if(Math.abs(arc)<1) return [(s.x+t.x)/2,(s.y+t.y)/2];
   const dx=t.x-s.x, dy=t.y-s.y, dist=Math.sqrt(dx*dx+dy*dy)||1;
   const qx=(s.x+t.x)/2-dy/dist*arc, qy=(s.y+t.y)/2+dx/dist*arc;
   return [0.25*s.x+0.5*qx+0.25*t.x, 0.25*s.y+0.5*qy+0.25*t.y];
 }
 
-// ── Rendering layers ──────────────────────────────────────────────────────────
+// ── Rendering layers: indivG < linkG < propBoxG < classNodeG ─────────────────
+const indivG=root.append("g");
 const linkG=root.append("g");
 const propBoxG=root.append("g");
-const nodeG=root.append("g");
+const classNodeG=root.append("g");
 
 const hiddenLinkTypes=new Set();
 function applyLinkVis(){
@@ -868,85 +1374,192 @@ propBoxSel.each(function(d){
 
 applyLinkVis();
 
-// Nodes
-let nodeSel=nodeG.selectAll("g")
-  .data(nodes,d=>d.id)
-  .join(enter=>{
-    const g=enter.append("g")
-      .attr("class",d=>`node node-${d.type}`)
-      .call(d3.drag()
-        .on("start",(e,d)=>{ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
-        .on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; })
-        .on("end",(e,d)=>{ if(!e.active) sim.alphaTarget(0); updatePinMarker(nodeSel); }))
-      .on("click",(_,d)=>{
-        const newHl=highlighted===d.id?null:d.id;
-        highlighted=newHl;
-        applyHighlight();
-        if(newHl){ togglePanel(true); showDetail(d); } else showDefault();
-      })
-      .on("dblclick",(_,d)=>{ d.fx=null; d.fy=null; updatePinMarker(nodeSel); sim.alpha(0.3).restart(); })
-      .on("mouseover",showTip).on("mousemove",moveTip).on("mouseout",hideTip);
-    g.each(function(d){
-      const s=d3.select(this);
-      const r=nodeRadius(d);
-      // Datatype nodes render as rectangles
-      if(d.type==="datatype"){
-        const w=Math.max((d.label||"").length*7+16,50), h=22;
-        s.append("rect").attr("x",-w/2).attr("y",-h/2).attr("width",w).attr("height",h).attr("rx",4)
-          .attr("fill","#fef3c7").attr("stroke","#f59e0b").attr("stroke-width",1.5)
-          .style("filter","drop-shadow(0 1px 2px rgba(0,0,0,.08))");
-        s.append("text").text(d.label)
-          .attr("font-size",10).attr("fill","#92400e").attr("font-weight","500")
-          .attr("text-anchor","middle").attr("dominant-baseline","central");
-        return;
-      }
-      const fill=nodeFill(d), stroke=nodeStroke(d);
-      // Outer ring for root classes
-      if(d.type==="class"&&isRoot(d)){
-        s.append("circle").attr("r",r+9)
-          .attr("fill","none").attr("stroke",stroke).attr("stroke-width",1.2).attr("opacity",.35);
-      }
-      s.append("circle").attr("r",r)
-        .attr("fill",fill).attr("stroke",stroke)
-        .attr("stroke-width",d.type==="class"&&isRoot(d)?2.5:1.5)
-        .style("filter","drop-shadow(0 1px 3px rgba(0,0,0,.12))");
-      s.append("text").text(d.label)
-        .attr("font-size",d.type==="scheme"?12:d.type==="class"&&isRoot(d)?12:10)
-        .attr("font-weight",d.type==="class"||d.type==="scheme"?"600":"400");
-      s.append("circle").attr("class","pin-dot")
-        .attr("cx",r-6).attr("cy",-r+6).attr("r",4)
-        .attr("stroke","white").attr("stroke-width",1.5);
-      // Individual count badge on class nodes
-      if(d.type==="class"){
-        const cnt=(classIndividualsMap[d.id]||[]).length;
-        if(cnt>0){
-          s.append("circle").attr("class","ind-badge")
-            .attr("cx",0).attr("cy",r+8).attr("r",8)
-            .attr("fill","#7fb8e0").attr("stroke","white").attr("stroke-width",1.5)
-            .style("cursor","pointer")
-            .on("mouseover",function(){
-              d3.select(this).attr("r",10).attr("stroke-width",2.5);
-            })
-            .on("mouseout",function(){
-              d3.select(this).attr("r",8).attr("stroke-width",1.5);
-            })
-            .on("click",function(e){
-              e.stopPropagation();
-              if(hiddenIndivClasses.has(d.id)) hiddenIndivClasses.delete(d.id);
-              else hiddenIndivClasses.add(d.id);
-              applyIndivVis();
-            });
-          s.append("text").attr("class","ind-badge-text")
-            .attr("x",0).attr("y",r+8)
-            .attr("text-anchor","middle").attr("dominant-baseline","central")
-            .attr("font-size","8px").attr("fill","white")
-            .attr("pointer-events","none")
-            .text(cnt);
-        }
-      }
-    });
-    return g;
+// Expand/revert state — assigned after node selections are created below
+let indivNodeSel,classNodeSel,nodeSel;
+let expandedClass=null;
+
+// Saved zoom transform captured when an expand is first opened; null when idle.
+let _preExpandTransform=null;
+
+// Internal cleanup: remove expand data and reset DOM without touching zoom.
+function _clearExpand(){
+  if(!expandedClass) return;
+  const prev=expandedClass; expandedClass=null;
+  (classIndividualsMap[prev]||[]).forEach(iUri=>{
+    const nd=nodeById[iUri]; if(!nd) return;
+    delete nd._expandR; delete nd._expandAngle; delete nd._expandOrbitR;
   });
+  indivNodeSel.filter(d=>d.orbitClassUri===prev).each(function(d){
+    const s=d3.select(this),r=34;
+    s.select("circle:not(.pin-dot)").attr("r",r);
+    renderLabel(s.select("text"),d.label,r,10);
+  });
+  sim.alpha(0.3).restart();
+}
+
+function applyExpand(classId){
+  // Silently collapse any previous expand (no zoom restore when switching classes)
+  _clearExpand();
+  expandedClass=classId;
+  const cls=nodeById[classId];
+  const clsR=cls?nodeRadius(cls):40;
+  const indR=34;
+  const firstRingR=clsR+indR+12;
+  const ringGap=6;
+  const indivs=classIndividualsMap[classId]||[];
+  let remaining=indivs.slice();
+  let ring=0;
+  let maxOrbitR=firstRingR;
+  while(remaining.length>0&&ring<8){
+    const ringR=firstRingR+ring*(2*indR+ringGap);
+    maxOrbitR=ringR;
+    const minStep=2*Math.asin(Math.min(indR/ringR,1));
+    const capacity=Math.max(1,Math.floor(Math.PI*2*0.98/minStep));
+    const batch=remaining.splice(0,capacity);
+    const nb=batch.length;
+    batch.forEach((iUri,i)=>{
+      const nd=nodeById[iUri]; if(!nd) return;
+      nd._expandR=indR;
+      nd._expandAngle=-Math.PI/2+Math.PI*2*i/nb;
+      nd._expandOrbitR=ringR;
+    });
+    ring++;
+  }
+  indivNodeSel.filter(d=>d.orbitClassUri===classId).each(function(d){
+    const s=d3.select(this);
+    s.select("circle:not(.pin-dot)").attr("r",indR);
+    renderLabel(s.select("text"),d.label,indR,10);
+  });
+  sim.alpha(0.3).restart();
+  // Save zoom state only on the first expand in a session
+  if(!_preExpandTransform) _preExpandTransform=d3.zoomTransform(svg.node());
+  // Collect all highlighted nodes: clicked class + directly connected + their individuals
+  const conn=new Set([classId]);
+  sim.force("link").links().forEach(l=>{
+    const sid=l.source.id||l.source, tid=l.target.id||l.target;
+    if(sid===classId) conn.add(tid);
+    if(tid===classId) conn.add(sid);
+  });
+  conn.forEach(nid=>{ (classIndividualsMap[nid]||[]).forEach(iUri=>conn.add(iUri)); });
+  // Bounding box of all highlighted nodes using their current positions + radii
+  let bx0=Infinity,by0=Infinity,bx1=-Infinity,by1=-Infinity;
+  conn.forEach(nid=>{
+    const nd=nodeById[nid]; if(!nd||nd.x==null) return;
+    const r=nodeRadius(nd);
+    bx0=Math.min(bx0,nd.x-r); by0=Math.min(by0,nd.y-r);
+    bx1=Math.max(bx1,nd.x+r); by1=Math.max(by1,nd.y+r);
+  });
+  // Also extend for the expanded-class orbit rings (individuals not yet settled)
+  if(cls&&cls.x!=null){
+    const er=maxOrbitR+indR+16;
+    bx0=Math.min(bx0,cls.x-er); by0=Math.min(by0,cls.y-er);
+    bx1=Math.max(bx1,cls.x+er); by1=Math.max(by1,cls.y+er);
+  }
+  if(isFinite(bx0)){
+    const pad=60;
+    const k=Math.min(W/(bx1-bx0+pad*2),H/(by1-by0+pad*2));
+    const cx=(bx0+bx1)/2, cy=(by0+by1)/2;
+    svg.transition().duration(600)
+      .call(zoomBehavior.transform,d3.zoomIdentity.translate(W/2-k*cx,H/2-k*cy).scale(k));
+  }
+}
+
+// Explicit close (Escape / re-click): collapse expand AND restore the saved zoom.
+function revertExpand(){
+  _clearExpand();
+  if(_preExpandTransform){
+    svg.transition().duration(400)
+      .call(zoomBehavior.transform,_preExpandTransform);
+    _preExpandTransform=null;
+  }
+}
+
+function makeNodes(container,data){
+  return container.selectAll("g")
+    .data(data,d=>d.id)
+    .join(enter=>{
+      const g=enter.append("g")
+        .attr("class",d=>`node node-${d.type}`)
+        .call(d3.drag()
+          .on("start",(e,d)=>{ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+          .on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; })
+          .on("end",(e,d)=>{ if(!e.active) sim.alphaTarget(0); updatePinMarker(nodeSel); }))
+        .on("click",(_,d)=>{
+          const newHl=highlighted===d.id?null:d.id;
+          highlighted=newHl;
+          if(d.type==="class"){ if(newHl) applyExpand(d.id); else revertExpand(); }
+          applyHighlight();
+          if(newHl){ togglePanel(true); showDetail(d); } else showDefault();
+        })
+        .on("dblclick",(_,d)=>{ d.fx=null; d.fy=null; updatePinMarker(nodeSel); sim.alpha(0.3).restart(); })
+        .on("mouseover",showTip).on("mousemove",moveTip).on("mouseout",hideTip);
+      g.each(function(d){
+        const s=d3.select(this);
+        const r=nodeRadius(d);
+        if(d.type==="datatype"){
+          const w=Math.max((d.label||"").length*7+16,50), h=22;
+          s.append("rect").attr("x",-w/2).attr("y",-h/2).attr("width",w).attr("height",h).attr("rx",4)
+            .attr("fill","#fef3c7").attr("stroke","#f59e0b").attr("stroke-width",1.5)
+            .style("filter","drop-shadow(0 1px 2px rgba(0,0,0,.08))");
+          s.append("text").text(d.label)
+            .attr("font-size",10).attr("fill","#92400e").attr("font-weight","500")
+            .attr("text-anchor","middle").attr("dominant-baseline","central");
+          return;
+        }
+        const fill=nodeFill(d), stroke=nodeStroke(d);
+        if(d.type==="class"&&isRoot(d)){
+          s.append("circle").attr("r",r+9)
+            .attr("fill","none").attr("stroke",stroke).attr("stroke-width",1.2).attr("opacity",.35);
+        }
+        s.append("circle").attr("r",r)
+          .attr("fill",fill).attr("stroke",stroke)
+          .attr("stroke-width",d.type==="class"&&isRoot(d)?2.5:1.5)
+          .style("filter","drop-shadow(0 1px 3px rgba(0,0,0,.12))");
+        const fs=d.type==="scheme"?12:d.type==="class"&&isRoot(d)?12:10;
+        {const t=s.append("text")
+          .attr("font-size",fs)
+          .attr("font-weight",d.type==="class"||d.type==="scheme"?"600":"400");
+        renderLabel(t,d.label,r,fs);}
+        s.append("circle").attr("class","pin-dot")
+          .attr("cx",r-6).attr("cy",-r+6).attr("r",4)
+          .attr("stroke","white").attr("stroke-width",1.5);
+        if(d.type==="class"){
+          const cnt=(classIndividualsMap[d.id]||[]).length;
+          if(cnt>0){
+            s.append("circle").attr("class","ind-badge")
+              .attr("cx",0).attr("cy",r+13).attr("r",13)
+              .attr("fill","#7fb8e0").attr("stroke","white").attr("stroke-width",2)
+              .style("cursor","pointer")
+              .on("mouseover",function(){
+                d3.select(this).attr("r",15).attr("stroke-width",2.5);
+              })
+              .on("mouseout",function(){
+                d3.select(this).attr("r",13).attr("stroke-width",2);
+              })
+              .on("click",function(e){
+                e.stopPropagation();
+                if(hiddenIndivClasses.has(d.id)) hiddenIndivClasses.delete(d.id);
+                else hiddenIndivClasses.add(d.id);
+                applyIndivVis();
+              });
+            s.append("text").attr("class","ind-badge-text")
+              .attr("x",0).attr("y",r+13)
+              .attr("text-anchor","middle").attr("dominant-baseline","central")
+              .attr("font-size","11px").attr("fill","white")
+              .attr("pointer-events","none")
+              .text(cnt);
+          }
+        }
+      });
+      return g;
+    });
+}
+
+// Individual nodes rendered in indivG (below edges); all others in classNodeG (above edges)
+indivNodeSel=makeNodes(indivG,nodes.filter(d=>d.type==="individual"));
+classNodeSel=makeNodes(classNodeG,nodes.filter(d=>d.type!=="individual"));
+// Combined selection for highlight, visibility, and tick transforms
+nodeSel=d3.selectAll([...indivNodeSel.nodes(),...classNodeSel.nodes()]);
 
 sim.nodes(nodes);
 sim.force("link").links(links);
@@ -954,6 +1567,102 @@ sim.alpha(1).restart();
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
 sim.on("tick",()=>{
+  // Dynamic arc adjustments for hierarchical OWL layout — recomputed each tick
+  // from current node positions so they stay correct after dragging.
+  if(isHierarchical){
+    // Reset dynamic arcs for all routed edge types
+    links.forEach(l=>{
+      if(l.type==="objectProperty"||l.type==="subClassOf") l._arcDyn=0;
+    });
+
+    // ── 1. objectProperty edge-edge midpoint repulsion ────────────────────────
+    const opLinks=links.filter(l=>l.type==="objectProperty");
+    for(let i=0;i<opLinks.length;i++){
+      const ei=opLinks[i]; if(!ei.source.x) continue;
+      for(let j=i+1;j<opLinks.length;j++){
+        const ej=opLinks[j]; if(!ej.source.x) continue;
+        if(ei.source===ej.source&&ei.target===ej.target) continue;
+        if(ei.source===ej.target&&ei.target===ej.source) continue;
+        const mx1=(ei.source.x+ei.target.x)/2,my1=(ei.source.y+ei.target.y)/2;
+        const mx2=(ej.source.x+ej.target.x)/2,my2=(ej.source.y+ej.target.y)/2;
+        const d=Math.hypot(mx1-mx2,my1-my2);
+        if(d<60){
+          const push=Math.min((60-d)*0.6,24);
+          const srcDiff=ei.source.x-ej.source.x;
+          const sign=srcDiff!==0?(srcDiff>0?1:-1):(ei.target.x>=ej.target.x?1:-1);
+          ei._arcDyn=Math.max(-80,Math.min(80,ei._arcDyn+sign*push));
+          ej._arcDyn=Math.max(-80,Math.min(80,ej._arcDyn-sign*push));
+        }
+      }
+    }
+
+    // ── 2. Route objectProperty and subClassOf edges around blocking class nodes ─
+    // Uses the signed perpendicular distance from the blocking node to the edge
+    // line to determine which side to arc toward, avoiding the zero-vector problem
+    // that occurs when a node sits exactly on the edge path.
+    links.forEach(edge=>{
+      if(edge.type!=="objectProperty"&&edge.type!=="subClassOf") return;
+      if(!edge.source.x) return;
+      const s=edge.source,t=edge.target;
+      const edx=t.x-s.x,edy=t.y-s.y,len2=edx*edx+edy*edy;
+      if(len2<1) return;
+      const len=Math.sqrt(len2);
+      nodes.forEach(n=>{
+        if(n.type!=="class"||n===s||n===t) return;
+        // Only consider nodes whose projection falls strictly between the endpoints
+        const param=((n.x-s.x)*edx+(n.y-s.y)*edy)/len2;
+        if(param<=0||param>=1) return;
+        // Signed perpendicular distance: positive = node is to the right of s→t
+        const cross=(edx*(n.y-s.y)-edy*(n.x-s.x))/len;
+        const perpDist=Math.abs(cross);
+        const r=nodeRadius(n)+16;
+        if(perpDist<r){
+          // Geometric minimum arc: the bezier at parameter `param` deviates from the
+          // chord by 2·param·(1−param)·arc. Invert to get the arc that fully clears
+          // the blocking node. Clamp the bezier factor to avoid huge values near the
+          // endpoints, and cap the final arc to keep curves reasonable.
+          // In SVG (Y down): cross<0 means node is above/left of the edge line →
+          // arc downward (+) to route below; cross>0 → arc upward (−).
+          const f=Math.max(2*param*(1-param),0.04);
+          const needed=Math.min((r-perpDist)/f+10,200);
+          const dir=cross<=0?1:-1;
+          edge._arcDyn=Math.max(-200,Math.min(200,edge._arcDyn+dir*needed));
+        }
+      });
+    });
+
+    // ── 3. Avoid objectProperty ↔ subClassOf crossings ──────────────────────
+    // Detect straight-line segment intersections between the two edge types and
+    // arc each crossing pair apart in opposite perpendicular directions.
+    const segCross=(ax,ay,bx,by,cx,cy,dx,dy)=>{
+      const abx=bx-ax,aby=by-ay,cdx=dx-cx,cdy=dy-cy;
+      const denom=abx*cdy-aby*cdx;
+      if(Math.abs(denom)<1e-6) return false;
+      const t=((cx-ax)*cdy-(cy-ay)*cdx)/denom;
+      const u=((cx-ax)*aby-(cy-ay)*abx)/denom;
+      return t>0&&t<1&&u>0&&u<1;
+    };
+    const scLinks=links.filter(l=>l.type==="subClassOf");
+    opLinks.forEach(op=>{
+      if(!op.source.x) return;
+      scLinks.forEach(sc=>{
+        if(!sc.source.x) return;
+        // Adjacent edges share a node and cannot truly cross
+        if(op.source===sc.source||op.source===sc.target||op.target===sc.source||op.target===sc.target) return;
+        if(!segCross(op.source.x,op.source.y,op.target.x,op.target.y,
+                     sc.source.x,sc.source.y,sc.target.x,sc.target.y)) return;
+        // Determine which side sc's midpoint is relative to op's direction.
+        // Positive cross ⟹ sc is to the right of op (in SVG/arc convention) ⟹ arc op left (−).
+        const opMx=(op.source.x+op.target.x)/2, opMy=(op.source.y+op.target.y)/2;
+        const scMx=(sc.source.x+sc.target.x)/2, scMy=(sc.source.y+sc.target.y)/2;
+        const cross=(op.target.x-op.source.x)*(scMy-opMy)-(op.target.y-op.source.y)*(scMx-opMx);
+        const opSign=cross>0?-1:1;
+        const push=30;
+        op._arcDyn=Math.max(-200,Math.min(200,op._arcDyn+opSign*push));
+        sc._arcDyn=Math.max(-200,Math.min(200,sc._arcDyn-opSign*push));
+      });
+    });
+  }
   linkSel.attr("d",edgePath);
   propBoxSel.attr("transform",d=>{
     const [px,py]=propBoxPos(d);
@@ -1035,7 +1744,8 @@ function togglePanel(show){
       const rcNode=rcId?nodeById[rcId]:null;
       n._hierLaneX=rcNode?rcNode._hierLaneX:W/2;
     });
-    sim.force("cx",d3.forceX(d=>d._hierLaneX||W/2).strength(0.45));
+    spreadSubtrees();
+    sim.force("cx",d3.forceX(d=>d._hierLaneX||W/2).strength(d=>d.orbitClassUri?0:0.65));
   } else {
     sim.force("cx",d3.forceX(W/2).strength(0.04));
   }
@@ -1047,7 +1757,7 @@ document.getElementById("panel-close").addEventListener("click",()=>togglePanel(
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
-    if(highlighted){ highlighted=null; applyHighlight(); showDefault(); }
+    if(highlighted){ highlighted=null; revertExpand(); applyHighlight(); showDefault(); }
     else togglePanel();
   }
   if(e.key==="f"){
@@ -1201,6 +1911,15 @@ window.toggleAllIndividuals=toggleAllIndividuals;
 
 showDefault();
 }catch(e){_showVowlErr(e.stack||e.message||String(e));}
+})();
+
+// ── Live refresh via SSE (injected by `ster serve`) ───────────────────────────
+(function(){
+  const tok="__API_TOKEN__";
+  if(!tok) return;
+  const es=new EventSource("/api/events?token="+encodeURIComponent(tok));
+  es.onmessage=function(){ location.reload(); };
+  // No onerror override — let EventSource auto-reconnect on transient failures.
 })();
 </script>
 </body>

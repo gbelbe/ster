@@ -43,14 +43,15 @@ def test_build_vowl_graph_class_node():
     assert n["id"] == NS + "Animal"
 
 
-def test_build_vowl_graph_label_truncated_at_20():
+def test_build_vowl_graph_label_passed_through_full():
+    # Python no longer pre-truncates; the JS renderLabel handles wrapping/clipping.
     tax = Taxonomy()
     long_name = "A" * 25
     tax.owl_classes[NS + long_name] = RDFClass(
         uri=NS + long_name, labels=[Label(lang="en", value=long_name)]
     )
     result = build_vowl_graph(tax)
-    assert len(result["nodes"][0]["label"]) == 20
+    assert result["nodes"][0]["label"] == long_name
     assert result["nodes"][0]["fullLabel"] == long_name
 
 
@@ -329,3 +330,51 @@ def test_build_vowl_graph_layout_mixed_is_force():
     tax.schemes[NS + "S"] = ConceptScheme(uri=NS + "S")
     result = build_vowl_graph(tax)
     assert result["layout"] == "force"
+
+
+# ── render_vowl_html ──────────────────────────────────────────────────────────
+
+from ster.viz_vowl import render_vowl_html  # noqa: E402
+
+
+def _make_render_taxonomy() -> Taxonomy:
+    t = Taxonomy()
+    t.ontology_uri = "https://example.org/onto"
+    for name in ("Animal", "Dog", "Cat"):
+        t.owl_classes[NS + name] = RDFClass(uri=NS + name, labels=[Label(lang="en", value=name)])
+    t.owl_classes[NS + "Dog"].sub_class_of = [NS + "Animal"]
+    t.owl_classes[NS + "Cat"].sub_class_of = [NS + "Animal"]
+    t.owl_individuals[NS + "Fido"] = OWLIndividual(uri=NS + "Fido", types=[NS + "Dog"])
+    return t
+
+
+def test_render_vowl_html_injects_api_token():
+    html = render_vowl_html(_make_render_taxonomy(), None, api_token="secret-token")
+    assert 'const tok="secret-token"' in html
+
+
+def test_render_vowl_html_empty_token_sse_exits_early():
+    html = render_vowl_html(_make_render_taxonomy(), None, api_token="")
+    assert 'const tok=""' in html
+    assert "if(!tok) return;" in html
+
+
+def test_render_vowl_html_with_root_uri_changes_title():
+    html = render_vowl_html(_make_render_taxonomy(), None, root_uri=NS + "Animal")
+    assert "Animal" in html
+
+
+def test_render_vowl_html_with_root_uri_excludes_unrelated_classes():
+    t = _make_render_taxonomy()
+    t.owl_classes[NS + "Unrelated"] = RDFClass(
+        uri=NS + "Unrelated", labels=[Label(lang="en", value="Unrelated")]
+    )
+    html = render_vowl_html(t, None, root_uri=NS + "Dog")
+    assert NS + "Unrelated" not in html
+
+
+def test_render_vowl_html_without_root_uri_includes_all_classes():
+    t = _make_render_taxonomy()
+    html = render_vowl_html(t, None)
+    for name in ("Animal", "Dog", "Cat"):
+        assert NS + name in html

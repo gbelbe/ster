@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
@@ -28,9 +29,13 @@ _FORMAT_MAP = {
     ".ttl": "turtle",
     ".rdf": "xml",
     ".xml": "xml",
+    ".owl": "xml",
+    ".n3": "n3",
     ".jsonld": "json-ld",
     ".json": "json-ld",
 }
+
+_RDFXML_EXTENSIONS = {".rdf", ".xml", ".owl"}
 
 
 def _detect_format(path: Path) -> str:
@@ -42,15 +47,84 @@ def _detect_format(path: Path) -> str:
     return fmt
 
 
+def is_rdfxml_path(path: Path) -> bool:
+    """Return True if *path* has an RDF/XML file extension."""
+    return path.suffix.lower() in _RDFXML_EXTENSIONS
+
+
+_SNIFF_BYTES = 512
+
+
+def _sniff_format(path: Path) -> str | None:
+    """Guess RDF serialisation format from the first bytes of *path*."""
+    try:
+        head = path.read_bytes()[:_SNIFF_BYTES].lstrip()
+    except OSError:
+        return None
+    if head.startswith((b"<?xml", b"<rdf:RDF", b"<owl:")):
+        return "xml"
+    text = head.decode("utf-8", errors="replace").lstrip()
+    if text.startswith(("@prefix", "@base", "PREFIX")):
+        return "turtle"
+    if text.startswith(("{", "[")):
+        return "json-ld"
+    return None
+
+
+def detect_format_mismatch(path: Path) -> tuple[str, str] | None:
+    """Return (declared_fmt, actual_fmt) if content format differs from extension, else None."""
+    declared = _FORMAT_MAP.get(path.suffix.lower())
+    if declared is None:
+        return None
+    actual = _sniff_format(path)
+    if actual and actual != declared:
+        return declared, actual
+    return None
+
+
+def file_hash(path: Path) -> str:
+    """Return an MD5 hex digest of *path*'s content (for change detection)."""
+    return hashlib.md5(path.read_bytes(), usedforsecurity=False).hexdigest()
+
+
+def _parse_graph(path: Path) -> Graph:
+    """Parse *path* into a Graph, falling back to sniffed format if extension-based parse fails."""
+    fmt = _detect_format(path)
+    g = Graph()
+    try:
+        g.parse(str(path), format=fmt)
+        return g
+    except Exception as exc:
+        sniffed = _sniff_format(path)
+        if sniffed and sniffed != fmt:
+            g = Graph()
+            g.parse(str(path), format=sniffed)
+            return g
+        raise exc
+
+
+def convert(input_path: Path, output_path: Path) -> Path:
+    """Load *input_path* and serialise to *output_path* (formats from extensions)."""
+    out_fmt = _detect_format(output_path)
+    g = _parse_graph(input_path)
+    g.serialize(destination=str(output_path), format=out_fmt)
+    return output_path
+
+
+def convert_to_ttl(input_path: Path, output_path: Path | None = None) -> Path:
+    """Convert *input_path* to Turtle, writing to *output_path* (default: same stem + .ttl)."""
+    if output_path is None:
+        output_path = input_path.with_suffix(".ttl")
+    return convert(input_path, output_path)
+
+
 # ──────────────────────────── public API ─────────────────────────────────────
 
 
 def load(path: str | Path) -> Taxonomy:
     """Parse a SKOS RDF file and return a fully handle-annotated Taxonomy."""
     path = Path(path)
-    fmt = _detect_format(path)
-    g = Graph()
-    g.parse(str(path), format=fmt)
+    g = _parse_graph(path)
     taxonomy = graph_to_taxonomy(g)
     taxonomy.file_path = path
     assign_handles(taxonomy)

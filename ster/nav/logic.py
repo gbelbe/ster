@@ -2865,6 +2865,16 @@ def build_scheme_dashboard_fields(
 
 # ──────────────────────────── global overview ────────────────────────────────
 
+
+def _load_bearer_token() -> str:
+    """Return the persisted bearer token, or a placeholder if not yet created."""
+    from ..api_server import _TOKEN_FILE  # noqa: PLC0415
+
+    if _TOKEN_FILE.exists():
+        return _TOKEN_FILE.read_text().strip()
+    return "(not yet created — launch ster view first)"
+
+
 _HELP_HINTS: list[tuple[str, str]] = [
     ("↑ ↓  /  j k", "navigate tree"),
     ("Enter", "focus detail panel"),
@@ -2881,22 +2891,72 @@ _HELP_HINTS: list[tuple[str, str]] = [
 
 
 def build_global_fields(
-    workspace: TaxonomyWorkspace,
+    workspace: TaxonomyWorkspace | None,
     analysis: dict[str, SchemeAnalysis] | None,
     lang: str,
+    server_url: str = "http://127.0.0.1",
+    server_port: int = 8765,
+    show_token: bool = False,
+    pending_restart: bool = False,
 ) -> list[DetailField]:
     """Build DetailField list for the global overview panel.
 
-    Sections: Setup (language), Shortcuts, Overview stats, Completeness, Quality.
+    When *workspace* is None only Server Setup and LLM Setup sections are included
+    (used by the standalone config screen).
     """
 
     fields: list[DetailField] = []
 
-    # ── 1. Setup ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Setup"))
-    fields.append(_display_lang_field(lang))
+    # ── 1. Server Setup ───────────────────────────────────────────────────────
+    fields.append(_sep("Server Setup"))
+    if pending_restart:
+        fields.append(
+            DetailField(
+                "server:restart_warning",
+                "⚠ restart required",
+                "close browser tabs then relaunch ster",
+                editable=False,
+                meta={"type": "warning"},
+            )
+        )
+    fields.append(
+        DetailField(
+            "server:url",
+            "server URL",
+            server_url,
+            editable=False,
+            meta={"type": "action", "action": "edit_server_url"},
+        )
+    )
+    fields.append(
+        DetailField(
+            "server:port",
+            "port",
+            str(server_port),
+            editable=False,
+            meta={"type": "action", "action": "edit_server_port"},
+        )
+    )
+    _token_value = _load_bearer_token() if show_token else "***"
+    fields.append(
+        DetailField(
+            "server:token",
+            "bearer token",
+            _token_value,
+            editable=False,
+            meta={"type": "action", "action": "show_bearer_token"},
+        )
+    )
 
-    # ── 2. Keyboard shortcuts ─────────────────────────────────────────────────
+    # ── 2. LLM Setup ──────────────────────────────────────────────────────────
+    fields.append(_sep("LLM Setup"))
+    fields.append(_display_lang_field(lang))
+    fields.append(_add_action_field("llm:ai_config", "configure AI model", "open_ai_config"))
+
+    if workspace is None:
+        return fields
+
+    # ── 3. Keyboard shortcuts ─────────────────────────────────────────────────
     fields.append(_sep("Keyboard Shortcuts"))
     for keys, desc in _HELP_HINTS:
         fields.append(
