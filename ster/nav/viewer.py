@@ -8263,8 +8263,9 @@ class TaxonomyViewer:
             return
 
         n = len(level_cands)
-        max_label = max(len(name) + (2 if has_ch else 1) for name, has_ch in level_cands)
-        popup_w = min(max_label + len(qs.qn_prefix) + 4, 50, cols - 2)
+        # Popup width: enough for the longest "prefix:name" + scroll col + arrow col + 2 gap
+        max_name_w = max(len(f"{qs.qn_prefix}:{name}") for name, _ in level_cands)
+        popup_w = min(max_name_w + 4, 50, cols - 2)  # +1 scroll +2 gap +1 arrow
         max_list_h = 12
         list_h = min(n, max_list_h)
         popup_h = list_h + 1
@@ -8285,6 +8286,8 @@ class TaxonomyViewer:
 
         cur = max(0, min(qs.qn_cursor, n - 1))
         scroll = _qn_clamp_scroll(cur, qs.qn_scroll, list_h)
+        # Layout: [scroll_marker 1][label area popup_w-2][arrow 1]
+        label_w = popup_w - 2
         for i in range(list_h):
             idx_in_list = scroll + i
             if idx_in_list >= n:
@@ -8296,22 +8299,25 @@ class TaxonomyViewer:
                 if (i == 0 and scroll > 0)
                 else ("▼" if (i == list_h - 1 and scroll + list_h < n) else " ")
             )
-            child_marker = "▶" if has_children else " "
-            text = f"{scroll_marker}{qs.qn_prefix}:{label}{child_marker}"
+            # Right-align ▶ at the popup edge; plain names get trailing spaces
+            label_text = f"{qs.qn_prefix}:{label}"
+            label_padded = label_text[:label_w].ljust(label_w)
+            arrow = "▶" if has_children else " "
+            text = f"{scroll_marker}{label_padded}{arrow}"
             attr = (
                 curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
                 if sel
                 else curses.color_pair(_C_FIELD_VAL)
             )
             try:
-                stdscr.addstr(popup_y + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr)
+                stdscr.addstr(popup_y + i, popup_x, text[:popup_w], attr)
             except curses.error:
                 pass
 
         breadcrumb = f" …/{qs.qn_parent}" if qs.qn_parent else ""
         ctx_label = " [classes]" if qs.qn_context == "class" else ""
-        nav_hint = "←back " if qs.qn_parent or qs.qn_breadcrumb else ""
-        hint = f" {nav_hint}↑↓ →expand Tab:insert{breadcrumb}{ctx_label} "
+        nav_hint = "← " if qs.qn_parent or qs.qn_breadcrumb else ""
+        hint = f" {nav_hint}↑↓  →/Tab:expand  Enter:insert{breadcrumb}{ctx_label} "
         try:
             stdscr.addstr(
                 popup_y + list_h,
@@ -8510,8 +8516,8 @@ class TaxonomyViewer:
 
                 cur_idx = max(0, min(qs.qn_cursor, len(level_cands) - 1))
 
-                if key == curses.KEY_RIGHT and level_cands:
-                    # Drill into selected class if it has children
+                if key in (curses.KEY_RIGHT, 9) and level_cands:
+                    # → and Tab: drill down into a parent class; insert leaf directly
                     name, has_children = level_cands[cur_idx]
                     if has_children:
                         qs.qn_breadcrumb.append(qs.qn_parent)
@@ -8519,6 +8525,17 @@ class TaxonomyViewer:
                         qs.qn_filter = ""
                         qs.qn_cursor = 0
                         qs.qn_scroll = 0
+                    else:
+                        # Leaf: insert
+                        qs.query_buffer = (
+                            qs.query_buffer[: qs.qn_trigger_pos]
+                            + name
+                            + qs.query_buffer[qs.query_pos :]
+                        )
+                        qs.query_pos = qs.qn_trigger_pos + len(name)
+                        qs.qn_active = False
+                        qs.qn_parent = ""
+                        qs.qn_breadcrumb.clear()
                     return False
 
                 if key == curses.KEY_LEFT:
@@ -8528,7 +8545,8 @@ class TaxonomyViewer:
                     qs.qn_scroll = 0
                     return False
 
-                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
+                if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                    # Enter always inserts the selected item (whether parent or leaf)
                     if level_cands:
                         name, _ = level_cands[cur_idx]
                         qs.query_buffer = (
