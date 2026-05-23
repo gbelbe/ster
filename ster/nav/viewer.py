@@ -589,12 +589,14 @@ class TaxonomyViewer:
         except KeyboardInterrupt:
             pass
         except Exception:
+            # Log the crash but don't re-raise: a crash inside the TUI should
+            # always return the user cleanly to the home screen.  The full
+            # traceback is in ~/.cache/ster/crash.log for debugging.
             log = Path.home() / ".cache" / "ster" / "crash.log"
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open("a") as f:
                 f.write(f"\n{'=' * 60}\n")
                 traceback.print_exc(file=f)
-            raise
         finally:
             self._watchdog_active = False
             signal.signal(signal.SIGUSR1, _prev_handler)

@@ -1925,38 +1925,42 @@ def main() -> None:
     from .git.log import launch_git_log
 
     while True:
-        _print_welcome()
-
-        global _ci_check_done
-        if not _ci_check_done:
-            _ci_check_done = True
-            from .init_ci import prompt_if_missing
-            from .project import _git_root as _find_git_root
-
-            _root = _find_git_root(Path.cwd())
-            if _root and prompt_if_missing(_root):
-                console.print(
-                    "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
-                    "commit and push to activate CI\n"
-                )
-
-        found: list[Path] = []
-        for pattern in _TAXONOMY_GLOBS:
-            found.extend(Path.cwd().glob(pattern))
-        found = sorted(set(found))
-
-        # ── No files in folder → inform user and exit ─────────────────────────
-        if not found:
-            console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
-            break
-
-        # ── Load project for lang preference ──────────────────────────────────
-        project = Project.load(Path.cwd())
-
-        console.print("[bold]Taxonomy files in this folder:[/bold]\n")
-
         try:
-            selected = _multi_file_picker(found)
+            _print_welcome()
+
+            global _ci_check_done
+            if not _ci_check_done:
+                _ci_check_done = True
+                from .init_ci import prompt_if_missing
+                from .project import _git_root as _find_git_root
+
+                _root = _find_git_root(Path.cwd())
+                if _root and prompt_if_missing(_root):
+                    console.print(
+                        "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
+                        "commit and push to activate CI\n"
+                    )
+
+            found: list[Path] = []
+            for pattern in _TAXONOMY_GLOBS:
+                found.extend(Path.cwd().glob(pattern))
+            found = sorted(set(found))
+
+            # ── No files in folder → inform user and exit ─────────────────────
+            if not found:
+                console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
+                break
+
+            # ── Load project for lang preference ──────────────────────────────
+            project = Project.load(Path.cwd())
+
+            console.print("[bold]Taxonomy files in this folder:[/bold]\n")
+
+            try:
+                selected = _multi_file_picker(found)
+            except (KeyboardInterrupt, EOFError):
+                console.print()
+                break
         except (KeyboardInterrupt, EOFError):
             console.print()
             break
