@@ -210,6 +210,7 @@ class TaxonomyViewer:
         self._install_command: list[str] | None = None  # if set, overrides pip install
         self._generate_elapsed: float = 0.0  # seconds since current generation started
         self._last_query_buffer: str = ""  # persist query across mode switches
+        self._query_viz_path: Path | None = None  # track last query-result viz for auto-refresh
         self._show_bearer_token: bool = False
         self._server_pending_restart: bool = False
         self._pending_open_config: bool = False
@@ -1346,7 +1347,7 @@ class TaxonomyViewer:
             mode_hint = f"[{cur_label}]"
         return (
             f" ?: help  {pos}  ↑↓/j·k: move  {enter_hint}  ←/h: parent"
-            f"   Space: fold  +: add  {jump_hint}  /: search  {mode_hint}  q: quit "
+            f"   Space: fold  +: add  {jump_hint}  /: search  S: SPARQL  {mode_hint}  q: quit "
         )
 
     def _draw_tree_preview(self, stdscr: curses.window, rows: int, cols: int) -> None:
@@ -1625,6 +1626,9 @@ class TaxonomyViewer:
                 self._status = f"Graph opened in browser — {out}"
             except Exception as exc:
                 self._status = f"Error opening graph: {exc}"
+
+        elif key == ord("S"):
+            self._trigger_action("open_query")
 
         elif key == ord("?"):
             self._state = WelcomeState()
@@ -7698,19 +7702,48 @@ class TaxonomyViewer:
     _QUERY_EDIT_RATIO = 3  # editor takes ~1/3 of available rows
 
     def _draw_query(self, stdscr: curses.window, rows: int, cols: int) -> None:
-        """Render the SPARQL query interface (editor + results + optional presets)."""
+        """Render the SPARQL query modal over the tree view."""
         from .. import sparql_query as _sq
 
         qs = self._state
         if not isinstance(qs, QueryState):
             return
 
-        # AI sub-flow screens take over the full display
+        # ── Tree background ───────────────────────────────────────────────────
+        # Draw the tree first so it's visible through the modal border.
+        self._draw_tree(stdscr, rows, cols)
+
+        # AI sub-flow screens take over the full modal
+        modal_y, modal_x = 1, 2
+        modal_h, modal_w = rows - 2, cols - 4
+
         if qs.ai_step == "prompt_review" or qs.ai_generating:
-            self._draw_query_ai_prompt_review(stdscr, rows, cols, qs)
+            try:
+                win = stdscr.derwin(modal_h, modal_w, modal_y, modal_x)
+            except curses.error:
+                win, modal_h, modal_w = stdscr, rows, cols
+            self._draw_query_ai_prompt_review(win, modal_h, modal_w, qs)
             return
 
+        # ── Modal border ──────────────────────────────────────────────────────
+        border_attr = curses.color_pair(_C_FIELD_LABEL)
+        try:
+            stdscr.addstr(modal_y - 1, modal_x - 1, "┌" + "─" * modal_w + "┐", border_attr)
+            for r in range(modal_h):
+                stdscr.addstr(modal_y + r, modal_x - 1, "│", border_attr)
+                stdscr.addstr(modal_y + r, modal_x + modal_w, "│", border_attr)
+            stdscr.addstr(modal_y + modal_h, modal_x - 1, "└" + "─" * modal_w + "┘", border_attr)
+        except curses.error:
+            pass
+
+        # ── Derive a subwindow so all helpers use local coordinates ───────────
+        try:
+            win = stdscr.derwin(modal_h, modal_w, modal_y, modal_x)
+        except curses.error:
+            win, modal_h, modal_w = stdscr, rows, cols
+
         # ── Dimensions ────────────────────────────────────────────────────────
+        rows, cols = modal_h, modal_w
         edit_h = max(5, (rows - 2) // self._QUERY_EDIT_RATIO)
         div_row = edit_h + 1
         res_start = div_row + 1
@@ -7718,7 +7751,7 @@ class TaxonomyViewer:
 
         # ── Header ────────────────────────────────────────────────────────────
         file_names = ", ".join(p.name for p in qs.file_paths) or "—"
-        _draw_bar(stdscr, 0, 0, cols, f" ❯ SPARQL Query — {file_names} ", dim=False)
+        _draw_bar(win, 0, 0, cols, f" ❯ SPARQL Query — {file_names} ", dim=False)
 
         # ── Editor ────────────────────────────────────────────────────────────
         is_edit = qs.panel == "editor"
@@ -7765,7 +7798,7 @@ class TaxonomyViewer:
             screen_y = 1 + i
             if idx >= len(display_lines):
                 try:
-                    stdscr.addstr(screen_y, 0, " " * cols, default_attr)
+                    win.addstr(screen_y, 0, " " * cols, default_attr)
                 except curses.error:
                     pass
                 continue
@@ -7800,13 +7833,13 @@ class TaxonomyViewer:
                     break
                 clip = seg_text[: cols - xcol]
                 try:
-                    stdscr.addstr(screen_y, xcol, clip, seg_attr)
+                    win.addstr(screen_y, xcol, clip, seg_attr)
                 except curses.error:
                     pass
                 xcol += len(clip)
             if xcol < cols:
                 try:
-                    stdscr.addstr(screen_y, xcol, " " * (cols - xcol), default_attr)
+                    win.addstr(screen_y, xcol, " " * (cols - xcol), default_attr)
                 except curses.error:
                     pass
 
@@ -7821,14 +7854,14 @@ class TaxonomyViewer:
             div_label = f"  Results — {n_rows} row{'s' if n_rows != 1 else ''}  "
         else:
             div_label = "  Results  "
-        _draw_bar(stdscr, div_row, 0, cols, div_label, dim=qs.panel != "results")
+        _draw_bar(win, div_row, 0, cols, div_label, dim=qs.panel != "results")
 
         # ── Results area ──────────────────────────────────────────────────────
         is_res = qs.panel == "results"
 
         if qs.running:
             try:
-                stdscr.addstr(
+                win.addstr(
                     res_start + res_h // 2,
                     2,
                     "Executing query…",
@@ -7840,7 +7873,7 @@ class TaxonomyViewer:
             lines = qs.result_error.splitlines()
             for i, ln in enumerate(lines[: max(1, res_h)]):
                 try:
-                    stdscr.addstr(res_start + i, 1, ln[: cols - 2], curses.color_pair(_C_DIFF_DEL))
+                    win.addstr(res_start + i, 1, ln[: cols - 2], curses.color_pair(_C_DIFF_DEL))
                 except curses.error:
                     pass
         elif qs.columns:
@@ -7852,13 +7885,13 @@ class TaxonomyViewer:
                 if i < len(qs.columns) - 1:
                     hdr += " │ "
             try:
-                stdscr.addstr(res_start, 0, hdr[:cols], curses.color_pair(_C_FIELD_LABEL))
+                win.addstr(res_start, 0, hdr[:cols], curses.color_pair(_C_FIELD_LABEL))
             except curses.error:
                 pass
             # Separator
             sep_line = "─" * (cols - 1)
             try:
-                stdscr.addstr(res_start + 1, 0, sep_line[:cols], curses.color_pair(_C_DIM))
+                win.addstr(res_start + 1, 0, sep_line[:cols], curses.color_pair(_C_DIM))
             except curses.error:
                 pass
             # Data rows
@@ -7882,13 +7915,13 @@ class TaxonomyViewer:
                         cell_text += " │ "
                 attr = curses.color_pair(_C_SEL) | curses.A_BOLD if sel else curses.A_NORMAL
                 try:
-                    stdscr.addstr(data_start + i, 0, cell_text[:cols].ljust(cols)[:cols], attr)
+                    win.addstr(data_start + i, 0, cell_text[:cols].ljust(cols)[:cols], attr)
                 except curses.error:
                     pass
         else:
             hint = "Ctrl+R or F5 to run query   P for presets   Tab to switch panel"
             try:
-                stdscr.addstr(
+                win.addstr(
                     res_start + res_h // 2,
                     max(0, (cols - len(hint)) // 2),
                     hint[:cols],
@@ -7899,15 +7932,15 @@ class TaxonomyViewer:
 
         # ── Presets overlay ───────────────────────────────────────────────────
         if qs.show_presets:
-            self._draw_query_presets(stdscr, rows, cols, qs)
+            self._draw_query_presets(win, rows, cols, qs)
 
         # ── AI ask overlay (drawn on top of everything) ───────────────────────
         if qs.ai_step == "ask":
-            self._draw_query_ai_ask(stdscr, rows, cols, qs)
+            self._draw_query_ai_ask(win, rows, cols, qs)
 
         # ── @ autocomplete overlay ────────────────────────────────────────────
         if qs.ac_active and qs.panel == "editor":
-            self._draw_query_ac(stdscr, rows, cols, qs)
+            self._draw_query_ac(win, rows, cols, qs)
 
         # ── Keyword autocomplete popup (when editor focused and no @ AC) ──────
         if (
@@ -7921,19 +7954,19 @@ class TaxonomyViewer:
             kw_cands = _sparql_kw_candidates(kw_word)
             if kw_cands:
                 self._draw_query_kw_popup(
-                    stdscr, rows, cols, qs, kw_cands, cursor_display_line, cursor_col_on_screen
+                    win, rows, cols, qs, kw_cands, cursor_display_line, cursor_col_on_screen
                 )
 
         # ── QName completion popup ────────────────────────────────────────────
         if qs.qn_active and qs.panel == "editor":
             self._draw_query_qname_popup(
-                stdscr, rows, cols, qs, cursor_display_line, cursor_col_on_screen
+                win, rows, cols, qs, cursor_display_line, cursor_col_on_screen
             )
 
         # ── Variable suggestion popup ─────────────────────────────────────────
         if qs.var_active and qs.panel == "editor":
             self._draw_query_var_popup(
-                stdscr, rows, cols, qs, cursor_display_line, cursor_col_on_screen
+                win, rows, cols, qs, cursor_display_line, cursor_col_on_screen
             )
 
         # ── Footer ────────────────────────────────────────────────────────────
@@ -7951,10 +7984,10 @@ class TaxonomyViewer:
         elif qs.var_active:
             hint_text = "  ↑↓: navigate   Tab/Enter: insert variable   Esc: cancel  "
         elif qs.panel == "editor":
-            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: back  "
+            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: close  "
         else:
-            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   A: AI   Ctrl+L: presets   Esc: back  "
-        _draw_bar(stdscr, rows - 1, 0, cols, hint_text, dim=True)
+            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   A: AI   Ctrl+L: presets   Esc: close  "
+        _draw_bar(win, rows - 1, 0, cols, hint_text, dim=True)
 
     def _draw_query_presets(
         self,
@@ -8524,7 +8557,8 @@ class TaxonomyViewer:
 
         uris = _sq.extract_result_uris(qs.rows)
         try:
-            url = _viz.open_query_result_in_browser(self.taxonomy, uris, self.file_path)
+            url, out_path = _viz.open_query_result_in_browser(self.taxonomy, uris, self.file_path)
+            self._query_viz_path = out_path
             self._status = f"Query result graph opened — {url}"
         except ValueError as exc:
             self._status = str(exc)
@@ -8578,6 +8612,15 @@ class TaxonomyViewer:
         qs.running = False
         if not result.error:
             qs.panel = "results"
+            if self._query_viz_path is not None:
+                from .. import sparql_query as _sq2
+                from .. import viz_vowl as _viz
+
+                uris = _sq2.extract_result_uris(qs.rows)
+                try:
+                    _viz.refresh_query_result_in_browser(self.taxonomy, uris, self._query_viz_path)
+                except (ValueError, Exception):
+                    pass  # silent — viz refresh is best-effort
 
     def _generate_sparql_query(self) -> None:
         """Background worker: call the LLM to generate a SPARQL query.

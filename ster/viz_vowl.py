@@ -556,16 +556,12 @@ def build_query_result_graph(taxonomy: Taxonomy, uris: set[str]) -> dict:
     return {"nodes": nodes, "links": links, "layout": "force"}
 
 
-def open_query_result_in_browser(
+def _build_query_result_html(
     taxonomy: Taxonomy,
     uris: set[str],
     file_path: Path | None = None,
-) -> str:
-    """Open a VOWL graph of the SPARQL query result nodes in the browser.
-
-    Only taxonomy nodes whose URI appears in *uris* are rendered.
-    Raises ``ValueError`` when none of the URIs match any node.
-    """
+) -> tuple[dict, str]:
+    """Return (graph_dict, html_str) for a query result viz, or raise ValueError."""
     graph = build_query_result_graph(taxonomy, uris)
     if not graph["nodes"]:
         raise ValueError("No taxonomy nodes matched the query result URIs.")
@@ -579,6 +575,21 @@ def open_query_result_in_browser(
         .replace("__D3_SCRIPT__", _d3_script_tag())
         .replace("__API_TOKEN__", "")
     )
+    return graph, html
+
+
+def open_query_result_in_browser(
+    taxonomy: Taxonomy,
+    uris: set[str],
+    file_path: Path | None = None,
+) -> tuple[str, Path]:
+    """Open a VOWL graph of the SPARQL query result nodes in the browser.
+
+    Only taxonomy nodes whose URI appears in *uris* are rendered.
+    Raises ``ValueError`` when none of the URIs match any node.
+    Returns ``(url, out_path)`` so callers can track the file for later refresh.
+    """
+    _graph, html = _build_query_result_html(taxonomy, uris, file_path)
     cache = Path.home() / ".cache" / "ster"
     cache.mkdir(parents=True, exist_ok=True)
     stem = (file_path.stem if file_path else "query") + "_sparql_result"
@@ -587,7 +598,25 @@ def open_query_result_in_browser(
     port = _ensure_server(out.parent)
     url = f"http://127.0.0.1:{port}/{out.name}"
     webbrowser.open(url)
-    return url
+    return url, out
+
+
+def refresh_query_result_in_browser(
+    taxonomy: Taxonomy,
+    uris: set[str],
+    out: Path,
+) -> None:
+    """Rewrite an existing query-result viz file and bring the browser tab to front.
+
+    Raises ``ValueError`` when none of the URIs match any taxonomy node.
+    The *out* path must be the file previously returned by
+    ``open_query_result_in_browser``.
+    """
+    _graph, html = _build_query_result_html(taxonomy, uris)
+    out.write_text(html, encoding="utf-8")
+    port = _ensure_server(out.parent)
+    url = f"http://127.0.0.1:{port}/{out.name}"
+    webbrowser.open(url)
 
 
 # ── File output ───────────────────────────────────────────────────────────────
