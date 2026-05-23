@@ -11,6 +11,11 @@ from rdflib.namespace import DCTERMS, OWL, RDFS, SKOS, XSD
 VOID = Namespace("http://rdfs.org/ns/void#")
 SCHEMA = Namespace("https://schema.org/")
 
+# Prefixes rdflib injects into every fresh Graph — not declared by the user's file.
+_RDFLIB_DEFAULT_PREFIXES: frozenset[str] = frozenset(
+    p for p, _ in Graph().namespace_manager.namespaces()
+) | frozenset({"wv", ""})
+
 from .handles import assign_handles
 from .model import (
     Concept,
@@ -384,10 +389,9 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
     _normalize_hierarchy(taxonomy)
 
     # ── Capture prefix bindings from source file ──────────────────────────────
-    _BUILTIN_PREFIXES = {"rdf", "rdfs", "owl", "xsd", "skos", "dcterms", "void", "schema", "wv", ""}
     for raw_prefix, raw_ns in g.namespace_manager.namespaces():
         p, n = str(raw_prefix), str(raw_ns)  # type: ignore[assignment]
-        if p not in _BUILTIN_PREFIXES:
+        if p not in _RDFLIB_DEFAULT_PREFIXES:
             taxonomy.namespace_bindings[p] = n  # type: ignore[index]
 
     return taxonomy
