@@ -2,20 +2,17 @@ Feature: SPARQL editor smart completions
 
   # ── Prefix header ─────────────────────────────────────────────────────────────
 
-  Scenario: Prefix header always includes standard prefixes
-    Given an empty taxonomy
-    When I build the prefix header
-    Then the header declares "PREFIX rdf:"
-    And the header declares "PREFIX rdfs:"
-    And the header declares "PREFIX owl:"
-    And the header declares "PREFIX skos:"
-
-  Scenario: Prefix header includes custom namespace bindings from the taxonomy
+  Scenario: Prefix header emits only the bindings declared in the TTL file
     Given a taxonomy with kai namespace binding
     When I build the prefix header
     Then the header declares "PREFIX kai:"
 
-  Scenario: Prefix header never duplicates a PREFIX declaration
+  Scenario: Prefix header is empty when the taxonomy has no bindings
+    Given an empty taxonomy
+    When I build the prefix header
+    Then the header contains no PREFIX declarations
+
+  Scenario: Prefix header does not duplicate when the same prefix appears once
     Given a taxonomy that redeclares the rdf namespace
     When I build the prefix header
     Then the header contains exactly one "PREFIX rdf:"

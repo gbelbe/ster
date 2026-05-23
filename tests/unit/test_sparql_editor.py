@@ -18,37 +18,27 @@ _KAI_NS = "https://ex.org/kai/"
 # ── build_prefix_header ───────────────────────────────────────────────────────
 
 
-def test_prefix_header_contains_rdf():
-    assert "PREFIX rdf:" in build_prefix_header({})
-
-
-def test_prefix_header_contains_rdfs():
-    assert "PREFIX rdfs:" in build_prefix_header({})
-
-
-def test_prefix_header_contains_owl():
-    assert "PREFIX owl:" in build_prefix_header({})
-
-
-def test_prefix_header_contains_skos():
-    assert "PREFIX skos:" in build_prefix_header({})
-
-
-def test_prefix_header_includes_custom_binding():
+def test_prefix_header_includes_binding():
     header = build_prefix_header({"kai": _KAI_NS})
     assert "PREFIX kai:" in header
     assert _KAI_NS in header
 
 
-def test_prefix_header_no_duplicate_when_binding_matches_standard():
-    # If the file declares rdf: with the canonical URI, it must appear exactly once.
-    header = build_prefix_header({"rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"})
-    assert header.count("PREFIX rdf:") == 1
+def test_prefix_header_empty_bindings_produces_only_blank_line():
+    # No standard prefixes injected — empty bindings → just the trailing newlines
+    assert build_prefix_header({}) == "\n\n"
 
 
 def test_prefix_header_ends_with_blank_line():
-    header = build_prefix_header({})
+    header = build_prefix_header({"kai": _KAI_NS})
     assert header.endswith("\n\n")
+
+
+def test_prefix_header_is_sorted_alphabetically():
+    header = build_prefix_header({"skos": "http://s/", "kai": _KAI_NS, "rdf": "http://r/"})
+    lines = [ln for ln in header.strip().splitlines() if ln]
+    prefixes = [ln.split()[1].rstrip(":") for ln in lines]
+    assert prefixes == sorted(prefixes)
 
 
 def test_prefix_header_each_line_is_valid_sparql_prefix():

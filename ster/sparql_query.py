@@ -547,17 +547,15 @@ _STANDARD_QNAMES: dict[str, list[str]] = {
 
 
 def build_prefix_header(namespace_bindings: dict[str, str]) -> str:
-    """Build a SPARQL PREFIX block from *namespace_bindings* plus standard prefixes.
+    """Build a SPARQL PREFIX block from *namespace_bindings* only.
 
-    Standard prefixes (rdf, rdfs, owl, skos, dcterms, xsd) are always included.
-    Custom bindings are appended after them.  A binding whose prefix name already
-    appears in the standard set keeps the standard URI — no duplicates are emitted.
+    Emits exactly the prefixes declared in the loaded TTL file, sorted
+    alphabetically.  No standard prefixes are added automatically.
     """
-    combined: dict[str, str] = dict(_STANDARD_PREFIXES)
-    for pfx, uri in namespace_bindings.items():
-        if pfx not in combined:
-            combined[pfx] = uri
-    return "\n".join(f"PREFIX {pfx}: <{uri}>" for pfx, uri in combined.items()) + "\n\n"
+    return (
+        "\n".join(f"PREFIX {pfx}: <{uri}>" for pfx, uri in sorted(namespace_bindings.items()))
+        + "\n\n"
+    )
 
 
 def build_qname_index(taxonomy: Taxonomy) -> dict[str, list[str]]:

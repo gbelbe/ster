@@ -100,29 +100,14 @@ def when_insert_where(ctx):
 # ── Then ───────────────────────────────────────────────────────────────────────
 
 
-@then('the header declares "PREFIX rdf:"')
-def then_header_rdf(ctx):
-    assert "PREFIX rdf:" in ctx["header"]
-
-
-@then('the header declares "PREFIX rdfs:"')
-def then_header_rdfs(ctx):
-    assert "PREFIX rdfs:" in ctx["header"]
-
-
-@then('the header declares "PREFIX owl:"')
-def then_header_owl(ctx):
-    assert "PREFIX owl:" in ctx["header"]
-
-
-@then('the header declares "PREFIX skos:"')
-def then_header_skos(ctx):
-    assert "PREFIX skos:" in ctx["header"]
-
-
 @then('the header declares "PREFIX kai:"')
 def then_header_kai(ctx):
     assert "PREFIX kai:" in ctx["header"]
+
+
+@then("the header contains no PREFIX declarations")
+def then_header_empty(ctx):
+    assert "PREFIX " not in ctx["header"]
 
 
 @then('the header contains exactly one "PREFIX rdf:"')
