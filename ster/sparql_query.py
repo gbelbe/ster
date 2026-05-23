@@ -409,8 +409,10 @@ def find_uri_column(result: QueryResult) -> int | None:
 def compute_col_widths(columns: list[str], rows: list[list[str]], available: int) -> list[int]:
     """Compute column display widths to fill *available* characters.
 
-    Each column gets at least 4 characters.  Widths are proportional to the
-    maximum cell length (capped at 40) so no single column dominates.
+    Each column gets at least 4 characters.  When all content fits within the
+    available space the actual content widths are returned unchanged.  When the
+    content is wider than the screen, widths are scaled down proportionally so
+    no single column dominates.
     """
     n = len(columns)
     if n == 0:
@@ -420,10 +422,9 @@ def compute_col_widths(columns: list[str], rows: list[list[str]], available: int
         for i, val in enumerate(row):
             if i < n:
                 maxes[i] = max(maxes[i], len(val))
-    maxes = [min(m, 40) for m in maxes]
-    sep = n - 1  # " │ " is 3 chars but we'll use 1-char sep
-    total_max = sum(maxes)
+    sep = n - 1  # " │ " separators
     budget = max(n * 4, available - sep * 3)
+    total_max = sum(maxes)
     if total_max <= budget:
         return maxes
     scale = budget / total_max
