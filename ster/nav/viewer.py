@@ -7742,6 +7742,17 @@ class TaxonomyViewer:
         except curses.error:
             win, modal_h, modal_w = stdscr, rows, cols
 
+        # Fill the modal background so the tree does not bleed through.
+        bg_attr = curses.color_pair(_C_FIELD_VAL)
+        try:
+            win.bkgd(" ", bg_attr)
+        except curses.error:
+            pass
+        try:
+            win.erase()
+        except curses.error:
+            pass
+
         # ── Dimensions ────────────────────────────────────────────────────────
         rows, cols = modal_h, modal_w
         edit_h = max(5, (rows - 2) // self._QUERY_EDIT_RATIO)
