@@ -3250,13 +3250,20 @@ class TaxonomyViewer:
             from .. import sparql_query as _sq  # noqa: PLC0415
 
             buf = self._last_query_buffer
+            file_paths = list(self._workspace.taxonomies.keys())
             if not buf:
                 buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
             self._state = QueryState(
-                file_paths=list(self._workspace.taxonomies.keys()),
+                file_paths=file_paths,
                 query_buffer=buf,
                 query_pos=len(buf),
             )
+            # Pre-warm the graph cache in the background so the first query is fast.
+            threading.Thread(
+                target=_sq.load_graph_cached,
+                args=(file_paths,),
+                daemon=True,
+            ).start()
 
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
