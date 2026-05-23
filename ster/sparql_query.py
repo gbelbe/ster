@@ -728,6 +728,9 @@ _CLASS_PREDICATES: frozenset[str] = frozenset(
 # Regex: last SPARQL token before the cursor (ignoring trailing whitespace)
 _LAST_TOKEN_RE = re.compile(r"(\S+)\s+$")
 
+# Regex: PREFIX name: declarations in a SPARQL buffer
+_PREFIX_DECL_RE = re.compile(r"(?i)\bPREFIX\s+(\w+)\s*:")
+
 
 def _sparql_context_at_cursor(buffer: str, pos: int) -> str:
     """Return ``"class"`` when the cursor is in a position expecting a class URI.
@@ -743,6 +746,11 @@ def _sparql_context_at_cursor(buffer: str, pos: int) -> str:
     if m and m.group(1) in _CLASS_PREDICATES:
         return "class"
     return "any"
+
+
+def parse_buffer_prefixes(buffer: str) -> set[str]:
+    """Return the set of prefix names declared with PREFIX in *buffer*."""
+    return {m.group(1) for m in _PREFIX_DECL_RE.finditer(buffer)}
 
 
 def qname_candidates(idx: UriIndex, prefix: str, filter_text: str, context: str) -> list[str]:

@@ -3255,18 +3255,19 @@ class TaxonomyViewer:
             file_paths = list(self._workspace.taxonomies.keys())
             if not buf:
                 buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
+            # Build URI index synchronously so the first ':' keypress always
+            # finds the index ready — avoids the race where background thread
+            # hasn't stored the result yet when the user types ':'.
+            if file_paths:
+                try:
+                    _sq.build_uri_index_cached(file_paths)
+                except Exception:
+                    pass
             self._state = QueryState(
                 file_paths=file_paths,
                 query_buffer=buf,
                 query_pos=len(buf),
             )
-            # Pre-warm graph + URI index caches in the background so the first
-            # query and the first colon-trigger are both instant.
-            threading.Thread(
-                target=_sq.build_uri_index_cached,
-                args=(file_paths,),
-                daemon=True,
-            ).start()
 
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
@@ -8536,7 +8537,11 @@ class TaxonomyViewer:
                     from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
                     uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
-                    known = set(uri_idx.keys()) | set(_sq.build_qname_index(self.taxonomy).keys())
+                    known = (
+                        set(uri_idx.keys())
+                        | set(_sq.build_qname_index(self.taxonomy).keys())
+                        | _sq.parse_buffer_prefixes(qs.query_buffer)
+                    )
                     pfx = _qname_prefix_at_cursor(qs.query_buffer, qs.query_pos, known)
                     if pfx is not None:
                         ctx = _sq._sparql_context_at_cursor(qs.query_buffer, qs.query_pos)
