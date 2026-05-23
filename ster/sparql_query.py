@@ -337,6 +337,23 @@ def load_graph(paths: list[Path]) -> rdflib.Graph:
     return g
 
 
+# Module-level cache: (sorted paths, mtimes) → rdflib.Graph
+_graph_cache: dict[tuple, rdflib.Graph] = {}
+
+
+def _cache_key(paths: list[Path]) -> tuple:
+    """Build a cache key from paths and their current modification times."""
+    return tuple((str(p), p.stat().st_mtime if p.exists() else 0) for p in sorted(paths))
+
+
+def load_graph_cached(paths: list[Path]) -> rdflib.Graph:
+    """Return a cached graph, re-parsing only when a file has changed on disk."""
+    key = _cache_key(paths)
+    if key not in _graph_cache:
+        _graph_cache[key] = load_graph(paths)
+    return _graph_cache[key]
+
+
 def run_query(paths: list[Path], sparql_text: str) -> QueryResult:
     """Execute *sparql_text* against the taxonomy files at *paths*.
 
@@ -346,7 +363,7 @@ def run_query(paths: list[Path], sparql_text: str) -> QueryResult:
     if not sparql_text.strip():
         return QueryResult(columns=[], rows=[], error="Empty query.")
     try:
-        g = load_graph(paths)
+        g = load_graph_cached(paths)
     except Exception as exc:
         return QueryResult(columns=[], rows=[], error=f"Load error: {exc}")
     return run_query_on_graph(g, sparql_text)
