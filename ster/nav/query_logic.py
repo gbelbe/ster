@@ -137,6 +137,20 @@ def _ac_matches(label: str, q: str) -> bool:
     return any(word.startswith(q_lower) for word in label_lower.split())
 
 
+def _qn_clamp_scroll(cursor: int, scroll: int, window_h: int) -> int:
+    """Return an updated scroll so *cursor* is within the visible window.
+
+    The window shows items ``[scroll, scroll + window_h)``.  If the cursor is
+    above the window, scroll snaps up.  If below, scroll advances so the cursor
+    is the last visible item.
+    """
+    if cursor < scroll:
+        return cursor
+    if cursor >= scroll + window_h:
+        return cursor - window_h + 1
+    return scroll
+
+
 def _query_pos_up(buffer: str, pos: int) -> int:
     """Move cursor position up one logical line, preserving column."""
     before = buffer[:pos]

@@ -294,6 +294,7 @@ class QueryState:
     qn_cursor: int = 0
     qn_scroll: int = 0
     qn_trigger_pos: int = 0
+    qn_context: str = "any"  # "class" or "any" — set from surrounding SPARQL syntax
     # ?variable suggestion popup (triggered after '?')
     var_active: bool = False
     var_filter: str = ""

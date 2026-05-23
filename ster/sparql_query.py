@@ -340,6 +340,11 @@ def load_graph(paths: list[Path]) -> rdflib.Graph:
 # Module-level cache: (sorted paths, mtimes) → rdflib.Graph
 _graph_cache: dict[tuple, rdflib.Graph] = {}
 
+# Module-level URI completion index cache: same key → UriIndex
+# UriIndex shape: {prefix: {"all": [...], "classes": [...], "individuals": [...]}}
+UriIndex = dict[str, dict[str, list[str]]]
+_uri_index_cache: dict[tuple, UriIndex] = {}
+
 
 def _cache_key(paths: list[Path]) -> tuple:
     """Build a cache key from paths and their current modification times."""
@@ -352,6 +357,33 @@ def load_graph_cached(paths: list[Path]) -> rdflib.Graph:
     if key not in _graph_cache:
         _graph_cache[key] = load_graph(paths)
     return _graph_cache[key]
+
+
+def build_uri_index_cached(paths: list[Path]) -> UriIndex:
+    """Return a cached URI completion index, rebuilding when any file changes."""
+    from .model import Taxonomy  # avoid circular at module level  # noqa: PLC0415
+
+    key = _cache_key(paths)
+    if key not in _uri_index_cache:
+        # Ensure the graph is cached first (warm the rdflib engine)
+        load_graph_cached(paths)
+        # Build a lightweight taxonomy snapshot for the index
+        tax = Taxonomy()
+        for p in paths:
+            try:
+                from . import store as _store  # noqa: PLC0415
+
+                loaded = _store.load(p)
+                tax.owl_classes.update(loaded.owl_classes)
+                tax.owl_individuals.update(loaded.owl_individuals)
+                tax.concepts.update(loaded.concepts)
+                tax.schemes.update(loaded.schemes)
+                tax.owl_properties.update(loaded.owl_properties)
+                tax.namespace_bindings.update(loaded.namespace_bindings)
+            except Exception:
+                pass
+        _uri_index_cache[key] = build_uri_index(tax)
+    return _uri_index_cache[key]
 
 
 def run_query(paths: list[Path], sparql_text: str) -> QueryResult:
@@ -615,6 +647,115 @@ def build_qname_index(taxonomy: Taxonomy) -> dict[str, list[str]]:
         index[pfx] = sorted(index[pfx])
 
     return index
+
+
+def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
+    """Build a prefix → {all, classes, individuals} completion index.
+
+    Each sub-list is sorted alphabetically.  Standard prefix well-known names
+    are included under "all" and under "classes" where appropriate.
+    """
+    if TYPE_CHECKING:
+        pass
+    ns_to_pfx: dict[str, str] = {uri: pfx for pfx, uri in taxonomy.namespace_bindings.items()}
+
+    # Collect per-bucket
+    all_map: dict[str, list[str]] = {}
+    cls_map: dict[str, list[str]] = {}
+    ind_map: dict[str, list[str]] = {}
+    seen_all: set[tuple[str, str]] = set()
+
+    def _add(uri: str, bucket: dict[str, list[str]]) -> None:
+        for ns, pfx in ns_to_pfx.items():
+            if uri.startswith(ns):
+                local = uri[len(ns) :]
+                if local:
+                    bucket.setdefault(pfx, []).append(local)
+                    if (pfx, local) not in seen_all:
+                        seen_all.add((pfx, local))
+                        all_map.setdefault(pfx, []).append(local)
+                return
+
+    for uri in taxonomy.owl_classes:
+        _add(uri, cls_map)
+    for uri in taxonomy.owl_individuals:
+        _add(uri, ind_map)
+    for uri in (*taxonomy.concepts, *taxonomy.schemes, *taxonomy.owl_properties):
+        _add(uri, all_map)
+
+    # Standard well-known names: add owl:Class / rdfs:Class etc. to classes bucket
+    _STANDARD_CLASS_LOCALS: dict[str, list[str]] = {
+        "owl": ["Class", "NamedIndividual", "Thing", "Nothing"],
+        "rdfs": ["Class", "Resource"],
+        "rdf": ["Property"],
+    }
+    for pfx, qnames in _STANDARD_QNAMES.items():
+        cls_locals = set(_STANDARD_CLASS_LOCALS.get(pfx, []))
+        for local in qnames:
+            if (pfx, local) not in seen_all:
+                seen_all.add((pfx, local))
+                all_map.setdefault(pfx, []).append(local)
+            if local in cls_locals and local not in cls_map.get(pfx, []):
+                cls_map.setdefault(pfx, []).append(local)
+
+    idx: UriIndex = {}
+    all_pfxs = set(all_map) | set(cls_map) | set(ind_map)
+    for pfx in all_pfxs:
+        idx[pfx] = {
+            "all": sorted(set(all_map.get(pfx, []))),
+            "classes": sorted(set(cls_map.get(pfx, []))),
+            "individuals": sorted(set(ind_map.get(pfx, []))),
+        }
+    return idx
+
+
+# SPARQL predicates that signal the object position expects a class URI
+_CLASS_PREDICATES: frozenset[str] = frozenset(
+    {
+        "a",
+        "rdf:type",
+        "rdfs:subClassOf",
+        "rdfs:domain",
+        "rdfs:range",
+        "owl:equivalentClass",
+        "owl:disjointWith",
+        "owl:unionOf",
+        "owl:intersectionOf",
+        "owl:complementOf",
+    }
+)
+
+# Regex: last SPARQL token before the cursor (ignoring trailing whitespace)
+_LAST_TOKEN_RE = re.compile(r"(\S+)\s+$")
+
+
+def _sparql_context_at_cursor(buffer: str, pos: int) -> str:
+    """Return ``"class"`` when the cursor is in a position expecting a class URI.
+
+    Strips the in-progress token (e.g. ``"kai:"`` just typed) then looks at
+    the immediately preceding whitespace-separated token.  Returns ``"any"``
+    for all other positions.
+    """
+    before = buffer[:pos]
+    # Remove the in-progress token (the prefix: or partial identifier being typed)
+    stripped = re.sub(r"\S+$", "", before)
+    m = _LAST_TOKEN_RE.search(stripped)
+    if m and m.group(1) in _CLASS_PREDICATES:
+        return "class"
+    return "any"
+
+
+def qname_candidates(idx: UriIndex, prefix: str, filter_text: str, context: str) -> list[str]:
+    """Return filtered, alphabetically-sorted local names for *prefix*.
+
+    *context* is ``"class"`` or ``"any"``.  When ``"class"``, only names from
+    the ``classes`` bucket are returned.  Filter is applied case-insensitively
+    as a prefix match.
+    """
+    bucket_key = "classes" if context == "class" else "all"
+    names = idx.get(prefix, {}).get(bucket_key, [])
+    f = filter_text.lower()
+    return [n for n in names if n.lower().startswith(f)]
 
 
 def extract_query_variables(buffer: str) -> list[str]:

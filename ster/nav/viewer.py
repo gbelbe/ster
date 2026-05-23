@@ -3258,9 +3258,10 @@ class TaxonomyViewer:
                 query_buffer=buf,
                 query_pos=len(buf),
             )
-            # Pre-warm the graph cache in the background so the first query is fast.
+            # Pre-warm graph + URI index caches in the background so the first
+            # query and the first colon-trigger are both instant.
             threading.Thread(
-                target=_sq.load_graph_cached,
+                target=_sq.build_uri_index_cached,
                 args=(file_paths,),
                 daemon=True,
             ).start()
@@ -8161,14 +8162,21 @@ class TaxonomyViewer:
     ) -> None:
         """Draw the QName completion popup below the cursor."""
         from .. import sparql_query as _sq
+        from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
-        qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
-        candidates = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+        uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+        candidates = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
+        if not candidates:
+            # fall back to taxonomy-based index
+            qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+            candidates = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
         if not candidates:
             return
         n = len(candidates)
-        popup_w = min(max(len(c) for c in candidates) + 4, 40, cols - 2)
-        popup_h = min(n + 1, 10, rows - 3)
+        popup_w = min(max(len(c) + len(qs.qn_prefix) + 3 for c in candidates) + 4, 50, cols - 2)
+        max_list_h = 12  # visible rows before scroll kicks in
+        list_h = min(n, max_list_h)
+        popup_h = list_h + 1  # +1 for hint row
         if popup_h < 2:
             return
 
@@ -8178,7 +8186,6 @@ class TaxonomyViewer:
         if popup_y + popup_h > rows - 1:
             popup_y = max(1, screen_row - popup_h)
 
-        list_h = popup_h - 1
         for y in range(popup_h):
             try:
                 stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
@@ -8186,11 +8193,19 @@ class TaxonomyViewer:
                 pass
 
         cur = max(0, min(qs.qn_cursor, n - 1))
+        scroll = _qn_clamp_scroll(cur, qs.qn_scroll, list_h)
         for i in range(list_h):
-            if i >= n:
+            idx_in_list = scroll + i
+            if idx_in_list >= n:
                 break
-            sel = i == cur
-            text = f" {qs.qn_prefix}:{candidates[i]} "
+            sel = idx_in_list == cur
+            label = candidates[idx_in_list]
+            scroll_marker = (
+                "▲"
+                if (i == 0 and scroll > 0)
+                else ("▼" if (i == list_h - 1 and scroll + list_h < n) else " ")
+            )
+            text = f"{scroll_marker}{qs.qn_prefix}:{label} "
             attr = (
                 curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
                 if sel
@@ -8201,10 +8216,11 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
-        hint = " ↑↓: select   Tab: insert "
+        ctx_label = " [classes]" if qs.qn_context == "class" else ""
+        hint = f" ↑↓: scroll   Tab: insert{ctx_label} "
         try:
             stdscr.addstr(
-                popup_y + popup_h - 1,
+                popup_y + list_h,
                 popup_x,
                 hint.center(popup_w)[:popup_w],
                 curses.color_pair(_C_DIM),
@@ -8314,9 +8330,14 @@ class TaxonomyViewer:
             # ── QName popup intercept ─────────────────────────────────────────
             if qs.qn_active:
                 from .. import sparql_query as _sq
+                from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
-                qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
-                filtered = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+                uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+                filtered = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
+                if not filtered:
+                    # fall back to taxonomy-based index
+                    qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+                    filtered = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
                 if key == 27:  # Esc
                     qs.qn_active = False
                     return False
@@ -8333,9 +8354,11 @@ class TaxonomyViewer:
                     return False
                 if key == curses.KEY_UP:
                     qs.qn_cursor = max(0, qs.qn_cursor - 1)
+                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 9)
                     return False
                 if key == curses.KEY_DOWN:
                     qs.qn_cursor = min(max(0, len(filtered) - 1), qs.qn_cursor + 1)
+                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 9)
                     return False
                 qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
                 qs.qn_filter = qs.query_buffer[qs.qn_trigger_pos : qs.query_pos]
@@ -8343,6 +8366,7 @@ class TaxonomyViewer:
                     qs.qn_active = False
                 else:
                     qs.qn_cursor = 0
+                    qs.qn_scroll = 0
                 return False
 
             # ── Variable suggestion popup intercept ───────────────────────────
@@ -8507,16 +8531,20 @@ class TaxonomyViewer:
                     qs.ac_scheme_label = ""
                 elif key == ord(":"):
                     from .. import sparql_query as _sq
+                    from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
-                    known = set(_sq.build_qname_index(self.taxonomy).keys())
+                    uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+                    known = set(uri_idx.keys()) | set(_sq.build_qname_index(self.taxonomy).keys())
                     pfx = _qname_prefix_at_cursor(qs.query_buffer, qs.query_pos, known)
                     if pfx is not None:
+                        ctx = _sq._sparql_context_at_cursor(qs.query_buffer, qs.query_pos)
                         qs.qn_active = True
                         qs.qn_prefix = pfx
                         qs.qn_filter = ""
                         qs.qn_cursor = 0
                         qs.qn_scroll = 0
                         qs.qn_trigger_pos = qs.query_pos
+                        qs.qn_context = ctx
                 elif key == ord("?"):
                     from .. import sparql_query as _sq
 
