@@ -7714,8 +7714,8 @@ class TaxonomyViewer:
         self._draw_tree(stdscr, rows, cols)
 
         # AI sub-flow screens take over the full modal
-        modal_y, modal_x = 1, 2
-        modal_h, modal_w = rows - 2, cols - 4
+        modal_y, modal_x = 2, 4
+        modal_h, modal_w = rows - 4, cols - 8
 
         if qs.ai_step == "prompt_review" or qs.ai_generating:
             try:
