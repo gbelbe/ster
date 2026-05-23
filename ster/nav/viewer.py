@@ -8244,23 +8244,30 @@ class TaxonomyViewer:
         cursor_display_line: int,
         cursor_col: int,
     ) -> None:
-        """Draw the QName completion popup below the cursor."""
+        """Draw the hierarchical QName completion popup below the cursor."""
         from .. import sparql_query as _sq
         from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
         uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
-        candidates = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
-        if not candidates:
-            # fall back to taxonomy-based index
-            qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
-            candidates = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
-        if not candidates:
+        level_cands = _sq.qname_level_candidates(
+            uri_idx, qs.qn_prefix, qs.qn_parent, qs.qn_filter, qs.qn_context
+        )
+        if not level_cands:
+            # Fall back to flat list when hierarchy data not available
+            flat = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
+            if not flat:
+                qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+                flat = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+            level_cands = [(name, False) for name in flat]
+        if not level_cands:
             return
-        n = len(candidates)
-        popup_w = min(max(len(c) + len(qs.qn_prefix) + 3 for c in candidates) + 4, 50, cols - 2)
-        max_list_h = 12  # visible rows before scroll kicks in
+
+        n = len(level_cands)
+        max_label = max(len(name) + (2 if has_ch else 1) for name, has_ch in level_cands)
+        popup_w = min(max_label + len(qs.qn_prefix) + 4, 50, cols - 2)
+        max_list_h = 12
         list_h = min(n, max_list_h)
-        popup_h = list_h + 1  # +1 for hint row
+        popup_h = list_h + 1
         if popup_h < 2:
             return
 
@@ -8283,13 +8290,14 @@ class TaxonomyViewer:
             if idx_in_list >= n:
                 break
             sel = idx_in_list == cur
-            label = candidates[idx_in_list]
+            label, has_children = level_cands[idx_in_list]
             scroll_marker = (
                 "▲"
                 if (i == 0 and scroll > 0)
                 else ("▼" if (i == list_h - 1 and scroll + list_h < n) else " ")
             )
-            text = f"{scroll_marker}{qs.qn_prefix}:{label} "
+            child_marker = "▶" if has_children else " "
+            text = f"{scroll_marker}{qs.qn_prefix}:{label}{child_marker}"
             attr = (
                 curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
                 if sel
@@ -8300,8 +8308,10 @@ class TaxonomyViewer:
             except curses.error:
                 pass
 
+        breadcrumb = f" …/{qs.qn_parent}" if qs.qn_parent else ""
         ctx_label = " [classes]" if qs.qn_context == "class" else ""
-        hint = f" ↑↓: scroll   Tab: insert{ctx_label} "
+        nav_hint = "←back " if qs.qn_parent or qs.qn_breadcrumb else ""
+        hint = f" {nav_hint}↑↓ →expand Tab:insert{breadcrumb}{ctx_label} "
         try:
             stdscr.addstr(
                 popup_y + list_h,
@@ -8454,6 +8464,8 @@ class TaxonomyViewer:
                         qs.qn_scroll = 0
                         qs.qn_trigger_pos = qs.query_pos
                         qs.qn_context = ctx
+                        qs.qn_parent = ""
+                        qs.qn_breadcrumb.clear()
                     else:
                         qs.pfx_active = False
                     return False
@@ -8477,17 +8489,48 @@ class TaxonomyViewer:
                 from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
                 uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
-                filtered = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
-                if not filtered:
-                    # fall back to taxonomy-based index
-                    qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
-                    filtered = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
-                if key == 27:  # Esc
-                    qs.qn_active = False
+                level_cands = _sq.qname_level_candidates(
+                    uri_idx, qs.qn_prefix, qs.qn_parent, qs.qn_filter, qs.qn_context
+                )
+                if not level_cands:
+                    flat = _sq.qname_candidates(uri_idx, qs.qn_prefix, qs.qn_filter, qs.qn_context)
+                    if not flat:
+                        qn_names = _sq.build_qname_index(self.taxonomy).get(qs.qn_prefix, [])
+                        flat = [n for n in qn_names if n.lower().startswith(qs.qn_filter.lower())]
+                    level_cands = [(name, False) for name in flat]
+
+                if key == 27:  # Esc — close or go up one level
+                    if qs.qn_parent or qs.qn_breadcrumb:
+                        qs.qn_parent = qs.qn_breadcrumb.pop() if qs.qn_breadcrumb else ""
+                        qs.qn_cursor = 0
+                        qs.qn_scroll = 0
+                    else:
+                        qs.qn_active = False
                     return False
+
+                cur_idx = max(0, min(qs.qn_cursor, len(level_cands) - 1))
+
+                if key == curses.KEY_RIGHT and level_cands:
+                    # Drill into selected class if it has children
+                    name, has_children = level_cands[cur_idx]
+                    if has_children:
+                        qs.qn_breadcrumb.append(qs.qn_parent)
+                        qs.qn_parent = name
+                        qs.qn_filter = ""
+                        qs.qn_cursor = 0
+                        qs.qn_scroll = 0
+                    return False
+
+                if key == curses.KEY_LEFT:
+                    # Navigate back to parent level
+                    qs.qn_parent = qs.qn_breadcrumb.pop() if qs.qn_breadcrumb else ""
+                    qs.qn_cursor = 0
+                    qs.qn_scroll = 0
+                    return False
+
                 if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
-                    if filtered:
-                        name = filtered[qs.qn_cursor]
+                    if level_cands:
+                        name, _ = level_cands[cur_idx]
                         qs.query_buffer = (
                             qs.query_buffer[: qs.qn_trigger_pos]
                             + name
@@ -8495,19 +8538,23 @@ class TaxonomyViewer:
                         )
                         qs.query_pos = qs.qn_trigger_pos + len(name)
                     qs.qn_active = False
+                    qs.qn_parent = ""
+                    qs.qn_breadcrumb.clear()
                     return False
                 if key == curses.KEY_UP:
                     qs.qn_cursor = max(0, qs.qn_cursor - 1)
-                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 9)
+                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 12)
                     return False
                 if key == curses.KEY_DOWN:
-                    qs.qn_cursor = min(max(0, len(filtered) - 1), qs.qn_cursor + 1)
-                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 9)
+                    qs.qn_cursor = min(max(0, len(level_cands) - 1), qs.qn_cursor + 1)
+                    qs.qn_scroll = _qn_clamp_scroll(qs.qn_cursor, qs.qn_scroll, 12)
                     return False
                 qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
                 qs.qn_filter = qs.query_buffer[qs.qn_trigger_pos : qs.query_pos]
                 if qs.query_pos <= qs.qn_trigger_pos:
                     qs.qn_active = False
+                    qs.qn_parent = ""
+                    qs.qn_breadcrumb.clear()
                 else:
                     qs.qn_cursor = 0
                     qs.qn_scroll = 0
@@ -8694,6 +8741,8 @@ class TaxonomyViewer:
                         qs.qn_scroll = 0
                         qs.qn_trigger_pos = qs.query_pos
                         qs.qn_context = ctx
+                        qs.qn_parent = ""
+                        qs.qn_breadcrumb.clear()
                 elif key == ord("?"):
                     from .. import sparql_query as _sq
 

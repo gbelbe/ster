@@ -341,8 +341,9 @@ def load_graph(paths: list[Path]) -> rdflib.Graph:
 _graph_cache: dict[tuple, rdflib.Graph] = {}
 
 # Module-level URI completion index cache: same key → UriIndex
-# UriIndex shape: {prefix: {"all": [...], "classes": [...], "individuals": [...]}}
-UriIndex = dict[str, dict[str, list[str]]]
+# UriIndex shape: {prefix: {"all": [...], "classes": [...], "individuals": [...],
+#                            "roots": [...], "children": {parent: [child, ...]}}}
+UriIndex = dict[str, dict[str, list[str] | dict[str, list[str]]]]
 _uri_index_cache: dict[tuple, UriIndex] = {}
 
 
@@ -650,10 +651,15 @@ def build_qname_index(taxonomy: Taxonomy) -> dict[str, list[str]]:
 
 
 def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
-    """Build a prefix → {all, classes, individuals} completion index.
+    """Build a prefix → {all, classes, individuals, roots, children} completion index.
 
     Each sub-list is sorted alphabetically.  Standard prefix well-known names
     are included under "all" and under "classes" where appropriate.
+
+    ``roots``    — classes with no rdfs:subClassOf pointing to another class
+                   in the same namespace (parentless classes surface at root level).
+    ``children`` — mapping of parent local name → sorted list of direct child
+                   local names within the same namespace.
     """
     if TYPE_CHECKING:
         pass
@@ -698,13 +704,44 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
             if local in cls_locals and local not in cls_map.get(pfx, []):
                 cls_map.setdefault(pfx, []).append(local)
 
+    # Build hierarchy: roots (no parent in same NS) and children map
+    roots_map: dict[str, list[str]] = {}
+    children_map: dict[str, dict[str, list[str]]] = {}
+
+    for uri, cls in taxonomy.owl_classes.items():
+        cpfx: str | None = None
+        cns: str | None = None
+        for namespace, p in ns_to_pfx.items():
+            if uri.startswith(namespace):
+                cpfx = p
+                cns = namespace
+                break
+        if cpfx is None or cns is None:
+            continue
+        local = uri[len(cns) :]
+        if not local:
+            continue
+        has_parent_in_ns = False
+        for parent_uri in cls.sub_class_of:
+            if parent_uri.startswith(cns):
+                parent_local = parent_uri[len(cns) :]
+                if parent_local:
+                    has_parent_in_ns = True
+                    children_map.setdefault(cpfx, {}).setdefault(parent_local, []).append(local)
+        if not has_parent_in_ns:
+            roots_map.setdefault(cpfx, []).append(local)
+
     idx: UriIndex = {}
-    all_pfxs = set(all_map) | set(cls_map) | set(ind_map)
+    all_pfxs = set(all_map) | set(cls_map) | set(ind_map) | set(roots_map)
     for pfx in all_pfxs:
         idx[pfx] = {
             "all": sorted(set(all_map.get(pfx, []))),
             "classes": sorted(set(cls_map.get(pfx, []))),
             "individuals": sorted(set(ind_map.get(pfx, []))),
+            "roots": sorted(set(roots_map.get(pfx, []))),
+            "children": {
+                parent: sorted(children) for parent, children in children_map.get(pfx, {}).items()
+            },
         }
     return idx
 
@@ -773,6 +810,46 @@ def qname_candidates(idx: UriIndex, prefix: str, filter_text: str, context: str)
     names = idx.get(prefix, {}).get(bucket_key, [])
     f = filter_text.lower()
     return [n for n in names if n.lower().startswith(f)]
+
+
+def qname_level_candidates(
+    idx: UriIndex,
+    prefix: str,
+    parent_local: str,
+    filter_text: str,
+    context: str,
+) -> list[tuple[str, bool]]:
+    """Return candidates for one level of the hierarchical QName popup.
+
+    *parent_local* is the local name of the class currently being browsed
+    (empty string = root level).  Each result is a ``(local_name, has_children)``
+    tuple so the caller can display a ``▶`` marker.
+
+    At root level in ``"class"`` context only root classes are shown.
+    In ``"any"`` context individuals are also included (at root level only).
+    At any non-root level only the direct children of *parent_local* are shown.
+    Filter is applied case-insensitively as a prefix match.
+    """
+    if prefix not in idx:
+        return []
+    entry = idx[prefix]
+    children_map: dict[str, list[str]] = entry.get("children", {})  # type: ignore[assignment]
+
+    if parent_local:
+        names = list(children_map.get(parent_local, []))
+    else:
+        roots: list[str] = list(entry.get("roots", []))  # type: ignore[arg-type]
+        if context == "any":
+            individuals: list[str] = list(entry.get("individuals", []))  # type: ignore[arg-type]
+            seen: set[str] = set(roots)
+            for ind in individuals:
+                if ind not in seen:
+                    roots.append(ind)
+                    seen.add(ind)
+        names = roots
+
+    f = filter_text.lower()
+    return [(name, name in children_map) for name in sorted(names) if name.lower().startswith(f)]
 
 
 def extract_query_variables(buffer: str) -> list[str]:

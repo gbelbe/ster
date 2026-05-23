@@ -57,7 +57,8 @@ def test_build_uri_index_sorted_alphabetically() -> None:
     tax = _make_taxonomy()
     idx = build_uri_index(tax)
     for bucket in idx["kai"].values():
-        assert bucket == sorted(bucket)
+        if isinstance(bucket, list):
+            assert bucket == sorted(bucket)
 
 
 def test_build_uri_index_standard_prefix_classes_only() -> None:

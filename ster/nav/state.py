@@ -301,6 +301,8 @@ class QueryState:
     qn_scroll: int = 0
     qn_trigger_pos: int = 0
     qn_context: str = "any"  # "class" or "any" — set from surrounding SPARQL syntax
+    qn_parent: str = ""  # "" = root level, else local name of parent being browsed
+    qn_breadcrumb: list[str] = dc_field(default_factory=list)  # navigation stack
     # ?variable suggestion popup (triggered after '?')
     var_active: bool = False
     var_filter: str = ""
