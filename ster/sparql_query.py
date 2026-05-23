@@ -753,6 +753,15 @@ def parse_buffer_prefixes(buffer: str) -> set[str]:
     return {m.group(1) for m in _PREFIX_DECL_RE.finditer(buffer)}
 
 
+def _sparql_pfx_candidates(known_prefixes: set[str], filter_text: str) -> list[str]:
+    """Return prefix names from *known_prefixes* that start with *filter_text*.
+
+    Match is case-insensitive; result is sorted alphabetically.
+    """
+    f = filter_text.lower()
+    return sorted(p for p in known_prefixes if p.lower().startswith(f))
+
+
 def qname_candidates(idx: UriIndex, prefix: str, filter_text: str, context: str) -> list[str]:
     """Return filtered, alphabetically-sorted local names for *prefix*.
 

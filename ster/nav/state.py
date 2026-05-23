@@ -287,6 +287,12 @@ class QueryState:
     ac_level: int = 1
     ac_scheme_uri: str = ""
     ac_scheme_label: str = ""
+    # Prefix name popup (triggered while typing the prefix part, before ':')
+    pfx_active: bool = False
+    pfx_filter: str = ""
+    pfx_cursor: int = 0
+    pfx_scroll: int = 0
+    pfx_trigger_pos: int = 0  # buffer pos where the partial word started
     # QName completion popup (triggered after 'prefix:')
     qn_active: bool = False
     qn_prefix: str = ""

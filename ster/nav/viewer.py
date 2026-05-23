@@ -7981,6 +7981,12 @@ class TaxonomyViewer:
                     win, rows, cols, qs, kw_cands, cursor_display_line, cursor_col_on_screen
                 )
 
+        # ── Prefix name popup ─────────────────────────────────────────────────
+        if qs.pfx_active and qs.panel == "editor":
+            self._draw_query_pfx_popup(
+                win, rows, cols, qs, cursor_display_line, cursor_col_on_screen
+            )
+
         # ── QName completion popup ────────────────────────────────────────────
         if qs.qn_active and qs.panel == "editor":
             self._draw_query_qname_popup(
@@ -8147,6 +8153,81 @@ class TaxonomyViewer:
         try:
             stdscr.addstr(
                 popup_y + popup_h - 1,
+                popup_x,
+                hint.center(popup_w)[:popup_w],
+                curses.color_pair(_C_DIM),
+            )
+        except curses.error:
+            pass
+
+    def _draw_query_pfx_popup(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        cols: int,
+        qs: QueryState,
+        cursor_display_line: int,
+        cursor_col: int,
+    ) -> None:
+        """Draw the prefix-name completion popup below the cursor."""
+        from .. import sparql_query as _sq
+        from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
+
+        uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+        known = (
+            set(uri_idx.keys())
+            | set(_sq.build_qname_index(self.taxonomy).keys())
+            | _sq.parse_buffer_prefixes(qs.query_buffer)
+        )
+        candidates = _sq._sparql_pfx_candidates(known, qs.pfx_filter)
+        if not candidates:
+            return
+        n = len(candidates)
+        popup_w = min(max(len(c) + 2 for c in candidates) + 4, 40, cols - 2)
+        max_list_h = 9
+        list_h = min(n, max_list_h)
+        popup_h = list_h + 1
+
+        screen_row = 1 + (cursor_display_line - qs.query_scroll)
+        popup_y = screen_row + 1
+        popup_x = max(0, min(cursor_col, cols - popup_w - 1))
+        if popup_y + popup_h > rows - 1:
+            popup_y = max(1, screen_row - popup_h)
+
+        for y in range(popup_h):
+            try:
+                stdscr.addstr(popup_y + y, popup_x, " " * popup_w, curses.color_pair(_C_FIELD_VAL))
+            except curses.error:
+                pass
+
+        cur = max(0, min(qs.pfx_cursor, n - 1))
+        scroll = _qn_clamp_scroll(cur, qs.pfx_scroll, list_h)
+        for i in range(list_h):
+            idx_in_list = scroll + i
+            if idx_in_list >= n:
+                break
+            sel = idx_in_list == cur
+            label = candidates[idx_in_list]
+            scroll_marker = (
+                "▲"
+                if (i == 0 and scroll > 0)
+                else ("▼" if (i == list_h - 1 and scroll + list_h < n) else " ")
+            )
+            text = f"{scroll_marker}{label}: "
+            attr = (
+                curses.color_pair(_C_FIELD_VAL) | curses.A_BOLD | curses.A_REVERSE
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            try:
+                stdscr.addstr(popup_y + i, popup_x, text[:popup_w].ljust(popup_w)[:popup_w], attr)
+            except curses.error:
+                pass
+
+        hint = " ↑↓: select   Tab: insert "
+        try:
+            stdscr.addstr(
+                popup_y + list_h,
                 popup_x,
                 hint.center(popup_w)[:popup_w],
                 curses.color_pair(_C_DIM),
@@ -8330,6 +8411,66 @@ class TaxonomyViewer:
         # ── Editor panel ──────────────────────────────────────────────────────
         # Only Ctrl/function keys here — all printable chars pass to the editor.
         if qs.panel == "editor":
+            # ── Prefix name popup intercept ───────────────────────────────────
+            if qs.pfx_active:
+                from .. import sparql_query as _sq
+                from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
+
+                uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+                known = (
+                    set(uri_idx.keys())
+                    | set(_sq.build_qname_index(self.taxonomy).keys())
+                    | _sq.parse_buffer_prefixes(qs.query_buffer)
+                )
+                pfx_cands = _sq._sparql_pfx_candidates(known, qs.pfx_filter)
+                if key == 27:  # Esc
+                    qs.pfx_active = False
+                    return False
+                if key == curses.KEY_UP:
+                    qs.pfx_cursor = max(0, qs.pfx_cursor - 1)
+                    qs.pfx_scroll = _qn_clamp_scroll(qs.pfx_cursor, qs.pfx_scroll, 9)
+                    return False
+                if key == curses.KEY_DOWN:
+                    qs.pfx_cursor = min(max(0, len(pfx_cands) - 1), qs.pfx_cursor + 1)
+                    qs.pfx_scroll = _qn_clamp_scroll(qs.pfx_cursor, qs.pfx_scroll, 9)
+                    return False
+                if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):
+                    if pfx_cands:
+                        chosen = pfx_cands[max(0, min(qs.pfx_cursor, len(pfx_cands) - 1))]
+                        qs.query_buffer = (
+                            qs.query_buffer[: qs.pfx_trigger_pos]
+                            + chosen
+                            + ":"
+                            + qs.query_buffer[qs.query_pos :]
+                        )
+                        qs.query_pos = qs.pfx_trigger_pos + len(chosen) + 1
+                        qs.pfx_active = False
+                        # Open QName popup immediately for the chosen prefix
+                        ctx = _sq._sparql_context_at_cursor(qs.query_buffer, qs.query_pos)
+                        qs.qn_active = True
+                        qs.qn_prefix = chosen
+                        qs.qn_filter = ""
+                        qs.qn_cursor = 0
+                        qs.qn_scroll = 0
+                        qs.qn_trigger_pos = qs.query_pos
+                        qs.qn_context = ctx
+                    else:
+                        qs.pfx_active = False
+                    return False
+                # Pass key through to editor, then update filter
+                qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
+                word, word_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
+                if not word or ":" in word or qs.query_pos <= qs.pfx_trigger_pos:
+                    qs.pfx_active = False
+                else:
+                    qs.pfx_filter = word
+                    qs.pfx_trigger_pos = word_start
+                    qs.pfx_cursor = 0
+                    qs.pfx_scroll = 0
+                    if not _sq._sparql_pfx_candidates(known, word):
+                        qs.pfx_active = False
+                return False
+
             # ── QName popup intercept ─────────────────────────────────────────
             if qs.qn_active:
                 from .. import sparql_query as _sq
@@ -8536,6 +8677,7 @@ class TaxonomyViewer:
                     from .. import sparql_query as _sq
                     from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
 
+                    qs.pfx_active = False  # prefix popup superseded by colon
                     uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
                     known = (
                         set(uri_idx.keys())
@@ -8561,6 +8703,42 @@ class TaxonomyViewer:
                         qs.var_cursor = 0
                         qs.var_scroll = 0
                         qs.var_trigger_pos = qs.query_pos
+                # ── Prefix name popup trigger ─────────────────────────────────
+                if (
+                    not qs.qn_active
+                    and not qs.pfx_active
+                    and key
+                    not in (
+                        ord("@"),
+                        ord(":"),
+                        ord("?"),
+                        ord("{"),
+                        ord("("),
+                    )
+                    and 32 <= key < 127
+                ):
+                    from .. import sparql_query as _sq
+
+                    word, word_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
+                    # Don't suggest inside a PREFIX declaration line
+                    line_start = qs.query_buffer.rfind("\n", 0, qs.query_pos) + 1
+                    line_prefix = qs.query_buffer[line_start : qs.query_pos].lstrip()
+                    on_prefix_decl = line_prefix.upper().startswith(
+                        "PREFIX"
+                    ) or line_prefix.upper().startswith("BASE")
+                    if word and ":" not in word and not on_prefix_decl:
+                        uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
+                        known = (
+                            set(uri_idx.keys())
+                            | set(_sq.build_qname_index(self.taxonomy).keys())
+                            | _sq.parse_buffer_prefixes(qs.query_buffer)
+                        )
+                        if _sq._sparql_pfx_candidates(known, word):
+                            qs.pfx_active = True
+                            qs.pfx_filter = word
+                            qs.pfx_trigger_pos = word_start
+                            qs.pfx_cursor = 0
+                            qs.pfx_scroll = 0
             return False
 
         # ── Results panel ─────────────────────────────────────────────────────
