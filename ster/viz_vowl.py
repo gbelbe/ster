@@ -560,6 +560,7 @@ def _build_query_result_html(
     taxonomy: Taxonomy,
     uris: set[str],
     file_path: Path | None = None,
+    full_graph_link: str = "",
 ) -> tuple[dict, str]:
     """Return (graph_dict, html_str) for a query result viz, or raise ValueError."""
     graph = build_query_result_graph(taxonomy, uris)
@@ -568,12 +569,20 @@ def _build_query_result_html(
     title = _ontology_title(taxonomy, file_path) + " — Query results"
     graph_json = json.dumps(graph, ensure_ascii=False)
     meta_json = json.dumps(_taxonomy_meta(taxonomy, file_path), ensure_ascii=False)
+    show_all_btn = (
+        f'<span style="color:#cbd5e1"> │ </span>'
+        f'<button class="ftbtn active" onclick="window.location.href=\'{full_graph_link}\'">'
+        f"Show all nodes</button>"
+        if full_graph_link
+        else ""
+    )
     html = (
         _HTML_TEMPLATE.replace("__TITLE__", title)
         .replace('"__GRAPH_DATA__"', graph_json)
         .replace('"__TAXO_META__"', meta_json)
         .replace("__D3_SCRIPT__", _d3_script_tag())
         .replace("__API_TOKEN__", "")
+        .replace("__SHOW_ALL_BTN__", show_all_btn)
     )
     return graph, html
 
@@ -589,13 +598,17 @@ def open_query_result_in_browser(
     Raises ``ValueError`` when none of the URIs match any node.
     Returns ``(url, out_path)`` so callers can track the file for later refresh.
     """
-    _graph, html = _build_query_result_html(taxonomy, uris, file_path)
     cache = Path.home() / ".cache" / "ster"
     cache.mkdir(parents=True, exist_ok=True)
+    # Write the full ontology graph so the "Show all nodes" button has a target.
+    full_path = _graph_path(file_path)
+    _write_html(taxonomy, file_path, full_path)
+    port = _ensure_server(cache)
+    full_graph_link = f"/{full_path.name}"
+    _graph, html = _build_query_result_html(taxonomy, uris, file_path, full_graph_link)
     stem = (file_path.stem if file_path else "query") + "_sparql_result"
     out = cache / f"{stem}_vowl.html"
     out.write_text(html, encoding="utf-8")
-    port = _ensure_server(out.parent)
     url = f"http://127.0.0.1:{port}/{out.name}"
     webbrowser.open(url)
     return url, out
@@ -612,7 +625,10 @@ def refresh_query_result_in_browser(
     The *out* path must be the file previously returned by
     ``open_query_result_in_browser``.
     """
-    _graph, html = _build_query_result_html(taxonomy, uris)
+    stem_guess = out.name.replace("_sparql_result_vowl.html", "_vowl.html")
+    full_candidate = out.parent / stem_guess
+    full_graph_link = f"/{full_candidate.name}" if full_candidate.exists() else ""
+    _graph, html = _build_query_result_html(taxonomy, uris, full_graph_link=full_graph_link)
     out.write_text(html, encoding="utf-8")
     port = _ensure_server(out.parent)
     url = f"http://127.0.0.1:{port}/{out.name}"
@@ -796,6 +812,7 @@ def render_vowl_html(
         .replace('"__TAXO_META__"', meta_json)
         .replace("__D3_SCRIPT__", _d3_script_tag())
         .replace("__API_TOKEN__", api_token)
+        .replace("__SHOW_ALL_BTN__", "")
     )
 
 
@@ -964,7 +981,7 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 <div id="detail-panel"></div>
 <button id="panel-close" title="Close panel (Esc)">×</button>
 <div id="stats"></div>
-<div id="hint">drag: move · dbl-click: unpin · click: details · f: re-layout · esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-instanceOf" onclick="toggleLink('instanceOf')">rdf:type</button><button class="ftbtn active" id="ft-inScheme" onclick="toggleLink('inScheme')">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty" onclick="toggleLink('datatypeProperty')">datatype</button></div>
+<div id="hint">drag: move · dbl-click: unpin · click: details · f: re-layout · esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-instanceOf" onclick="toggleLink('instanceOf')">rdf:type</button><button class="ftbtn active" id="ft-inScheme" onclick="toggleLink('inScheme')">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty" onclick="toggleLink('datatypeProperty')">datatype</button>__SHOW_ALL_BTN__</div>
 <div id="tip"></div>
 <div id="err" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(220,38,38,.95);color:#fff;padding:24px;font-family:monospace;font-size:13px;z-index:200;white-space:pre-wrap;overflow:auto"></div>
 __D3_SCRIPT__

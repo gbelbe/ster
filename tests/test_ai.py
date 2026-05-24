@@ -356,6 +356,7 @@ def test_call_llm_mode(monkeypatch):
     mock_model = MagicMock()
     mock_model.prompt.return_value.text.return_value = "llm response"
     monkeypatch.setattr(ai_module, "is_copypaste", lambda: False)
+    monkeypatch.setattr(ai_module, "get_endpoint_config", lambda: {})  # no endpoint configured
     monkeypatch.setattr(ai_module, "get_model_for", lambda task: mock_model)
     result = _call("my prompt", "my_task")
     assert result == "llm response"

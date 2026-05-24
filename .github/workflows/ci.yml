@@ -43,7 +43,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Install deps
-        run: uv sync --extra html --extra dev
+        run: uv sync --extra html --extra api --extra dev
 
       - name: mypy
         run: uv run mypy ster/
@@ -58,7 +58,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Install deps
-        run: uv sync --extra html --extra dev
+        run: uv sync --extra html --extra api --extra dev
 
       - name: bandit — static analysis
         run: uv run bandit -r ster/ -c pyproject.toml
@@ -84,7 +84,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install deps
-        run: uv sync --extra html --extra dev
+        run: uv sync --extra html --extra api --extra dev
 
       - name: Run tests with coverage
         run: uv run pytest --tb=short -q --cov=ster --cov-report=xml --cov-report=term-missing

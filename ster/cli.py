@@ -706,11 +706,11 @@ def _multi_file_picker(
     _ACTIONS: list[tuple[object, str]] = [
         (True, "↵  Open Tree View"),  # True = "open" sentinel
         (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
+        (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
+        (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
-        (_QUERY_SENTINEL, "🔍 Query Graph SPARQL (Beta)"),
         (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
-        (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -722,11 +722,11 @@ def _multi_file_picker(
             console.print(f"  ✓  {f.name}")
         console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
         console.print("  [cyan] 2[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
-        console.print("  [cyan] 3[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
-        console.print("  [cyan] 4[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print("  [cyan] 5[/cyan]  [green]🔍 Query Graph SPARQL (Beta)[/green]")
-        console.print("  [cyan] 6[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan] 7[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
+        console.print("  [cyan] 3[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
+        console.print("  [cyan] 4[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
+        console.print("  [cyan] 5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
+        console.print("  [cyan] 6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan] 7[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
         console.print("  [cyan] 8[/cyan]  [red]✕  Quit[/red]")
         console.print()
         choice = Prompt.ask("Action (1–8)", default="1")
@@ -736,15 +736,15 @@ def _multi_file_picker(
         if s == "2":
             return _GRAPH_SENTINEL  # type: ignore[return-value]
         if s == "3":
-            return _HTML_SENTINEL  # type: ignore[return-value]
-        if s == "4":
-            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
-        if s == "5":
             return _QUERY_SENTINEL  # type: ignore[return-value]
-        if s == "6":
-            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
-        if s == "7":
+        if s == "4":
             return _EXT_ONT_SENTINEL  # type: ignore[return-value]
+        if s == "5":
+            return _HTML_SENTINEL  # type: ignore[return-value]
+        if s == "6":
+            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
+        if s == "7":
+            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
         if s == "8":
             return _QUIT_SENTINEL  # type: ignore[return-value]
         return list(found)
@@ -1028,6 +1028,8 @@ def _open_viewer(
                 console.print()
         try:
             gm.commit_and_push()
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             console.print(f"\n[red]Commit error:[/red] {exc}")
     elif gm.is_enabled() and not gm.is_configured():

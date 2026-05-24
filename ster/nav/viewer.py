@@ -73,7 +73,6 @@ from .query_logic import (
     _ac_matches,
     _auto_close_bracket,
     _clause_expand,  # noqa: F401 — re-exported for callers
-    _qname_prefix_at_cursor,
     _query_pos_down,
     _query_pos_up,
     _sparql_current_word,
@@ -232,6 +231,19 @@ class TaxonomyViewer:
             if _ln.uri == self._detail_uri:
                 self._tree.cursor = _i
                 break
+
+        # Warm graph and URI caches in the background so the first Ctrl+R query
+        # finds a warm cache instead of triggering a cold rdflib parse.
+        _warm_paths = list(self._workspace.taxonomies.keys())
+        if _warm_paths:
+            from .. import sparql_query as _sq  # noqa: PLC0415
+
+            threading.Thread(
+                target=_sq.warm_graph_caches,
+                args=(_warm_paths,),
+                daemon=True,
+                name="ster-cache-warm",
+            ).start()
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -472,6 +484,17 @@ class TaxonomyViewer:
             from .. import viz_vowl as _viz
 
             _viz.push_update(target_tax)
+            from .. import sparql_query as _sq  # noqa: PLC0415
+
+            _warm_paths = (
+                list(self._workspace.taxonomies.keys()) if self._workspace else [target_path]
+            )
+            threading.Thread(
+                target=_sq.warm_graph_caches,
+                args=(_warm_paths,),
+                daemon=True,
+                name="ster-cache-warm",
+            ).start()
         except Exception as exc:
             self._status = f"Error saving: {exc}"
 
@@ -3260,7 +3283,11 @@ class TaxonomyViewer:
             # hasn't stored the result yet when the user types ':'.
             if file_paths:
                 try:
+                    _sq._trace(
+                        f"open_query: calling build_uri_index_cached synchronously paths={[p.name for p in file_paths]}"
+                    )
                     _sq.build_uri_index_cached(file_paths)
+                    _sq._trace("open_query: build_uri_index_cached returned")
                 except Exception:
                     pass
             self._state = QueryState(
@@ -8476,6 +8503,18 @@ class TaxonomyViewer:
                         qs.pfx_active = False
                     return False
                 # Pass key through to editor, then update filter
+                if key == ord(":"):
+                    # Delegate to shared helper so the same logic is tested
+                    qs.pfx_active = False
+                    from .query_logic import open_qname_popup_on_colon  # noqa: PLC0415
+
+                    opened = open_qname_popup_on_colon(qs, known)
+                    _sq._trace(
+                        f"pfx ':' handler — pfx_filter={qs.pfx_filter!r}"
+                        f" known_sample={sorted(known)[:6]}"
+                        f" qn_opened={opened}"
+                    )
+                    return False
                 qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, key)
                 word, word_start = _sparql_current_word(qs.query_buffer, qs.query_pos)
                 if not word or ":" in word or qs.query_pos <= qs.pfx_trigger_pos:
@@ -8695,6 +8734,13 @@ class TaxonomyViewer:
                 if qs.query_buffer.strip():
                     self._last_query_buffer = qs.query_buffer
                     qs.running = True
+                    qs.pfx_active = False
+                    qs.qn_active = False
+                    qs.qn_parent = ""
+                    qs.qn_breadcrumb.clear()
+                    from .. import sparql_query as _sq_tr
+
+                    _sq_tr._trace("KEY Ctrl+R pressed — qs.running = True")
             elif key == 7:  # Ctrl+G → AI generate
                 qs.ai_step = "ask"
                 qs.ai_question = ""
@@ -8740,7 +8786,7 @@ class TaxonomyViewer:
                     qs.ac_scheme_label = ""
                 elif key == ord(":"):
                     from .. import sparql_query as _sq
-                    from .query_logic import _qn_clamp_scroll  # noqa: PLC0415
+                    from .query_logic import apply_qname_popup_from_colon  # noqa: PLC0415
 
                     qs.pfx_active = False  # prefix popup superseded by colon
                     uri_idx = _sq.build_uri_index_cached(qs.file_paths) if qs.file_paths else {}
@@ -8749,18 +8795,10 @@ class TaxonomyViewer:
                         | set(_sq.build_qname_index(self.taxonomy).keys())
                         | _sq.parse_buffer_prefixes(qs.query_buffer)
                     )
-                    pfx = _qname_prefix_at_cursor(qs.query_buffer, qs.query_pos, known)
-                    if pfx is not None:
-                        ctx = _sq._sparql_context_at_cursor(qs.query_buffer, qs.query_pos)
-                        qs.qn_active = True
-                        qs.qn_prefix = pfx
-                        qs.qn_filter = ""
-                        qs.qn_cursor = 0
-                        qs.qn_scroll = 0
-                        qs.qn_trigger_pos = qs.query_pos
-                        qs.qn_context = ctx
-                        qs.qn_parent = ""
-                        qs.qn_breadcrumb.clear()
+                    opened = apply_qname_popup_from_colon(qs, known)
+                    _sq._trace(
+                        f"normal ':' handler — known_sample={sorted(known)[:6]} qn_opened={opened}"
+                    )
                 elif key == ord("?"):
                     from .. import sparql_query as _sq
 
@@ -8837,6 +8875,13 @@ class TaxonomyViewer:
                 if qs.query_buffer.strip():
                     self._last_query_buffer = qs.query_buffer
                     qs.running = True
+                    qs.pfx_active = False
+                    qs.qn_active = False
+                    qs.qn_parent = ""
+                    qs.qn_breadcrumb.clear()
+                    from .. import sparql_query as _sq_tr
+
+                    _sq_tr._trace("KEY Ctrl+R pressed (results panel) — qs.running = True")
             elif key == 12:  # Ctrl+L → presets
                 qs.show_presets = True
             elif key == 22:  # Ctrl+V → visualize results
@@ -8898,29 +8943,55 @@ class TaxonomyViewer:
 
     def _execute_sparql_query(self) -> None:
         """Run the SPARQL query stored in QueryState, update result fields."""
+        import time
+
         from .. import sparql_query as _sq
 
         qs = self._state
         if not isinstance(qs, QueryState):
             return
+        _sq._trace(f"EXEC thread started — paths={[p.name for p in qs.file_paths]}")
+        t0 = time.time()
         result = _sq.run_query(qs.file_paths, qs.query_buffer)
+        t_query = time.time()
+        _sq._trace(
+            f"EXEC run_query done in {t_query - t0:.3f}s"
+            f" ({len(result.rows)} rows, error={bool(result.error)})"
+        )
         qs.columns = result.columns
         qs.rows = result.rows
         qs.result_error = result.error
         qs.result_scroll = 0
         qs.result_cursor = 0
         qs.running = False
+        _sq._trace(
+            f"EXEC qs.running=False set — results visible after next draw ({time.time() - t0:.3f}s total)"
+        )
         if not result.error:
             qs.panel = "results"
-            if self._query_viz_path is not None:
-                from .. import sparql_query as _sq2
-                from .. import viz_vowl as _viz
+            from .. import sparql_query as _sq2
+            from .. import viz_vowl as _viz
 
-                uris = _sq2.extract_result_uris(qs.rows)
+            uris = _sq2.extract_result_uris(qs.rows)
+            viz_path_snapshot = self._query_viz_path
+            taxonomy_snapshot = self.taxonomy
+            file_path_snapshot = self.file_path
+
+            def _update_viz() -> None:
                 try:
-                    _viz.refresh_query_result_in_browser(self.taxonomy, uris, self._query_viz_path)
-                except (ValueError, Exception):
-                    pass  # silent — viz refresh is best-effort
+                    if viz_path_snapshot is None:
+                        _url, out = _viz.open_query_result_in_browser(
+                            taxonomy_snapshot, uris, file_path_snapshot
+                        )
+                        self._query_viz_path = out
+                    else:
+                        _viz.refresh_query_result_in_browser(
+                            taxonomy_snapshot, uris, viz_path_snapshot
+                        )
+                except Exception:
+                    pass
+
+            threading.Thread(target=_update_viz, daemon=True, name="ster-viz-update").start()
 
     def _generate_sparql_query(self) -> None:
         """Background worker: call the LLM to generate a SPARQL query.

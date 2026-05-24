@@ -98,6 +98,51 @@ def _qname_prefix_at_cursor(buffer: str, pos: int, known_prefixes: set[str]) -> 
     return prefix_name if prefix_name in known_prefixes else None
 
 
+def open_qname_popup_on_colon(qs: QueryState, known: set[str]) -> bool:
+    """Insert ``:`` into the buffer and, if the word before it is a known
+    prefix, open the QName popup by mutating *qs*.
+
+    Returns ``True`` when the QName popup was opened, ``False`` otherwise.
+    Call this when ``:`` has NOT yet been applied to the buffer (pfx-active
+    path).  When ``:`` is already in the buffer (normal ``:`` handler), call
+    ``apply_qname_popup_from_colon`` instead.
+    """
+    from .editor import _apply_line_edit  # noqa: PLC0415
+
+    qs.query_buffer, qs.query_pos = _apply_line_edit(qs.query_buffer, qs.query_pos, ord(":"))
+    return _activate_qname_popup_if_known(qs, known)
+
+
+def apply_qname_popup_from_colon(qs: QueryState, known: set[str]) -> bool:
+    """Open the QName popup when ``:`` has already been inserted into the buffer.
+
+    Returns ``True`` when the QName popup was opened, ``False`` otherwise.
+    Call this from the normal ``:`` key handler (where ``_apply_line_edit`` ran first).
+    """
+    return _activate_qname_popup_if_known(qs, known)
+
+
+def _activate_qname_popup_if_known(qs: QueryState, known: set[str]) -> bool:
+    """Core: if ``buffer[pos-1]`` is ``:`` and the prefix before it is in
+    *known*, activate the QName popup and return ``True``."""
+    pfx = _qname_prefix_at_cursor(qs.query_buffer, qs.query_pos, known)
+    if pfx is None:
+        return False
+    from .. import sparql_query as _sq  # noqa: PLC0415
+
+    ctx = _sq._sparql_context_at_cursor(qs.query_buffer, qs.query_pos)
+    qs.qn_active = True
+    qs.qn_prefix = pfx
+    qs.qn_filter = ""
+    qs.qn_cursor = 0
+    qs.qn_scroll = 0
+    qs.qn_trigger_pos = qs.query_pos
+    qs.qn_context = ctx
+    qs.qn_parent = ""
+    qs.qn_breadcrumb.clear()
+    return True
+
+
 def _sparql_kw_insert(qs: QueryState, keyword: str) -> None:
     """Replace the partial word before the cursor with *keyword*.
 

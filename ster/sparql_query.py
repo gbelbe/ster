@@ -16,6 +16,8 @@ Extension points
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -339,12 +341,14 @@ def load_graph(paths: list[Path]) -> rdflib.Graph:
 
 # Module-level cache: (sorted paths, mtimes) → rdflib.Graph
 _graph_cache: dict[tuple, rdflib.Graph] = {}
+_graph_cache_lock = threading.Lock()
 
 # Module-level URI completion index cache: same key → UriIndex
 # UriIndex shape: {prefix: {"all": [...], "classes": [...], "individuals": [...],
 #                            "roots": [...], "children": {parent: [child, ...]}}}
 UriIndex = dict[str, dict[str, list[str] | dict[str, list[str]]]]
 _uri_index_cache: dict[tuple, UriIndex] = {}
+_uri_index_cache_lock = threading.Lock()
 
 
 def _cache_key(paths: list[Path]) -> tuple:
@@ -352,12 +356,27 @@ def _cache_key(paths: list[Path]) -> tuple:
     return tuple((str(p), p.stat().st_mtime if p.exists() else 0) for p in sorted(paths))
 
 
+def _trace(msg: str) -> None:
+    with open("/private/tmp/ster_cache.log", "a") as f:
+        f.write(f"{time.time():.3f} [{threading.current_thread().name}] {msg}\n")
+
+
 def load_graph_cached(paths: list[Path]) -> rdflib.Graph:
     """Return a cached graph, re-parsing only when a file has changed on disk."""
     key = _cache_key(paths)
-    if key not in _graph_cache:
-        _graph_cache[key] = load_graph(paths)
-    return _graph_cache[key]
+    # Fast path: no lock needed for a read-only hit
+    cached = _graph_cache.get(key)
+    if cached is not None:
+        _trace(f"load_graph_cached HIT {[p.name for p in paths]}")
+        return cached
+    _trace(f"load_graph_cached MISS — parsing {[p.name for p in paths]}")
+    t0 = time.time()
+    g = load_graph(paths)
+    _trace(f"load_graph_cached parse done in {time.time() - t0:.2f}s")
+    with _graph_cache_lock:
+        if key not in _graph_cache:
+            _graph_cache[key] = g
+    return _graph_cache.get(key, g)
 
 
 def build_uri_index_cached(paths: list[Path]) -> UriIndex:
@@ -365,26 +384,71 @@ def build_uri_index_cached(paths: list[Path]) -> UriIndex:
     from .model import Taxonomy  # avoid circular at module level  # noqa: PLC0415
 
     key = _cache_key(paths)
-    if key not in _uri_index_cache:
-        # Ensure the graph is cached first (warm the rdflib engine)
-        load_graph_cached(paths)
-        # Build a lightweight taxonomy snapshot for the index
-        tax = Taxonomy()
-        for p in paths:
-            try:
-                from . import store as _store  # noqa: PLC0415
+    # Fast path
+    cached = _uri_index_cache.get(key)
+    if cached is not None:
+        _trace(f"build_uri_index_cached HIT {[p.name for p in paths]}")
+        return cached
+    _trace(f"build_uri_index_cached MISS — building index {[p.name for p in paths]}")
+    t0 = time.time()
+    load_graph_cached(paths)
+    tax = Taxonomy()
+    for p in paths:
+        try:
+            from . import store as _store  # noqa: PLC0415
 
-                loaded = _store.load(p)
-                tax.owl_classes.update(loaded.owl_classes)
-                tax.owl_individuals.update(loaded.owl_individuals)
-                tax.concepts.update(loaded.concepts)
-                tax.schemes.update(loaded.schemes)
-                tax.owl_properties.update(loaded.owl_properties)
-                tax.namespace_bindings.update(loaded.namespace_bindings)
-            except Exception:
-                pass
-        _uri_index_cache[key] = build_uri_index(tax)
-    return _uri_index_cache[key]
+            t1 = time.time()
+            loaded = _store.load(p)
+            _trace(f"  store.load({p.name}) took {time.time() - t1:.2f}s")
+            tax.owl_classes.update(loaded.owl_classes)
+            tax.owl_individuals.update(loaded.owl_individuals)
+            tax.concepts.update(loaded.concepts)
+            tax.schemes.update(loaded.schemes)
+            tax.owl_properties.update(loaded.owl_properties)
+            tax.namespace_bindings.update(loaded.namespace_bindings)
+        except Exception:
+            pass
+    idx = build_uri_index(tax)
+    _trace(f"build_uri_index_cached total {time.time() - t0:.2f}s")
+    with _uri_index_cache_lock:
+        if key not in _uri_index_cache:
+            _uri_index_cache[key] = idx
+    return _uri_index_cache.get(key, idx)
+
+
+def warm_graph_caches(paths: list[Path]) -> None:
+    """Evict stale cache entries for *paths* and rebuild both caches.
+
+    Intended to be called from a background thread after every file save so
+    that the next Ctrl+R query finds warm caches and skips re-parsing.
+    Also runs a trivial SPARQL query to force rdflib to discover and load
+    its plugin modules (Python 3.13 importlib.metadata re-scans all package
+    metadata on every entry_points() call, costing ~23 s on first use).
+    """
+    _trace(f"warm_graph_caches START {[p.name for p in paths]}")
+    path_strs = {str(p) for p in paths}
+    with _graph_cache_lock:
+        stale = [k for k in list(_graph_cache) if any(str(e[0]) in path_strs for e in k)]
+        for k in stale:
+            del _graph_cache[k]
+    with _uri_index_cache_lock:
+        stale = [k for k in list(_uri_index_cache) if any(str(e[0]) in path_strs for e in k)]
+        for k in stale:
+            del _uri_index_cache[k]
+    build_uri_index_cached(paths)
+    # Pre-load rdflib SPARQL plugins: first g.query() triggers importlib.metadata
+    # to scan all installed packages.  Doing it here (background) means the user's
+    # first Ctrl+R hits an already-warm plugin cache.
+    key = _cache_key(paths)
+    g = _graph_cache.get(key)
+    if g is not None:
+        try:
+            t0 = time.time()
+            g.query("SELECT * WHERE { ?s ?p ?o } LIMIT 0")
+            _trace(f"warm_graph_caches plugin pre-load done in {time.time() - t0:.2f}s")
+        except Exception:
+            pass
+    _trace(f"warm_graph_caches DONE {[p.name for p in paths]}")
 
 
 def run_query(paths: list[Path], sparql_text: str) -> QueryResult:
@@ -396,10 +460,15 @@ def run_query(paths: list[Path], sparql_text: str) -> QueryResult:
     if not sparql_text.strip():
         return QueryResult(columns=[], rows=[], error="Empty query.")
     try:
+        t_load0 = time.time()
         g = load_graph_cached(paths)
+        _trace(f"run_query load_graph_cached done in {time.time() - t_load0:.3f}s")
     except Exception as exc:
         return QueryResult(columns=[], rows=[], error=f"Load error: {exc}")
-    return run_query_on_graph(g, sparql_text)
+    t_exec0 = time.time()
+    result = run_query_on_graph(g, sparql_text)
+    _trace(f"run_query run_query_on_graph done in {time.time() - t_exec0:.3f}s")
+    return result
 
 
 def run_query_on_graph(g: rdflib.Graph, sparql_text: str) -> QueryResult:
@@ -409,7 +478,9 @@ def run_query_on_graph(g: rdflib.Graph, sparql_text: str) -> QueryResult:
     graph (e.g. with a reasoner) can skip the file-load step.
     """
     try:
+        t0 = time.time()
         result = g.query(sparql_text)
+        _trace(f"run_query_on_graph g.query() done in {time.time() - t0:.3f}s")
     except Exception as exc:
         return QueryResult(columns=[], rows=[], error=f"Query error: {exc}")
 
@@ -430,9 +501,11 @@ def run_query_on_graph(g: rdflib.Graph, sparql_text: str) -> QueryResult:
 
     # SELECT
     cols: list[str] = [str(v) for v in result.vars] if result.vars else []
+    t_iter = time.time()
     rows: list[list[str]] = []
     for row in result:
         rows.append([_fmt_value(row[i]) for i in range(len(cols))])  # type: ignore[index]
+    _trace(f"run_query_on_graph iteration done in {time.time() - t_iter:.3f}s ({len(rows)} rows)")
     return QueryResult(columns=cols, rows=rows, query_type="SELECT")
 
 

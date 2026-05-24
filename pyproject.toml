@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ster"
-version = "0.4.4"
+version = "0.4.5"
 description = "Terminal tool for building and exploring SKOS taxonomies and OWL ontologies"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -166,4 +166,5 @@ skips        = [
     "B404",  # subprocess import — used for git/pip with controlled args
     "B603",  # subprocess without shell — called with controlled, non-user-supplied args
     "B607",  # subprocess partial path — pip/pylode/git are trusted system tools
+    "B107",  # hardcoded_password_default — false positive on api_token: str = "" (not a secret)
 ]
