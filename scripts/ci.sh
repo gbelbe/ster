@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+SENTINEL=".ci-passed"
+# Remove any stale sentinel at the start so a partial run never leaves it valid
+rm -f "$SENTINEL"
+
 FAST=0
 FIX=0
 for arg in "$@"; do
@@ -90,6 +94,9 @@ fi
 
 # ── Restore main venv ─────────────────────────────────────────────────────────
 uv sync --extra html --extra api --extra dev --quiet
+
+# Write sentinel so the pre-push hook knows CI has passed
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SENTINEL"
 
 echo -e "\n${GREEN}══════════════════════════════════════════"
 echo -e "  All checks passed — ready to push  ✓"

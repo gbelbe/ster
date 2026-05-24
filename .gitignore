@@ -6,6 +6,7 @@ build/
 .venv/
 .venv-ci-*/
 venv/
+.ci-passed
 .pytest_cache/
 .coverage
 htmlcov/
