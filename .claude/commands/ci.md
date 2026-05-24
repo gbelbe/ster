@@ -3,8 +3,9 @@
 Runs `scripts/ci.sh` which mirrors the GitHub Actions CI pipeline exactly
 (lint, format, mypy, bandit, pip-audit, pytest on Python 3.11 / 3.12 / 3.13).
 
-**This MUST be run and pass before every `git push`. A Claude Code hook blocks
-the push automatically if CI has not passed in the last 60 minutes.**
+**This MUST be run and pass before every `git push`.** The git pre-push hook
+(`scripts/pre-push.sh`) blocks any push automatically if CI has not passed
+in the last 60 minutes. Install the hook once with: `bash scripts/install-hooks.sh`
 
 ## Usage
 
@@ -28,8 +29,8 @@ Invoke directly as: `bash scripts/ci.sh [--fast|--fix]`
 | Tests + coverage | `pytest --cov=ster` on Python 3.11, 3.12, 3.13 |
 
 On success, writes `.ci-passed` (gitignored sentinel, expires 60 min).
-The `PreToolUse` hook in `.claude/settings.local.json` reads this file
-and blocks any `git push` that would bypass the gate.
+The git pre-push hook reads this file and blocks any `git push` that
+would bypass the gate — this works for all developers, not just Claude.
 
 ## Failure handling rules
 

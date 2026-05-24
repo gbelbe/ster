@@ -12,6 +12,9 @@ Use the `/ci` skill — it runs the exact same pipeline as GitHub Actions:
 
 Or invoke the script directly: `bash scripts/ci.sh`
 
+The git pre-push hook (`scripts/pre-push.sh`, installed via `bash scripts/install-hooks.sh`)
+blocks any `git push` that does not have a fresh CI pass within the last 60 minutes.
+
 **Never push while CI is red. Fix every failure before marking a feature done.**
 
 Individual commands (same as ci.yml):
