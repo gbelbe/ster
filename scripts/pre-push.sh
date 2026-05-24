@@ -9,7 +9,8 @@
 
 set -euo pipefail
 
-ROOT="$(git rev-parse --show-toplevel)"
+# CI_HOOK_ROOT can be overridden in tests to avoid requiring a real git repo
+ROOT="${CI_HOOK_ROOT:-$(git rev-parse --show-toplevel)}"
 SENTINEL="$ROOT/.ci-passed"
 
 if [[ ! -f "$SENTINEL" ]]; then
