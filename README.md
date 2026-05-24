@@ -21,7 +21,7 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.4.4
+  v0.4.6
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.
@@ -42,6 +42,7 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 | **AI assist** | LLM-powered concept suggestions (online or local via Ollama) |
 | **Git** | Stage, commit, push without leaving the terminal |
 | **Export** | pyLODE HTML documentation; SPARQL query runner |
+| **SPARQL** | Cache-warmed query engine — first query fires in milliseconds, not seconds |
 
 ---
 
@@ -219,11 +220,11 @@ Use arrow keys to navigate the action menu, then press **Enter** to confirm.
 
  ▶  1  ↵  Open Tree View
     2  ◈  Open Graph Viz
-    3  🌐 Generate Web-Documentation
-    4  ⎇  Browse git history
-    5  🔍 Query Graph SPARQL (Beta)
-    6  ⚙  Setup / Options
-    7  📥 Import External Ontology
+    3  🔍 Query Graph SPARQL
+    4  📥 Import External Ontology
+    5  🌐 Generate Web-Documentation
+    6  ⎇  Browse git history
+    7  ⚙  Setup / Options
     8  ✕  Quit
 ```
 
@@ -261,6 +262,36 @@ ster export my-taxonomy.ttl -o /tmp  # custom output directory
 ```
 
 Or use the **🌐 Generate Web-Documentation** option from the main menu.
+
+### SPARQL query runner
+
+Query the loaded taxonomy or ontology with SPARQL directly from the TUI.
+Select **🔍 Query Graph SPARQL** from the main menu, type or paste a query,
+and press **F5** (or **Ctrl+R**) to run.
+
+```sparql
+SELECT ?class ?label WHERE {
+  ?class a owl:Class ;
+         rdfs:label ?label .
+  FILTER(LANG(?label) = "en")
+}
+ORDER BY ?label
+```
+
+Results appear in a scrollable table. Navigate rows with arrow keys, copy
+a cell with **Enter**, and export the full result set to a CSV file.
+
+#### Cache-warmed engine — zero cold-start delay
+
+ster builds a URI index and prefilled prefix map from your RDF files before
+you open the query screen.  After the index is ready, ster pre-fires a
+no-op SPARQL query (`SELECT * WHERE { ?s ?p ?o } LIMIT 0`) against the
+cached graph in the background.  This forces rdflib's plugin discovery system
+to resolve all importlib.metadata entry points once, so the first real query
+you run returns in milliseconds instead of the ~20-second delay that rdflib
+triggers on Python 3.13 without this warm-up.
+
+The warm-up runs asynchronously — it does not block the TUI.
 
 ### Validate
 
@@ -336,11 +367,27 @@ AI prompts live in `prompts.py` as plain `string.Template` objects — edit them
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow including branch
+conventions, commit style, and pull request process.
+
 ```bash
-pip install -e ".[dev]"
-pytest
-pytest --cov=ster --cov-report=term-missing
+git clone https://github.com/gbelbe/ster.git
+cd ster
+uv sync --extra html --extra api --extra dev
+bash scripts/install-hooks.sh   # install git pre-push hook (once per clone)
 ```
+
+### Run the local CI gate
+
+```bash
+bash scripts/ci.sh          # full run: lint + types + security + tests on 3.11/3.12/3.13
+bash scripts/ci.sh --fast   # current Python only (quick iteration)
+bash scripts/ci.sh --fix    # auto-fix ruff, then full gate
+```
+
+The local gate mirrors the GitHub Actions pipeline exactly.  A git pre-push
+hook (installed by `scripts/install-hooks.sh`) blocks any `git push` that
+does not have a passing CI run from the last 60 minutes.
 
 ---
 
@@ -357,29 +404,23 @@ Every push and pull request runs four parallel jobs via GitHub Actions:
 
 Coverage is uploaded to [Codecov](https://codecov.io/gh/gbelbe/ster) on every run.
 
-### Run checks locally
-
-```bash
-pip install -e ".[dev]"
-
-ruff check .            # lint
-ruff format --check .   # format
-mypy ster/              # types
-bandit -r ster/ -c pyproject.toml   # security
-pip-audit               # dependency CVEs
-pytest --cov=ster       # tests + coverage
-```
-
-Or install the pre-commit hooks to run ruff automatically on every commit:
-
-```bash
-pip install pre-commit
-pre-commit install
-```
-
 ---
 
 ## Changelog
+
+### 0.4.6
+- **Cache-warmed SPARQL engine**: after building the URI index, ster pre-fires a no-op SPARQL query against the cached graph in the background, forcing rdflib's plugin discovery to complete before the user opens the query screen — eliminates the ~20-second first-query delay on Python 3.13
+- **Main menu reordered**: Query Graph SPARQL promoted to 3rd position (no longer labelled "Beta"); Import External Ontology 4th; Generate Web-Documentation 5th
+- **Git pre-push hook**: `scripts/install-hooks.sh` installs a standard git hook that blocks `git push` when CI has not passed in the last 60 minutes — works for all developers, not just inside Claude Code
+- **Local CI script** (`scripts/ci.sh`): mirrors the GitHub Actions pipeline exactly — lint, format, types, security, and pytest across Python 3.11, 3.12, and 3.13 in isolated per-version virtual environments
+- **CONTRIBUTING.md**: full contributor guide covering prerequisites, clone + hook setup, branching, local CI, commit conventions, PR process, and troubleshooting
+
+### 0.4.5
+- **Standalone Setup / Options screen**: replaced the tree-view panel with a dedicated full-screen curses settings page, accessible from the main menu — server URL, port, bearer token, and AI model configuration in one place
+- **AI model configuration wizard**: extracted from the tree-view modal into its own standalone curses module (`ai_config_screen.py`) — cleaner UX, no longer tied to the taxonomy viewer
+- **API server**: `ster api` command starts a local JSON + WebSocket server; host and port are persisted in `~/.config/ster/server_config.json` and read at startup — no more hardcoded address
+- **Bearer token management**: token is visible in Setup / Options (hidden by default, toggle with Enter); change server URL or port triggers an in-screen restart reminder
+- **Server startup from config**: `ster serve` / `ster api` now read host and port from the saved config rather than hardcoded defaults
 
 ### 0.4.4
 - **Standalone Setup / Options screen**: replaced the tree-view panel with a dedicated full-screen curses settings page, accessible from the main menu — server URL, port, bearer token, and AI model configuration in one place

@@ -7,8 +7,6 @@ import subprocess
 import time
 from pathlib import Path
 
-import pytest
-
 _HOOK = Path(__file__).parents[2] / "scripts" / "pre-push.sh"
 
 
