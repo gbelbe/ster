@@ -16,6 +16,7 @@ Extension points
 from __future__ import annotations
 
 import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -356,9 +357,15 @@ def _cache_key(paths: list[Path]) -> tuple:
     return tuple((str(p), p.stat().st_mtime if p.exists() else 0) for p in sorted(paths))
 
 
+_TRACE_LOG = Path(tempfile.gettempdir()) / "ster_cache.log"
+
+
 def _trace(msg: str) -> None:
-    with open("/private/tmp/ster_cache.log", "a") as f:
-        f.write(f"{time.time():.3f} [{threading.current_thread().name}] {msg}\n")
+    try:
+        with _TRACE_LOG.open("a") as f:
+            f.write(f"{time.time():.3f} [{threading.current_thread().name}] {msg}\n")
+    except OSError:
+        pass
 
 
 def load_graph_cached(paths: list[Path]) -> rdflib.Graph:

@@ -2,22 +2,28 @@
 
 ## Code quality gate (mandatory before every commit)
 
-Ensure the dev environment has all extras installed (mirrors CI):
-```bash
-uv sync --extra html --extra api --extra dev
+Use the `/ci` skill — it runs the exact same pipeline as GitHub Actions:
+
+```
+/ci          # full run: lint + types + security + tests on Python 3.11/3.12/3.13
+/ci --fast   # current Python only, for quick iteration during development
+/ci --fix    # auto-fix lint/format, then run the full gate
 ```
 
-Then run the full gate — every step must be clean:
-```bash
-uv run ruff check .          # lint
-uv run ruff format --check . # format
-uv run mypy ster/            # types
-uv run bandit -r ster/ -c pyproject.toml   # security SAST
-uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable  # CVEs
-uv run pytest tests/ -q --cov=ster --cov-report=term-missing  # tests + coverage
-```
+Or invoke the script directly: `bash scripts/ci.sh`
 
-Run `uv run ruff check --fix . && uv run ruff format .` to auto-fix most lint/format issues before checking manually.
+**Never push while CI is red. Fix every failure before marking a feature done.**
+
+Individual commands (same as ci.yml):
+```bash
+uv sync --extra html --extra api --extra dev   # install all extras first
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy ster/
+uv run bandit -r ster/ -c pyproject.toml
+uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
+uv run pytest tests/ -q --cov=ster --cov-report=term-missing
+```
 
 ## Ruff rules to follow in new code
 

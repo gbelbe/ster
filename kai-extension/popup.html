@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 280px;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      color: #1a1a1a;
+      background: #fff;
+    }
+
+    header {
+      background: #1e3a5f;
+      color: #fff;
+      padding: 10px 14px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    .main { padding: 14px; }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+      margin-top: 10px;
+    }
+
+    label:first-of-type { margin-top: 0; }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+      width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #d0d5dd;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, select:focus {
+      border-color: #1e3a5f;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .row > * { flex: 1; }
+
+    button.primary {
+      width: 100%;
+      margin-top: 14px;
+      padding: 9px;
+      background: #1e3a5f;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button.primary:hover { background: #162d4a; }
+    button.primary:disabled { background: #a0aec0; cursor: default; }
+
+    #status {
+      margin-top: 10px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      display: none;
+    }
+
+    #status.ok  { background: #d1fae5; color: #065f46; display: block; }
+    #status.err { background: #fee2e2; color: #991b1b; display: block; }
+
+    details {
+      margin-top: 14px;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 10px;
+    }
+
+    summary {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .settings-body { padding-top: 4px; }
+
+    button.save {
+      margin-top: 10px;
+      padding: 6px 12px;
+      background: #f3f4f6;
+      border: 1px solid #d0d5dd;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button.save:hover { background: #e5e7eb; }
+
+    #saved-msg {
+      font-size: 11px;
+      color: #065f46;
+      margin-left: 8px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>Add Person to knowledge base</header>
+
+  <div class="main">
+    <label for="name">Name</label>
+    <input id="name" type="text" placeholder="Full name" autocomplete="off">
+
+    <div class="row">
+      <div>
+        <label for="lang">Language</label>
+        <select id="lang">
+          <option value="en">English</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="es">Spanish</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="primary" id="submit">Add Individual</button>
+
+    <div id="status"></div>
+
+    <details id="settings-panel">
+      <summary>Settings</summary>
+      <div class="settings-body">
+        <label for="api-url">API URL</label>
+        <input id="api-url" type="text" placeholder="http://127.0.0.1:8765">
+
+        <label for="token">Bearer token</label>
+        <input id="token" type="password" placeholder="from ~/.config/ster/api_token">
+
+        <label for="class-uri">Class URI</label>
+        <input id="class-uri" type="text" placeholder="https://…#People">
+
+        <button class="save" id="save-btn">Save</button>
+        <span id="saved-msg">Saved ✓</span>
+      </div>
+    </details>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
