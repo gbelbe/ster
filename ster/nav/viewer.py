@@ -146,6 +146,53 @@ from .draw import (  # noqa: F401
     render_tree_col,
 )
 
+
+def _class_hierarchy_candidates(
+    taxonomy: Taxonomy,
+    lang: str,
+    exclude: set[str],
+) -> list[tuple[str, str]]:
+    """Return (uri, display) pairs in DFS class-hierarchy order.
+
+    Uses the same ├── / └── connector style as the main treeview.
+    *exclude* URIs are omitted but their children are still visited.
+    """
+    children_of: dict[str, list[str]] = {u: [] for u in taxonomy.owl_classes}
+    for u, cls in taxonomy.owl_classes.items():
+        for parent in cls.sub_class_of:
+            if parent in children_of:
+                children_of[parent].append(u)
+
+    roots = sorted(
+        (
+            u
+            for u in taxonomy.owl_classes
+            if not any(p in taxonomy.owl_classes for p in taxonomy.owl_classes[u].sub_class_of)
+        ),
+        key=lambda u: (taxonomy.owl_classes[u].label(lang) or u).lower(),
+    )
+
+    result: list[tuple[str, str]] = []
+
+    def _walk(node_uri: str, prefix: str, is_last: bool) -> None:
+        connector = "└── " if is_last else "├── "
+        label = taxonomy.owl_classes[node_uri].label(lang) or node_uri
+        if node_uri not in exclude:
+            result.append((node_uri, prefix + connector + label))
+        children = sorted(
+            children_of[node_uri],
+            key=lambda u: (taxonomy.owl_classes[u].label(lang) or u).lower(),
+        )
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        for i, child in enumerate(children):
+            _walk(child, child_prefix, i == len(children) - 1)
+
+    for i, root in enumerate(roots):
+        _walk(root, "", i == len(roots) - 1)
+
+    return result
+
+
 # ──────────────────────────── TaxonomyViewer ─────────────────────────────────
 
 
@@ -3011,19 +3058,10 @@ class TaxonomyViewer:
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
                 ind_uri = self._detail_uri
                 existing = set(self.taxonomy.owl_individuals[ind_uri].types)
-                type_candidates: list[tuple[str, str]] = []
-                for cls_uri, cls in sorted(
-                    self.taxonomy.owl_classes.items(),
-                    key=lambda kv: kv[1].label(self.lang),
-                ):
-                    if cls_uri in existing:
-                        continue
-                    h = self.taxonomy.uri_to_handle(cls_uri) or "?"
-                    type_candidates.append((cls_uri, f"[{h}]  {cls.label(self.lang)}"))
                 self._state = MovePickState(
                     source_uri=ind_uri,
                     pick_type="add_ind_type",
-                    candidates=type_candidates,
+                    candidates=_class_hierarchy_candidates(self.taxonomy, self.lang, existing),
                     filter_text="",
                     cursor=0,
                     scroll=0,
@@ -3046,16 +3084,10 @@ class TaxonomyViewer:
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
                 prop = self.taxonomy.owl_properties[self._detail_uri]
                 already = set(prop.domains if action == "add_prop_domain" else prop.ranges)
-                candidates: list[tuple[str, str]] = []  # type: ignore[no-redef]
-                for cls_uri in sorted(self.taxonomy.owl_classes):
-                    if cls_uri in already:
-                        continue
-                    cls = self.taxonomy.owl_classes[cls_uri]
-                    candidates.append((cls_uri, cls.label(self.lang)))
                 self._state = MovePickState(
                     source_uri=self._detail_uri,
                     pick_type=action,
-                    candidates=candidates,
+                    candidates=_class_hierarchy_candidates(self.taxonomy, self.lang, already),
                     filter_text="",
                     cursor=0,
                     scroll=0,

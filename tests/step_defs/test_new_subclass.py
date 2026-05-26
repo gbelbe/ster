@@ -28,7 +28,10 @@ def ctx() -> dict[str, Any]:
 # ── Givens ────────────────────────────────────────────────────────────────────
 
 
-@given(parsers.parse('a taxonomy with class "{name}" that has a subclass "{child}"'), target_fixture="ctx")
+@given(
+    parsers.parse('a taxonomy with class "{name}" that has a subclass "{child}"'),
+    target_fixture="ctx",
+)
 def taxonomy_with_child(name: str, child: str) -> dict[str, Any]:
     t = Taxonomy()
     t.owl_classes[BASE + name] = RDFClass(uri=BASE + name, labels=[Label("en", name)])
@@ -88,7 +91,11 @@ def has_child_row(name: str, key: str, ctx: dict[str, Any]) -> None:
     assert key in keys, f"Key '{key}' not found. Found: {keys}"
 
 
-@then(parsers.parse('the detail panel contains a "New subclass" action after the Subclasses separator'))
+@then(
+    parsers.parse(
+        'the detail panel contains a "New subclass" action after the Subclasses separator'
+    )
+)
 def has_new_subclass_action(ctx: dict[str, Any]) -> None:
     actions = [f.meta.get("action", "") for f in ctx["fields"] if f.meta.get("action")]
     assert "new_subclass" in actions, f"new_subclass action not found. Actions: {actions}"

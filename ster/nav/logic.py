@@ -1880,9 +1880,7 @@ def build_rdf_class_detail(
                 meta={"type": "rdf_relation", "uri": child_uri, "nav": True},
             )
         )
-    fields.append(
-        _add_action_add_field("action:new_subclass", "↓ New subclass", "new_subclass")
-    )
+    fields.append(_add_action_add_field("action:new_subclass", "↓ New subclass", "new_subclass"))
 
     # ── Instances ────────────────────────────────────────────────────────────
     fields.append(_sep("Instances"))
