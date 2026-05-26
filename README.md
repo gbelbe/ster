@@ -21,7 +21,7 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.4.6
+  v0.5.0
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.
@@ -407,6 +407,11 @@ Coverage is uploaded to [Codecov](https://codecov.io/gh/gbelbe/ster) on every ru
 ---
 
 ## Changelog
+
+### 0.5.0
+- **SPARQL predicate autocomplete**: typing `prefix:` at predicate position in a WHERE clause now filters suggestions to OWL properties only
+- **SPARQL subject autocomplete**: typing `prefix:` at subject position shows class roots and properties; expanding a class reveals its subclasses and individuals; leaf classes with only individuals now correctly show the expand arrow
+- **Fix**: creating a new OWL property from the Properties section panel now works (was silently discarded due to routing bug)
 
 ### 0.4.6
 - **Cache-warmed SPARQL engine**: after building the URI index, ster pre-fires a no-op SPARQL query against the cached graph in the background, forcing rdflib's plugin discovery to complete before the user opens the query screen — eliminates the ~20-second first-query delay on Python 3.13
