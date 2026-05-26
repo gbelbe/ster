@@ -1864,7 +1864,25 @@ def build_rdf_class_detail(
                 "action:move_class", "↷ Move under different superclass", "move_class"
             )
         )
-    fields.append(_add_action_add_field("action:link_sub", "↓ Add subclass", "link_subclass"))
+
+    # ── Subclasses — direct children of this class ───────────────────────────
+    fields.append(_sep("Subclasses"))
+    for child_uri, child_cls in taxonomy.owl_classes.items():
+        if uri not in child_cls.sub_class_of:
+            continue
+        child_label = child_cls.label(lang) or child_uri
+        fields.append(
+            DetailField(
+                f"subclass:{child_uri}",
+                "↓ subclass",
+                child_label,
+                editable=False,
+                meta={"type": "rdf_relation", "uri": child_uri, "nav": True},
+            )
+        )
+    fields.append(
+        _add_action_add_field("action:new_subclass", "↓ New subclass", "new_subclass")
+    )
 
     # ── Instances ────────────────────────────────────────────────────────────
     fields.append(_sep("Instances"))

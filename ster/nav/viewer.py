@@ -865,16 +865,6 @@ class TaxonomyViewer:
                     if key == -1:
                         continue
                     self._on_owl_pick(key, rows, replace=False)
-                elif ms.pick_type == "link_subclass":
-                    self._draw_move(stdscr, rows, cols, title=" ↓ Add subclass ")
-                    stdscr.refresh()
-                    key = stdscr.getch()
-                    if key == curses.KEY_RESIZE:
-                        curses.update_lines_cols()
-                        continue
-                    if key == -1:
-                        continue
-                    self._on_subclass_pick(key, rows)
                 elif ms.pick_type == "move_class":
                     self._draw_move(stdscr, rows, cols, title=" ↷ Move under different superclass ")
                     stdscr.refresh()
@@ -1616,7 +1606,7 @@ class TaxonomyViewer:
                 elif line.node_type == "class":
                     self._detail_uri = line.uri
                     self._detail_fields = self._bcdf(line.uri)
-                    self._trigger_action("link_subclass")
+                    self._trigger_action("new_subclass")
                 elif not line.is_file and not line.is_action:
                     self._detail_uri = line.uri
                     self._detail_fields = self._bdf(line.uri)
@@ -2552,6 +2542,30 @@ class TaxonomyViewer:
             self._field_cursor = 0
             self._state = DetailState()
 
+        elif ftype == "new_subclass_uri":
+            if not new_value:
+                return
+            parent_uri = f.meta.get("parent_uri", "") if f else ""
+            from ..exceptions import CircularHierarchyError, ClassNotFoundError
+            from ..handles import assign_handles
+            from ..model import RDFClass
+            from ..operations import add_subclass_of
+
+            if new_value not in self.taxonomy.owl_classes:
+                self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
+                assign_handles(self.taxonomy)
+            if parent_uri:
+                try:
+                    add_subclass_of(self.taxonomy, new_value, parent_uri)
+                except (CircularHierarchyError, ClassNotFoundError):
+                    pass
+            self._rebuild()
+            self._save_file()
+            self._detail_uri = parent_uri or new_value
+            self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
+            self._field_cursor = 0
+            self._state = DetailState()
+
         elif ftype == "new_owl_property_uri":
             if not new_value:
                 return
@@ -2799,13 +2813,16 @@ class TaxonomyViewer:
                     candidates=self._build_owl_class_candidates(self._detail_uri),
                 )
 
-        elif action == "link_subclass":
+        elif action == "new_subclass":
             if self._detail_uri:
-                self._state = MovePickState(
-                    source_uri=self._detail_uri,
-                    pick_type="link_subclass",
-                    candidates=self._build_subclass_candidates(self._detail_uri),
+                synthetic = DetailField(
+                    "add:new_subclass_uri",
+                    "New subclass URI",
+                    "",
+                    editable=True,
+                    meta={"type": "new_subclass_uri", "parent_uri": self._detail_uri},
                 )
+                self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "move_class":
             if self._detail_uri:
@@ -6008,92 +6025,6 @@ class TaxonomyViewer:
                 candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
         candidates.append(("__BROWSE_EXT__", "  🌐  Browse external ontology…"))
         return candidates
-
-    def _build_subclass_candidates(self, source_uri: str) -> list[tuple[str, str]]:
-        """OWL classes that can become subclasses of source_uri (excludes self and ancestors)."""
-        excluded: set[str] = {source_uri}
-        queue = [source_uri]
-        while queue:
-            u = queue.pop()
-            cls = self.taxonomy.owl_classes.get(u)
-            if cls:
-                for parent_uri in cls.sub_class_of:
-                    if parent_uri not in excluded:
-                        excluded.add(parent_uri)
-                        queue.append(parent_uri)
-
-        candidates: list[tuple[str, str]] = []
-        for line in self._tree.flat:
-            if line.uri in excluded or line.is_scheme or line.is_file or line.is_action:
-                continue
-            owl_cls = self.taxonomy.owl_classes.get(line.uri)
-            if owl_cls is not None:
-                from ..ontology_imports import is_external_uri, prefix_label
-
-                handle = self.taxonomy.uri_to_handle(line.uri) or "?"
-                if is_external_uri(line.uri, self.taxonomy):
-                    label = prefix_label(line.uri, self.taxonomy)
-                else:
-                    label = owl_cls.label(self.lang) or line.uri
-                indent = "  " * line.depth
-                candidates.append((line.uri, f"{indent}[{handle}]  {label}"))
-        return candidates
-
-    def _on_subclass_pick(self, key: int, rows: int) -> None:
-        """Handle keypresses in the 'add subclass' picker."""
-        if not isinstance(self._state, MovePickState):
-            return
-        ms = self._state
-        filtered = self._filtered_move_candidates()
-        n = len(filtered)
-        list_h = rows - 3
-
-        if key == curses.KEY_UP:
-            ms.cursor = max(0, ms.cursor - 1)
-        elif key == curses.KEY_DOWN:
-            ms.cursor = max(0, min(n - 1, ms.cursor + 1))
-        elif key == curses.KEY_PPAGE:
-            ms.cursor = max(0, ms.cursor - list_h)
-        elif key == curses.KEY_NPAGE:
-            ms.cursor = max(0, min(n - 1, ms.cursor + list_h))
-        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if 0 <= ms.cursor < n:
-                child_uri, _ = filtered[ms.cursor]
-                self._confirm_add_subclass(child_uri)
-        elif key == 27:  # Esc
-            self._detail_uri = ms.source_uri
-            self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
-            self._state = DetailState()
-        elif key in (curses.KEY_BACKSPACE, 127, 8):
-            if ms.filter_text:
-                ms.filter_text = ms.filter_text[:-1]
-                ms.cursor = 0
-                ms.scroll = 0
-        elif 32 <= key < 256:
-            ms.filter_text += chr(key)
-            ms.cursor = 0
-            ms.scroll = 0
-
-    def _confirm_add_subclass(self, child_uri: str) -> None:
-        """Make child_uri a subclass of the source (parent) class, then return to detail."""
-        if not isinstance(self._state, MovePickState):
-            return
-        parent_uri = self._state.source_uri
-        from ..exceptions import CircularHierarchyError, ClassNotFoundError
-        from ..operations import add_subclass_of
-
-        try:
-            add_subclass_of(self.taxonomy, child_uri, parent_uri)
-        except (CircularHierarchyError, ClassNotFoundError):
-            self._state = DetailState()
-            return
-        self._rebuild()
-        self._save_file()
-        self._detail_uri = parent_uri
-        self._detail_fields = self._bcdf(parent_uri)
-        self._field_cursor = 0
-        self._history.clear()
-        self._state = DetailState()
 
     def _confirm_owl_reparent(self, new_parent_uri: str | None, replace: bool) -> None:
         """Set (or add) subClassOf for the source OWL class, then return to detail."""
