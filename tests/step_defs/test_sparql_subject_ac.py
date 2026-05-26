@@ -30,9 +30,7 @@ def tax_animal_fido(ctx: dict[str, Any]) -> None:
     t = Taxonomy()
     _setup_ns(t)
     t.owl_classes[BASE + "Animal"] = RDFClass(uri=BASE + "Animal")
-    t.owl_individuals[BASE + "Fido"] = OWLIndividual(
-        uri=BASE + "Fido", types=[BASE + "Animal"]
-    )
+    t.owl_individuals[BASE + "Fido"] = OWLIndividual(uri=BASE + "Fido", types=[BASE + "Animal"])
     ctx["taxonomy"] = t
 
 

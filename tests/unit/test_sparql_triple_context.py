@@ -277,9 +277,7 @@ def test_drill_does_not_show_individuals_of_other_class():
     t.namespace_bindings["kai"] = BASE
     t.owl_classes[BASE + "Animal"] = RDFClass(uri=BASE + "Animal")
     t.owl_classes[BASE + "Vehicle"] = RDFClass(uri=BASE + "Vehicle")
-    t.owl_individuals[BASE + "Car"] = OWLIndividual(
-        uri=BASE + "Car", types=[BASE + "Vehicle"]
-    )
+    t.owl_individuals[BASE + "Car"] = OWLIndividual(uri=BASE + "Car", types=[BASE + "Vehicle"])
     idx = build_uri_index(t)
     assert "Car" not in _names(qname_level_candidates(idx, "kai", "Animal", "", "any"))
 
@@ -313,9 +311,7 @@ def test_subclass_with_only_individuals_has_children_marker():
     t.owl_classes[BASE + "Animal"] = RDFClass(uri=BASE + "Animal")
     t.owl_classes[BASE + "Dog"] = RDFClass(uri=BASE + "Dog")
     add_subclass_of(t, BASE + "Dog", BASE + "Animal")
-    t.owl_individuals[BASE + "Fido"] = OWLIndividual(
-        uri=BASE + "Fido", types=[BASE + "Dog"]
-    )
+    t.owl_individuals[BASE + "Fido"] = OWLIndividual(uri=BASE + "Fido", types=[BASE + "Dog"])
     idx = build_uri_index(t)
     results = qname_level_candidates(idx, "kai", "Animal", "", "any")
     dog_results = [(n, hc) for n, hc in results if n == "Dog"]

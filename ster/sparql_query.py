@@ -835,7 +835,7 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
             continue
         typed_in_ns = False
         for type_uri in ind.types:
-            for namespace, p in ns_to_pfx.items():
+            for namespace, _p in ns_to_pfx.items():
                 if type_uri.startswith(namespace):
                     class_local = type_uri[len(namespace) :]
                     if class_local:
@@ -867,8 +867,7 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
                 for parent, children in children_map.get(pfx, {}).items()
             },
             "individuals_by_class": {
-                cls: sorted(set(inds))
-                for cls, inds in ibc_map.get(pfx, {}).items()
+                cls: sorted(set(inds)) for cls, inds in ibc_map.get(pfx, {}).items()
             },
             "untyped_individuals": sorted(set(untyped_ind_map.get(pfx, []))),
         }
