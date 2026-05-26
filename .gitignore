@@ -11,3 +11,4 @@ venv/
 .coverage
 htmlcov/
 *.egg
+RELEASE_NOTES.md

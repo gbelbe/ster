@@ -203,3 +203,56 @@ bash scripts/ci.sh
 
 Only use `--ignore-vuln` for CVEs that affect pip itself (not ster's
 dependencies), and only after confirming the CVE does not apply.
+
+---
+
+## Releasing a new version (maintainers)
+
+The release pipeline is fully automated. Human input is limited to writing
+the changelog entry.
+
+### Step 1 — Write release notes
+
+Create `RELEASE_NOTES.md` (gitignored) with bullet points describing what
+changed. Plain markdown, one bullet per notable change:
+
+```markdown
+- **New subclass creation**: click "↓ New subclass" in a class detail panel to create and link a new child class inline
+- **Pre-push hook**: `scripts/install-hooks.sh` blocks git push without a passing CI run
+```
+
+### Step 2 — Run CI
+
+```bash
+bash scripts/ci.sh
+```
+
+The release script checks the CI sentinel and will refuse to run if it is
+absent or older than 60 minutes.
+
+### Step 3 — Release
+
+```bash
+bash scripts/release.sh 0.4.7
+```
+
+The script will:
+
+| Action | What happens |
+|--------|-------------|
+| Validate | semver format, new > current, CI green, notes non-empty |
+| Bump | `pyproject.toml` version + README ASCII banner |
+| Changelog | Prepend `### 0.4.7` entry (from `RELEASE_NOTES.md`) to `## Changelog` in README |
+| Commit | `chore(release): v0.4.7` |
+| Tag | `v0.4.7` |
+| Push | branch + tag to GitHub |
+| Build | `uv build` → `dist/ster-0.4.7*` |
+| Publish | `twine upload` to PyPI |
+| Clean | removes `RELEASE_NOTES.md` |
+
+### What you never need to do manually
+
+- Edit `pyproject.toml`
+- Edit the README banner or changelog section
+- Run `git tag`, `git push`, `uv build`, or `twine upload`
+- Ask Claude to do any of the above
