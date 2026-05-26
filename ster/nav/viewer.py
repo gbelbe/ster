@@ -2431,6 +2431,28 @@ class TaxonomyViewer:
             return
         ftype = f.meta.get("type")
         lang = f.meta.get("lang", "")
+        if ftype == "new_subclass_uri":
+            parent_uri = f.meta.get("parent_uri", "")
+            from ..exceptions import CircularHierarchyError, ClassNotFoundError
+            from ..handles import assign_handles
+            from ..model import RDFClass
+            from ..operations import add_subclass_of
+
+            if new_value not in self.taxonomy.owl_classes:
+                self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
+                assign_handles(self.taxonomy)
+            if parent_uri:
+                try:
+                    add_subclass_of(self.taxonomy, new_value, parent_uri)
+                except (CircularHierarchyError, ClassNotFoundError):
+                    pass
+            self._rebuild()
+            self._save_file()
+            self._detail_uri = parent_uri or new_value
+            self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
+            self._field_cursor = 0
+            self._state = DetailState()
+            return
         if ftype == "rdf_label":
             for lbl in rdf_class.labels:
                 if lbl.lang == lang:
@@ -2539,30 +2561,6 @@ class TaxonomyViewer:
                 self._save_file()
             self._detail_uri = new_value
             self._detail_fields = self._bcdf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
-
-        elif ftype == "new_subclass_uri":
-            if not new_value:
-                return
-            parent_uri = f.meta.get("parent_uri", "") if f else ""
-            from ..exceptions import CircularHierarchyError, ClassNotFoundError
-            from ..handles import assign_handles
-            from ..model import RDFClass
-            from ..operations import add_subclass_of
-
-            if new_value not in self.taxonomy.owl_classes:
-                self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
-                assign_handles(self.taxonomy)
-            if parent_uri:
-                try:
-                    add_subclass_of(self.taxonomy, new_value, parent_uri)
-                except (CircularHierarchyError, ClassNotFoundError):
-                    pass
-            self._rebuild()
-            self._save_file()
-            self._detail_uri = parent_uri or new_value
-            self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
             self._field_cursor = 0
             self._state = DetailState()
 

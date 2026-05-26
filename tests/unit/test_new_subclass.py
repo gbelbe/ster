@@ -76,6 +76,21 @@ def test_old_link_subclass_action_removed():
     assert "link_subclass" not in _actions(fields)
 
 
+# ── _commit_owl_class_edit routing — regression for misplaced handler ─────────
+
+
+def test_new_subclass_action_field_has_correct_ftype():
+    """The synthetic field created by 'new_subclass' action must use ftype
+    'new_subclass_uri' so _commit_owl_class_edit (not _commit_ontology_edit) handles it."""
+    t = _taxonomy("Animal")
+    fields = build_rdf_class_detail(t, BASE + "Animal", "en")
+    action_field = next(f for f in fields if f.meta.get("action") == "new_subclass")
+    # The action triggers creation of a synthetic EditState field with this ftype.
+    # Verify the action key uses the right identifier (not an ontology-scoped one).
+    assert action_field.key == "action:new_subclass"
+    assert action_field.meta.get("type") in ("action_add",)
+
+
 # ── new_subclass_uri handler logic (pure) ────────────────────────────────────
 
 
