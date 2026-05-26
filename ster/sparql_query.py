@@ -749,6 +749,7 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
     all_map: dict[str, list[str]] = {}
     cls_map: dict[str, list[str]] = {}
     ind_map: dict[str, list[str]] = {}
+    prop_map: dict[str, list[str]] = {}
     seen_all: set[tuple[str, str]] = set()
 
     def _add(uri: str, bucket: dict[str, list[str]]) -> None:
@@ -766,6 +767,8 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
         _add(uri, cls_map)
     for uri in taxonomy.owl_individuals:
         _add(uri, ind_map)
+    for uri in taxonomy.owl_properties:
+        _add(uri, prop_map)
     for uri in (*taxonomy.concepts, *taxonomy.schemes, *taxonomy.owl_properties):
         _add(uri, all_map)
 
@@ -811,17 +814,63 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
         if not has_parent_in_ns:
             roots_map.setdefault(cpfx, []).append(local)
 
+    # Build individuals_by_class: class_local → [ind_locals] for same-NS typed individuals.
+    # Individuals whose types are all outside this namespace are tracked as "untyped"
+    # and shown at root level so they remain reachable.
+    ibc_map: dict[str, dict[str, list[str]]] = {}
+    untyped_ind_map: dict[str, list[str]] = {}
+
+    for ind_uri, ind in taxonomy.owl_individuals.items():
+        ipfx: str | None = None
+        ins: str | None = None
+        for namespace, p in ns_to_pfx.items():
+            if ind_uri.startswith(namespace):
+                ipfx = p
+                ins = namespace
+                break
+        if ipfx is None or ins is None:
+            continue
+        ind_local = ind_uri[len(ins) :]
+        if not ind_local:
+            continue
+        typed_in_ns = False
+        for type_uri in ind.types:
+            for namespace, p in ns_to_pfx.items():
+                if type_uri.startswith(namespace):
+                    class_local = type_uri[len(namespace) :]
+                    if class_local:
+                        ibc_map.setdefault(ipfx, {}).setdefault(class_local, []).append(ind_local)
+                        typed_in_ns = True
+                    break
+        if not typed_in_ns:
+            untyped_ind_map.setdefault(ipfx, []).append(ind_local)
+
     idx: UriIndex = {}
-    all_pfxs = set(all_map) | set(cls_map) | set(ind_map) | set(roots_map)
+    all_pfxs = (
+        set(all_map)
+        | set(cls_map)
+        | set(ind_map)
+        | set(prop_map)
+        | set(roots_map)
+        | set(ibc_map)
+        | set(untyped_ind_map)
+    )
     for pfx in all_pfxs:
         idx[pfx] = {
             "all": sorted(set(all_map.get(pfx, []))),
             "classes": sorted(set(cls_map.get(pfx, []))),
             "individuals": sorted(set(ind_map.get(pfx, []))),
+            "properties": sorted(set(prop_map.get(pfx, []))),
             "roots": sorted(set(roots_map.get(pfx, []))),
             "children": {
-                parent: sorted(children) for parent, children in children_map.get(pfx, {}).items()
+                parent: sorted(set(children))
+                for parent, children in children_map.get(pfx, {}).items()
             },
+            "individuals_by_class": {
+                cls: sorted(set(inds))
+                for cls, inds in ibc_map.get(pfx, {}).items()
+            },
+            "untyped_individuals": sorted(set(untyped_ind_map.get(pfx, []))),
         }
     return idx
 
@@ -848,20 +897,65 @@ _LAST_TOKEN_RE = re.compile(r"(\S+)\s+$")
 # Regex: PREFIX name: declarations in a SPARQL buffer
 _PREFIX_DECL_RE = re.compile(r"(?i)\bPREFIX\s+(\w+)\s*:")
 
+# Regex: triple-pattern separators that reset the token position counter
+_TRIPLE_SEP_RE = re.compile(r"[{.;,]")
+
 
 def _sparql_context_at_cursor(buffer: str, pos: int) -> str:
-    """Return ``"class"`` when the cursor is in a position expecting a class URI.
+    """Return the autocomplete context at the cursor position.
 
-    Strips the in-progress token (e.g. ``"kai:"`` just typed) then looks at
-    the immediately preceding whitespace-separated token.  Returns ``"any"``
-    for all other positions.
+    Returns ``"property"`` at predicate position, ``"class"`` when the
+    preceding token is a class-expecting predicate, and ``"any"`` elsewhere.
+
+    Algorithm: strip the in-progress token, find the last triple-pattern
+    separator (``{`` ``.`` ``;`` ``,``), count whitespace-separated tokens
+    after it, then derive the triple position (subject/predicate/object).
     """
     before = buffer[:pos]
-    # Remove the in-progress token (the prefix: or partial identifier being typed)
     stripped = re.sub(r"\S+$", "", before)
-    m = _LAST_TOKEN_RE.search(stripped)
-    if m and m.group(1) in _CLASS_PREDICATES:
-        return "class"
+
+    # Find the last triple-pattern separator
+    last_sep: re.Match[str] | None = None
+    for m in _TRIPLE_SEP_RE.finditer(stripped):
+        last_sep = m
+
+    if last_sep is not None:
+        sep_char = last_sep.group()
+        after_sep = stripped[last_sep.end() :]
+    else:
+        sep_char = None
+        after_sep = stripped
+
+    tokens = after_sep.split()
+    n = len(tokens)
+
+    # Semicolon reuses the subject; n=0 means we are typing the predicate.
+    if sep_char == ";":
+        at_predicate = n == 0
+        at_object = n >= 1
+    # Comma reuses subject+predicate; we are always typing an object.
+    elif sep_char == ",":
+        at_predicate = False
+        at_object = True
+    else:
+        # { or . or no separator: subject=pos1, predicate=pos2, object=pos3+
+        at_predicate = n == 1
+        at_object = n >= 2
+
+    if at_object:
+        last_token = tokens[-1] if tokens else None
+        if last_token and last_token in _CLASS_PREDICATES:
+            return "class"
+        return "any"
+
+    if at_predicate:
+        # If the single preceding token is itself a class predicate, it is
+        # acting as the predicate (not the subject) and we are at object position.
+        last_token = tokens[-1] if tokens else None
+        if last_token and last_token in _CLASS_PREDICATES:
+            return "class"
+        return "property"
+
     return "any"
 
 
@@ -882,11 +976,17 @@ def _sparql_pfx_candidates(known_prefixes: set[str], filter_text: str) -> list[s
 def qname_candidates(idx: UriIndex, prefix: str, filter_text: str, context: str) -> list[str]:
     """Return filtered, alphabetically-sorted local names for *prefix*.
 
-    *context* is ``"class"`` or ``"any"``.  When ``"class"``, only names from
-    the ``classes`` bucket are returned.  Filter is applied case-insensitively
-    as a prefix match.
+    *context* is ``"class"``, ``"property"``, or ``"any"``.  ``"class"``
+    restricts to the classes bucket; ``"property"`` to the properties bucket;
+    ``"any"`` returns everything.  Filter is applied case-insensitively as a
+    prefix match.
     """
-    bucket_key = "classes" if context == "class" else "all"
+    if context == "class":
+        bucket_key = "classes"
+    elif context == "property":
+        bucket_key = "properties"
+    else:
+        bucket_key = "all"
     names = idx.get(prefix, {}).get(bucket_key, [])
     f = filter_text.lower()
     return [n for n in names if n.lower().startswith(f)]
@@ -915,21 +1015,52 @@ def qname_level_candidates(
     entry = idx[prefix]
     children_map: dict[str, list[str]] = entry.get("children", {})  # type: ignore[assignment]
 
+    if context == "property":
+        # Properties are a flat list; no hierarchy, no children markers.
+        props: list[str] = list(entry.get("properties", []))  # type: ignore[arg-type]
+        f = filter_text.lower()
+        return [(name, False) for name in sorted(props) if name.lower().startswith(f)]
+
+    ibc: dict[str, list[str]] = entry.get("individuals_by_class", {})  # type: ignore[assignment]
+
+    def _has_drillable_content(name: str) -> bool:
+        """True when a class name has subclasses or individuals — warrants a ▶."""
+        return bool(children_map.get(name)) or bool(ibc.get(name))
+
     if parent_local:
-        names = list(children_map.get(parent_local, []))
-    else:
+        # Drill-down: subclasses of parent + individuals typed as parent class.
+        names_set: set[str] = set(children_map.get(parent_local, []))
+        for ind in ibc.get(parent_local, []):
+            names_set.add(ind)
+        names = sorted(names_set)
+        f = filter_text.lower()
+        # Individuals are leaves; subclasses get ▶ if they have further content.
+        return [
+            (name, name not in ibc.get(parent_local, []) and _has_drillable_content(name))
+            for name in names
+            if name.lower().startswith(f)
+        ]
+
+    # Root level
+    if context == "any":
+        # Class roots + properties + untyped individuals (typed individuals are
+        # only reachable by drilling into their class).
         roots: list[str] = list(entry.get("roots", []))  # type: ignore[arg-type]
-        if context == "any":
-            individuals: list[str] = list(entry.get("individuals", []))  # type: ignore[arg-type]
-            seen: set[str] = set(roots)
-            for ind in individuals:
-                if ind not in seen:
-                    roots.append(ind)
-                    seen.add(ind)
+        props_at_root: list[str] = list(entry.get("properties", []))  # type: ignore[arg-type]
+        untyped: list[str] = list(entry.get("untyped_individuals", []))  # type: ignore[arg-type]
+        seen: set[str] = set(roots)
+        for name in (*props_at_root, *untyped):
+            if name not in seen:
+                roots.append(name)
+                seen.add(name)
         names = roots
+    else:
+        names = list(entry.get("roots", []))  # type: ignore[arg-type]
 
     f = filter_text.lower()
-    return [(name, name in children_map) for name in sorted(names) if name.lower().startswith(f)]
+    return [
+        (name, _has_drillable_content(name)) for name in sorted(names) if name.lower().startswith(f)
+    ]
 
 
 def extract_query_variables(buffer: str) -> list[str]:

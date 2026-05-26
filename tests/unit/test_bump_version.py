@@ -11,7 +11,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2] / "scripts"))
 import bump_version as bv  # noqa: E402
 
-
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -22,11 +21,7 @@ def _make_pyproject(root: Path, version: str) -> Path:
 
 
 def _make_readme(root: Path, banner_ver: str, has_changelog: bool = True) -> Path:
-    changelog = (
-        "\n## Changelog\n\n### 0.4.6\n- Old feature\n"
-        if has_changelog
-        else ""
-    )
+    changelog = "\n## Changelog\n\n### 0.4.6\n- Old feature\n" if has_changelog else ""
     p = root / "README.md"
     p.write_text(f"# ster\n\n  v{banner_ver}\n\nSome text.{changelog}")
     return p

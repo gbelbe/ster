@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +19,7 @@ scenarios("../features/ci/release.feature")
 _SCRIPT = Path(__file__).parents[2] / "scripts" / "release.sh"
 
 _PYPROJECT_TMPL = '[project]\nname = "ster"\nversion = "{ver}"\n'
-_README_TMPL = (
-    "# ster\n\n  v{ver}\n\nSome text.\n\n"
-    "## Changelog\n\n### {ver}\n- Old feature\n"
-)
+_README_TMPL = "# ster\n\n  v{ver}\n\nSome text.\n\n## Changelog\n\n### {ver}\n- Old feature\n"
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -156,8 +152,6 @@ def exits_nonzero(ctx: dict[str, Any]) -> None:
     assert ctx["result"].returncode != 0
 
 
-@then(parsers.parse("stderr contains \"{msg}\""))
+@then(parsers.parse('stderr contains "{msg}"'))
 def stderr_contains(msg: str, ctx: dict[str, Any]) -> None:
-    assert msg in ctx["result"].stderr, (
-        f"Expected '{msg}' in stderr:\n{ctx['result'].stderr}"
-    )
+    assert msg in ctx["result"].stderr, f"Expected '{msg}' in stderr:\n{ctx['result'].stderr}"
