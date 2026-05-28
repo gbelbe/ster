@@ -56,7 +56,7 @@ def _fields_in_section(fields, section_label: str):
 
 
 def test_server_setup_section_present():
-    assert "Server Setup" in _section_labels(_fields())
+    assert "Local Server Configuration" in _section_labels(_fields())
 
 
 def test_llm_setup_section_present():
@@ -68,19 +68,19 @@ def test_no_bare_setup_section():
 
 
 def test_server_url_field_default():
-    section = _fields_in_section(_fields(), "Server Setup")
+    section = _fields_in_section(_fields(), "Local Server Configuration")
     values = [f.value for f in section]
     assert "http://127.0.0.1" in values
 
 
 def test_server_port_field_default():
-    section = _fields_in_section(_fields(), "Server Setup")
+    section = _fields_in_section(_fields(), "Local Server Configuration")
     values = [f.value for f in section]
     assert "8765" in values
 
 
 def test_bearer_token_field_present():
-    section = _fields_in_section(_fields(), "Server Setup")
+    section = _fields_in_section(_fields(), "Local Server Configuration")
     labels = [f.display for f in section]
     assert "bearer token" in labels
 
@@ -98,12 +98,12 @@ def test_ai_config_field_in_llm_setup():
 
 
 def test_restart_warning_when_pending():
-    section = _fields_in_section(_fields(pending_restart=True), "Server Setup")
+    section = _fields_in_section(_fields(pending_restart=True), "Local Server Configuration")
     keys = [f.key for f in section]
     assert any("restart" in k for k in keys)
 
 
 def test_no_restart_warning_when_not_pending():
-    section = _fields_in_section(_fields(pending_restart=False), "Server Setup")
+    section = _fields_in_section(_fields(pending_restart=False), "Local Server Configuration")
     keys = [f.key for f in section]
     assert not any("restart" in k for k in keys)

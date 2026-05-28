@@ -78,10 +78,10 @@ def when_build_fields_pending(ctx):
     )
 
 
-@then('a section labelled "Server Setup" is present')
+@then('a section labelled "Local Server Configuration" is present')
 def then_server_setup_section(ctx):
     labels = [f.display for f in ctx["fields"] if f.meta.get("type") == "separator"]
-    assert "Server Setup" in labels
+    assert "Local Server Configuration" in labels
 
 
 @then('a section labelled "LLM Setup" is present')
@@ -96,21 +96,21 @@ def then_no_bare_setup(ctx):
     assert "Setup" not in labels
 
 
-@then('the Server Setup section contains a field showing "http://127.0.0.1"')
+@then('the Local Server Configuration section contains a field showing "http://127.0.0.1"')
 def then_url_field(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any(f.value == "http://127.0.0.1" for f in section)
 
 
-@then('the Server Setup section contains a field showing "8765"')
+@then('the Local Server Configuration section contains a field showing "8765"')
 def then_port_field(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any(f.value == "8765" for f in section)
 
 
-@then('the Server Setup section contains a field labelled "bearer token"')
+@then('the Local Server Configuration section contains a field labelled "bearer token"')
 def then_bearer_token_field(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any(f.display == "bearer token" for f in section)
 
 
@@ -126,13 +126,13 @@ def then_ai_config_in_llm(ctx):
     assert any(f.meta.get("action") == "open_ai_config" for f in section)
 
 
-@then("the Server Setup section contains a restart warning field")
+@then("the Local Server Configuration section contains a restart warning field")
 def then_restart_warning_present(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any("restart" in f.key for f in section)
 
 
-@then("the Server Setup section contains no restart warning field")
+@then("the Local Server Configuration section contains no restart warning field")
 def then_no_restart_warning(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert not any("restart" in f.key for f in section)

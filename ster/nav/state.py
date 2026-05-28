@@ -107,15 +107,47 @@ class ConfirmDeleteState:
 
 
 @dataclass
-class OntologySetupState:
-    """Startup prompt: no owl:Ontology / skos:ConceptScheme URI found in file."""
+class RenameUriConfirmState:
+    """Confirmation dialog before executing a URI rename."""
 
-    # 0 = name field active, 1 = URI field active
+    old_uri: str = ""
+    new_uri: str = ""
+    ref_count: int = 0
+    # entity kind for display: "class", "individual", or "property"
+    kind: str = ""
+
+
+@dataclass
+class DeleteClassChoiceState:
+    """Multi-step dialog for deleting an OWL class that has subclasses or individuals."""
+
+    class_uri: str = ""
+    # All subclass descendants (transitive, excluding class_uri itself)
+    subclass_uris: list[str] = dc_field(default_factory=list)
+    # Parents of the class being deleted (surviving OWL classes)
+    parent_uris: list[str] = dc_field(default_factory=list)
+    # Individuals typed to this class or any descendant
+    individual_uris: list[str] = dc_field(default_factory=list)
+    # 0 = Keep subclasses & individuals, 1 = Delete subclasses keep individuals, 2 = Delete all, 3 = Cancel
+    cursor: int = 0
+    # True when showing the second-step confirmation screen
+    confirming: bool = False
+
+
+@dataclass
+class OntologySetupState:
+    """Startup prompt (create) or edit dialog (rename) for the ontology base URI."""
+
+    # "create" = no URI exists yet; "edit" = renaming an existing URI
+    mode: str = "create"
+    # create: 0=name, 1=URI, 2=separator  |  edit: 0=URI, 1=separator
     active: int = 0
     name_buf: str = ""
     name_pos: int = 0
     uri_buf: str = ""
     uri_pos: int = 0
+    # 0 = "#" (recommended), 1 = "/"
+    sep_cursor: int = 0
     error: str = ""
 
 
@@ -320,6 +352,8 @@ ViewerState = (
     | SchemeCreateState
     | BatchCreateState
     | ConfirmDeleteState
+    | RenameUriConfirmState
+    | DeleteClassChoiceState
     | OntologySetupState
     | ClassToIndividualState
     | IndividualToClassState

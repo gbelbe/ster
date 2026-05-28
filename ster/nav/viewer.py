@@ -85,6 +85,7 @@ from .state import (
     ClassToIndividualState,
     ConfirmDeleteState,
     CreateState,
+    DeleteClassChoiceState,
     DetailState,
     EditState,
     IndividualToClassState,
@@ -95,6 +96,7 @@ from .state import (
     OntologySetupState,
     PropertyImpactState,
     QueryState,
+    RenameUriConfirmState,
     SchemeCreateState,
     TreeState,
     ViewerState,
@@ -145,6 +147,24 @@ from .draw import (  # noqa: F401
     _render_line_with_match,
     render_tree_col,
 )
+
+
+def _ensure_full_uri(value: str, taxonomy: Taxonomy) -> str:
+    """Return a full URI for *value*, expanding bare local names with the taxonomy base URI.
+
+    If *value* already contains '://' it is returned as-is.
+    If *value* is a bare local name and a base URI is available, returns base + value.
+    Returns '' when *value* is empty or cannot be made into a valid URI.
+    """
+    value = value.strip()
+    if not value:
+        return ""
+    if "://" in value:
+        return value
+    base = taxonomy.base_uri()
+    if base:
+        return base + value
+    return ""
 
 
 def _class_hierarchy_candidates(
@@ -424,9 +444,11 @@ class TaxonomyViewer:
 
     def _bgf(self) -> list[DetailField]:
         """Build global overview fields (server setup + LLM setup + shortcuts + stats)."""
+        from ..api import _derive_slug  # noqa: PLC0415
         from ..api_server import load_server_config  # noqa: PLC0415
 
         server_url, server_port = load_server_config()
+        slug = _derive_slug(self.file_path)
         return build_global_fields(
             self._workspace,
             self._analysis,
@@ -435,6 +457,7 @@ class TaxonomyViewer:
             server_port=server_port,
             show_token=self._show_bearer_token,
             pending_restart=self._server_pending_restart,
+            ontology_slug=slug,
         )
 
     def _load_analysis(self) -> None:
@@ -846,6 +869,17 @@ class TaxonomyViewer:
                         continue
                     self._on_batch(key, rows)
 
+            elif isinstance(self._state, RenameUriConfirmState):
+                self._draw_rename_uri_confirm(stdscr, rows, cols)
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                if key == -1:
+                    continue
+                self._on_rename_uri_confirm(key)
+
             elif isinstance(self._state, ConfirmDeleteState):
                 self._draw_confirm(stdscr, rows, cols)
                 stdscr.refresh()
@@ -856,6 +890,17 @@ class TaxonomyViewer:
                 if key == -1:
                     continue
                 self._on_confirm_delete(key)
+
+            elif isinstance(self._state, DeleteClassChoiceState):
+                self._draw_delete_class_confirm(stdscr, rows, cols)
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                if key == -1:
+                    continue
+                self._on_delete_class_confirm(key)
 
             elif isinstance(self._state, ClassToIndividualState):
                 self._draw_class_to_individual_confirm(stdscr, rows, cols)
@@ -2478,6 +2523,9 @@ class TaxonomyViewer:
             return
         ftype = f.meta.get("type")
         lang = f.meta.get("lang", "")
+        if ftype == "uri":
+            self._start_rename_uri(new_value)
+            return
         if ftype == "new_subclass_uri":
             parent_uri = f.meta.get("parent_uri", "")
             from ..exceptions import CircularHierarchyError, ClassNotFoundError
@@ -2485,6 +2533,9 @@ class TaxonomyViewer:
             from ..model import RDFClass
             from ..operations import add_subclass_of
 
+            new_value = _ensure_full_uri(new_value, self.taxonomy)
+            if not new_value:
+                return
             if new_value not in self.taxonomy.owl_classes:
                 self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
                 assign_handles(self.taxonomy)
@@ -2532,6 +2583,9 @@ class TaxonomyViewer:
             return
         ftype = f.meta.get("type")
         lang = f.meta.get("lang", "")
+        if ftype == "uri":
+            self._start_rename_uri(new_value)
+            return
         if ftype == "ind_label":
             for lbl in individual.labels:
                 if lbl.lang == lang:
@@ -2560,6 +2614,9 @@ class TaxonomyViewer:
             return
         ftype = f.meta.get("type")
         lang = f.meta.get("lang", "")
+        if ftype == "uri":
+            self._start_rename_uri(new_value)
+            return
         if ftype == "prop_label":
             for lbl in prop.labels:
                 if lbl.lang == lang:
@@ -2581,6 +2638,28 @@ class TaxonomyViewer:
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
         self._save_file()
 
+    def _start_rename_uri(self, new_uri: str) -> None:
+        """Initiate a URI rename: count references and enter RenameUriConfirmState."""
+        old_uri = self._detail_uri or ""
+        if not new_uri or new_uri == old_uri:
+            self._state = DetailState()
+            return
+        from ..operations import count_owl_uri_references
+
+        ref_count = count_owl_uri_references(self.taxonomy, old_uri)
+        if old_uri in self.taxonomy.owl_classes:
+            kind = "class"
+        elif old_uri in self.taxonomy.owl_individuals:
+            kind = "individual"
+        else:
+            kind = "property"
+        self._state = RenameUriConfirmState(
+            old_uri=old_uri,
+            new_uri=new_uri,
+            ref_count=ref_count,
+            kind=kind,
+        )
+
     def _commit_ontology_edit(self, f: DetailField, new_value: str) -> None:
         """Commit an edit to the ontology metadata or OWL creation prompt."""
         ftype = f.meta.get("type")
@@ -2595,6 +2674,9 @@ class TaxonomyViewer:
             self._save_file()
 
         elif ftype == "new_owl_class_uri":
+            if not new_value:
+                return
+            new_value = _ensure_full_uri(new_value, self.taxonomy)
             if not new_value:
                 return
             from ..model import RDFClass
@@ -2614,6 +2696,9 @@ class TaxonomyViewer:
         elif ftype == "new_owl_property_uri":
             if not new_value:
                 return
+            new_value = _ensure_full_uri(new_value, self.taxonomy)
+            if not new_value:
+                return
             from ..model import OWLProperty
 
             if new_value not in self.taxonomy.owl_properties:
@@ -2629,6 +2714,9 @@ class TaxonomyViewer:
             self._state = DetailState()
 
         elif ftype == "new_owl_individual_uri":
+            if not new_value:
+                return
+            new_value = _ensure_full_uri(new_value, self.taxonomy)
             if not new_value:
                 return
             class_uri = f.meta.get("class_uri", "")
@@ -2860,14 +2948,17 @@ class TaxonomyViewer:
 
         elif action == "new_subclass":
             if self._detail_uri:
+                _base = self.taxonomy.base_uri()
                 synthetic = DetailField(
                     "add:new_subclass_uri",
                     "New subclass URI",
-                    "",
+                    _base,
                     editable=True,
                     meta={"type": "new_subclass_uri", "parent_uri": self._detail_uri},
                 )
-                self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
+                self._state = EditState(
+                    buffer=_base, pos=len(_base), field=synthetic, return_to=None
+                )
 
         elif action == "move_class":
             if self._detail_uri:
@@ -2892,15 +2983,38 @@ class TaxonomyViewer:
 
         elif action == "delete_class":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_classes:
-                uri = self._detail_uri
-                del self.taxonomy.owl_classes[uri]
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
+                from ..operations import _owl_subclass_tree
+
+                cls_uri = self._detail_uri
+                rdf_cls = self.taxonomy.owl_classes[cls_uri]
+                all_tree = _owl_subclass_tree(self.taxonomy, cls_uri)
+                subclass_uris = [u for u in all_tree if u != cls_uri]
+                individual_uris = [
+                    ind_uri
+                    for ind_uri, ind in self.taxonomy.owl_individuals.items()
+                    if any(t in all_tree for t in ind.types)
+                ]
+                parent_uris = [p for p in rdf_cls.sub_class_of if p in self.taxonomy.owl_classes]
+                if subclass_uris or individual_uris:
+                    self._state = DeleteClassChoiceState(
+                        class_uri=cls_uri,
+                        subclass_uris=subclass_uris,
+                        parent_uris=parent_uris,
+                        individual_uris=individual_uris,
+                        cursor=0,
+                        confirming=False,
+                    )
+                else:
+                    from ..operations import delete_owl_class
+
+                    delete_owl_class(self.taxonomy, cls_uri, mode="keep_all")
+                    self._rebuild()
+                    self._save_file()
+                    self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+                    self._detail_uri = _GLOBAL_URI
+                    self._detail_fields = self._bgf()
+                    self._field_cursor = 0
+                    self._state = TreeState()
 
         elif action == "class_to_individual":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_classes:
@@ -3183,6 +3297,23 @@ class TaxonomyViewer:
                     lst.remove(url)
                     self._refresh_detail()
                     self._save_file()
+
+        elif action == "edit_ontology_uri":
+            uri_now = self.taxonomy.ontology_uri or ""
+            # Detect current separator from existing entity URIs
+            root = uri_now.rstrip("#/")
+            sep_cur = 0  # default to "#"
+            for u in list(self.taxonomy.owl_classes) + list(self.taxonomy.owl_individuals):
+                if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+                    sep_cur = 0 if u[len(root)] == "#" else 1
+                    break
+            self._state = OntologySetupState(
+                mode="edit",
+                active=0,
+                uri_buf=root,
+                uri_pos=len(root),
+                sep_cursor=sep_cur,
+            )
 
         elif action == "view_ontology_graph":
             from .. import viz_vowl as _viz
@@ -5294,71 +5425,131 @@ class TaxonomyViewer:
         self._history.clear()
         self._state = DetailState()
 
-    # ──────────────────────── ONTOLOGY SETUP prompt ──────────────────────────
+    # ──────────────────────── ONTOLOGY SETUP / EDIT ──────────────────────────
+
+    _SEP_OPTIONS = [("# (recommended)", "#"), ("/ (slash)", "/")]
+    _W3C_COOL_URIS = "https://www.w3.org/TR/cooluris/"
 
     def _draw_ontology_setup(self, stdscr: curses.window, rows: int, cols: int) -> None:
         if not isinstance(self._state, OntologySetupState):
             return
         st = self._state
         width = cols
+        is_edit = st.mode == "edit"
 
-        _draw_bar(stdscr, 0, 0, width, " ⚠  Ontology has no URI ", dim=False)
+        title = " ✎ Edit base URI " if is_edit else " ⚠  Ontology has no URI "
+        _draw_bar(stdscr, 0, 0, width, title, dim=False)
+
+        # In edit mode: active 0=URI, 1=separator
+        # In create mode: active 0=name, 1=URI, 2=separator
+        uri_active_idx = 0 if is_edit else 1
+        sep_active_idx = 1 if is_edit else 2
 
         y = 2
         try:
-            stdscr.addstr(
-                y,
-                2,
-                "This file has no owl:Ontology or skos:ConceptScheme URI."[: width - 3],
-                curses.color_pair(_C_FIELD_VAL),
-            )
-            y += 1
-            stdscr.addstr(
-                y,
-                2,
-                "pyLODE and other tools need one to generate documentation."[: width - 3],
-                curses.color_pair(_C_FIELD_VAL),
-            )
-            y += 2
+            if not is_edit:
+                stdscr.addstr(
+                    y,
+                    2,
+                    "This file has no owl:Ontology or skos:ConceptScheme URI."[: width - 3],
+                    curses.color_pair(_C_FIELD_VAL),
+                )
+                y += 1
+                stdscr.addstr(
+                    y,
+                    2,
+                    "pyLODE and other tools need one to generate documentation."[: width - 3],
+                    curses.color_pair(_C_FIELD_VAL),
+                )
+                y += 2
 
-            # Name field
-            name_sel = st.active == 0
-            name_attr = (
-                curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
-                if name_sel
-                else curses.color_pair(_C_FIELD_LABEL)
-            )
-            stdscr.addstr(y, 2, "Name:"[: width - 3], curses.color_pair(_C_DIM))
-            y += 1
-            name_display = st.name_buf + ("▌" if name_sel else "")
-            stdscr.addstr(y, 4, name_display[: width - 5].ljust(width - 5), name_attr)
-            y += 2
+                # Name field (create only)
+                name_sel = st.active == 0
+                name_attr = (
+                    curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
+                    if name_sel
+                    else curses.color_pair(_C_FIELD_LABEL)
+                )
+                stdscr.addstr(y, 2, "Name:"[: width - 3], curses.color_pair(_C_DIM))
+                y += 1
+                name_display = st.name_buf + ("▌" if name_sel else "")
+                stdscr.addstr(y, 4, name_display[: width - 5].ljust(width - 5), name_attr)
+                y += 2
 
             # URI field
-            uri_sel = st.active == 1
+            uri_sel = st.active == uri_active_idx
             uri_attr = (
                 curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
                 if uri_sel
                 else curses.color_pair(_C_FIELD_LABEL)
             )
-            stdscr.addstr(y, 2, "URI:"[: width - 3], curses.color_pair(_C_DIM))
+            stdscr.addstr(y, 2, "Base URI:"[: width - 3], curses.color_pair(_C_DIM))
             y += 1
             uri_display = st.uri_buf + ("▌" if uri_sel else "")
             stdscr.addstr(y, 4, uri_display[: width - 5].ljust(width - 5), uri_attr)
             y += 2
 
+            # Separator picker
+            sep_sel = st.active == sep_active_idx
+            stdscr.addstr(
+                y,
+                2,
+                "Separator:"[: width - 3],
+                curses.color_pair(_C_DIM),
+            )
+            y += 1
+            for i, (label, _sep_ch) in enumerate(self._SEP_OPTIONS):
+                chosen = i == st.sep_cursor
+                active_sep = sep_sel and chosen
+                prefix = "▶ " if chosen else "  "
+                attr = (
+                    curses.color_pair(_C_SEL) | curses.A_BOLD
+                    if active_sep
+                    else (
+                        curses.color_pair(_C_NAVIGABLE)
+                        if chosen
+                        else curses.color_pair(_C_FIELD_VAL)
+                    )
+                )
+                stdscr.addstr(y, 4, f"{prefix}{label}"[: width - 5], attr)
+                y += 1
+            y += 1
+
+            # W3C recommendation note
+            stdscr.addstr(
+                y,
+                2,
+                "W3C: " + self._W3C_COOL_URIS,
+                curses.color_pair(_C_DIM) | curses.A_DIM,
+            )
+            y += 2
+
             if st.error:
                 stdscr.addstr(y, 2, st.error[: width - 3], curses.color_pair(_C_DIFF_DEL))
                 y += 1
+
+            if is_edit:
+                # Count how many entities will move
+                from ..operations import collect_ontology_entities
+
+                n = len(collect_ontology_entities(self.taxonomy))
+                noun = "entity" if n == 1 else "entities"
+                stdscr.addstr(
+                    y,
+                    2,
+                    f"  {n} local {noun} will be renamed."[: width - 3],
+                    curses.color_pair(_C_FIELD_VAL),
+                )
         except curses.error:
             pass
 
+        esc_action = "cancel" if is_edit else "skip"
         _draw_bar(
             stdscr,
             rows - 1,
             0,
             width,
-            " Tab/↑↓: switch field   Enter: confirm   Esc: skip ",
+            f" Tab/↑↓: switch   ←/→: separator   Enter: confirm   Esc: {esc_action} ",
             dim=True,
         )
 
@@ -5366,45 +5557,193 @@ class TaxonomyViewer:
         if not isinstance(self._state, OntologySetupState):
             return
         st = self._state
+        is_edit = st.mode == "edit"
 
-        if key in (9, curses.KEY_DOWN, curses.KEY_UP):  # Tab / arrows switch field
-            st.active = 1 - st.active
+        # Field count: edit=2 (URI, sep), create=3 (name, URI, sep)
+        n_fields = 2 if is_edit else 3
+        uri_active_idx = 0 if is_edit else 1
+        sep_active_idx = 1 if is_edit else 2
+
+        if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next field
+            st.active = (st.active + 1) % n_fields
             st.error = ""
+        elif key == curses.KEY_UP:  # ↑ — previous field
+            st.active = (st.active - 1) % n_fields
+            st.error = ""
+        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+            if st.active == sep_active_idx:
+                st.sep_cursor = 1 - st.sep_cursor
+
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            name = st.name_buf.strip()
-            uri = st.uri_buf.strip()
-            if not name:
-                st.error = "Name is required."
-                st.active = 0
-            elif not uri:
+            uri = st.uri_buf.strip().rstrip("#/")
+            sep = self._SEP_OPTIONS[st.sep_cursor][1]
+
+            if not uri:
                 st.error = "URI is required."
-                st.active = 1
-            elif " " in uri:
+                st.active = uri_active_idx
+                return
+            if " " in uri:
                 st.error = "URI must not contain spaces."
-                st.active = 1
+                st.active = uri_active_idx
+                return
+
+            if is_edit:
+                from ..operations import rename_ontology_uri
+
+                rename_ontology_uri(self.taxonomy, uri, sep)
+                self._rebuild()
+                self._save_file()
+                self._detail_fields = self._bgf()
+                self._field_cursor = 0
+                self._state = DetailState()
             else:
-                self.taxonomy.ontology_uri = uri
+                name = st.name_buf.strip()
+                if not name:
+                    st.error = "Name is required."
+                    st.active = 0
+                    return
+                self.taxonomy.ontology_uri = uri + sep
                 self.taxonomy.ontology_label = name
                 self._save_file()
                 self._rebuild()
                 self._state = TreeState()
-        elif key == 27:  # Esc — skip without saving
-            self._state = TreeState()
+
+        elif key == 27:  # Esc
+            self._state = TreeState() if not is_edit else DetailState()
+
         elif key in (curses.KEY_BACKSPACE, 127, 8):
-            if st.active == 0 and st.name_buf:
+            if not is_edit and st.active == 0 and st.name_buf:
                 st.name_buf = st.name_buf[:-1]
                 st.name_pos = len(st.name_buf)
-            elif st.active == 1 and st.uri_buf:
+            elif st.active == uri_active_idx and st.uri_buf:
                 st.uri_buf = st.uri_buf[:-1]
                 st.uri_pos = len(st.uri_buf)
+
         elif 32 <= key < 256:
             ch = chr(key)
-            if st.active == 0:
+            if not is_edit and st.active == 0:
                 st.name_buf += ch
                 st.name_pos = len(st.name_buf)
-            else:
+            elif st.active == uri_active_idx:
                 st.uri_buf += ch
                 st.uri_pos = len(st.uri_buf)
+
+    # ─────────────────────────── RENAME URI confirm ───────────────────────────
+
+    def _draw_rename_uri_confirm(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        wide = cols >= self._SPLIT_MIN_COLS
+        tree_w = cols // 3 if wide else 0
+        detail_x0 = tree_w
+        detail_w = cols - tree_w
+        if wide:
+            if self._detail_uri:
+                for i, line in enumerate(self._tree.flat):
+                    if line.uri == self._detail_uri:
+                        self._tree.cursor = i
+                        break
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr,
+                rows,
+                0,
+                tree_w,
+                cursor_idx=self._tree.cursor,
+                highlight_uri=self._detail_uri,
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+        self._render_rename_uri_col(stdscr, rows, detail_x0, detail_w)
+
+    def _render_rename_uri_col(self, stdscr: curses.window, rows: int, x0: int, width: int) -> None:
+        if not isinstance(self._state, RenameUriConfirmState):
+            return
+        rs = self._state
+
+        _draw_bar(stdscr, 0, x0, width, " ✎ Confirm URI rename ", dim=False)
+
+        y = 2
+        try:
+            stdscr.addstr(
+                y,
+                x0,
+                f"  {rs.kind.capitalize()}:"[: width - 1],
+                curses.color_pair(_C_DIM),
+            )
+            y += 1
+            stdscr.addstr(
+                y,
+                x0,
+                f"  {rs.old_uri}"[: width - 1],
+                curses.color_pair(_C_SEL) | curses.A_BOLD,
+            )
+            y += 1
+            stdscr.addstr(y, x0, f"  → {rs.new_uri}"[: width - 1], curses.color_pair(_C_NAVIGABLE))
+            y += 2
+
+            noun = "statement" if rs.ref_count == 1 else "statements"
+            stdscr.addstr(
+                y,
+                x0,
+                f"  The URI will change in {rs.ref_count} {noun}."[: width - 1],
+                curses.color_pair(_C_FIELD_VAL),
+            )
+            y += 2
+
+            stdscr.addstr(
+                y,
+                x0,
+                "  y / Enter  — confirm rename"[: width - 1],
+                curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+            )
+            y += 1
+            stdscr.addstr(y, x0, "  n / Esc    — cancel"[: width - 1], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+
+        _draw_bar(
+            stdscr,
+            rows - 1,
+            x0,
+            width,
+            f" y/Enter: rename ({rs.ref_count} statements)   n/Esc: cancel ",
+            dim=True,
+        )
+
+    def _on_rename_uri_confirm(self, key: int) -> None:
+        if not isinstance(self._state, RenameUriConfirmState):
+            return
+        rs = self._state
+
+        if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
+            from ..exceptions import URIAlreadyExistsError
+            from ..operations import rename_owl_uri
+
+            try:
+                rename_owl_uri(self.taxonomy, rs.old_uri, rs.new_uri)
+            except URIAlreadyExistsError as exc:
+                self._status = str(exc)
+                self._state = DetailState()
+                return
+            self._rebuild()
+            self._save_file()
+            self._detail_uri = rs.new_uri
+            node_t = self.taxonomy.node_type(rs.new_uri)
+            if node_t == "owl_class":
+                self._detail_fields = self._bcdf(rs.new_uri)
+            elif node_t == "individual":
+                self._detail_fields = self._bidf(rs.new_uri)
+            elif node_t in ("property", "owl_property"):
+                self._detail_fields = self._bpropf(rs.new_uri)
+            else:
+                self._detail_fields = self._bcdf(rs.new_uri)
+            self._field_cursor = 0
+            self._state = DetailState()
+
+        elif key in (ord("n"), 27):
+            self._state = DetailState()
 
     # ─────────────────────────── CONFIRM DELETE mode ─────────────────────────
 
@@ -5514,6 +5853,205 @@ class TaxonomyViewer:
             self._state = TreeState()
         elif key in (ord("n"), 27):
             self._state = DetailState()
+
+    # ──────────────── DELETE CLASS confirmation ──────────────────────────────
+
+    _DELETE_CLASS_MODES = ["keep_all", "cascade_subclasses", "delete_all"]
+
+    def _draw_delete_class_confirm(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        wide = cols >= self._SPLIT_MIN_COLS
+        tree_w = cols // 3 if wide else 0
+        detail_x0 = tree_w
+        detail_w = cols - tree_w
+        if wide:
+            self._adjust_tree_scroll(rows)
+            self._render_tree_col(
+                stdscr,
+                rows,
+                0,
+                tree_w,
+                cursor_idx=self._tree.cursor,
+                highlight_uri=None,
+            )
+            for y in range(rows):
+                try:
+                    stdscr.addch(y, tree_w - 1, curses.ACS_VLINE)
+                except curses.error:
+                    pass
+        self._render_delete_class_col(stdscr, rows, detail_x0, detail_w)
+
+    def _render_delete_class_col(
+        self, stdscr: curses.window, rows: int, x0: int, width: int
+    ) -> None:
+        if not isinstance(self._state, DeleteClassChoiceState):
+            return
+        ds = self._state
+        rdf_cls = self.taxonomy.owl_classes.get(ds.class_uri)
+        label = (rdf_cls.label(self.lang) if rdf_cls else None) or ds.class_uri
+        handle = self.taxonomy.uri_to_handle(ds.class_uri) or "?"
+
+        n_sub = len(ds.subclass_uris)
+        n_ind = len(ds.individual_uris)
+
+        try:
+            if ds.confirming:
+                self._render_delete_class_confirm_step(
+                    stdscr, rows, x0, width, ds, label, handle, n_sub, n_ind
+                )
+            else:
+                self._render_delete_class_choice_step(
+                    stdscr, rows, x0, width, ds, label, handle, n_sub, n_ind
+                )
+        except curses.error:
+            pass
+
+    def _render_delete_class_choice_step(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        ds: DeleteClassChoiceState,
+        label: str,
+        handle: str,
+        n_sub: int,
+        n_ind: int,
+    ) -> None:
+        _draw_bar(stdscr, 0, x0, width, " ⊘ Delete class — choose action ", dim=False)
+        y = 2
+        stdscr.addstr(
+            y,
+            x0,
+            f"  [{handle}]  {label}"[: width - 1],
+            curses.color_pair(_C_SEL) | curses.A_BOLD,
+        )
+        y += 2
+
+        parts: list[str] = []
+        if n_sub:
+            parts.append(f"{n_sub} subclass{'es' if n_sub != 1 else ''}")
+        if n_ind:
+            parts.append(f"{n_ind} individual{'s' if n_ind != 1 else ''}")
+        stdscr.addstr(
+            y,
+            x0,
+            f"  This class has {' and '.join(parts)}."[: width - 1],
+            curses.color_pair(_C_FIELD_VAL),
+        )
+        y += 2
+
+        parent_label = ""
+        if ds.parent_uris:
+            pc = self.taxonomy.owl_classes.get(ds.parent_uris[0])
+            parent_label = (pc.label(self.lang) if pc else None) or ds.parent_uris[0]
+
+        options: list[str] = [
+            "  ↑  Keep subclasses & individuals"
+            + (f" (re-parent to {parent_label})" if parent_label else " (promote to roots)"),
+            "  ⊘  Delete subclasses, keep individuals"
+            + (f" (re-type to {parent_label})" if parent_label else " (individuals lose type)"),
+            "  ✕  Delete subclasses & individuals",
+            "  ←  Cancel",
+        ]
+        for i, opt in enumerate(options):
+            sel = i == ds.cursor
+            attr = (
+                curses.color_pair(_C_SEL) | curses.A_BOLD
+                if sel
+                else curses.color_pair(_C_FIELD_VAL)
+            )
+            prefix = "▶" if sel else " "
+            stdscr.addstr(y, x0, f"{prefix}{opt}"[: width - 1], attr)
+            y += 1
+
+        _draw_bar(
+            stdscr, rows - 1, x0, width, " ↑↓: choose   Enter: confirm   Esc: cancel ", dim=True
+        )
+
+    def _render_delete_class_confirm_step(
+        self,
+        stdscr: curses.window,
+        rows: int,
+        x0: int,
+        width: int,
+        ds: DeleteClassChoiceState,
+        label: str,
+        handle: str,
+        n_sub: int,
+        n_ind: int,
+    ) -> None:
+        _draw_bar(stdscr, 0, x0, width, " ⊘ Confirm deletion ", dim=False)
+        y = 2
+        stdscr.addstr(
+            y,
+            x0,
+            f"  [{handle}]  {label}"[: width - 1],
+            curses.color_pair(_C_SEL) | curses.A_BOLD,
+        )
+        y += 2
+
+        mode = self._DELETE_CLASS_MODES[ds.cursor]
+        if mode == "keep_all":
+            summary = "Delete class only; subclasses and individuals will be re-parented."
+        elif mode == "cascade_subclasses":
+            n_cls = 1 + n_sub
+            summary = f"Delete {n_cls} class{'es' if n_cls != 1 else ''}" + (
+                f" and keep {n_ind} individual{'s' if n_ind != 1 else ''} (re-typed)."
+                if n_ind
+                else "."
+            )
+        else:
+            n_cls = 1 + n_sub
+            summary = f"Permanently delete {n_cls} class{'es' if n_cls != 1 else ''}" + (
+                f" and {n_ind} individual{'s' if n_ind != 1 else ''}." if n_ind else "."
+            )
+
+        stdscr.addstr(y, x0, f"  {summary}"[: width - 1], curses.color_pair(_C_FIELD_VAL))
+        y += 2
+        stdscr.addstr(
+            y,
+            x0,
+            "  y / Enter  — confirm"[: width - 1],
+            curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+        )
+        y += 1
+        stdscr.addstr(y, x0, "  Esc        — go back"[: width - 1], curses.color_pair(_C_DIM))
+
+        _draw_bar(stdscr, rows - 1, x0, width, " y/Enter: confirm   Esc: back ", dim=True)
+
+    def _on_delete_class_confirm(self, key: int) -> None:
+        if not isinstance(self._state, DeleteClassChoiceState):
+            return
+        ds = self._state
+
+        if ds.confirming:
+            if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
+                from ..operations import delete_owl_class
+
+                mode = self._DELETE_CLASS_MODES[ds.cursor]
+                delete_owl_class(self.taxonomy, ds.class_uri, mode=mode)
+                self._rebuild()
+                self._save_file()
+                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+                self._detail_uri = _GLOBAL_URI
+                self._detail_fields = self._bgf()
+                self._field_cursor = 0
+                self._state = TreeState()
+            elif key == 27:  # Esc → back to choice
+                ds.confirming = False
+        else:
+            n_options = 4  # keep_all / cascade_subclasses / delete_all / cancel
+            if key in (curses.KEY_UP, ord("k")):
+                ds.cursor = max(0, ds.cursor - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                ds.cursor = min(n_options - 1, ds.cursor + 1)
+            elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                if ds.cursor == 3:  # Cancel
+                    self._state = DetailState()
+                else:
+                    ds.confirming = True
+            elif key == 27:  # Esc
+                self._state = DetailState()
 
     # ──────────────── CLASS → INDIVIDUAL confirmation ────────────────────────
 

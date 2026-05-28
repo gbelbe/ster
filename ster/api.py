@@ -10,9 +10,10 @@ import asyncio
 import re
 import unicodedata
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -139,6 +140,8 @@ def create_app(
     save_fn: Any,  # Callable[[Taxonomy], None] — Any avoids heavy typing import
     *,
     html_fn: Any = None,  # Callable[[], str] — returns rendered HTML for GET /
+    file_path: Path | None = None,
+    publish_dir: Path | None = None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -147,7 +150,7 @@ def create_app(
     when the source file changes; the broadcasted SSE event triggers a reload
     in every connected WebVOWL client.
     """
-    _st: dict[str, Any] = {"taxonomy": taxonomy}
+    _st: dict[str, Any] = {"taxonomy": taxonomy, "file_path": file_path}
     _bearer = HTTPBearer(auto_error=False)
 
     def _tax() -> Taxonomy:
@@ -179,6 +182,15 @@ def create_app(
     # Expose mutable state so api_server can update the taxonomy reference
     app.state._ster = _st  # type: ignore[attr-defined]
 
+    if publish_dir is not None and publish_dir.exists():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            f"/{publish_dir.name}",
+            StaticFiles(directory=str(publish_dir), html=True),
+            name="published",
+        )
+
     # ── Endpoints ─────────────────────────────────────────────────────────────
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -188,6 +200,21 @@ def create_app(
         if html_fn is None:
             raise HTTPException(status_code=501, detail="No HTML renderer configured")
         return HTMLResponse(html_fn(root_uri))
+
+    @app.get("/viz", response_class=HTMLResponse, include_in_schema=False)
+    def viz(
+        root_uri: str | None = Query(default=None, alias="root"),
+    ) -> HTMLResponse:
+        if html_fn is None:
+            raise HTTPException(status_code=501, detail="No HTML renderer configured")
+        return HTMLResponse(html_fn(root_uri))
+
+    @app.get("/onto", response_class=Response, include_in_schema=False)
+    def serve_ontology(request: Request) -> Response:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return _serve_pylode(_st["file_path"])
+        return _serve_turtle(_st["taxonomy"])
 
     @app.get(
         "/api/classes",
@@ -378,3 +405,50 @@ def _unique_uri(tax: Taxonomy, namespace: str, local: str) -> str:
     while f"{namespace}{local}_{i}" in tax.owl_individuals:
         i += 1
     return f"{namespace}{local}_{i}"
+
+
+def _derive_slug(file_path: Path | None) -> str:
+    """Return a URL-safe slug derived from the ontology file stem."""
+    if file_path is None:
+        return "onto"
+    slug = re.sub(r"[^a-z0-9]+", "-", file_path.stem.lower()).strip("-")
+    return slug or "onto"
+
+
+def _serve_turtle(taxonomy: Taxonomy) -> Response:
+    from .store import taxonomy_to_graph
+
+    g = taxonomy_to_graph(taxonomy)
+    ttl: str = g.serialize(format="turtle")
+    return Response(ttl, media_type="text/turtle; charset=utf-8")
+
+
+def _serve_pylode(file_path: Path | None) -> Response:
+    if file_path is None:
+        raise HTTPException(status_code=503, detail="No ontology file path configured")
+    try:
+        from .html_export import _patch_missing_pyproject, detect_profile
+
+        with _patch_missing_pyproject():
+            from pylode import OntPub, VocPub  # type: ignore[import]
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="pyLODE is not installed. Run: pip install 'ster[html]'",
+        )
+
+    import logging
+
+    _root_level = logging.root.level
+    logging.root.setLevel(logging.WARNING)
+    try:
+        profile = detect_profile(file_path)
+        if profile in ("ontpub", "both"):
+            vp: Any = OntPub(ontology=str(file_path.resolve()))
+        else:
+            vp = VocPub(ontology=str(file_path.resolve()))
+        html: str = vp.make_html()
+    finally:
+        logging.root.setLevel(_root_level)
+
+    return HTMLResponse(html)

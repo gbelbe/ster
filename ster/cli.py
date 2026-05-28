@@ -212,6 +212,7 @@ _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
+_PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 _session_file: Path | None = None  # in-process cache
@@ -640,7 +641,7 @@ def _load_safe(path: Path) -> Taxonomy | None:
     try:
         return store.load(path)
     except Exception as exc:
-        err.print(f"[red]Cannot load {path}: {exc}[/red]")
+        err.print(f"[red]{store.format_parse_error(exc, path)}[/red]")
         return None
 
 
@@ -710,6 +711,7 @@ def _multi_file_picker(
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
+        (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
         (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
@@ -726,10 +728,11 @@ def _multi_file_picker(
         console.print("  [cyan] 4[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
         console.print("  [cyan] 5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
         console.print("  [cyan] 6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print("  [cyan] 7[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan] 8[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 7[/cyan]  [green]📦 Version & Publish LD[/green]")
+        console.print("  [cyan] 8[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
+        console.print("  [cyan] 9[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–8)", default="1")
+        choice = Prompt.ask("Action (1–9)", default="1")
         s = choice.strip().lower()
         if s == "1" or s == "all":
             return list(found)
@@ -744,8 +747,10 @@ def _multi_file_picker(
         if s == "6":
             return _GIT_LOG_SENTINEL  # type: ignore[return-value]
         if s == "7":
-            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
+            return _PUBLISH_SENTINEL  # type: ignore[return-value]
         if s == "8":
+            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
+        if s == "9":
             return _QUIT_SENTINEL  # type: ignore[return-value]
         return list(found)
 
@@ -785,6 +790,8 @@ def _multi_file_picker(
             return GR  # green
         if sentinel == _EXT_ONT_SENTINEL:
             return MG  # magenta
+        if sentinel == _PUBLISH_SENTINEL:
+            return GR  # green
         return CY  # "open tree view"
 
     def render(first: bool = False) -> None:
@@ -1902,6 +1909,227 @@ def cmd_serve(
     serve(file.resolve(), host=host, port=port)
 
 
+def _run_publish_interactive(files: list[Path]) -> None:
+    """Interactive Version & Publish LD screen from the home-screen menu."""
+    from rich.panel import Panel
+    from rich.prompt import Confirm, Prompt
+    from rich.rule import Rule
+
+    from .publish import (
+        PublishError,
+        _git_short_sha,
+        _today_str,
+        build_version_string,
+        bump_version,
+        pre_flight,
+        write_dev_artifacts,
+        write_stable_artifacts,
+    )
+
+    console.print()
+
+    if not files:
+        err.print("[red]No taxonomy files found. Open a taxonomy file first.[/red]")
+        return
+
+    # Pick a file when multiple are available
+    if len(files) == 1:
+        taxonomy_file = files[0]
+    else:
+        console.print("[bold]Select a file to publish:[/bold]")
+        for i, f in enumerate(files, 1):
+            console.print(f"  [cyan]{i}[/cyan]  {f.name}")
+        try:
+            idx = int(Prompt.ask("File number", default="1")) - 1
+            taxonomy_file = files[max(0, min(idx, len(files) - 1))]
+        except (ValueError, KeyboardInterrupt):
+            return
+
+    from .store import load as _load_tax
+
+    try:
+        taxonomy = _load_tax(taxonomy_file)
+    except Exception as e:
+        err.print(f"[red]Failed to load {taxonomy_file.name}:[/red] {e}")
+        return
+
+    try:
+        pre_flight(taxonomy)
+    except PublishError as e:
+        err.print(f"[red]Publish blocked:[/red] {e}")
+        return
+
+    console.print(
+        Panel(
+            f"[bold]📦 Version & Publish LD[/bold]\n"
+            f"[dim]File: {taxonomy_file}[/dim]\n"
+            f"[dim]Ontology URI: {taxonomy.ontology_uri}[/dim]"
+            + (
+                f"\n[dim]Current version: {taxonomy.version_info}[/dim]"
+                if taxonomy.version_info
+                else ""
+            ),
+            border_style="green",
+        )
+    )
+
+    # Determine current base version
+    vi = taxonomy.version_info
+    current_base = vi.split("+")[0] if vi and "+" in vi else (vi or "0.1.0")
+    sha = _git_short_sha(taxonomy_file.parent)
+    today = _today_str()
+
+    # Channel selection
+    console.print()
+    console.print(
+        "  [cyan]1[/cyan]  [bold]stable[/bold]  — writes [dim]v{version}/[/dim] + [dim]latest/[/dim]  (tag + commit)"
+    )
+    console.print(
+        "  [cyan]2[/cyan]  [bold]dev[/bold]     — overwrites [dim]dev/[/dim]  (no history, no source file change)"
+    )
+    try:
+        channel_choice = Prompt.ask("Channel", choices=["1", "2"], default="1")
+    except (KeyboardInterrupt, EOFError):
+        return
+    channel = "stable" if channel_choice == "1" else "dev"
+
+    if channel == "stable":
+        suggested = bump_version(current_base, "patch")
+        try:
+            base_version = Prompt.ask("New base version", default=suggested)
+        except (KeyboardInterrupt, EOFError):
+            return
+    else:
+        base_version = current_base
+
+    version_str = build_version_string(base_version, today, sha)
+    publish_dir = taxonomy_file.parent / "ontology"
+
+    console.print()
+    console.print(f"  Version string : [bold]{version_str}[/bold]")
+    console.print(f"  Channel        : [bold]{channel}[/bold]")
+    console.print(f"  Publish dir    : [dim]{publish_dir}[/dim]")
+    console.print()
+
+    try:
+        if not Confirm.ask("Proceed?", default=True):
+            return
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    console.print()
+
+    if channel == "dev":
+        artifacts = write_dev_artifacts(taxonomy_file, publish_dir, version_str)
+        console.print(
+            f"[green]✓[/green]  Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}"
+        )
+    else:
+        artifacts = write_stable_artifacts(taxonomy_file, publish_dir, base_version, version_str)
+        for a in artifacts:
+            console.print(f"[green]✓[/green]  {a.relative_to(taxonomy_file.parent)}")
+
+    console.print()
+    console.print(Rule(style="green"))
+    console.print(
+        "[dim]Next step: commit the ontology/ directory and push.\n"
+        "  git add ontology/  &&  git commit -m 'release: v"
+        + base_version
+        + "'  &&  git push[/dim]"
+    )
+
+    if channel == "stable":
+        console.print()
+        console.print("[dim]GitHub Pages tip (one-time setup):[/dim]")
+        console.print(f"  [dim]Repo → Settings → Pages → Branch: main / /{publish_dir.name}[/dim]")
+
+    console.print()
+    try:
+        input("Press Enter to return to menu…")
+    except (KeyboardInterrupt, EOFError):
+        pass
+
+
+@app.command("publish")
+def cmd_publish(
+    path: Path = typer.Argument(..., help="Taxonomy file to publish."),
+    version: str | None = typer.Option(
+        None, "--version", "-v", help="Base semver (e.g. 1.2.0). Prompted if omitted."
+    ),
+    channel: str = typer.Option("stable", "--channel", "-c", help="Channel: stable or dev."),
+    publish_dir: Path = typer.Option(
+        Path("ontology"), "--dir", "-d", help="Directory to write artifacts."
+    ),
+) -> None:
+    """Publish a new versioned release of the ontology.
+
+    Stable channel: writes ontology/v{version}/ and ontology/latest/.
+    Dev channel:    writes ontology/dev/ (overwrites, no history).
+    """
+    from rich.console import Console
+    from rich.prompt import Prompt
+
+    from .publish import (
+        PublishError,
+        _git_short_sha,
+        _today_str,
+        build_version_string,
+        bump_version,
+        pre_flight,
+        write_dev_artifacts,
+        write_stable_artifacts,
+    )
+    from .store import load
+
+    _con = Console()
+
+    if not path.exists():
+        err.print(f"[red]File not found:[/red] {path}")
+        raise typer.Exit(1)
+
+    taxonomy = load(path)
+
+    try:
+        pre_flight(taxonomy)
+    except PublishError as e:
+        err.print(f"[red]Publish blocked:[/red] {e}")
+        raise typer.Exit(1)
+
+    sha = _git_short_sha(path.parent)
+    today = _today_str()
+
+    if version is None:
+        current = (
+            taxonomy.version_info.split("+")[0]
+            if taxonomy.version_info and "+" in taxonomy.version_info
+            else (taxonomy.version_info or "0.1.0")
+        )
+        suggested = bump_version(current, "patch")
+        version = Prompt.ask("Base version", default=suggested)
+
+    version_str = build_version_string(version, today, sha)
+
+    if channel == "dev":
+        _con.print(f"Publishing dev channel → [bold]{version_str}[/bold]")
+        artifacts = write_dev_artifacts(path, publish_dir, version_str)
+        _con.print(f"[green]Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}[/green]")
+    else:
+        _con.print(f"Publishing stable [bold]{version_str}[/bold]")
+        artifacts = write_stable_artifacts(path, publish_dir, version, version_str)
+        _con.print(f"[green]Written {len(artifacts)} artifact(s):[/green]")
+        for a in artifacts:
+            _con.print(f"  {a}")
+        _con.print()
+        _con.rule("Tip")
+        _con.print("To serve publicly via GitHub Pages:")
+        _con.print(f"  1. Repo → Settings → Pages → Deploy from branch: main / /{publish_dir.name}")
+        _con.print(
+            f"  2. Your ontology will be live at: https://yourorg.github.io/repo/{publish_dir.name}/latest/"
+        )
+        _con.print("  3. Each git push automatically updates the public site.")
+        _con.rule()
+
+
 def main() -> None:
     """Entry point.
 
@@ -1994,6 +2222,10 @@ def main() -> None:
             from .ext_ontologies_ui import run_ext_ontologies_screen
 
             run_ext_ontologies_screen(taxonomy=None)
+            continue
+
+        if selected is _PUBLISH_SENTINEL:
+            _run_publish_interactive(found)
             continue
 
         if not selected:

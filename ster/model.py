@@ -223,6 +223,9 @@ class Taxonomy:
     owl_properties: dict[str, OWLProperty] = field(default_factory=dict)  # uri → property
     ontology_uri: str | None = field(default=None)  # owl:Ontology URI if declared
     ontology_label: str | None = field(default=None)  # rdfs:label of the ontology
+    version_info: str | None = field(default=None)  # owl:versionInfo
+    version_iri: str | None = field(default=None)  # owl:versionIRI
+    prior_version: str | None = field(default=None)  # owl:priorVersion
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
     # prefix → namespace URL (from source file; used for round-trip serialisation)

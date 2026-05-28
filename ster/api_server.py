@@ -110,7 +110,7 @@ def serve(
             root_uri=root_uri,
         )
 
-    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn)
+    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn, file_path=file_path)
     # Also store broadcaster in shared state so the watcher can reach it
     app.state._ster["broadcaster"] = broadcaster  # type: ignore[attr-defined]
 

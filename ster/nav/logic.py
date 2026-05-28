@@ -414,6 +414,18 @@ def _sep(label: str) -> DetailField:
     )
 
 
+def _read_last_publish(work_dir: Path) -> dict | None:
+    import json
+
+    last = work_dir / ".ster-publish-last.json"
+    if not last.exists():
+        return None
+    try:
+        return json.loads(last.read_text())
+    except Exception:
+        return None
+
+
 # ──────────────────────────── scheme dashboard helpers ───────────────────────
 
 _SEVERITY_ICONS = {"error": "⊘", "warning": "⚠", "info": "ℹ"}
@@ -1741,7 +1753,7 @@ def build_rdf_class_detail(
 
     # ── Identity ────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
-    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
     fields.append(
         DetailField(
             "node_type",
@@ -1981,7 +1993,7 @@ def build_promoted_detail(
 
     # ── Identity ────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
-    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
     fields.append(
         DetailField(
             "node_type",
@@ -2096,7 +2108,7 @@ def build_individual_detail(
 
     # ── Identity ────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
-    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
     fields.append(
         DetailField(
             "node_type",
@@ -2416,6 +2428,38 @@ def build_ontology_overview_fields(
                 meta={"type": "uri"},
             )
         )
+        fields.append(
+            _add_action_field(
+                "action:edit_ontology_uri",
+                "✎ Edit base URI",
+                "edit_ontology_uri",
+            )
+        )
+    if taxonomy.version_info:
+        fields.append(
+            DetailField(
+                "ont:version_info",
+                "version",
+                taxonomy.version_info,
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+    if file_path:
+        _last = _read_last_publish(file_path.parent)
+        if _last:
+            _ch = _last.get("channel", "")
+            _ts = _last.get("finished_at", "")[:10]
+            _sha = _last.get("commit_sha", "")[:7]
+            fields.append(
+                DetailField(
+                    "ont:last_published",
+                    "last published",
+                    f"{_ch} · {_ts} [{_sha}]",
+                    editable=False,
+                    meta={"type": "stat"},
+                )
+            )
     if taxonomy.ontology_label:
         fields.append(
             DetailField(
@@ -2595,7 +2639,7 @@ def build_property_detail(
 
     # ── Identity ─────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
-    fields.append(DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"}))
+    fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
     fields.append(
         DetailField(
             "prop_type",
@@ -2914,17 +2958,18 @@ def build_global_fields(
     server_port: int = 8765,
     show_token: bool = False,
     pending_restart: bool = False,
+    ontology_slug: str | None = None,
 ) -> list[DetailField]:
     """Build DetailField list for the global overview panel.
 
-    When *workspace* is None only Server Setup and LLM Setup sections are included
-    (used by the standalone config screen).
+    When *workspace* is None only Local Server Configuration and LLM Setup
+    sections are included (used by the standalone config screen).
     """
 
     fields: list[DetailField] = []
 
-    # ── 1. Server Setup ───────────────────────────────────────────────────────
-    fields.append(_sep("Server Setup"))
+    # ── 1. Local Server Configuration ─────────────────────────────────────────
+    fields.append(_sep("Local Server Configuration"))
     if pending_restart:
         fields.append(
             DetailField(
@@ -2963,6 +3008,26 @@ def build_global_fields(
             meta={"type": "action", "action": "show_bearer_token"},
         )
     )
+    if ontology_slug is not None:
+        _host = server_url.rstrip("/")
+        fields.append(
+            DetailField(
+                "ontology:serving_url",
+                "ontology serving URL",
+                f"{_host}:{server_port}/{ontology_slug}",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+        fields.append(
+            DetailField(
+                "ontology:viz_url",
+                "VoWL graph URL",
+                f"{_host}:{server_port}/viz",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
 
     # ── 2. LLM Setup ──────────────────────────────────────────────────────────
     fields.append(_sep("LLM Setup"))

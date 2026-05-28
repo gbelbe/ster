@@ -56,3 +56,9 @@ class ClassNotFoundError(SkostaxError):
     def __init__(self, uri: str) -> None:
         super().__init__(f"OWL class not found: {uri!r}")
         self.uri = uri
+
+
+class URIAlreadyExistsError(SkostaxError):
+    def __init__(self, uri: str) -> None:
+        super().__init__(f"URI already exists in taxonomy: {uri!r}")
+        self.uri = uri

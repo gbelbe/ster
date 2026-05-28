@@ -29,7 +29,7 @@ def _section_labels(fields):
 
 def test_config_fields_has_server_setup_section():
     fields = build_global_fields(None, None, "en", server_url="http://127.0.0.1", server_port=8765)
-    assert "Server Setup" in _section_labels(fields)
+    assert "Local Server Configuration" in _section_labels(fields)
 
 
 def test_config_fields_has_llm_setup_section():
@@ -42,13 +42,13 @@ def test_config_fields_has_llm_setup_section():
 
 def test_config_fields_shows_current_url():
     fields = build_global_fields(None, None, "en", server_url="http://127.0.0.1", server_port=8765)
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     assert any(f.value == "http://127.0.0.1" for f in section)
 
 
 def test_config_fields_shows_current_port():
     fields = build_global_fields(None, None, "en", server_url="http://127.0.0.1", server_port=8765)
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     assert any(f.value == "8765" for f in section)
 
 
@@ -56,7 +56,7 @@ def test_config_fields_url_and_port_are_editable():
     fields = build_global_fields(
         None, None, "en", server_url="http://192.168.1.5", server_port=9000
     )
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     actions = {f.meta.get("action") for f in section}
     assert "edit_server_url" in actions
     assert "edit_server_port" in actions
@@ -67,7 +67,7 @@ def test_config_fields_url_and_port_are_editable():
 
 def test_config_fields_has_bearer_token_field():
     fields = build_global_fields(None, None, "en", server_url="http://127.0.0.1", server_port=8765)
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     assert any(f.display == "bearer token" for f in section)
 
 
@@ -75,7 +75,7 @@ def test_config_fields_token_hidden_by_default():
     fields = build_global_fields(
         None, None, "en", server_url="http://127.0.0.1", server_port=8765, show_token=False
     )
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     token_field = next(f for f in section if f.display == "bearer token")
     assert token_field.value == "***"
 
@@ -90,7 +90,7 @@ def test_config_fields_token_visible_when_revealed(tmp_path, monkeypatch):
     fields = build_global_fields(
         None, None, "en", server_url="http://127.0.0.1", server_port=8765, show_token=True
     )
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     token_field = next(f for f in section if f.display == "bearer token")
     assert token_field.value == "my-secret-token"
 
@@ -102,7 +102,7 @@ def test_config_fields_restart_warning_present_after_change():
     fields = build_global_fields(
         None, None, "en", server_url="http://127.0.0.1", server_port=8765, pending_restart=True
     )
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     assert any("restart" in f.key for f in section)
 
 
@@ -110,7 +110,7 @@ def test_config_fields_restart_warning_absent_at_rest():
     fields = build_global_fields(
         None, None, "en", server_url="http://127.0.0.1", server_port=8765, pending_restart=False
     )
-    section = _fields_in_section(fields, "Server Setup")
+    section = _fields_in_section(fields, "Local Server Configuration")
     assert not any("restart" in f.key for f in section)
 
 

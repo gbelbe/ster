@@ -138,10 +138,10 @@ def when_save_port(ctx):
 # ── Then ──────────────────────────────────────────────────────────────────────
 
 
-@then('a section labelled "Server Setup" is present')
+@then('a section labelled "Local Server Configuration" is present')
 def then_server_setup_section(ctx):
     labels = [f.display for f in ctx["fields"] if f.meta.get("type") == "separator"]
-    assert "Server Setup" in labels
+    assert "Local Server Configuration" in labels
 
 
 @then('a section labelled "LLM Setup" is present')
@@ -150,44 +150,44 @@ def then_llm_setup_section(ctx):
     assert "LLM Setup" in labels
 
 
-@then('the Server Setup section contains a field showing "http://127.0.0.1"')
+@then('the Local Server Configuration section contains a field showing "http://127.0.0.1"')
 def then_url_shown(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any(f.value == "http://127.0.0.1" for f in section)
 
 
-@then('the Server Setup section contains a field showing "8765"')
+@then('the Local Server Configuration section contains a field showing "8765"')
 def then_port_shown(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any(f.value == "8765" for f in section)
 
 
-@then("the Server Setup section contains a bearer token field with hidden value")
+@then("the Local Server Configuration section contains a bearer token field with hidden value")
 def then_token_hidden(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     token_field = next((f for f in section if f.display == "bearer token"), None)
     assert token_field is not None
     assert token_field.value == "***"
 
 
-@then("the Server Setup section contains a bearer token field with visible value")
+@then("the Local Server Configuration section contains a bearer token field with visible value")
 def then_token_visible(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     token_field = next((f for f in section if f.display == "bearer token"), None)
     assert token_field is not None
     assert token_field.value != "***"
     assert len(token_field.value) > 0
 
 
-@then("the Server Setup section contains a restart warning field")
+@then("the Local Server Configuration section contains a restart warning field")
 def then_restart_warning_present(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert any("restart" in f.key for f in section)
 
 
-@then("the Server Setup section contains no restart warning field")
+@then("the Local Server Configuration section contains no restart warning field")
 def then_no_restart_warning(ctx):
-    section = _fields_in_section(ctx["fields"], "Server Setup")
+    section = _fields_in_section(ctx["fields"], "Local Server Configuration")
     assert not any("restart" in f.key for f in section)
 
 

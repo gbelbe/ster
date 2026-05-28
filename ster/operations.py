@@ -10,6 +10,7 @@ from .exceptions import (
     HandleNotFoundError,
     HasChildrenError,
     RelatedHierarchyConflictError,
+    URIAlreadyExistsError,
 )
 from .handles import assign_handles, handle_for_uri
 from .model import (
@@ -432,6 +433,98 @@ def clear_property_values(taxonomy: Taxonomy, prop_uri: str) -> None:
         ind.property_values = [(p, v) for p, v in ind.property_values if p != prop_uri]
 
 
+def _owl_subclass_tree(taxonomy: Taxonomy, root_uri: str) -> set[str]:
+    """Return all URIs in the OWL subclass tree rooted at *root_uri* (inclusive)."""
+    result: set[str] = set()
+
+    def visit(u: str) -> None:
+        if u in result:
+            return
+        result.add(u)
+        for other_uri, cls in taxonomy.owl_classes.items():
+            if u in cls.sub_class_of and other_uri not in result:
+                visit(other_uri)
+
+    visit(root_uri)
+    return result
+
+
+def delete_owl_class(
+    taxonomy: Taxonomy,
+    uri: str,
+    *,
+    mode: str,
+) -> None:
+    """Delete an OWL class from *taxonomy*.
+
+    *mode* controls how subclasses and typed individuals are handled:
+
+    ``"keep_all"``
+        Delete the class only.  Direct subclasses are re-parented to the
+        deleted class's own parents (or become roots).  Individuals typed
+        as the deleted class are re-typed to those same parents.
+
+    ``"cascade_subclasses"``
+        Delete the class and all its subclass descendants (transitive).
+        Individuals typed to any deleted class are re-typed to the deleted
+        class's parents (or lose all types when there are none).
+
+    ``"delete_all"``
+        Delete the class, all subclass descendants, and every individual
+        typed to any of the deleted classes.
+    """
+    if uri not in taxonomy.owl_classes:
+        return
+
+    deleted_cls = taxonomy.owl_classes[uri]
+    # parents of the class being deleted (only those that are themselves OWL classes)
+    surviving_parents = [
+        p for p in deleted_cls.sub_class_of if p in taxonomy.owl_classes and p != uri
+    ]
+
+    if mode == "keep_all":
+        deleted_uris: set[str] = {uri}
+    else:
+        deleted_uris = _owl_subclass_tree(taxonomy, uri)
+
+    # ── handle individuals ─────────────────────────────────────────────────
+    for ind_uri in list(taxonomy.owl_individuals):
+        ind = taxonomy.owl_individuals[ind_uri]
+        affected_types = [t for t in ind.types if t in deleted_uris]
+        if not affected_types:
+            continue
+        if mode == "delete_all":
+            del taxonomy.owl_individuals[ind_uri]
+            continue
+        # keep_all or cascade_subclasses: re-type to surviving parents
+        for t in affected_types:
+            ind.types.remove(t)
+        for parent in surviving_parents:
+            if parent not in ind.types:
+                ind.types.append(parent)
+
+    # ── remove deleted classes from other classes' sub_class_of ───────────
+    for other_uri, cls in taxonomy.owl_classes.items():
+        if other_uri in deleted_uris:
+            continue
+        for dead in deleted_uris:
+            if dead in cls.sub_class_of:
+                cls.sub_class_of.remove(dead)
+                # re-parent: add surviving parents if not already present
+                for parent in surviving_parents:
+                    if parent not in cls.sub_class_of and parent != other_uri:
+                        cls.sub_class_of.append(parent)
+
+    # ── clean property domain/range references ────────────────────────────
+    for prop in taxonomy.owl_properties.values():
+        prop.domains = [d for d in prop.domains if d not in deleted_uris]
+        prop.ranges = [r for r in prop.ranges if r not in deleted_uris]
+
+    # ── delete the classes ────────────────────────────────────────────────
+    for dead in deleted_uris:
+        taxonomy.owl_classes.pop(dead, None)
+
+
 # ──────────────────────────── OWL promotion ──────────────────────────────────
 
 
@@ -553,3 +646,228 @@ def _replace_in_list(lst: list[str], old: str, new: str) -> None:
     for i, v in enumerate(lst):
         if v == old:
             lst[i] = new
+
+
+# ──────────────────────────── OWL URI rename ─────────────────────────────────
+
+
+def rename_owl_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
+    """Rename an OWL class, individual, or property URI, updating all references.
+
+    Raises URIAlreadyExistsError if *new_uri* is already occupied by any entity
+    in owl_classes, owl_individuals, or owl_properties.
+    """
+    all_uris = (
+        set(taxonomy.owl_classes) | set(taxonomy.owl_individuals) | set(taxonomy.owl_properties)
+    )
+    if new_uri in all_uris:
+        raise URIAlreadyExistsError(new_uri)
+
+    if old_uri in taxonomy.owl_classes:
+        _rename_owl_class(taxonomy, old_uri, new_uri)
+    elif old_uri in taxonomy.owl_individuals:
+        _rename_owl_individual(taxonomy, old_uri, new_uri)
+    elif old_uri in taxonomy.owl_properties:
+        _rename_owl_property(taxonomy, old_uri, new_uri)
+
+
+def _rename_owl_class(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
+    cls = taxonomy.owl_classes.pop(old_uri)
+    cls.uri = new_uri
+    taxonomy.owl_classes[new_uri] = cls
+
+    # Update own sub_class_of list (if it somehow self-referenced)
+    _replace_in_list(cls.sub_class_of, old_uri, new_uri)
+
+    # Update all other classes
+    for other_cls in taxonomy.owl_classes.values():
+        _replace_in_list(other_cls.sub_class_of, old_uri, new_uri)
+        _replace_in_list(other_cls.equivalent_class, old_uri, new_uri)
+        _replace_in_list(other_cls.disjoint_with, old_uri, new_uri)
+
+    # Update individuals' rdf:type lists
+    for ind in taxonomy.owl_individuals.values():
+        _replace_in_list(ind.types, old_uri, new_uri)
+
+    # Update property domains and ranges
+    for prop in taxonomy.owl_properties.values():
+        _replace_in_list(prop.domains, old_uri, new_uri)
+        _replace_in_list(prop.ranges, old_uri, new_uri)
+
+
+def _rename_owl_individual(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
+    ind = taxonomy.owl_individuals.pop(old_uri)
+    ind.uri = new_uri
+    taxonomy.owl_individuals[new_uri] = ind
+
+    # Update other individuals' property_values where this URI appears as value
+    for other_ind in taxonomy.owl_individuals.values():
+        other_ind.property_values = [
+            (p, new_uri if v == old_uri else v) for p, v in other_ind.property_values
+        ]
+
+
+def _rename_owl_property(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
+    prop = taxonomy.owl_properties.pop(old_uri)
+    prop.uri = new_uri
+    taxonomy.owl_properties[new_uri] = prop
+
+    # Update all individuals' property_values where this URI appears as predicate
+    for ind in taxonomy.owl_individuals.values():
+        ind.property_values = [(new_uri if p == old_uri else p, v) for p, v in ind.property_values]
+
+
+def collect_ontology_entities(taxonomy: Taxonomy) -> list[str]:
+    """Return all entity URIs that belong to the current ontology base.
+
+    An entity is "local" if its URI starts with ``ontology_uri + "#"`` or
+    ``ontology_uri + "/"``.  Returns an empty list when no ontology URI is set.
+    """
+    if not taxonomy.ontology_uri:
+        return []
+    root = taxonomy.ontology_uri.rstrip("#/")
+    result: list[str] = []
+    for u in (
+        list(taxonomy.owl_classes) + list(taxonomy.owl_individuals) + list(taxonomy.owl_properties)
+    ):
+        if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+            result.append(u)
+    return result
+
+
+def rename_ontology_uri(taxonomy: Taxonomy, new_uri: str, new_sep: str) -> None:
+    """Rename the global ontology URI and propagate the change to all local entities.
+
+    *new_uri* is the bare ontology URI without a trailing separator.
+    *new_sep* is ``"#"`` or ``"/"``.
+
+    Only entity URIs that currently share the ontology base are renamed;
+    external URIs (other namespaces) are left untouched.  Cross-reference lists
+    (subClassOf, types, domains, ranges, property_values) are updated to match
+    the new URIs.
+    """
+    old_uri = (taxonomy.ontology_uri or "").rstrip("#/")
+    new_uri = new_uri.rstrip("#/")
+
+    # Detect old separator from existing entities; default to "#"
+    old_sep = "#"
+    for u in (
+        list(taxonomy.owl_classes) + list(taxonomy.owl_individuals) + list(taxonomy.owl_properties)
+    ):
+        if len(u) > len(old_uri) and u.startswith(old_uri) and u[len(old_uri)] in ("#", "/"):
+            old_sep = u[len(old_uri)]
+            break
+
+    old_base = old_uri + old_sep
+    new_base = new_uri + new_sep
+
+    # Build mapping old → new for every local entity
+    old_to_new: dict[str, str] = {}
+    for u in (
+        list(taxonomy.owl_classes) + list(taxonomy.owl_individuals) + list(taxonomy.owl_properties)
+    ):
+        if u.startswith(old_base):
+            local = u[len(old_base) :]
+            old_to_new[u] = new_base + local
+
+    def _remap(lst: list[str]) -> None:
+        for i, v in enumerate(lst):
+            if v in old_to_new:
+                lst[i] = old_to_new[v]
+
+    # ── rename classes ────────────────────────────────────────────────────
+    for old, new in list(old_to_new.items()):
+        if old in taxonomy.owl_classes:
+            cls = taxonomy.owl_classes.pop(old)
+            cls.uri = new
+            taxonomy.owl_classes[new] = cls
+
+    # ── rename individuals ────────────────────────────────────────────────
+    for old, new in list(old_to_new.items()):
+        if old in taxonomy.owl_individuals:
+            ind = taxonomy.owl_individuals.pop(old)
+            ind.uri = new
+            taxonomy.owl_individuals[new] = ind
+
+    # ── rename properties ─────────────────────────────────────────────────
+    for old, new in list(old_to_new.items()):
+        if old in taxonomy.owl_properties:
+            prop = taxonomy.owl_properties.pop(old)
+            prop.uri = new
+            taxonomy.owl_properties[new] = prop
+
+    # ── update cross-references ───────────────────────────────────────────
+    for cls in taxonomy.owl_classes.values():
+        _remap(cls.sub_class_of)
+        _remap(cls.equivalent_class)
+        _remap(cls.disjoint_with)
+
+    for ind in taxonomy.owl_individuals.values():
+        _remap(ind.types)
+        ind.property_values = [
+            (old_to_new.get(p, p), old_to_new.get(v, v)) for p, v in ind.property_values
+        ]
+
+    for prop in taxonomy.owl_properties.values():
+        _remap(prop.domains)
+        _remap(prop.ranges)
+
+    taxonomy.ontology_uri = new_uri
+
+
+def count_owl_uri_references(taxonomy: Taxonomy, uri: str) -> int:
+    """Count the number of RDF-model positions where *uri* appears.
+
+    Counts both the entity's own triples (subject) and all cross-references
+    from other entities (object / predicate).  Used to inform the user how
+    many statements will change when a URI is renamed.
+    """
+    count = 0
+
+    # ── subject: the entity's own triples ─────────────────────────────────
+    if uri in taxonomy.owl_classes:
+        cls = taxonomy.owl_classes[uri]
+        count += 1  # rdf:type owl:Class
+        count += len(cls.labels)
+        count += len(cls.comments)
+        count += len(cls.sub_class_of)
+        count += len(cls.equivalent_class)
+        count += len(cls.disjoint_with)
+
+    if uri in taxonomy.owl_individuals:
+        ind = taxonomy.owl_individuals[uri]
+        count += 1  # rdf:type owl:NamedIndividual
+        count += len(ind.labels)
+        count += len(ind.comments)
+        count += len(ind.types)
+        count += len(ind.property_values)
+
+    if uri in taxonomy.owl_properties:
+        prop = taxonomy.owl_properties[uri]
+        count += 1  # rdf:type owl:ObjectProperty / owl:DatatypeProperty
+        count += len(prop.labels)
+        count += len(prop.comments)
+        count += len(prop.domains)
+        count += len(prop.ranges)
+
+    # ── object / predicate: references from other entities ────────────────
+    for cls_uri, cls in taxonomy.owl_classes.items():
+        if cls_uri == uri:
+            continue
+        count += cls.sub_class_of.count(uri)
+        count += cls.equivalent_class.count(uri)
+        count += cls.disjoint_with.count(uri)
+
+    for ind_uri, ind in taxonomy.owl_individuals.items():
+        if ind_uri == uri:
+            continue
+        count += ind.types.count(uri)
+        count += sum(1 for p, v in ind.property_values if p == uri or v == uri)
+
+    for prop_uri, prop in taxonomy.owl_properties.items():
+        if prop_uri == uri:
+            continue
+        count += prop.domains.count(uri)
+        count += prop.ranges.count(uri)
+
+    return count

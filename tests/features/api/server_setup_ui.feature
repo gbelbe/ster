@@ -6,21 +6,21 @@ Feature: Server setup UI in the global overview panel
   Background:
     Given a workspace with a single taxonomy
 
-  Scenario: Server Setup section is present
+  Scenario: Local Server Configuration section is present
     When I build the global overview fields
-    Then a section labelled "Server Setup" is present
+    Then a section labelled "Local Server Configuration" is present
 
   Scenario: Server URL field shows the default
     When I build the global overview fields
-    Then the Server Setup section contains a field showing "http://127.0.0.1"
+    Then the Local Server Configuration section contains a field showing "http://127.0.0.1"
 
   Scenario: Port field shows the default
     When I build the global overview fields
-    Then the Server Setup section contains a field showing "8765"
+    Then the Local Server Configuration section contains a field showing "8765"
 
   Scenario: Bearer token field is present
     When I build the global overview fields
-    Then the Server Setup section contains a field labelled "bearer token"
+    Then the Local Server Configuration section contains a field labelled "bearer token"
 
   Scenario: LLM Setup section is present
     When I build the global overview fields
@@ -40,8 +40,8 @@ Feature: Server setup UI in the global overview panel
 
   Scenario: Restart warning shown when config change is pending
     When I build the global overview fields with a pending restart
-    Then the Server Setup section contains a restart warning field
+    Then the Local Server Configuration section contains a restart warning field
 
   Scenario: No restart warning when config is unchanged
     When I build the global overview fields
-    Then the Server Setup section contains no restart warning field
+    Then the Local Server Configuration section contains no restart warning field
