@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
@@ -90,6 +91,48 @@ def detect_format_mismatch(path: Path) -> tuple[str, str] | None:
 def file_hash(path: Path) -> str:
     """Return an MD5 hex digest of *path*'s content (for change detection)."""
     return hashlib.md5(path.read_bytes(), usedforsecurity=False).hexdigest()
+
+
+_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
+_EXCERPT_PREFIX = "  → "
+# Keep total formatted line ("  → <content>") within 120 chars
+_MAX_LINE_LEN = 120 - len(_EXCERPT_PREFIX)  # 116
+
+
+def format_parse_error(exc: Exception, path: Path) -> str:
+    """Return a human-readable description of a parse error, including the bad line.
+
+    Extracts the line number from the exception message (rdflib, lxml, and most
+    other RDF parsers embed "line N" in their error text), reads that line from
+    *path*, and formats a three-line message:
+
+        Syntax error in <filename> at line N
+          → <content of the offending line, trimmed to 120 chars>
+          <original exception text>
+    """
+    msg = str(exc)
+    match = _LINE_RE.search(msg)
+    line_no: int | None = int(match.group(1)) if match else None
+
+    line_content: str | None = None
+    if line_no is not None:
+        try:
+            file_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if 1 <= line_no <= len(file_lines):
+                raw = file_lines[line_no - 1]
+                line_content = raw if len(raw) <= _MAX_LINE_LEN else raw[: _MAX_LINE_LEN - 1] + "…"
+        except OSError:
+            pass
+
+    parts: list[str] = []
+    if line_no is not None:
+        parts.append(f"Syntax error in {path.name} at line {line_no}")
+    else:
+        parts.append(f"Cannot load {path.name}")
+    if line_content is not None:
+        parts.append(f"  → {line_content}")
+    parts.append(f"  {msg}")
+    return "\n".join(parts)
 
 
 def _parse_graph(path: Path) -> Graph:
@@ -291,6 +334,15 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         taxonomy.ontology_uri = str(ont_ref)
         for _, _p, o in g.triples((ont_ref, RDFS.label, None)):
             taxonomy.ontology_label = str(o)
+            break
+        for o in g.objects(ont_ref, OWL.versionInfo):
+            taxonomy.version_info = str(o)
+            break
+        for o in g.objects(ont_ref, OWL.versionIRI):
+            taxonomy.version_iri = str(o)
+            break
+        for o in g.objects(ont_ref, OWL.priorVersion):
+            taxonomy.prior_version = str(o)
             break
         break  # only take the first owl:Ontology
 
@@ -554,6 +606,12 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
         g.add((ont_ref, RDF.type, OWL.Ontology))
         if taxonomy.ontology_label:
             g.add((ont_ref, RDFS.label, Literal(taxonomy.ontology_label)))
+        if taxonomy.version_info:
+            g.set((ont_ref, OWL.versionInfo, Literal(taxonomy.version_info)))
+        if taxonomy.version_iri:
+            g.set((ont_ref, OWL.versionIRI, URIRef(taxonomy.version_iri)))
+        if taxonomy.prior_version:
+            g.set((ont_ref, OWL.priorVersion, URIRef(taxonomy.prior_version)))
 
     return g
 

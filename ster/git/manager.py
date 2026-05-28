@@ -175,7 +175,10 @@ class GitManager:
         repo = self._repo()
         if not repo or not self._cfg.get("remote_url"):
             return
-        _git("fetch", "--quiet", "origin", cwd=repo)
+        try:
+            _git("fetch", "--quiet", "origin", cwd=repo)
+        except KeyboardInterrupt:
+            return
 
     def check_and_pull(self) -> str | None:
         """Check if behind remote and offer to pull. Does NOT fetch — call fetch_remote() first."""
@@ -187,6 +190,12 @@ class GitManager:
         if not self._cfg.get("remote_url"):
             return None
 
+        try:
+            return self._check_and_pull_inner(repo)
+        except KeyboardInterrupt:
+            return None
+
+    def _check_and_pull_inner(self, repo: Path) -> str | None:
         main = self._cfg.get("main_branch", "main")
         behind_r = _git("rev-list", "--count", f"HEAD..origin/{main}", cwd=repo)
         if behind_r.returncode != 0:
@@ -235,6 +244,12 @@ class GitManager:
         if not self._cfg.get("remote_url"):
             return None
 
+        try:
+            return self._pre_edit_check_inner(repo)
+        except KeyboardInterrupt:
+            return None
+
+    def _pre_edit_check_inner(self, repo: Path) -> str | None:
         # Silent fetch
         _git("fetch", "--quiet", "origin", cwd=repo)
 
