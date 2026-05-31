@@ -109,6 +109,7 @@ class OWLProperty:
     sub_property_of: list[str] = field(default_factory=list)  # rdfs:subPropertyOf
     inverse_of: list[str] = field(default_factory=list)  # owl:inverseOf
     is_functional: bool = False  # owl:FunctionalProperty
+    note: str = ""  # ns1:note markdown annotation
 
     @property
     def local_name(self) -> str:
@@ -134,11 +135,15 @@ class OWLIndividual:
     labels: list[Label] = field(default_factory=list)  # rdfs:label
     comments: list[Definition] = field(default_factory=list)  # rdfs:comment
     types: list[str] = field(default_factory=list)  # rdf:type class URIs (user-defined only)
-    # Object-property assertions: (property_uri, target_individual_uri)
+    # URI-valued property assertions: (property_uri, target_uri)
     property_values: list[tuple[str, str]] = field(default_factory=list)
+    # Literal-valued property assertions: (property_uri, value_str, lang_or_datatype)
+    # lang_or_datatype: "@en" for lang tags, full datatype URI for typed literals, "" for plain
+    literal_values: list[tuple[str, str, str]] = field(default_factory=list)
     schema_images: list[str] = field(default_factory=list)  # schema:image URLs
     schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
     schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
+    note: str = ""  # ns1:note markdown annotation
 
     @property
     def local_name(self) -> str:
@@ -169,6 +174,7 @@ class RDFClass:
     schema_images: list[str] = field(default_factory=list)  # schema:image URLs
     schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
     schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
+    note: str = ""  # ns1:note markdown annotation
 
     @property
     def local_name(self) -> str:
@@ -223,6 +229,8 @@ class Taxonomy:
     owl_properties: dict[str, OWLProperty] = field(default_factory=dict)  # uri → property
     ontology_uri: str | None = field(default=None)  # owl:Ontology URI if declared
     ontology_label: str | None = field(default=None)  # rdfs:label of the ontology
+    ontology_title: str | None = field(default=None)  # dcterms:title of the ontology
+    ontology_description: str | None = field(default=None)  # dcterms:description of the ontology
     version_info: str | None = field(default=None)  # owl:versionInfo
     version_iri: str | None = field(default=None)  # owl:versionIRI
     prior_version: str | None = field(default=None)  # owl:priorVersion

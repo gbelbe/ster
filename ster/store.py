@@ -12,6 +12,8 @@ from rdflib.namespace import DCTERMS, OWL, RDFS, SKOS, XSD
 VOID = Namespace("http://rdfs.org/ns/void#")
 SCHEMA = Namespace("https://schema.org/")
 
+NOTE_PROPERTY_URI = "https://example.org/ontology/kai-internal-knowledge#note"
+
 # Prefixes rdflib injects into every fresh Graph — not declared by the user's file.
 _RDFLIB_DEFAULT_PREFIXES: frozenset[str] = frozenset(
     p for p, _ in Graph().namespace_manager.namespaces()
@@ -325,6 +327,8 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                 rdf_class.schema_videos.append(str(o))
             elif ps == str(SCHEMA.url):
                 rdf_class.schema_urls.append(str(o))
+            elif ps == NOTE_PROPERTY_URI and isinstance(o, Literal):
+                rdf_class.note = str(o)
         taxonomy.owl_classes[uri] = rdf_class
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
@@ -335,6 +339,12 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         for _, _p, o in g.triples((ont_ref, RDFS.label, None)):
             taxonomy.ontology_label = str(o)
             break
+        for o in g.objects(ont_ref, DCTERMS.title):
+            taxonomy.ontology_title = str(o)
+            break
+        for o in g.objects(ont_ref, DCTERMS.description):
+            taxonomy.ontology_description = str(o)
+            break
         for o in g.objects(ont_ref, OWL.versionInfo):
             taxonomy.version_info = str(o)
             break
@@ -344,6 +354,11 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         for o in g.objects(ont_ref, OWL.priorVersion):
             taxonomy.prior_version = str(o)
             break
+        # Pre-fill title and description from rdfs:label when absent
+        if taxonomy.ontology_title is None and taxonomy.ontology_label:
+            taxonomy.ontology_title = taxonomy.ontology_label
+        if taxonomy.ontology_description is None and taxonomy.ontology_label:
+            taxonomy.ontology_description = taxonomy.ontology_label
         break  # only take the first owl:Ontology
 
     # ── OWL Properties ────────────────────────────────────────────────────────
@@ -379,6 +394,8 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                 prop.sub_property_of.append(str(o))
             elif ps == str(OWL.inverseOf) and isinstance(o, URIRef):
                 prop.inverse_of.append(str(o))
+            elif ps == NOTE_PROPERTY_URI and isinstance(o, Literal):
+                prop.note = str(o)
         taxonomy.owl_properties[uri] = prop
 
     # ── OWL Individuals ───────────────────────────────────────────────────────
@@ -399,6 +416,17 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                     and uri not in taxonomy.schemes
                 ):
                     individual_uris.add(uri)
+    _IND_SKIP_PREDICATES: frozenset[str] = frozenset(
+        str(p)
+        for p in (
+            RDFS.label,
+            RDFS.comment,
+            RDF.type,
+            SCHEMA.image,
+            SCHEMA.video,
+            SCHEMA.url,
+        )
+    ) | {NOTE_PROPERTY_URI}
     for uri in individual_uris:
         ind_ref = URIRef(uri)
         individual = OWLIndividual(uri=uri)
@@ -422,20 +450,17 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                 individual.schema_videos.append(str(o))
             elif ps == str(SCHEMA.url):
                 individual.schema_urls.append(str(o))
+            elif ps == NOTE_PROPERTY_URI and isinstance(o, Literal):
+                individual.note = str(o)
+            elif ps not in _IND_SKIP_PREDICATES:
+                if isinstance(o, URIRef):
+                    individual.property_values.append((ps, str(o)))
+                elif isinstance(o, Literal):
+                    lang = o.language  # type: ignore[attr-defined]
+                    dt = str(o.datatype) if o.datatype else ""  # type: ignore[attr-defined]
+                    lang_or_dt = f"@{lang}" if lang else dt
+                    individual.literal_values.append((ps, str(o), lang_or_dt))
         taxonomy.owl_individuals[uri] = individual
-
-    # ── Object-property assertions on individuals (second pass) ──────────────
-    for uri, individual in taxonomy.owl_individuals.items():
-        ind_ref = URIRef(uri)
-        for prop_uri in taxonomy.owl_properties:
-            prop = taxonomy.owl_properties[prop_uri]
-            if prop.prop_type not in ("ObjectProperty", "Property"):
-                continue
-            for obj in g.objects(ind_ref, URIRef(prop_uri)):
-                if isinstance(obj, URIRef):
-                    val_uri = str(obj)
-                    if val_uri in taxonomy.owl_individuals:
-                        individual.property_values.append((prop_uri, val_uri))
 
     # ── Normalize hierarchy (handle graphs that only declare one direction) ──
     _normalize_hierarchy(taxonomy)
@@ -556,6 +581,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, SCHEMA.video, URIRef(u)))
         for u in rdf_class.schema_urls:
             g.add((ref, SCHEMA.url, URIRef(u)))
+        if rdf_class.note:
+            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(rdf_class.note)))
 
     # ── OWL Individuals ───────────────────────────────────────────────────────
     for uri, individual in taxonomy.owl_individuals.items():
@@ -569,12 +596,22 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, RDFS.comment, Literal(comment.value, lang=comment.lang or None)))
         for prop_uri, val_uri in individual.property_values:
             g.add((ref, URIRef(prop_uri), URIRef(val_uri)))
+        for prop_uri, val_str, lang_or_dt in individual.literal_values:
+            if lang_or_dt.startswith("@"):
+                lit = Literal(val_str, lang=lang_or_dt[1:] or None)
+            elif lang_or_dt:
+                lit = Literal(val_str, datatype=URIRef(lang_or_dt))
+            else:
+                lit = Literal(val_str)
+            g.add((ref, URIRef(prop_uri), lit))
         for u in individual.schema_images:
             g.add((ref, SCHEMA.image, URIRef(u)))
         for u in individual.schema_videos:
             g.add((ref, SCHEMA.video, URIRef(u)))
         for u in individual.schema_urls:
             g.add((ref, SCHEMA.url, URIRef(u)))
+        if individual.note:
+            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(individual.note)))
 
     # ── OWL Properties ────────────────────────────────────────────────────────
     _OWL_PROP_TYPE = {
@@ -599,6 +636,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, RDFS.subPropertyOf, URIRef(sup)))
         for inv in prop.inverse_of:
             g.add((ref, OWL.inverseOf, URIRef(inv)))
+        if prop.note:
+            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(prop.note)))
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
     if taxonomy.ontology_uri:
@@ -606,6 +645,10 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
         g.add((ont_ref, RDF.type, OWL.Ontology))
         if taxonomy.ontology_label:
             g.add((ont_ref, RDFS.label, Literal(taxonomy.ontology_label)))
+        if taxonomy.ontology_title:
+            g.set((ont_ref, DCTERMS.title, Literal(taxonomy.ontology_title)))
+        if taxonomy.ontology_description:
+            g.set((ont_ref, DCTERMS.description, Literal(taxonomy.ontology_description)))
         if taxonomy.version_info:
             g.set((ont_ref, OWL.versionInfo, Literal(taxonomy.version_info)))
         if taxonomy.version_iri:

@@ -21,7 +21,7 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.5.0
+  v0.6.0
 ```
 
 **ster** is a terminal tool for building and exploring semantic knowledge bases.
@@ -43,6 +43,7 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 | **Git** | Stage, commit, push without leaving the terminal |
 | **Export** | pyLODE HTML documentation; SPARQL query runner |
 | **SPARQL** | Cache-warmed query engine — first query fires in milliseconds, not seconds |
+| **Notes** | Multiline markdown notes (`ns1:note`) on any OWL class, individual, or property — full-screen editor, live rendered preview |
 
 ---
 
@@ -58,8 +59,9 @@ Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://
 - Fold / unfold subtrees; hidden-concept count shown
 - Scheme dashboard: completion rates, quality issues, concept counts at a glance
 - **OWL class quality stats**: label/comment coverage, instance count, and property fill rates displayed inline on each class node
-- **Ontology root node**: selectable in the tree; opens the ontology overview panel
+- **Ontology root node**: selectable in the tree; opens the ontology overview panel with editable `dcterms:title` and `dcterms:description` fields (auto-prefilled from `rdfs:label` when absent)
 - **Smart startup**: opening a pure-OWL file goes directly to the ontology overview
+- **Markdown notes**: every OWL class, individual, and property has an editable `ns1:note` field — full-screen multiline editor with rendered preview; heading lines shown bold in the detail panel
 
 ### VOWL graph visualisation
 
@@ -138,6 +140,8 @@ A dedicated full-screen settings panel, available from the main menu:
 - Generate a browsable, wiki-style HTML page from any taxonomy via [pyLODE](https://github.com/RDFLib/pyLODE)
 - One HTML file per language detected in the taxonomy
 - Sticky language-switcher bar links between language versions
+- Sanitises the ontology before handing it to pyLODE: removes bare-namespace URI declarations that caused crashes, and injects `dcterms:title` / `dcterms:description` from `rdfs:label` when absent
+- Auto-installs pyLODE via `uv pip install` in uv-managed environments (no "No module named pip" error)
 - Available from the main menu or `ster export`
 
 ---
@@ -334,9 +338,9 @@ ster/
 ├── prompts.py          — All AI prompt templates (string.Template)
 ├── config_screen.py    — Standalone curses Setup / Options screen
 ├── ai_config_screen.py — Standalone curses AI model configuration wizard
-├── html_export.py      — pyLODE HTML export (VocPub / OntPub profiles)
+├── html_export.py      — pyLODE HTML export (VocPub / OntPub profiles); graph sanitiser for robust OntPub rendering
 ├── viz.py              — Graph helpers: label formatters, node detail builders, metadata
-├── viz_vowl.py         — VOWL-style D3 graph: writes self-contained HTML, opens in browser
+├── viz_vowl.py         — VOWL-style Cytoscape.js graph: writes self-contained HTML, opens in browser
 ├── owl_analysis.py     — OWL axiom analysis and statistics
 ├── sparql_query.py     — SPARQL query runner against the loaded taxonomy
 ├── handles.py          — Short handle generation from camelCase URIs
@@ -407,6 +411,13 @@ Coverage is uploaded to [Codecov](https://codecov.io/gh/gbelbe/ster) on every ru
 ---
 
 ## Changelog
+
+### 0.6.0
+- **Markdown notes**: editable `ns1:note` annotation on OWL classes, individuals, and object properties — full-screen multiline editor (Ctrl+S to save, Esc to cancel) with a live rendered preview pane; heading lines shown bold, bullet lists converted to `•`, in the detail panel
+- **Ontology dcterms:title and dcterms:description**: both fields are now first-class editable fields in the ontology overview panel, positioned right after the label; auto-prefilled from `rdfs:label` on load when absent, and written to the TTL on save
+- **pyLODE HTML export — crash fixes**: a new graph sanitiser (`_sanitize_ontpub_graph`) runs before every OntPub call — it removes bare-namespace URI subjects (e.g. `ns1: a owl:ObjectProperty`) that caused pyLODE's fragment-ID generator to crash with `TypeError: can only concatenate str (not "NoneType") to str`, and injects `dcterms:title` / `dcterms:description` when missing
+- **pyLODE auto-install**: detection now uses `uv pip install --python <exe>` when `uv` is in PATH — fixes `No module named pip` in uv-managed tool environments; pip output is captured (spinner shown); `importlib.invalidate_caches()` called after install so the package is importable in the current process immediately
+- **Graph search autofocus**: the search box in the Cytoscape VOWL graph is focused automatically on page load — start typing without clicking
 
 ### 0.5.0
 - **SPARQL predicate autocomplete**: typing `prefix:` at predicate position in a WHERE clause now filters suggestions to OWL properties only

@@ -102,6 +102,17 @@ class EditState:
 
 
 @dataclass
+class NoteEditState:
+    """Full-screen multiline markdown note editor."""
+
+    buffer: str = ""  # raw markdown with \n
+    pos: int = 0  # cursor offset in buffer
+    scroll: int = 0  # first visible line
+    return_uri: str = ""
+    entity_type: str = ""  # "class" | "individual" | "property"
+
+
+@dataclass
 class ConfirmDeleteState:
     uri: str = ""
 
@@ -115,6 +126,15 @@ class RenameUriConfirmState:
     ref_count: int = 0
     # entity kind for display: "class", "individual", or "property"
     kind: str = ""
+
+
+@dataclass
+class OntologyRenameConfirmState:
+    """Confirmation step before applying an ontology base URI rename."""
+
+    old_base: str = ""
+    new_base: str = ""
+    entity_count: int = 0
 
 
 @dataclass
@@ -198,6 +218,7 @@ class MovePickState:
     cursor: int = 0
     scroll: int = 0
     replace_val_uri: str = ""  # non-empty → edit mode (replace this val, not append)
+    prop_range_hints: dict[str, list[str]] = dc_field(default_factory=dict)  # prop_uri → ranges
 
 
 @dataclass
@@ -348,11 +369,13 @@ ViewerState = (
     | WelcomeState
     | DetailState
     | EditState
+    | NoteEditState
     | CreateState
     | SchemeCreateState
     | BatchCreateState
     | ConfirmDeleteState
     | RenameUriConfirmState
+    | OntologyRenameConfirmState
     | DeleteClassChoiceState
     | OntologySetupState
     | ClassToIndividualState

@@ -1,0 +1,276 @@
+"""Ontology publication pipeline for ster."""
+
+from __future__ import annotations
+
+import datetime
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+from rdflib import Graph, Literal, URIRef
+from rdflib.namespace import DCTERMS, OWL, XSD
+
+from .model import Taxonomy
+
+
+class PublishError(Exception):
+    """Raised when the publish pipeline cannot proceed."""
+
+
+# ── version helpers ───────────────────────────────────────────────────────────
+
+
+def build_version_string(base: str, date: str, sha: str) -> str:
+    """Build 'base+date.sha' version string."""
+    return f"{base}+{date}.{sha}"
+
+
+def bump_version(current: str, kind: str) -> str:
+    """Bump a semver string. Strips a leading 'v' if present."""
+    v = current.lstrip("v")
+    parts = v.split(".")
+    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+    if kind == "major":
+        return f"{major + 1}.0.0"
+    if kind == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+# ── version triple patching ───────────────────────────────────────────────────
+
+
+def patch_version_triples(file_path: Path, version_str: str, base_version: str) -> None:
+    """Patch OWL version triples into file_path in place."""
+    from .store import graph_to_taxonomy
+
+    g = Graph()
+    g.parse(str(file_path), format=_detect_format(file_path))
+    t = graph_to_taxonomy(g)
+
+    assert t.ontology_uri, "ontology URI must be set before patching version"
+    ont_ref = URIRef(t.ontology_uri)
+
+    version_iri = f"{t.ontology_uri}/{base_version}"
+
+    g.set((ont_ref, OWL.versionInfo, Literal(version_str)))
+    g.set((ont_ref, OWL.versionIRI, URIRef(version_iri)))
+    if t.prior_version:
+        g.set((ont_ref, OWL.priorVersion, URIRef(t.prior_version)))
+    today = datetime.date.today().isoformat()
+    g.set((ont_ref, DCTERMS.modified, Literal(today, datatype=XSD.date)))
+
+    fmt = _detect_format(file_path)
+    file_path.write_text(g.serialize(format=fmt))
+
+
+def _patch_version_in_graph(g: Graph, version_str: str, base_version: str) -> None:
+    """Patch version triples directly into an rdflib Graph (in memory)."""
+    from rdflib import RDF
+
+    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
+        version_iri = f"{str(ont_ref)}/{base_version}"
+        g.set((ont_ref, OWL.versionInfo, Literal(version_str)))
+        g.set((ont_ref, OWL.versionIRI, URIRef(version_iri)))
+        today = datetime.date.today().isoformat()
+        g.set((ont_ref, DCTERMS.modified, Literal(today, datatype=XSD.date)))
+        break
+
+
+# ── publish context ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class PublishContext:
+    """All data available to serializers during a publish run.
+
+    Built once per publish, shared across all serializers and all output
+    directories.  Serializers that do not need every field simply ignore it.
+    """
+
+    source_file: Path  # original source path — carries the stem / filename
+    taxonomy: Taxonomy  # structured model (needed by KI, analysis serializers)
+    graph: Graph  # version-patched rdflib graph (needed by TTL, HTML)
+    version_str: str  # full version e.g. "1.2.0+20260528.abc1234"
+    base_version: str  # semver base e.g. "1.2.0"
+
+
+# ── serializer protocol ───────────────────────────────────────────────────────
+
+
+@runtime_checkable
+class ArtifactSerializer(Protocol):
+    """Contract for a publish format.
+
+    Implement ``write`` to serialise the ontology into ``dest_dir`` in whatever
+    format makes sense, and return the list of files written.  Raise any
+    exception on unrecoverable failure; the pipeline isolates failures so that
+    one broken serializer never blocks the others.
+    """
+
+    name: str
+
+    def write(self, ctx: PublishContext, dest_dir: Path) -> list[Path]: ...
+
+
+# ── built-in serializers ──────────────────────────────────────────────────────
+
+
+class TurtleSerializer:
+    """Write the ontology as a Turtle (.ttl) file."""
+
+    name = "turtle"
+
+    def write(self, ctx: PublishContext, dest_dir: Path) -> list[Path]:
+        path = dest_dir / ctx.source_file.name
+        path.write_text(ctx.graph.serialize(format="turtle"))
+        return [path]
+
+
+class HtmlSerializer:
+    """Write HTML documentation via pyLODE.  Silently skipped when not installed."""
+
+    name = "html"
+
+    def write(self, ctx: PublishContext, dest_dir: Path) -> list[Path]:
+        import tempfile
+
+        try:
+            from .html_export import _patch_missing_pyproject, detect_profile
+
+            with _patch_missing_pyproject():
+                from pylode import OntPub, VocPub  # type: ignore[import-not-found]
+        except (ImportError, Exception):
+            return []
+
+        with tempfile.NamedTemporaryFile(suffix=".ttl", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp_path.write_text(ctx.graph.serialize(format="turtle"))
+
+        try:
+            profile = detect_profile(tmp_path)
+            renderer: type = VocPub if profile == "vocpub" else OntPub
+            html: str = renderer(ontology=str(tmp_path)).make_html()  # type: ignore[attr-defined]
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            return []
+
+        tmp_path.unlink(missing_ok=True)
+
+        html_path = dest_dir / "index.html"
+        html_path.write_text(html)
+        return [html_path]
+
+
+def _default_serializers() -> list[ArtifactSerializer]:
+    """Return the built-in serializers used when none are supplied by the caller."""
+    return [TurtleSerializer(), HtmlSerializer()]
+
+
+# ── pipeline ──────────────────────────────────────────────────────────────────
+
+
+def _build_context(source_file: Path, version_str: str, base_version: str) -> PublishContext:
+    """Parse source_file, apply version triples, and return a shared PublishContext.
+
+    The source file on disk is never modified; patching happens in memory only.
+    """
+    from .store import graph_to_taxonomy
+
+    g = Graph()
+    g.parse(str(source_file), format=_detect_format(source_file))
+    _patch_version_in_graph(g, version_str, base_version)
+    taxonomy = graph_to_taxonomy(g)
+    return PublishContext(
+        source_file=source_file,
+        taxonomy=taxonomy,
+        graph=g,
+        version_str=version_str,
+        base_version=base_version,
+    )
+
+
+def _run_serializers(
+    ctx: PublishContext,
+    dirs: list[Path],
+    serializers: list[ArtifactSerializer],
+) -> list[Path]:
+    """Write every format to every output directory.
+
+    Failures are isolated per serializer: one broken format never prevents the
+    others from running.  Directories are created if they do not exist.
+    """
+    artifacts: list[Path] = []
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        for s in serializers:
+            try:
+                artifacts.extend(s.write(ctx, d))
+            except Exception:
+                pass
+    return artifacts
+
+
+def write_stable_artifacts(
+    source_file: Path,
+    publish_dir: Path,
+    base_version: str,
+    version_str: str,
+    serializers: list[ArtifactSerializer] | None = None,
+) -> list[Path]:
+    """Write versioned + latest artifacts for a stable release.
+
+    Returns the list of all written file paths.
+    Pass ``serializers`` to override or extend the default set (TTL + HTML).
+    """
+    ctx = _build_context(source_file, version_str, base_version)
+    dirs = [publish_dir / f"v{base_version}", publish_dir / "latest"]
+    return _run_serializers(ctx, dirs, serializers or _default_serializers())
+
+
+def write_dev_artifacts(
+    source_file: Path,
+    publish_dir: Path,
+    version_str: str,
+    serializers: list[ArtifactSerializer] | None = None,
+) -> list[Path]:
+    """Write dev-channel artifact.  The source file on disk is NOT modified.
+
+    Pass ``serializers`` to override or extend the default set (TTL + HTML).
+    """
+    base = version_str.split("+")[0] if "+" in version_str else version_str
+    ctx = _build_context(source_file, version_str, base)
+    dirs = [publish_dir / "dev"]
+    return _run_serializers(ctx, dirs, serializers or _default_serializers())
+
+
+# ── pre-flight gate ───────────────────────────────────────────────────────────
+
+
+def pre_flight(taxonomy: Taxonomy) -> None:
+    """Raise PublishError if basic pre-conditions are not met."""
+    if not taxonomy.ontology_uri:
+        raise PublishError("ontology URI is not set. Add an owl:Ontology declaration to your file.")
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _detect_format(path: Path) -> str:
+    ext = path.suffix.lower()
+    return {".ttl": "turtle", ".rdf": "xml", ".xml": "xml", ".owl": "xml"}.get(ext, "turtle")
+
+
+def _git_short_sha(repo_dir: Path | None = None) -> str:
+    r = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=repo_dir,
+    )
+    return r.stdout.strip() if r.returncode == 0 else "unknown"
+
+
+def _today_str() -> str:
+    return datetime.date.today().strftime("%Y%m%d")

@@ -1699,15 +1699,24 @@ def _ensure_pylode() -> bool:
     if answer != "y":
         return False
 
+    import importlib
+    import shutil
     import subprocess
     import sys
 
-    console.print("[dim]Installing pyLODE…[/dim]")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "pylode"],
-    )
+    # uv-managed tool environments don't bundle pip — prefer uv when available.
+    uv_bin = shutil.which("uv")
+    if uv_bin:
+        cmd = [uv_bin, "pip", "install", "--python", sys.executable, "pylode"]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", "pylode"]
+
+    with console.status("[dim]Installing pyLODE…[/dim]"):
+        result = subprocess.run(cmd, capture_output=True)
+    importlib.invalidate_caches()
     if result.returncode != 0:
         err.print("[red]Installation failed.[/red]")
+        err.print(result.stderr.decode(errors="replace"))
         return False
     console.print("[green]✓ pyLODE installed.[/green]")
     return True
@@ -1892,7 +1901,7 @@ def cmd_serve(
     host: str | None = typer.Option(None, "--host", help="Bind host."),
     port: int | None = typer.Option(None, "--port", "-p", help="Bind port."),
 ) -> None:
-    """Start the live WebVOWL viewer and ontology REST API.
+    """Start the live graph viewer and ontology REST API.
 
     The browser view auto-refreshes when the file is edited via the ster CLI.
     API docs are available at http://<host>:<port>/docs.

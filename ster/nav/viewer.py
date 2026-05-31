@@ -67,6 +67,7 @@ from .logic import (  # noqa: F401
     flatten_mixed_tree,
     flatten_ontology_tree,
     flatten_tree,
+    render_note_markdown,
 )
 from .prefs import _load_lang_pref, _load_prefs, _save_lang_pref, _save_prefs
 from .query_logic import (
@@ -93,6 +94,8 @@ from .state import (
     MapConceptPickState,
     MapSchemePickState,
     MovePickState,
+    NoteEditState,
+    OntologyRenameConfirmState,
     OntologySetupState,
     PropertyImpactState,
     QueryState,
@@ -147,6 +150,24 @@ from .draw import (  # noqa: F401
     _render_line_with_match,
     render_tree_col,
 )
+
+
+def _note_cursor_line_col(buffer: str, pos: int) -> tuple[int, int]:
+    """Return (line_index, col) for cursor offset *pos* in *buffer*."""
+    before = buffer[:pos]
+    line_idx = before.count("\n")
+    last_nl = before.rfind("\n")
+    col = pos - (last_nl + 1) if last_nl >= 0 else pos
+    return line_idx, col
+
+
+def _note_pos_from_line_col(buffer: str, line_idx: int, col: int) -> int:
+    """Return buffer offset for (line_idx, col)."""
+    lines = buffer.split("\n")
+    if line_idx >= len(lines):
+        return len(buffer)
+    line_start = sum(len(lines[i]) + 1 for i in range(line_idx))
+    return line_start + min(col, len(lines[line_idx]))
 
 
 def _ensure_full_uri(value: str, taxonomy: Taxonomy) -> str:
@@ -444,11 +465,12 @@ class TaxonomyViewer:
 
     def _bgf(self) -> list[DetailField]:
         """Build global overview fields (server setup + LLM setup + shortcuts + stats)."""
-        from ..api import _derive_slug  # noqa: PLC0415
         from ..api_server import load_server_config  # noqa: PLC0415
 
         server_url, server_port = load_server_config()
-        slug = _derive_slug(self.file_path)
+        # Derive slug without importing api.py (which has top-level fastapi imports)
+        stem = self.file_path.stem if self.file_path else ""
+        slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "onto"
         return build_global_fields(
             self._workspace,
             self._analysis,
@@ -880,6 +902,17 @@ class TaxonomyViewer:
                     continue
                 self._on_rename_uri_confirm(key)
 
+            elif isinstance(self._state, OntologyRenameConfirmState):
+                self._draw_ontology_rename_confirm(stdscr, rows, cols)
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                if key == -1:
+                    continue
+                self._on_ontology_rename_confirm(key)
+
             elif isinstance(self._state, ConfirmDeleteState):
                 self._draw_confirm(stdscr, rows, cols)
                 stdscr.refresh()
@@ -1160,6 +1193,17 @@ class TaxonomyViewer:
                         continue
                     if self._on_query(key, rows, cols):
                         break
+
+            elif isinstance(self._state, NoteEditState):
+                self._draw_note_editor(stdscr, rows, cols)
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key == curses.KEY_RESIZE:
+                    curses.update_lines_cols()
+                    continue
+                if key == -1:
+                    continue
+                self._on_note_edit(key)
 
     # ─────────────────────────── WELCOME screen ──────────────────────────────
 
@@ -1464,8 +1508,14 @@ class TaxonomyViewer:
         detail_w = cols - tree_w
 
         self._adjust_tree_scroll(rows)
+        _in_search = self._tree.search.active or bool(self._tree.search.matches)
         self._render_tree_col(
-            stdscr, rows, 0, tree_w, self._tree.cursor, highlight_uri=self._detail_uri
+            stdscr,
+            rows,
+            0,
+            tree_w,
+            self._tree.cursor,
+            highlight_uri=None if _in_search else self._detail_uri,
         )
 
         # Vertical separator
@@ -2046,6 +2096,14 @@ class TaxonomyViewer:
                             fv[: width - lbl_w - 5],
                             curses.color_pair(_C_DIM),
                         )
+                elif f.meta.get("type") == "note_line":
+                    # Rendered markdown line: indent slightly, bold for headings
+                    is_bold_line = bool(f.meta.get("bold"))
+                    attr = curses.color_pair(_C_FIELD_VAL)
+                    if is_bold_line:
+                        attr |= curses.A_BOLD
+                    stdscr.addstr(y, x0, "    ")
+                    stdscr.addstr(y, x0 + 4, fv[: width - 5], attr)
                 else:
                     stdscr.addstr(y, x0, "  ")
                     stdscr.addstr(y, x0 + 2, fl, curses.color_pair(_C_DIM) | curses.A_DIM)
@@ -2301,7 +2359,8 @@ class TaxonomyViewer:
 
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             self._commit_edit()
-            _return_to_prev()
+            if isinstance(self._state, EditState):
+                _return_to_prev()
 
         elif key == 1:  # Ctrl+A — go to start
             es.pos = 0
@@ -2348,6 +2407,185 @@ class TaxonomyViewer:
             ch = chr(key)
             es.buffer = v[:p] + ch + v[p:]
             es.pos = p + 1
+
+    # ─────────────────────── NOTE EDITOR drawing ─────────────────────────────
+
+    def _draw_note_editor(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        ns = self._state
+        if not isinstance(ns, NoteEditState):
+            return
+
+        self._draw_tree(stdscr, rows, cols)
+
+        modal_h = max(10, rows - 4)
+        modal_w = max(40, cols - 8)
+        modal_y = (rows - modal_h) // 2
+        modal_x = (cols - modal_w) // 2
+
+        border_attr = curses.color_pair(_C_FIELD_LABEL)
+        try:
+            stdscr.addstr(modal_y - 1, modal_x - 1, "┌" + "─" * modal_w + "┐", border_attr)
+            for r in range(modal_h):
+                stdscr.addstr(modal_y + r, modal_x - 1, "│", border_attr)
+                stdscr.addstr(modal_y + r, modal_x + modal_w, "│", border_attr)
+            stdscr.addstr(modal_y + modal_h, modal_x - 1, "└" + "─" * modal_w + "┘", border_attr)
+        except curses.error:
+            pass
+
+        try:
+            win = stdscr.derwin(modal_h, modal_w, modal_y, modal_x)
+        except curses.error:
+            win, modal_h, modal_w = stdscr, rows, cols
+
+        try:
+            win.bkgd(" ", curses.color_pair(_C_FIELD_VAL))
+            win.erase()
+        except curses.error:
+            pass
+
+        _draw_bar(win, 0, 0, modal_w, " ✎ Note Editor (markdown)  ^S:save  Esc:cancel ", dim=False)
+
+        edit_h = max(3, modal_h - 8)
+        sep_row = edit_h + 1
+        preview_start = sep_row + 1
+        preview_h = max(0, modal_h - preview_start - 2)
+
+        buf = ns.buffer
+        pos = ns.pos
+        lines = buf.split("\n") if buf else [""]
+        line_idx, col = _note_cursor_line_col(buf, pos)
+
+        if ns.scroll > line_idx:
+            ns.scroll = line_idx
+        if line_idx >= ns.scroll + edit_h:
+            ns.scroll = line_idx - edit_h + 1
+
+        try:
+            for row in range(edit_h):
+                li = ns.scroll + row
+                if li < len(lines):
+                    raw = lines[li]
+                    display = raw[: modal_w - 1]
+                    if li == line_idx:
+                        cur_col = min(col, len(raw))
+                        before = raw[:cur_col][: modal_w - 2]
+                        cur_ch = raw[cur_col : cur_col + 1] or " "
+                        after = raw[cur_col + 1 :]
+                        remaining = modal_w - 1 - len(before) - 1
+                        after = after[:remaining] if remaining > 0 else ""
+                        win.addstr(row + 1, 0, before, curses.color_pair(_C_FIELD_VAL))
+                        win.addstr(cur_ch, curses.color_pair(_C_DETAIL_CURSOR) | curses.A_REVERSE)
+                        if after:
+                            win.addstr(after, curses.color_pair(_C_FIELD_VAL))
+                    else:
+                        win.addstr(row + 1, 0, display, curses.color_pair(_C_FIELD_VAL))
+        except curses.error:
+            pass
+
+        try:
+            sep_line = "─ Preview " + "─" * max(0, modal_w - 10)
+            win.addstr(sep_row, 0, sep_line[: modal_w - 1], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+
+        try:
+            rendered = render_note_markdown(buf)
+            for row in range(preview_h):
+                if row < len(rendered):
+                    text, is_bold = rendered[row]
+                    attr = curses.color_pair(_C_FIELD_VAL)
+                    if is_bold:
+                        attr |= curses.A_BOLD
+                    win.addstr(preview_start + row, 0, text[: modal_w - 1], attr)
+        except curses.error:
+            pass
+
+        try:
+            footer = " ↑↓←→: navigate  Enter: new line  ^S: save  Esc: cancel "
+            win.addstr(modal_h - 1, 0, footer[: modal_w - 1], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+
+    # ─────────────────────── NOTE EDITOR events ──────────────────────────────
+
+    def _on_note_edit(self, key: int) -> None:
+        if not isinstance(self._state, NoteEditState):
+            return
+        ns = self._state
+        v, p = ns.buffer, ns.pos
+
+        if key == 27:  # Esc — cancel
+            self._state = DetailState()
+        elif key == 19:  # Ctrl+S — save
+            self._commit_note_edit()
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            ns.buffer = v[:p] + "\n" + v[p:]
+            ns.pos = p + 1
+        elif key in (curses.KEY_BACKSPACE, 127):
+            if p > 0:
+                ns.buffer = v[: p - 1] + v[p:]
+                ns.pos = p - 1
+        elif key == curses.KEY_DC:
+            if p < len(v):
+                ns.buffer = v[:p] + v[p + 1 :]
+        elif key == curses.KEY_LEFT:
+            ns.pos = max(0, p - 1)
+        elif key == curses.KEY_RIGHT:
+            ns.pos = min(len(v), p + 1)
+        elif key == curses.KEY_UP:
+            li, col = _note_cursor_line_col(v, p)
+            if li > 0:
+                ns.pos = _note_pos_from_line_col(v, li - 1, col)
+        elif key == curses.KEY_DOWN:
+            li, col = _note_cursor_line_col(v, p)
+            lines = v.split("\n")
+            if li < len(lines) - 1:
+                ns.pos = _note_pos_from_line_col(v, li + 1, col)
+        elif key in (1, curses.KEY_HOME):  # Ctrl+A / Home — start of line
+            nl = v.rfind("\n", 0, p)
+            ns.pos = nl + 1 if nl >= 0 else 0
+        elif key in (5, curses.KEY_END):  # Ctrl+E / End — end of line
+            nl = v.find("\n", p)
+            ns.pos = nl if nl >= 0 else len(v)
+        elif key == 11:  # Ctrl+K — kill to end of line
+            nl = v.find("\n", p)
+            ns.buffer = v[:p] + (v[nl:] if nl >= 0 else "")
+        elif isinstance(key, int) and 32 <= key < 256:
+            ns.buffer = v[:p] + chr(key) + v[p:]
+            ns.pos = p + 1
+        elif isinstance(key, int) and key > 255:
+            try:
+                ch = chr(key)
+                ns.buffer = v[:p] + ch + v[p:]
+                ns.pos = p + 1
+            except (ValueError, OverflowError):
+                pass
+
+    def _commit_note_edit(self) -> None:
+        if not isinstance(self._state, NoteEditState):
+            return
+        ns = self._state
+        uri = ns.return_uri
+        etype = ns.entity_type
+        new_note = ns.buffer
+        if etype == "class":
+            entity = self.taxonomy.owl_classes.get(uri)
+            if entity:
+                entity.note = new_note
+                self._detail_fields = self._bcdf(uri)
+        elif etype == "individual":
+            entity = self.taxonomy.owl_individuals.get(uri)  # type: ignore[assignment]
+            if entity:
+                entity.note = new_note
+                self._detail_fields = self._bidf(uri)
+        elif etype == "property":
+            entity = self.taxonomy.owl_properties.get(uri)  # type: ignore[assignment]
+            if entity:
+                entity.note = new_note
+                self._detail_fields = self._bpropf(uri)
+        self._detail_uri = uri
+        self._save_file()
+        self._state = DetailState()
 
     def _commit_edit(self) -> None:
         if not isinstance(self._state, EditState):
@@ -2430,6 +2668,50 @@ class TaxonomyViewer:
             self._detail_uri = new_value
             self._detail_fields = self._bidf(new_value)
             self._field_cursor = 0
+            self._state = DetailState()
+            return
+
+        # ── new OWL property (triggered from Properties section, tree, or overview) ──
+        if f.meta.get("type") == "new_owl_property_uri":
+            if new_value:
+                new_value = _ensure_full_uri(new_value, self.taxonomy)
+            if new_value and new_value not in self.taxonomy.owl_properties:
+                from ..handles import assign_handles
+                from ..model import OWLProperty
+
+                self.taxonomy.owl_properties[new_value] = OWLProperty(uri=new_value)
+                assign_handles(self.taxonomy)
+                self._rebuild()
+                self._save_file()
+            if new_value:
+                self._detail_uri = new_value
+                self._detail_fields = self._bpropf(new_value)
+                self._field_cursor = 0
+            self._state = DetailState()
+            return
+
+        # ── new property with pre-set domain (triggered from a class detail panel) ──
+        if f.meta.get("type") == "new_owl_class_property_uri":
+            if new_value:
+                class_uri = f.meta.get("class_uri", "")
+                if new_value not in self.taxonomy.owl_properties:
+                    from ..handles import assign_handles
+                    from ..operations import add_owl_property
+
+                    add_owl_property(
+                        self.taxonomy,
+                        new_value,
+                        "ObjectProperty",
+                        new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1],
+                        self.lang,
+                        class_uri if class_uri else None,
+                    )
+                    assign_handles(self.taxonomy)
+                    self._rebuild()
+                    self._save_file()
+                self._detail_uri = new_value
+                self._detail_fields = self._bpropf(new_value)
+                self._field_cursor = 0
             self._state = DetailState()
             return
 
@@ -2600,6 +2882,17 @@ class TaxonomyViewer:
                     break
             else:
                 individual.comments.append(Definition(lang=lang, value=new_value))
+        elif ftype == "ind_lit_val_edit":
+            prop_uri = f.meta.get("prop_uri", "")
+            old_val = f.meta.get("old_val_str", "")
+            lang_or_dt = f.meta.get("lang_or_dt", "")
+            triple_old = (prop_uri, old_val, lang_or_dt)
+            triple_new = (prop_uri, new_value, lang_or_dt)
+            if triple_old in individual.literal_values:
+                idx = individual.literal_values.index(triple_old)
+                individual.literal_values[idx] = triple_new
+            elif triple_new not in individual.literal_values:
+                individual.literal_values.append(triple_new)
         else:
             return
         assert self._detail_uri is not None
@@ -2673,6 +2966,18 @@ class TaxonomyViewer:
             self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
             self._save_file()
 
+        elif ftype == "ont_title":
+            self.taxonomy.ontology_title = new_value or None
+            self._detail_fields = self._boof(file_path)
+            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+            self._save_file()
+
+        elif ftype == "ont_description":
+            self.taxonomy.ontology_description = new_value or None
+            self._detail_fields = self._boof(file_path)
+            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+            self._save_file()
+
         elif ftype == "new_owl_class_uri":
             if not new_value:
                 return
@@ -2690,73 +2995,6 @@ class TaxonomyViewer:
                 self._save_file()
             self._detail_uri = new_value
             self._detail_fields = self._bcdf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
-
-        elif ftype == "new_owl_property_uri":
-            if not new_value:
-                return
-            new_value = _ensure_full_uri(new_value, self.taxonomy)
-            if not new_value:
-                return
-            from ..model import OWLProperty
-
-            if new_value not in self.taxonomy.owl_properties:
-                self.taxonomy.owl_properties[new_value] = OWLProperty(uri=new_value)
-                from ..handles import assign_handles
-
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            self._detail_uri = new_value
-            self._detail_fields = self._bpropf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
-
-        elif ftype == "new_owl_individual_uri":
-            if not new_value:
-                return
-            new_value = _ensure_full_uri(new_value, self.taxonomy)
-            if not new_value:
-                return
-            class_uri = f.meta.get("class_uri", "")
-            if new_value not in self.taxonomy.owl_individuals:
-                self.taxonomy.owl_individuals[new_value] = OWLIndividual(
-                    uri=new_value,
-                    types=[class_uri] if class_uri else [],
-                )
-                from ..handles import assign_handles
-
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            self._detail_uri = new_value
-            self._detail_fields = self._bidf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
-
-        elif ftype == "new_owl_class_property_uri":
-            if not new_value:
-                return
-            class_uri = f.meta.get("class_uri", "")
-            if new_value not in self.taxonomy.owl_properties:
-                from ..operations import add_owl_property
-
-                add_owl_property(
-                    self.taxonomy,
-                    new_value,
-                    "ObjectProperty",
-                    new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1],
-                    self.lang,
-                    class_uri if class_uri else None,
-                )
-                from ..handles import assign_handles
-
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            self._detail_uri = new_value
-            self._detail_fields = self._bpropf(new_value)
             self._field_cursor = 0
             self._state = DetailState()
 
@@ -3102,6 +3340,7 @@ class TaxonomyViewer:
                 individual = self.taxonomy.owl_individuals[self._detail_uri]
                 # Step 1: pick a property (object properties where this individual's class is domain)
                 candidates: list[tuple[str, str]] = []  # type: ignore[no-redef]
+                prop_range_hints: dict[str, list[str]] = {}
                 from ..ontology_imports import suggest_external_properties
 
                 for prop in sorted(
@@ -3122,6 +3361,8 @@ class TaxonomyViewer:
                     ]
                     suffix = f"  ({', '.join(range_classes)})" if range_classes else ""
                     candidates.append((p_uri, f"[{h}]  {lbl}{suffix}"))
+                    if prop.ranges:
+                        prop_range_hints[p_uri] = list(prop.ranges)
                 self._state = MovePickState(
                     source_uri=self._detail_uri,
                     pick_type="add_prop_value_step1",
@@ -3129,6 +3370,7 @@ class TaxonomyViewer:
                     filter_text="",
                     cursor=0,
                     scroll=0,
+                    prop_range_hints=prop_range_hints,
                 )
 
         elif action == "remove_prop_value":
@@ -3153,6 +3395,48 @@ class TaxonomyViewer:
                 edit_prop = self.taxonomy.owl_properties.get(prop_uri)
                 self._state = self._make_class_or_individual_state(
                     ind_uri, prop_uri, edit_prop, replace_val_uri=val_uri
+                )
+
+        elif action == "remove_literal_value":
+            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
+                prop_uri = (meta or {}).get("prop_uri", "")
+                val_str = (meta or {}).get("val_str", "")
+                lang_or_dt = (meta or {}).get("lang_or_dt", "")
+                individual = self.taxonomy.owl_individuals[self._detail_uri]
+                triple = (prop_uri, val_str, lang_or_dt)
+                if triple in individual.literal_values:
+                    individual.literal_values.remove(triple)
+                    self._save_file()
+                    self._detail_fields = self._bidf(self._detail_uri)
+                    self._field_cursor = min(
+                        self._field_cursor, max(0, len(self._detail_fields) - 1)
+                    )
+
+        elif action == "edit_literal_value":
+            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
+                prop_uri = (meta or {}).get("prop_uri", "")
+                val_str = (meta or {}).get("val_str", "")
+                lang_or_dt = (meta or {}).get("lang_or_dt", "")
+                prop = self.taxonomy.owl_properties.get(prop_uri)
+                prop_lbl = (
+                    prop.label(self.lang)
+                    if prop
+                    else prop_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+                )
+                synthetic = DetailField(
+                    f"edit:lit_val:{prop_uri}",
+                    f"→ {prop_lbl}",
+                    val_str,
+                    editable=True,
+                    meta={
+                        "type": "ind_lit_val_edit",
+                        "prop_uri": prop_uri,
+                        "old_val_str": val_str,
+                        "lang_or_dt": lang_or_dt,
+                    },
+                )
+                self._state = EditState(
+                    buffer=val_str, pos=len(val_str), field=synthetic, return_to=None
                 )
 
         elif action == "remove_ind_type":
@@ -3230,6 +3514,56 @@ class TaxonomyViewer:
                     self._field_cursor = min(
                         self._field_cursor, max(0, len(self._detail_fields) - 1)
                     )
+
+        elif action == "edit_note":
+            if self._detail_uri:
+                uri = self._detail_uri
+                node_t = self.taxonomy.node_type(uri)
+                etype = ""
+                note_val = ""
+                found = False
+                if node_t in ("class", "promoted"):
+                    ent_cls = self.taxonomy.owl_classes.get(uri)
+                    if ent_cls is not None:
+                        etype, note_val, found = "class", ent_cls.note, True
+                elif node_t == "individual":
+                    ent_ind = self.taxonomy.owl_individuals.get(uri)
+                    if ent_ind is not None:
+                        etype, note_val, found = "individual", ent_ind.note, True
+                elif node_t == "property":
+                    ent_prop = self.taxonomy.owl_properties.get(uri)
+                    if ent_prop is not None:
+                        etype, note_val, found = "property", ent_prop.note, True
+                if found:
+                    self._state = NoteEditState(
+                        buffer=note_val,
+                        pos=len(note_val),
+                        return_uri=uri,
+                        entity_type=etype,
+                    )
+
+        elif action == "delete_note":
+            if self._detail_uri:
+                uri = self._detail_uri
+                node_t = self.taxonomy.node_type(uri)
+                if node_t in ("class", "promoted"):
+                    ent_cls2 = self.taxonomy.owl_classes.get(uri)
+                    if ent_cls2 is not None:
+                        ent_cls2.note = ""
+                        self._detail_fields = self._bcdf(uri)
+                        self._save_file()
+                elif node_t == "individual":
+                    ent_ind2 = self.taxonomy.owl_individuals.get(uri)
+                    if ent_ind2 is not None:
+                        ent_ind2.note = ""
+                        self._detail_fields = self._bidf(uri)
+                        self._save_file()
+                elif node_t == "property":
+                    ent_prop2 = self.taxonomy.owl_properties.get(uri)
+                    if ent_prop2 is not None:
+                        ent_prop2.note = ""
+                        self._detail_fields = self._bpropf(uri)
+                        self._save_file()
 
         elif action == "delete_property":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
@@ -5440,10 +5774,11 @@ class TaxonomyViewer:
         title = " ✎ Edit base URI " if is_edit else " ⚠  Ontology has no URI "
         _draw_bar(stdscr, 0, 0, width, title, dim=False)
 
-        # In edit mode: active 0=URI, 1=separator
-        # In create mode: active 0=name, 1=URI, 2=separator
+        # Each separator option has its own active slot so Tab/↑↓ lands directly on it.
+        # edit:   active 0=URI, 1=sep-# option, 2=sep-/ option
+        # create: active 0=name, 1=URI, 2=sep-# option, 3=sep-/ option
         uri_active_idx = 0 if is_edit else 1
-        sep_active_idx = 1 if is_edit else 2
+        sep_base_idx = 1 if is_edit else 2  # first separator option's active index
 
         y = 2
         try:
@@ -5489,28 +5824,19 @@ class TaxonomyViewer:
             stdscr.addstr(y, 4, uri_display[: width - 5].ljust(width - 5), uri_attr)
             y += 2
 
-            # Separator picker
-            sep_sel = st.active == sep_active_idx
-            stdscr.addstr(
-                y,
-                2,
-                "Separator:"[: width - 3],
-                curses.color_pair(_C_DIM),
-            )
+            # Separator picker — each option is its own navigable row
+            stdscr.addstr(y, 2, "Separator:"[: width - 3], curses.color_pair(_C_DIM))
             y += 1
             for i, (label, _sep_ch) in enumerate(self._SEP_OPTIONS):
-                chosen = i == st.sep_cursor
-                active_sep = sep_sel and chosen
+                chosen = i == st.sep_cursor  # currently selected
+                focused = st.active == sep_base_idx + i  # cursor is on this row
                 prefix = "▶ " if chosen else "  "
-                attr = (
-                    curses.color_pair(_C_SEL) | curses.A_BOLD
-                    if active_sep
-                    else (
-                        curses.color_pair(_C_NAVIGABLE)
-                        if chosen
-                        else curses.color_pair(_C_FIELD_VAL)
-                    )
-                )
+                if focused:
+                    attr = curses.color_pair(_C_SEL) | curses.A_BOLD
+                elif chosen:
+                    attr = curses.color_pair(_C_NAVIGABLE)
+                else:
+                    attr = curses.color_pair(_C_FIELD_VAL)
                 stdscr.addstr(y, 4, f"{prefix}{label}"[: width - 5], attr)
                 y += 1
             y += 1
@@ -5526,20 +5852,6 @@ class TaxonomyViewer:
 
             if st.error:
                 stdscr.addstr(y, 2, st.error[: width - 3], curses.color_pair(_C_DIFF_DEL))
-                y += 1
-
-            if is_edit:
-                # Count how many entities will move
-                from ..operations import collect_ontology_entities
-
-                n = len(collect_ontology_entities(self.taxonomy))
-                noun = "entity" if n == 1 else "entities"
-                stdscr.addstr(
-                    y,
-                    2,
-                    f"  {n} local {noun} will be renamed."[: width - 3],
-                    curses.color_pair(_C_FIELD_VAL),
-                )
         except curses.error:
             pass
 
@@ -5549,7 +5861,7 @@ class TaxonomyViewer:
             rows - 1,
             0,
             width,
-            f" Tab/↑↓: switch   ←/→: separator   Enter: confirm   Esc: {esc_action} ",
+            f" Tab/↑↓: navigate   Enter: confirm   Esc: {esc_action} ",
             dim=True,
         )
 
@@ -5559,10 +5871,10 @@ class TaxonomyViewer:
         st = self._state
         is_edit = st.mode == "edit"
 
-        # Field count: edit=2 (URI, sep), create=3 (name, URI, sep)
-        n_fields = 2 if is_edit else 3
+        # edit: 3 slots (URI, sep-#, sep-/)  |  create: 4 slots (name, URI, sep-#, sep-/)
+        n_fields = 3 if is_edit else 4
         uri_active_idx = 0 if is_edit else 1
-        sep_active_idx = 1 if is_edit else 2
+        sep_base_idx = 1 if is_edit else 2  # sep-# option index; sep-/ is sep_base_idx+1
 
         if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next field
             st.active = (st.active + 1) % n_fields
@@ -5570,11 +5882,14 @@ class TaxonomyViewer:
         elif key == curses.KEY_UP:  # ↑ — previous field
             st.active = (st.active - 1) % n_fields
             st.error = ""
-        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT):
-            if st.active == sep_active_idx:
-                st.sep_cursor = 1 - st.sep_cursor
 
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            # If cursor is on a separator row, select it first, then submit
+            if st.active == sep_base_idx:
+                st.sep_cursor = 0
+            elif st.active == sep_base_idx + 1:
+                st.sep_cursor = 1
+
             uri = st.uri_buf.strip().rstrip("#/")
             sep = self._SEP_OPTIONS[st.sep_cursor][1]
 
@@ -5588,14 +5903,14 @@ class TaxonomyViewer:
                 return
 
             if is_edit:
-                from ..operations import rename_ontology_uri
+                from ..operations import count_ontology_rename_changes
 
-                rename_ontology_uri(self.taxonomy, uri, sep)
-                self._rebuild()
-                self._save_file()
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = DetailState()
+                old_base, new_base, count = count_ontology_rename_changes(self.taxonomy, uri, sep)
+                self._state = OntologyRenameConfirmState(
+                    old_base=old_base,
+                    new_base=new_base,
+                    entity_count=count,
+                )
             else:
                 name = st.name_buf.strip()
                 if not name:
@@ -5627,6 +5942,93 @@ class TaxonomyViewer:
             elif st.active == uri_active_idx:
                 st.uri_buf += ch
                 st.uri_pos = len(st.uri_buf)
+
+    # ─────────────────── ONTOLOGY BASE URI rename confirm ────────────────────
+
+    def _draw_ontology_rename_confirm(self, stdscr: curses.window, rows: int, cols: int) -> None:
+        if not isinstance(self._state, OntologyRenameConfirmState):
+            return
+        cs = self._state
+        width = cols
+
+        _draw_bar(stdscr, 0, 0, width, " ✎ Confirm base URI change ", dim=False)
+
+        y = 2
+        try:
+            stdscr.addstr(y, 2, "Old base:"[: width - 3], curses.color_pair(_C_DIM))
+            y += 1
+            stdscr.addstr(y, 4, cs.old_base[: width - 5], curses.color_pair(_C_SEL) | curses.A_BOLD)
+            y += 1
+            stdscr.addstr(y, 2, "New base:"[: width - 3], curses.color_pair(_C_DIM))
+            y += 1
+            stdscr.addstr(
+                y, 4, cs.new_base[: width - 5], curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD
+            )
+            y += 2
+
+            if cs.entity_count == 0:
+                stdscr.addstr(
+                    y,
+                    2,
+                    "No URI changes needed — base URI is already up to date."[: width - 3],
+                    curses.color_pair(_C_DIM),
+                )
+            else:
+                noun = "entity" if cs.entity_count == 1 else "entities"
+                stdscr.addstr(
+                    y,
+                    2,
+                    f"{cs.entity_count} {noun} will have their URI updated."[: width - 3],
+                    curses.color_pair(_C_FIELD_VAL),
+                )
+            y += 2
+
+            stdscr.addstr(
+                y,
+                2,
+                "  y / Enter  — confirm"[: width - 3],
+                curses.color_pair(_C_NAVIGABLE) | curses.A_BOLD,
+            )
+            y += 1
+            stdscr.addstr(y, 2, "  n / Esc    — go back"[: width - 3], curses.color_pair(_C_DIM))
+        except curses.error:
+            pass
+
+        hint = (
+            f" y/Enter: apply ({cs.entity_count} URI updates)   n/Esc: back "
+            if cs.entity_count
+            else " y/Enter: confirm (no changes)   n/Esc: back "
+        )
+        _draw_bar(stdscr, rows - 1, 0, width, hint, dim=True)
+
+    def _on_ontology_rename_confirm(self, key: int) -> None:
+        if not isinstance(self._state, OntologyRenameConfirmState):
+            return
+        cs = self._state
+
+        if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
+            from ..operations import rename_ontology_uri
+
+            new_uri = cs.new_base.rstrip("#/")
+            new_sep = cs.new_base[-1] if cs.new_base and cs.new_base[-1] in ("#", "/") else "#"
+            rename_ontology_uri(self.taxonomy, new_uri, new_sep)
+            self._rebuild()
+            self._save_file()
+            self._detail_fields = self._bgf()
+            self._field_cursor = 0
+            self._state = DetailState()
+
+        elif key in (ord("n"), 27):  # Esc / n — go back to edit form
+            old_uri = cs.old_base.rstrip("#/")
+            old_sep_char = cs.old_base[-1] if cs.old_base and cs.old_base[-1] in ("#", "/") else "#"
+            sep_cursor = 0 if old_sep_char == "#" else 1
+            self._state = OntologySetupState(
+                mode="edit",
+                active=0,
+                uri_buf=old_uri,
+                uri_pos=len(old_uri),
+                sep_cursor=sep_cursor,
+            )
 
     # ─────────────────────────── RENAME URI confirm ───────────────────────────
 
@@ -5731,11 +6133,9 @@ class TaxonomyViewer:
             self._save_file()
             self._detail_uri = rs.new_uri
             node_t = self.taxonomy.node_type(rs.new_uri)
-            if node_t == "owl_class":
-                self._detail_fields = self._bcdf(rs.new_uri)
-            elif node_t == "individual":
+            if node_t == "individual":
                 self._detail_fields = self._bidf(rs.new_uri)
-            elif node_t in ("property", "owl_property"):
+            elif node_t == "property":
                 self._detail_fields = self._bpropf(rs.new_uri)
             else:
                 self._detail_fields = self._bcdf(rs.new_uri)
@@ -7198,65 +7598,17 @@ class TaxonomyViewer:
     def _build_individual_candidates_grouped(
         self, prop: object, exclude_uri: str
     ) -> list[tuple[str, str]]:
-        """Build grouped candidates: class headers with indented individuals underneath.
-
-        Traverses the range class hierarchy depth-first.  Each class gets a bold
-        header row (URI prefix ``__HDR__:``) followed by its direct instances,
-        then its subclass groups recursively.  Individuals that belong to multiple
-        classes only appear under their most-specific (deepest) class.
-        """
         from ..model import OWLProperty as _OWLProp
+        from ..nav.logic import build_individual_candidates_grouped
 
-        range_roots: list[str] = (
+        prop_ranges: list[str] = (
             list(prop.ranges)  # type: ignore[union-attr]
             if isinstance(prop, _OWLProp) and prop.ranges  # type: ignore[union-attr]
-            else sorted(self.taxonomy.owl_classes)
+            else []
         )
-
-        candidates: list[tuple[str, str]] = []
-        added_ind_uris: set[str] = set()
-        seen_class_uris: set[str] = set()
-
-        def add_group(class_uri: str, depth: int) -> None:
-            if class_uri in seen_class_uris:
-                return
-            seen_class_uris.add(class_uri)
-
-            cls = self.taxonomy.owl_classes.get(class_uri)
-            cls_lbl = cls.label(self.lang) if cls else class_uri
-            indent = "  " * depth
-
-            sub_uris = sorted(
-                u for u, c in self.taxonomy.owl_classes.items() if class_uri in c.sub_class_of
-            )
-            direct_inds = sorted(
-                [
-                    (uri, ind)
-                    for uri, ind in self.taxonomy.owl_individuals.items()
-                    if uri != exclude_uri and uri not in added_ind_uris and class_uri in ind.types
-                ],
-                key=lambda kv: kv[1].label(self.lang),
-            )
-
-            if not sub_uris and not direct_inds:
-                return
-
-            candidates.append((f"__HDR__:{class_uri}", f"{indent}▸ {cls_lbl}"))
-
-            for sub_uri in sub_uris:
-                add_group(sub_uri, depth + 1)
-
-            for i_uri, ind in direct_inds:
-                if i_uri not in added_ind_uris:
-                    h = self.taxonomy.uri_to_handle(i_uri) or "?"
-                    lbl = ind.label(self.lang)
-                    candidates.append((i_uri, f"{indent}  [{h}]  {lbl}"))
-                    added_ind_uris.add(i_uri)
-
-        for root in range_roots:
-            add_group(root, 0)
-
-        return candidates
+        return build_individual_candidates_grouped(
+            self.taxonomy, self.lang, prop_ranges, exclude_uri
+        )
 
     def _on_prop_value_grouped(self, key: int, rows: int) -> None:
         """Handle grouped individual picker (class headers + individuals)."""
@@ -7381,11 +7733,17 @@ class TaxonomyViewer:
                 ind_uri = ms.source_uri
                 prop = self.taxonomy.owl_properties.get(prop_uri)
                 if prop is None:
-                    # External property — register it locally so it serialises correctly
+                    # External property — register it locally so it serialises correctly.
+                    # Preserve range hints gathered at step-1 build time so the individual
+                    # picker is filtered to the declared range class.
                     from ..model import OWLProperty
                     from ..ontology_imports import namespace_url_from_uri, suggest_prefix
 
-                    prop = OWLProperty(uri=prop_uri, prop_type="ObjectProperty")
+                    prop = OWLProperty(
+                        uri=prop_uri,
+                        prop_type="ObjectProperty",
+                        ranges=ms.prop_range_hints.get(prop_uri, []),
+                    )
                     self.taxonomy.owl_properties[prop_uri] = prop
                     ns = namespace_url_from_uri(prop_uri)
                     if ns not in self.taxonomy.namespace_bindings.values():

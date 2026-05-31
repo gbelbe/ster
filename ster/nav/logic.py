@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re as _re
 from collections import deque
 from dataclasses import dataclass
 from dataclasses import field as dc_field
@@ -552,6 +553,72 @@ def _sep_danger(label: str) -> DetailField:
     )
 
 
+def render_note_markdown(text: str) -> list[tuple[str, bool]]:
+    """Parse markdown text, return (rendered_line, is_bold) pairs.
+
+    Applies minimal terminal-friendly transformations:
+    - Headings (#+ text) → strip prefix, mark bold
+    - Bullets (- / * / + item) → bullet character
+    - **text** / *text* → strip markers
+    """
+    result: list[tuple[str, bool]] = []
+    for line in text.split("\n"):
+        m = _re.match(r"^#{1,6}\s+(.*)", line)
+        if m:
+            content = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", m.group(1))
+            result.append((content, True))
+            continue
+        m = _re.match(r"^[-*+]\s+(.*)", line)
+        if m:
+            content = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", m.group(1))
+            result.append(("• " + content, False))
+            continue
+        stripped = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", line)
+        result.append((stripped, False))
+    return result
+
+
+def _note_display_fields(note: str, key_prefix: str) -> list[DetailField]:
+    """Detail panel rows for the ns1:note markdown annotation field."""
+    fields: list[DetailField] = [_sep("Note (markdown)")]
+    if note:
+        for i, (rendered_line, is_bold) in enumerate(render_note_markdown(note)):
+            fields.append(
+                DetailField(
+                    f"{key_prefix}note_line:{i}",
+                    "",
+                    rendered_line,
+                    editable=False,
+                    meta={"type": "note_line", "bold": is_bold},
+                )
+            )
+        fields.append(
+            _add_action_del_field(
+                f"{key_prefix}action:delete_note",
+                "✗ Delete note",
+                "delete_note",
+            )
+        )
+    else:
+        fields.append(
+            DetailField(
+                f"{key_prefix}note_empty",
+                "note",
+                "(empty)",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+    fields.append(
+        _add_action_add_field(
+            f"{key_prefix}action:edit_note",
+            "✎ Edit note",
+            "edit_note",
+        )
+    )
+    return fields
+
+
 def _schema_media_display_fields(entity: object, prefix: str) -> list[DetailField]:
     """Display rows for schema:image / schema:video / schema:url if any are set."""
     imgs = getattr(entity, "schema_images", [])
@@ -597,23 +664,31 @@ def _schema_media_display_fields(entity: object, prefix: str) -> list[DetailFiel
 
 
 def _schema_media_action_fields(entity: object, prefix: str) -> list[DetailField]:
-    """Add / remove action rows for schema media."""
+    """Add / remove action rows for schema media. Add actions only shown when no value exists."""
     imgs = getattr(entity, "schema_images", [])
     vids = getattr(entity, "schema_videos", [])
     urls = getattr(entity, "schema_urls", [])
-    fields: list[DetailField] = [
-        _add_action_field(
-            f"action:{prefix}add_img", "+ Add schema:image (photo URL)", "add_schema_image"
-        ),
-        _add_action_field(
-            f"action:{prefix}add_vid",
-            "+ Add schema:video (YouTube / Vimeo URL)",
-            "add_schema_video",
-        ),
-        _add_action_field(
-            f"action:{prefix}add_url", "+ Add schema:url (external link)", "add_schema_url"
-        ),
-    ]
+    fields: list[DetailField] = []
+    if not imgs:
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}add_img", "+ Add schema:image (photo URL)", "add_schema_image"
+            )
+        )
+    if not vids:
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}add_vid",
+                "+ Add schema:video (YouTube / Vimeo URL)",
+                "add_schema_video",
+            )
+        )
+    if not urls:
+        fields.append(
+            _add_action_field(
+                f"action:{prefix}add_url", "+ Add schema:url (external link)", "add_schema_url"
+            )
+        )
     for url in imgs:
         short = "…" + url[-34:] if len(url) > 34 else url
         fields.append(
@@ -1944,6 +2019,9 @@ def build_rdf_class_detail(
     # ── Subtree quality stats ────────────────────────────────────────────────
     fields.extend(_class_quality_fields(taxonomy, uri, lang))
 
+    # ── Note (ns1:note markdown) ──────────────────────────────────────────────
+    fields.extend(_note_display_fields(rdf_class.note, "cls:"))
+
     # ── Rich Content (schema.org) ─────────────────────────────────────────────
     fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
     fields.extend(_schema_media_action_fields(rdf_class, "cls:"))
@@ -2197,69 +2275,133 @@ def build_individual_detail(
         )
     )
 
-    # ── Property Values — show applicable properties with inline mutations ───
+    # ── Property Values — all asserted first, then applicable-but-unapplied ──
+    has_any_assertion = bool(individual.property_values or individual.literal_values)
+    # Track which predicates are already asserted (to suppress empty placeholders)
+    asserted_pred_uris: set[str] = {pv[0] for pv in individual.property_values} | {
+        lv[0] for lv in individual.literal_values
+    }
+
+    # Applicable properties (domain-matching) for the "unapplied" section
     eff_types_display = _effective_types(taxonomy, individual.types)
-    applicable_display = [
+    applicable_unapplied = [
         (p_uri, prop)
         for p_uri, prop in sorted(taxonomy.owl_properties.items(), key=lambda kv: kv[1].label(lang))
-        if prop.prop_type in ("ObjectProperty", "Property")
+        if p_uri not in asserted_pred_uris
         and (not prop.domains or any(t in prop.domains for t in eff_types_display))
     ]
-    if applicable_display:
+
+    if has_any_assertion or applicable_unapplied:
         fields.append(_sep("Property Values"))
-        # Index asserted values by property for O(1) lookup
-        asserted: dict[str, list[str]] = {}
-        for prop_uri, val_uri in individual.property_values:
-            asserted.setdefault(prop_uri, []).append(val_uri)
-        for p_uri, prop in applicable_display:
-            prop_lbl = prop.label(lang)
-            values = asserted.get(p_uri, [])
-            if values:
-                for val_uri in values:
-                    target = taxonomy.owl_individuals.get(val_uri)
-                    val_lbl = target.label(lang) if target else val_uri
-                    fields.append(
-                        DetailField(
-                            f"ind_propval:{p_uri}::{val_uri}",
-                            f"→ {prop_lbl}",
-                            val_lbl,
-                            editable=False,
-                            meta={
-                                "type": "ind_prop_val",
-                                "prop_uri": p_uri,
-                                "val_uri": val_uri,
-                                "nav": bool(target),
-                            },
-                        )
-                    )
-                    fields.append(
-                        _add_action_field(
-                            f"action:edit_prop_value:{p_uri}::{val_uri}",
-                            f"  ✎ Change → {prop_lbl}: {val_lbl}",
-                            "edit_prop_value",
-                            prop_uri=p_uri,
-                            val_uri=val_uri,
-                        )
-                    )
-                    fields.append(
-                        _add_action_del_field(
-                            f"action:rm_prop_value:{p_uri}::{val_uri}",
-                            f"  ✗ Remove → {prop_lbl}: {val_lbl}",
-                            "remove_prop_value",
-                            prop_uri=p_uri,
-                            val_uri=val_uri,
-                        )
-                    )
-            else:
-                fields.append(
-                    DetailField(
-                        f"ind_prop_empty:{p_uri}",
-                        f"→ {prop_lbl}",
-                        "—",
-                        editable=False,
-                        meta={"type": "stat"},
-                    )
+
+    # 1. URI-valued assertions (all of them, regardless of domain)
+    # Group by predicate so multi-valued props appear together
+    seen_preds_uri: list[str] = []
+    for prop_uri, _val_uri in individual.property_values:
+        if prop_uri not in seen_preds_uri:
+            seen_preds_uri.append(prop_uri)
+    for p_uri in seen_preds_uri:
+        prop = taxonomy.owl_properties.get(p_uri)
+        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        for _, val_uri in [(pu, vu) for pu, vu in individual.property_values if pu == p_uri]:
+            target = taxonomy.owl_individuals.get(val_uri)
+            val_lbl = target.label(lang) if target else val_uri
+            fields.append(
+                DetailField(
+                    f"ind_propval:{p_uri}::{val_uri}",
+                    f"→ {prop_lbl}",
+                    val_lbl,
+                    editable=False,
+                    meta={
+                        "type": "ind_prop_val",
+                        "prop_uri": p_uri,
+                        "val_uri": val_uri,
+                        "nav": bool(target),
+                    },
                 )
+            )
+            fields.append(
+                _add_action_field(
+                    f"action:edit_prop_value:{p_uri}::{val_uri}",
+                    f"  ✎ Change → {prop_lbl}: {val_lbl}",
+                    "edit_prop_value",
+                    prop_uri=p_uri,
+                    val_uri=val_uri,
+                )
+            )
+            fields.append(
+                _add_action_del_field(
+                    f"action:rm_prop_value:{p_uri}::{val_uri}",
+                    f"  ✗ Remove → {prop_lbl}: {val_lbl}",
+                    "remove_prop_value",
+                    prop_uri=p_uri,
+                    val_uri=val_uri,
+                )
+            )
+
+    # 2. Literal-valued assertions
+    seen_preds_lit: list[str] = []
+    for prop_uri, _, _ in individual.literal_values:
+        if prop_uri not in seen_preds_lit:
+            seen_preds_lit.append(prop_uri)
+    for p_uri in seen_preds_lit:
+        prop = taxonomy.owl_properties.get(p_uri)
+        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        for _, val_str, lang_or_dt in [
+            (pu, vs, ld) for pu, vs, ld in individual.literal_values if pu == p_uri
+        ]:
+            display_val = val_str
+            if lang_or_dt.startswith("@") and lang_or_dt[1:]:
+                display_val = f"{val_str}  [{lang_or_dt[1:]}]"
+            fields.append(
+                DetailField(
+                    f"ind_litval:{p_uri}::{val_str}",
+                    f"→ {prop_lbl}",
+                    display_val,
+                    editable=False,
+                    meta={
+                        "type": "ind_lit_val",
+                        "prop_uri": p_uri,
+                        "val_str": val_str,
+                        "lang_or_dt": lang_or_dt,
+                    },
+                )
+            )
+            fields.append(
+                _add_action_field(
+                    f"action:edit_lit_value:{p_uri}::{val_str}",
+                    f"  ✎ Edit → {prop_lbl}: {val_str}",
+                    "edit_literal_value",
+                    prop_uri=p_uri,
+                    val_str=val_str,
+                    lang_or_dt=lang_or_dt,
+                )
+            )
+            fields.append(
+                _add_action_del_field(
+                    f"action:rm_lit_value:{p_uri}::{val_str}",
+                    f"  ✗ Remove → {prop_lbl}: {val_str}",
+                    "remove_literal_value",
+                    prop_uri=p_uri,
+                    val_str=val_str,
+                    lang_or_dt=lang_or_dt,
+                )
+            )
+
+    # 3. Applicable but not yet asserted — shown as "—" placeholders
+    for p_uri, prop in applicable_unapplied:
+        prop_lbl = prop.label(lang)
+        fields.append(
+            DetailField(
+                f"ind_prop_empty:{p_uri}",
+                f"→ {prop_lbl}",
+                "—",
+                editable=False,
+                meta={"type": "stat"},
+            )
+        )
+
+    if has_any_assertion or applicable_unapplied:
         fields.append(
             _add_action_add_field(
                 "action:add_prop_value",
@@ -2267,6 +2409,9 @@ def build_individual_detail(
                 "add_prop_value",
             )
         )
+
+    # ── Note (ns1:note markdown) ──────────────────────────────────────────────
+    fields.extend(_note_display_fields(individual.note, "ind:"))
 
     # ── Rich Content (schema.org) ─────────────────────────────────────────────
     fields.extend(_schema_media_display_fields(individual, "ind:"))
@@ -2470,6 +2615,24 @@ def build_ontology_overview_fields(
                 meta={"type": "ont_label"},
             )
         )
+    fields.append(
+        DetailField(
+            "ont:title",
+            "dcterms:title",
+            taxonomy.ontology_title or "",
+            editable=True,
+            meta={"type": "ont_title"},
+        )
+    )
+    fields.append(
+        DetailField(
+            "ont:description",
+            "dcterms:description",
+            taxonomy.ontology_description or "",
+            editable=True,
+            meta={"type": "ont_description"},
+        )
+    )
 
     # ── Actions ─────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
@@ -2727,6 +2890,9 @@ def build_property_detail(
                 )
             )
 
+    # ── Note (ns1:note markdown) ──────────────────────────────────────────────
+    fields.extend(_note_display_fields(prop.note, "prop:"))
+
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
     label_langs = {lbl.lang for lbl in prop.labels}
@@ -2948,6 +3114,68 @@ _HELP_HINTS: list[tuple[str, str]] = [
     ("?", "full help screen"),
     ("q", "quit"),
 ]
+
+
+# ── Individual candidate builder ──────────────────────────────────────────────
+
+
+def build_individual_candidates_grouped(
+    taxonomy: Taxonomy,
+    lang: str,
+    prop_ranges: list[str],
+    exclude_uri: str,
+) -> list[tuple[str, str]]:
+    """Return grouped (uri, label) candidates for an individual-value picker.
+
+    When *prop_ranges* is non-empty only individuals from those classes and
+    their subclasses are included.  When empty every class is searched.
+    Header rows have a ``__HDR__:<class_uri>`` sentinel URI and are not
+    selectable.  *exclude_uri* is omitted from results (the source individual).
+    """
+    range_roots: list[str] = list(prop_ranges) if prop_ranges else sorted(taxonomy.owl_classes)
+
+    candidates: list[tuple[str, str]] = []
+    added_ind_uris: set[str] = set()
+    seen_class_uris: set[str] = set()
+
+    def add_group(class_uri: str, depth: int) -> None:
+        if class_uri in seen_class_uris:
+            return
+        seen_class_uris.add(class_uri)
+
+        cls = taxonomy.owl_classes.get(class_uri)
+        cls_lbl = cls.label(lang) if cls else class_uri
+        indent = "  " * depth
+
+        sub_uris = sorted(u for u, c in taxonomy.owl_classes.items() if class_uri in c.sub_class_of)
+        direct_inds = sorted(
+            [
+                (uri, ind)
+                for uri, ind in taxonomy.owl_individuals.items()
+                if uri != exclude_uri and uri not in added_ind_uris and class_uri in ind.types
+            ],
+            key=lambda kv: kv[1].label(lang),
+        )
+
+        if not sub_uris and not direct_inds:
+            return
+
+        candidates.append((f"__HDR__:{class_uri}", f"{indent}▸ {cls_lbl}"))
+
+        for sub_uri in sub_uris:
+            add_group(sub_uri, depth + 1)
+
+        for i_uri, ind in direct_inds:
+            if i_uri not in added_ind_uris:
+                h = taxonomy.uri_to_handle(i_uri) or "?"
+                lbl = ind.label(lang)
+                candidates.append((i_uri, f"{indent}  [{h}]  {lbl}"))
+                added_ind_uris.add(i_uri)
+
+    for root in range_roots:
+        add_group(root, 0)
+
+    return candidates
 
 
 def build_global_fields(
@@ -3215,7 +3443,6 @@ def build_global_fields(
             "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
         )
     )
-
     return fields
 
 
