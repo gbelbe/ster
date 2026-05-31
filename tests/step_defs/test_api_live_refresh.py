@@ -114,9 +114,9 @@ def then_has_nodes(ctx):
     assert "nodes" in ctx["response"].json()
 
 
-@then('the response contains a "links" list')
-def then_has_links(ctx):
-    assert "links" in ctx["response"].json()
+@then('the response contains an "edges" list')
+def then_has_edges(ctx):
+    assert "edges" in ctx["response"].json()
 
 
 @then('the Content-Type header contains "text/event-stream"')

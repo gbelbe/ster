@@ -81,7 +81,7 @@ def serve(
     host: str | None = None,
     port: int | None = None,
 ) -> None:
-    """Start the ster API server and WebVOWL viewer.
+    """Start the ster API server and graph viewer.
 
     Blocks until the server is stopped (Ctrl-C).
     """

@@ -1,7 +1,7 @@
 """FastAPI application for the ster ontology REST API.
 
 Provides schema introspection, individual creation, VOWL graph retrieval,
-and a Server-Sent Events stream for live WebVOWL refresh.
+and a Server-Sent Events stream for live graph refresh.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def create_app(
     All mutable state is held in ``_st`` — a dict closed over by every
     endpoint.  The file watcher in ``api_server`` updates ``_st["taxonomy"]``
     when the source file changes; the broadcasted SSE event triggers a reload
-    in every connected WebVOWL client.
+    in every connected graph client.
     """
     _st: dict[str, Any] = {"taxonomy": taxonomy, "file_path": file_path}
     _bearer = HTTPBearer(auto_error=False)

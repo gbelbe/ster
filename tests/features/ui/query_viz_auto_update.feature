@@ -1,4 +1,4 @@
-Feature: Auto-update WebVOWL window after SPARQL query execution
+Feature: Auto-update graph view after SPARQL query execution
 
   Scenario: query result HTML contains a Show all nodes button when link provided
     Given a valid taxonomy with a matching URI

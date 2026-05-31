@@ -66,7 +66,7 @@ def when_open_query_result(ctx: dict) -> None:
     with (
         patch("ster.viz_vowl._ensure_server", return_value=8000),
         patch("ster.viz_vowl.webbrowser.open"),
-        patch("ster.viz_vowl._d3_script_tag", return_value="<script></script>"),
+        patch("ster.viz_vowl._cytoscape_script_tag", return_value="<script></script>"),
         patch("ster.viz_vowl.Path.home", return_value=ctx["tmp_path"]),
     ):
         _url, out_path = open_query_result_in_browser(ctx["tax"], ctx["uris"], ctx["file_path"])

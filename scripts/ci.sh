@@ -29,6 +29,20 @@ step() { echo -e "\n${CYAN}── $1 ──${NC}"; }
 ok()   { echo -e "${PASS} $1"; }
 warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
 
+# ── 0. Pre-flight: ghost deletion check ──────────────────────────────────────
+# Tracked files deleted locally but not staged still exist in git.
+# GitHub CI clones from git and sees them; local pytest skips missing files.
+# This divergence is a common source of "passes locally, fails on GitHub".
+step "Pre-flight: ghost deletions"
+DELETED_UNSTAGED=$(git ls-files --deleted 2>/dev/null || true)
+if [[ -n "$DELETED_UNSTAGED" ]]; then
+  echo -e "${FAIL} Tracked files deleted locally but not staged — GitHub CI will clone them:"
+  while IFS= read -r f; do echo "  D $f"; done <<< "$DELETED_UNSTAGED"
+  echo -e "  Fix: git add -u  (or: git rm \$file)"
+  exit 1
+fi
+ok "no ghost deletions"
+
 # ── 1. Ensure main dev deps are installed ─────────────────────────────────────
 step "Install deps (main env)"
 uv sync --extra html --extra api --extra dev --quiet
@@ -51,7 +65,8 @@ fi
 
 # ── 3. Type check ─────────────────────────────────────────────────────────────
 step "Type check (mypy)"
-uv run mypy ster/ && ok "mypy"
+# --no-incremental: prevents stale cache masking errors that GitHub CI (cold run) would catch
+uv run mypy ster/ --no-incremental && ok "mypy"
 
 # ── 4. Security ───────────────────────────────────────────────────────────────
 step "Security — bandit"

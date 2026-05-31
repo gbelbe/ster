@@ -41,6 +41,6 @@ Feature: Focused graph from OWL class in tree view
     When I build a focused graph rooted at "Animal"
     Then the node for "Tweety" is absent
 
-  Scenario: Layout is always hierarchical
+  Scenario: Layout is always cose for focused OWL graphs
     When I build a focused graph rooted at "Animal"
-    Then the graph layout is "hierarchical"
+    Then the graph layout is "cose"

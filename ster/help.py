@@ -69,6 +69,12 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "GRAPH VIEWS  (tree view)",
+        [
+            ("G", "open Cytoscape graph in browser"),
+        ],
+    ),
+    (
         "GENERAL",
         [
             ("q / Esc", "quit ster"),

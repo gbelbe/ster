@@ -137,6 +137,6 @@ def then_tweety_absent(ctx):
     assert _uri("Tweety") not in _node_ids(ctx)
 
 
-@then('the graph layout is "hierarchical"')
-def then_layout_hierarchical(ctx):
-    assert ctx["result"]["layout"] == "hierarchical"
+@then('the graph layout is "cose"')
+def then_layout_cose(ctx):
+    assert ctx["result"]["layout"] == "cose"

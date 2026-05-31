@@ -1,16 +1,16 @@
 Feature: Live refresh via SSE
-  As a user of the WebVOWL view
+  As a user of the graph view
   I want the graph to update automatically when the ontology file changes
   So that edits made in the ster CLI are immediately reflected in the browser
 
   Background:
     Given the API server is running with the Animal/Dog/Tool ontology
 
-  Scenario: GET /api/graph returns VOWL graph with nodes and links
+  Scenario: GET /api/graph returns graph data with nodes and edges
     When I GET /api/graph
     Then the response status is 200
     And the response contains a "nodes" list
-    And the response contains a "links" list
+    And the response contains an "edges" list
 
   Scenario: GET /api/events returns SSE content type
     When I GET /api/events with the token as query param

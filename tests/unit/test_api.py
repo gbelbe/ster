@@ -244,10 +244,10 @@ def test_get_graph_returns_200(client):
     assert client.get("/api/graph", headers=AUTH).status_code == 200
 
 
-def test_get_graph_has_nodes_and_links(client):
+def test_get_graph_has_nodes_and_edges(client):
     data = client.get("/api/graph", headers=AUTH).json()
     assert "nodes" in data
-    assert "links" in data
+    assert "edges" in data
 
 
 # ── SSE: GET /api/events ──────────────────────────────────────────────────────

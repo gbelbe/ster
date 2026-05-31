@@ -59,7 +59,7 @@ def test_empty_uri_set_returns_empty_graph():
     tax.concepts[_NS + "A"] = Concept(uri=_NS + "A")
     result = build_query_result_graph(tax, set())
     assert result["nodes"] == []
-    assert result["links"] == []
+    assert result["edges"] == []
 
 
 def test_unknown_uri_is_skipped():
@@ -106,7 +106,7 @@ def test_link_between_two_result_uris_is_included():
     tax.concepts[_NS + "Parent"] = Concept(uri=_NS + "Parent")
     tax.concepts[_NS + "Child"] = Concept(uri=_NS + "Child", broader=[_NS + "Parent"])
     result = build_query_result_graph(tax, {_NS + "Parent", _NS + "Child"})
-    sources = [lk["source"] for lk in result["links"]]
+    sources = [lk["source"] for lk in result["edges"]]
     assert _NS + "Child" in sources
 
 
@@ -116,7 +116,7 @@ def test_link_to_external_node_is_excluded():
     tax.concepts[_NS + "Child"] = Concept(uri=_NS + "Child", broader=[_NS + "Parent"])
     # Only Child in result set — Parent is absent, so the broader link is excluded
     result = build_query_result_graph(tax, {_NS + "Child"})
-    assert result["links"] == []
+    assert result["edges"] == []
 
 
 def test_subclass_link_between_two_result_classes_is_included():
@@ -124,22 +124,22 @@ def test_subclass_link_between_two_result_classes_is_included():
     tax.owl_classes[_NS + "Animal"] = RDFClass(uri=_NS + "Animal")
     tax.owl_classes[_NS + "Dog"] = RDFClass(uri=_NS + "Dog", sub_class_of=[_NS + "Animal"])
     result = build_query_result_graph(tax, {_NS + "Animal", _NS + "Dog"})
-    link_types = [lk["type"] for lk in result["links"]]
+    link_types = [lk["type"] for lk in result["edges"]]
     assert "subClassOf" in link_types
 
 
 # ── build_query_result_graph — layout ─────────────────────────────────────────
 
 
-def test_result_graph_always_uses_force_layout():
+def test_result_graph_always_uses_cose_layout():
     tax = Taxonomy()
     tax.concepts[_NS + "A"] = Concept(uri=_NS + "A")
     result = build_query_result_graph(tax, {_NS + "A"})
-    assert result["layout"] == "force"
+    assert result["layout"] == "cose"
 
 
-def test_result_graph_uses_force_layout_even_for_owl_only():
+def test_result_graph_uses_cose_layout_even_for_owl_only():
     tax = Taxonomy()
     tax.owl_classes[_NS + "Cls"] = RDFClass(uri=_NS + "Cls")
     result = build_query_result_graph(tax, {_NS + "Cls"})
-    assert result["layout"] == "force"
+    assert result["layout"] == "cose"

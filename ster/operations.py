@@ -705,6 +705,9 @@ def _rename_owl_individual(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> No
         other_ind.property_values = [
             (p, new_uri if v == old_uri else v) for p, v in other_ind.property_values
         ]
+        other_ind.literal_values = [
+            (new_uri if p == old_uri else p, v, ld) for p, v, ld in other_ind.literal_values
+        ]
 
 
 def _rename_owl_property(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
@@ -712,9 +715,12 @@ def _rename_owl_property(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None
     prop.uri = new_uri
     taxonomy.owl_properties[new_uri] = prop
 
-    # Update all individuals' property_values where this URI appears as predicate
+    # Update all individuals' property_values and literal_values where this URI appears as predicate
     for ind in taxonomy.owl_individuals.values():
         ind.property_values = [(new_uri if p == old_uri else p, v) for p, v in ind.property_values]
+        ind.literal_values = [
+            (new_uri if p == old_uri else p, v, ld) for p, v, ld in ind.literal_values
+        ]
 
 
 def collect_ontology_entities(taxonomy: Taxonomy) -> list[str]:
@@ -807,12 +813,42 @@ def rename_ontology_uri(taxonomy: Taxonomy, new_uri: str, new_sep: str) -> None:
         ind.property_values = [
             (old_to_new.get(p, p), old_to_new.get(v, v)) for p, v in ind.property_values
         ]
+        ind.literal_values = [(old_to_new.get(p, p), v, ld) for p, v, ld in ind.literal_values]
 
     for prop in taxonomy.owl_properties.values():
         _remap(prop.domains)
         _remap(prop.ranges)
 
     taxonomy.ontology_uri = new_uri
+
+
+def count_ontology_rename_changes(
+    taxonomy: Taxonomy, new_uri: str, new_sep: str
+) -> tuple[str, str, int]:
+    """Return (old_base, new_base, count) for a prospective ontology base URI rename.
+
+    *old_base* is the current base URI with its detected separator appended.
+    *new_base* is *new_uri* + *new_sep*.
+    *count* is the number of local entities whose URI would change (0 when unchanged).
+    """
+    old_uri = (taxonomy.ontology_uri or "").rstrip("#/")
+    new_uri_clean = new_uri.rstrip("#/")
+
+    old_sep = "#"
+    for u in (
+        list(taxonomy.owl_classes) + list(taxonomy.owl_individuals) + list(taxonomy.owl_properties)
+    ):
+        if len(u) > len(old_uri) and u.startswith(old_uri) and u[len(old_uri)] in ("#", "/"):
+            old_sep = u[len(old_uri)]
+            break
+
+    old_base = old_uri + old_sep
+    new_base = new_uri_clean + new_sep
+
+    if old_base == new_base:
+        return old_base, new_base, 0
+
+    return old_base, new_base, len(collect_ontology_entities(taxonomy))
 
 
 def count_owl_uri_references(taxonomy: Taxonomy, uri: str) -> int:
@@ -863,6 +899,7 @@ def count_owl_uri_references(taxonomy: Taxonomy, uri: str) -> int:
             continue
         count += ind.types.count(uri)
         count += sum(1 for p, v in ind.property_values if p == uri or v == uri)
+        count += sum(1 for p, _v, _ld in ind.literal_values if p == uri)
 
     for prop_uri, prop in taxonomy.owl_properties.items():
         if prop_uri == uri:
