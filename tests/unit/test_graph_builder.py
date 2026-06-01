@@ -249,3 +249,119 @@ def test_query_result_uses_cose_layout():
     tax.owl_classes[_uri("Dog")] = _cls("Dog")
     result = build_query_result_graph(tax, {_uri("Dog")})
     assert result["layout"] == "cose"
+
+
+# ── build_individual_relations_graph ───────────────────────────────────────────
+
+
+def _rel_tax():
+    """Alice (Person) ← owns ← Fido (Dog); Alice → livesIn → Paris (City).
+
+    Bob (Person) is unrelated to Alice.
+    """
+    from ster.model import OWLProperty as _P
+
+    t = Taxonomy()
+    for c in ("Person", "Dog", "City"):
+        t.owl_classes[_uri(c)] = _cls(c)
+    t.owl_properties[_uri("owns")] = _P(uri=_uri("owns"), labels=[Label("en", "owns")])
+    t.owl_properties[_uri("livesIn")] = _P(uri=_uri("livesIn"), labels=[Label("en", "livesIn")])
+    t.owl_individuals[_uri("Alice")] = _ind("Alice", "Person")
+    t.owl_individuals[_uri("Fido")] = _ind("Fido", "Dog")
+    t.owl_individuals[_uri("Paris")] = _ind("Paris", "City")
+    t.owl_individuals[_uri("Bob")] = _ind("Bob", "Person")
+    # Fido owns Alice (incoming to Alice); Alice livesIn Paris (outgoing from Alice)
+    t.owl_individuals[_uri("Fido")].property_values.append((_uri("owns"), _uri("Alice")))
+    t.owl_individuals[_uri("Alice")].property_values.append((_uri("livesIn"), _uri("Paris")))
+    return t
+
+
+def test_individual_relations_includes_focus():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert _uri("Alice") in _node_ids(g)
+
+
+def test_individual_relations_includes_incoming_neighbour():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert _uri("Fido") in _node_ids(g)
+    assert any(
+        e["source"] == _uri("Fido") and e["target"] == _uri("Alice") and e["type"] == "objectProperty"
+        for e in g["edges"]
+    )
+
+
+def test_individual_relations_includes_outgoing_neighbour():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert _uri("Paris") in _node_ids(g)
+    assert any(
+        e["source"] == _uri("Alice") and e["target"] == _uri("Paris") and e["type"] == "objectProperty"
+        for e in g["edges"]
+    )
+
+
+def test_individual_relations_object_property_edge_carries_label():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    incoming = next(
+        e for e in g["edges"] if e["source"] == _uri("Fido") and e["target"] == _uri("Alice")
+    )
+    assert incoming["label"] == "owns"
+
+
+def test_individual_relations_includes_focus_classes():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert _uri("Person") in _node_ids(g)
+    assert any(
+        e["source"] == _uri("Alice") and e["target"] == _uri("Person") and e["type"] == "instanceOf"
+        for e in g["edges"]
+    )
+
+
+def test_individual_relations_includes_related_individual_classes():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    # Dog (Fido's class) and City (Paris's class) must appear
+    assert _uri("Dog") in _node_ids(g)
+    assert _uri("City") in _node_ids(g)
+
+
+def test_individual_relations_excludes_unrelated_individual():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert _uri("Bob") not in _node_ids(g)
+
+
+def test_individual_relations_ignores_literal_values():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    t = _rel_tax()
+    t.owl_individuals[_uri("Alice")].literal_values.append((_uri("age"), "30", ""))
+    g = build_individual_relations_graph(t, _uri("Alice"))
+    assert _uri("age") not in _node_ids(g)
+    assert "datatypeProperty" not in _edge_types(g)
+
+
+def test_individual_relations_missing_uri_returns_empty():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Ghost"))
+    assert g["nodes"] == []
+    assert g["edges"] == []
+
+
+def test_individual_relations_layout_is_cose():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
+    assert g["layout"] == "cose"

@@ -310,6 +310,19 @@ def create_app(
         return build_vowl_graph(_tax())  # type: ignore[return-value]
 
     @app.get(
+        "/api/individual-relations",
+        summary="Return the object-property relations subgraph for an individual",
+        tags=["Visualisation"],
+    )
+    def get_individual_relations(
+        uri: str = Query(description="URI of the individual to expand"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import build_individual_relations_graph
+
+        return build_individual_relations_graph(_tax(), uri)  # type: ignore[return-value]
+
+    @app.get(
         "/api/events",
         summary="SSE stream — fires 'updated' whenever the ontology changes",
         tags=["Visualisation"],

@@ -292,9 +292,37 @@ window._sterNav=navigateTo;
 window._sterBack=function(){highlighted=null;applyHighlight();showDefault();};
 window._sterToggleIndiv=toggleAllIndividuals;
 
+// ── Expand relations (object-property neighbourhood of an individual) ─────────
+// Server-only: fetches a focused subgraph from the API, swaps it in, and keeps
+// the previous graph so Escape can restore the original view.
+let _savedGraph=null;
+function expandRelations(uri){
+  if(!API_TOKEN)return;
+  fetch('/api/individual-relations?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{
+      if(!d||!d.nodes||!d.nodes.length)return;
+      if(!_savedGraph){_savedGraph={els:cy.elements().jsons(),zoom:cy.zoom(),pan:cy.pan()};}
+      cy.elements().remove();
+      cy.add(buildElements(d));
+      cy.layout(makeLayout()).run();
+      const n=cy.$('#'+CSS.escape(uri));
+      if(n.length){highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());}
+    }).catch(()=>{});
+}
+function restoreGraph(){
+  if(!_savedGraph)return;
+  cy.elements().remove();
+  cy.add(_savedGraph.els);
+  cy.viewport({zoom:_savedGraph.zoom,pan:_savedGraph.pan});
+  _savedGraph=null;
+  highlighted=null;applyHighlight();showDefault();
+}
+window._sterExpandRelations=expandRelations;
+
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
+  if(e.key==='Escape'){const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
   if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}cy.layout(makeLayout()).run();_saveState();}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(0.77);}
@@ -352,6 +380,7 @@ function showDetail(d){
   h+='<button class="dp-back" onclick="window._sterBack()">← Overview</button>';
   h+='<span class="dp-badge dp-'+d.type+'">'+(KM[d.type]||d.type)+'</span>';
   h+='<div class="dp-h3">'+esc(d.label)+'</div><div class="dp-uri">'+esc(d.id)+'</div>';
+  if(d.type==='individual'&&API_TOKEN){h+='<button class="dp-indiv-btn" onclick="window._sterExpandRelations('+JSON.stringify(d.id)+')">Expand relations</button>';}
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
   if(showLbls.length){h+='<hr class="dp-hr"><div class="dp-sub">Labels</div>';showLbls.forEach(l=>{h+='<div class="dp-lbl">';if(l.lang)h+='<span class="dp-lang">['+esc(l.lang)+']</span>';h+='<span class="'+(l.kind==='alt'?'dp-alt':'dp-pref')+'">'+esc(l.value)+'</span></div>';});}
   const coms=det.comments||[];if(coms.length){h+='<hr class="dp-hr"><div class="dp-sub">Comments</div>';coms.forEach(c=>{h+='<div class="dp-desc">'+esc(c.value)+'</div>';});}

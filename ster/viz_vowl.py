@@ -338,6 +338,117 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
     return {"nodes": nodes, "edges": edges, "layout": "cose"}
 
 
+# ── individual relations subgraph ─────────────────────────────────────────────
+
+
+def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
+    """Serialise the object-property neighbourhood of *ind_uri* into a payload.
+
+    Centred on one individual, the subgraph contains:
+      * the focus individual;
+      * every individual linked to it by an object property in **either**
+        direction (incoming ``S --prop--> focus`` and outgoing
+        ``focus --prop--> T``), each as a directed, property-labelled edge;
+      * the class(es) the focus belongs to (``instanceOf`` edges);
+      * the class(es) of every related individual.
+
+    Datatype / literal assertions are ignored. Returns an empty payload when
+    *ind_uri* is not a known individual.  Layout is always ``cose``.
+    """
+    if ind_uri not in taxonomy.owl_individuals:
+        return {"nodes": [], "edges": [], "layout": "cose"}
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen_nodes: set[str] = set()
+    _ec = 0
+
+    def _eid() -> str:
+        nonlocal _ec
+        eid = f"e{_ec}"
+        _ec += 1
+        return eid
+
+    def add_node(uri: str, label: str, node_type: str, detail: dict | None = None) -> None:
+        if uri not in seen_nodes:
+            seen_nodes.add(uri)
+            nodes.append(
+                {
+                    "id": uri,
+                    "label": label,
+                    "type": node_type,
+                    "detail": detail or {},
+                    "rootClass": 0,
+                }
+            )
+
+    def add_individual(uri: str) -> None:
+        ind = taxonomy.owl_individuals[uri]
+        add_node(uri, ind.label("en"), "individual", _detail_individual(ind, taxonomy))
+
+    def _prop_label(prop_uri: str) -> str:
+        prop = taxonomy.owl_properties.get(prop_uri)
+        return prop.label("en") if prop else _local(prop_uri)
+
+    add_individual(ind_uri)
+
+    related: set[str] = set()
+
+    # Outgoing: focus --prop--> target (object-property values to individuals)
+    for prop_uri, val_uri in taxonomy.owl_individuals[ind_uri].property_values:
+        if val_uri in taxonomy.owl_individuals:
+            add_individual(val_uri)
+            related.add(val_uri)
+            edges.append(
+                {
+                    "id": _eid(),
+                    "source": ind_uri,
+                    "target": val_uri,
+                    "type": "objectProperty",
+                    "label": _prop_label(prop_uri),
+                }
+            )
+
+    # Incoming: source --prop--> focus
+    for src_uri, src in taxonomy.owl_individuals.items():
+        if src_uri == ind_uri:
+            continue
+        for prop_uri, val_uri in src.property_values:
+            if val_uri == ind_uri:
+                add_individual(src_uri)
+                related.add(src_uri)
+                edges.append(
+                    {
+                        "id": _eid(),
+                        "source": src_uri,
+                        "target": ind_uri,
+                        "type": "objectProperty",
+                        "label": _prop_label(prop_uri),
+                    }
+                )
+
+    # rdf:type for the focus and every related individual
+    for x_uri in {ind_uri, *related}:
+        for type_uri in taxonomy.owl_individuals[x_uri].types:
+            if is_builtin_uri(type_uri):
+                continue
+            cls = taxonomy.owl_classes.get(type_uri)
+            label = cls.label("en") if cls else _local(type_uri)
+            detail = _detail_class(cls, taxonomy) if cls else {}
+            add_node(type_uri, label, "class", detail)
+            edges.append(
+                {
+                    "id": _eid(),
+                    "source": x_uri,
+                    "target": type_uri,
+                    "type": "instanceOf",
+                    "label": "",
+                }
+            )
+
+    return {"nodes": nodes, "edges": edges, "layout": "cose"}
+
+
 # ── SPARQL result subgraph ────────────────────────────────────────────────────
 
 
