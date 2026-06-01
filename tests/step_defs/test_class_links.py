@@ -44,8 +44,11 @@ def given_object_property(ctx: dict, prop: str, dom: str, rng: str) -> None:
     _ensure_class(t, dom)
     _ensure_class(t, rng)
     t.owl_properties[_u(prop)] = OWLProperty(
-        uri=_u(prop), prop_type="ObjectProperty", labels=[Label("en", prop)],
-        domains=[_u(dom)], ranges=[_u(rng)],
+        uri=_u(prop),
+        prop_type="ObjectProperty",
+        labels=[Label("en", prop)],
+        domains=[_u(dom)],
+        ranges=[_u(rng)],
     )
 
 
@@ -88,13 +91,13 @@ def then_subclass_edge(ctx: dict, src: str, tgt: str) -> None:
 
 
 @then(
-    parsers.parse(
-        'there is an object-property class-edge from "{src}" to "{tgt}" labelled "{lbl}"'
-    )
+    parsers.parse('there is an object-property class-edge from "{src}" to "{tgt}" labelled "{lbl}"')
 )
 def then_op_edge(ctx: dict, src: str, tgt: str, lbl: str) -> None:
     assert any(
-        e["source"] == _u(src) and e["target"] == _u(tgt)
-        and e["type"] == "objectProperty" and e["label"] == lbl
+        e["source"] == _u(src)
+        and e["target"] == _u(tgt)
+        and e["type"] == "objectProperty"
+        and e["label"] == lbl
         for e in ctx["graph"]["edges"]
     )

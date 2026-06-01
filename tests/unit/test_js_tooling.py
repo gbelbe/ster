@@ -52,7 +52,5 @@ def test_browser_assets_pass_eslint():
     eslint = ROOT / "node_modules" / ".bin" / "eslint"
     if not eslint.exists():
         pytest.skip("eslint not installed (run `npm ci`)")
-    proc = subprocess.run(
-        [str(eslint), "."], cwd=ROOT, capture_output=True, text=True, check=False
-    )
+    proc = subprocess.run([str(eslint), "."], cwd=ROOT, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr

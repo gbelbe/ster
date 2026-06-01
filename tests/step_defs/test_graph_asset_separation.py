@@ -21,7 +21,9 @@ def ctx() -> dict:
 
 
 def _stub(version: str) -> str:
-    return f"<script>{_LIB_MARKER} window.cytoscape=function(){{return{{}};}}; // {version}</script>"
+    return (
+        f"<script>{_LIB_MARKER} window.cytoscape=function(){{return{{}};}}; // {version}</script>"
+    )
 
 
 # ── Given ─────────────────────────────────────────────────────────────────────
@@ -59,7 +61,9 @@ def when_render_two_libs(ctx: dict, monkeypatch) -> None:
     monkeypatch.setattr(
         viz_vowl,
         "_cytoscape_script_tag",
-        lambda: "<script>/* 9.9.9 NEW different bytes */window.cytoscape=function(){return 42;};</script>",
+        lambda: (
+            "<script>/* 9.9.9 NEW different bytes */window.cytoscape=function(){return 42;};</script>"
+        ),
     )
     ctx["html_new"] = render_vowl_html(ctx["taxonomy"], file_path=None)
 

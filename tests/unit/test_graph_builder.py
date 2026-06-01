@@ -289,7 +289,9 @@ def test_individual_relations_includes_incoming_neighbour():
     g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
     assert _uri("Fido") in _node_ids(g)
     assert any(
-        e["source"] == _uri("Fido") and e["target"] == _uri("Alice") and e["type"] == "objectProperty"
+        e["source"] == _uri("Fido")
+        and e["target"] == _uri("Alice")
+        and e["type"] == "objectProperty"
         for e in g["edges"]
     )
 
@@ -300,7 +302,9 @@ def test_individual_relations_includes_outgoing_neighbour():
     g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
     assert _uri("Paris") in _node_ids(g)
     assert any(
-        e["source"] == _uri("Alice") and e["target"] == _uri("Paris") and e["type"] == "objectProperty"
+        e["source"] == _uri("Alice")
+        and e["target"] == _uri("Paris")
+        and e["type"] == "objectProperty"
         for e in g["edges"]
     )
 
@@ -459,12 +463,18 @@ def _class_links_tax():
     t.owl_classes[_uri("Company")] = _cls("Company")
     t.owl_classes[_uri("Unrelated")] = _cls("Unrelated")
     t.owl_properties[_uri("owns")] = OWLProperty(
-        uri=_uri("owns"), prop_type="ObjectProperty", labels=[Label("en", "owns")],
-        domains=[_uri("Person")], ranges=[_uri("Pet")],
+        uri=_uri("owns"),
+        prop_type="ObjectProperty",
+        labels=[Label("en", "owns")],
+        domains=[_uri("Person")],
+        ranges=[_uri("Pet")],
     )
     t.owl_properties[_uri("employs")] = OWLProperty(
-        uri=_uri("employs"), prop_type="ObjectProperty", labels=[Label("en", "employs")],
-        domains=[_uri("Company")], ranges=[_uri("Person")],
+        uri=_uri("employs"),
+        prop_type="ObjectProperty",
+        labels=[Label("en", "employs")],
+        domains=[_uri("Company")],
+        ranges=[_uri("Person")],
     )
     return t
 
@@ -493,8 +503,10 @@ def test_class_links_includes_object_property_range_class():
     g = build_class_links_graph(_class_links_tax(), _uri("Person"))
     assert _uri("Pet") in _node_ids(g)
     assert any(
-        e["source"] == _uri("Person") and e["target"] == _uri("Pet")
-        and e["type"] == "objectProperty" and e["label"] == "owns"
+        e["source"] == _uri("Person")
+        and e["target"] == _uri("Pet")
+        and e["type"] == "objectProperty"
+        and e["label"] == "owns"
         for e in g["edges"]
     )
 
@@ -505,8 +517,10 @@ def test_class_links_includes_object_property_domain_class():
     g = build_class_links_graph(_class_links_tax(), _uri("Person"))
     assert _uri("Company") in _node_ids(g)
     assert any(
-        e["source"] == _uri("Company") and e["target"] == _uri("Person")
-        and e["type"] == "objectProperty" and e["label"] == "employs"
+        e["source"] == _uri("Company")
+        and e["target"] == _uri("Person")
+        and e["type"] == "objectProperty"
+        and e["label"] == "employs"
         for e in g["edges"]
     )
 

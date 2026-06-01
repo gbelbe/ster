@@ -96,9 +96,7 @@ def then_count_at_least(ctx: dict, name: str, n: int) -> None:
 
 
 @then(
-    parsers.parse(
-        'counting all references to "{name}" is at least the concept plus class counts'
-    )
+    parsers.parse('counting all references to "{name}" is at least the concept plus class counts')
 )
 def then_count_sums_layers(ctx: dict, name: str) -> None:
     t: Taxonomy = ctx["taxonomy"]

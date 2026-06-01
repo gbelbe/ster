@@ -26,8 +26,11 @@ def make_taxonomy() -> Taxonomy:
     t.owl_classes[uri("Pet")] = RDFClass(uri=uri("Pet"), labels=[Label("en", "Pet")])
     t.owl_classes[uri("Unrelated")] = RDFClass(uri=uri("Unrelated"), labels=[Label("en", "U")])
     t.owl_properties[uri("owns")] = OWLProperty(
-        uri=uri("owns"), prop_type="ObjectProperty", labels=[Label("en", "owns")],
-        domains=[uri("Person")], ranges=[uri("Pet")],
+        uri=uri("owns"),
+        prop_type="ObjectProperty",
+        labels=[Label("en", "owns")],
+        domains=[uri("Person")],
+        ranges=[uri("Pet")],
     )
     return t
 
@@ -43,7 +46,8 @@ def test_class_links_requires_auth(client):
 
 def test_class_links_wrong_token_401(client):
     r = client.get(
-        "/api/class-links", params={"uri": uri("Person")},
+        "/api/class-links",
+        params={"uri": uri("Person")},
         headers={"Authorization": "Bearer bad"},
     )
     assert r.status_code == 401

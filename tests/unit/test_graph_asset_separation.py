@@ -131,8 +131,10 @@ def test_library_upgrade_leaves_app_block_unchanged(monkeypatch):
     monkeypatch.setattr(
         viz_vowl,
         "_cytoscape_script_tag",
-        lambda: "<script>/* cytoscape 9.9.9 — NEW, totally different bytes */ "
-        "window.cytoscape=function(){return 42;};</script>",
+        lambda: (
+            "<script>/* cytoscape 9.9.9 — NEW, totally different bytes */ "
+            "window.cytoscape=function(){return 42;};</script>"
+        ),
     )
     html_new = render_vowl_html(t, file_path=None)
     assert _app_block(html_old) == _app_block(html_new) == _app_js().strip()

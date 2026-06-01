@@ -29,9 +29,7 @@ def ctx() -> dict:
 def given_two_concepts(ctx: dict, a: str, b: str) -> None:
     t = Taxonomy()
     for name in (a, b):
-        t.concepts[_u(name)] = Concept(
-            uri=_u(name), labels=[Label("en", name, LabelType.PREF)]
-        )
+        t.concepts[_u(name)] = Concept(uri=_u(name), labels=[Label("en", name, LabelType.PREF)])
     ctx["taxonomy"] = t
 
 

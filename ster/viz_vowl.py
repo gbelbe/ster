@@ -403,15 +403,25 @@ def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
                     add_class(r, superclass=0)
                     linked.add(r)
                     edges.append(
-                        {"id": _eid(), "source": d, "target": r,
-                         "type": "objectProperty", "label": plabel}
+                        {
+                            "id": _eid(),
+                            "source": d,
+                            "target": r,
+                            "type": "objectProperty",
+                            "label": plabel,
+                        }
                     )
                 elif r == class_uri and d != class_uri:
                     add_class(d, superclass=0)
                     linked.add(d)
                     edges.append(
-                        {"id": _eid(), "source": d, "target": r,
-                         "type": "objectProperty", "label": plabel}
+                        {
+                            "id": _eid(),
+                            "source": d,
+                            "target": r,
+                            "type": "objectProperty",
+                            "label": plabel,
+                        }
                     )
 
     # ── superclass trail above the focus class ────────────────────────────
@@ -431,8 +441,13 @@ def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
             if (cur, parent) not in seen_subclass_edges:
                 seen_subclass_edges.add((cur, parent))
                 edges.append(
-                    {"id": _eid(), "source": cur, "target": parent,
-                     "type": "subClassOf", "label": ""}
+                    {
+                        "id": _eid(),
+                        "source": cur,
+                        "target": parent,
+                        "type": "subClassOf",
+                        "label": "",
+                    }
                 )
             stack.append(parent)
 

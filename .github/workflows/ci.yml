@@ -24,14 +24,16 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: Install ruff
-        run: uv tool install ruff
+      # Use the project's pinned ruff (from uv.lock) — not `uv tool install ruff`
+      # (always-latest) — so CI and local scripts/ci.sh can never drift apart.
+      - name: Install deps
+        run: uv sync --extra html --extra api --extra dev
 
       - name: ruff — check rules
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: ruff — check formatting
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
   # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
   js:

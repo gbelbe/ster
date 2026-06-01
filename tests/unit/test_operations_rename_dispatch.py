@@ -82,9 +82,7 @@ def test_count_uri_references_routes_to_concept():
     t.concepts[uri("Animal")] = _concept("Animal")
     t.concepts[uri("Dog")] = _concept("Dog")
     t.concepts[uri("Dog")].broader.append(uri("Animal"))
-    assert count_uri_references(t, uri("Animal")) == count_concept_uri_references(
-        t, uri("Animal")
-    )
+    assert count_uri_references(t, uri("Animal")) == count_concept_uri_references(t, uri("Animal"))
 
 
 def test_count_uri_references_routes_to_owl():
