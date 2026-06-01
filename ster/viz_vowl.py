@@ -427,15 +427,49 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
                     }
                 )
 
-    # rdf:type for the focus and every related individual
+    seen_subclass_edges: set[tuple[str, str]] = set()
+
+    def add_class_with_ancestors(cls_uri: str) -> None:
+        """Add *cls_uri* and its transitive ``subClassOf`` ancestors as a trail.
+
+        Each ancestor becomes a class node and each step a ``subClassOf`` edge
+        (child → parent).  Builtin URIs are skipped, ancestor nodes and edges are
+        de-duplicated, and subclass cycles terminate via the visited set.
+        """
+        stack = [cls_uri]
+        visited: set[str] = set()
+        while stack:
+            cur = stack.pop()
+            if cur in visited or is_builtin_uri(cur):
+                continue
+            visited.add(cur)
+            cls = taxonomy.owl_classes.get(cur)
+            label = cls.label("en") if cls else _local(cur)
+            detail = _detail_class(cls, taxonomy) if cls else {}
+            add_node(cur, label, "class", detail)
+            for parent in cls.sub_class_of if cls else []:
+                if is_builtin_uri(parent):
+                    continue
+                if (cur, parent) not in seen_subclass_edges:
+                    seen_subclass_edges.add((cur, parent))
+                    edges.append(
+                        {
+                            "id": _eid(),
+                            "source": cur,
+                            "target": parent,
+                            "type": "subClassOf",
+                            "label": "",
+                        }
+                    )
+                stack.append(parent)
+
+    # rdf:type (and the superclass trail above each class) for the focus and
+    # every related individual
     for x_uri in {ind_uri, *related}:
         for type_uri in taxonomy.owl_individuals[x_uri].types:
             if is_builtin_uri(type_uri):
                 continue
-            cls = taxonomy.owl_classes.get(type_uri)
-            label = cls.label("en") if cls else _local(type_uri)
-            detail = _detail_class(cls, taxonomy) if cls else {}
-            add_node(type_uri, label, "class", detail)
+            add_class_with_ancestors(type_uri)
             edges.append(
                 {
                     "id": _eid(),

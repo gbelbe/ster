@@ -36,3 +36,18 @@ Feature: Expand the object-property relations around an individual
   Scenario: Unrelated individuals are excluded
     When I expand relations for "Alice"
     Then node "Bob" is absent
+
+  Scenario: Superclasses of the focus class are included as a trail
+    Given "Person" is a subclass of "Agent"
+    And "Agent" is a subclass of "Thing"
+    When I expand relations for "Alice"
+    Then node "Agent" is present
+    And node "Thing" is present
+    And there is a subClassOf edge from "Person" to "Agent"
+    And there is a subClassOf edge from "Agent" to "Thing"
+
+  Scenario: Superclasses of related individuals' classes are included
+    Given "Dog" is a subclass of "Animal"
+    When I expand relations for "Alice"
+    Then node "Animal" is present
+    And there is a subClassOf edge from "Dog" to "Animal"

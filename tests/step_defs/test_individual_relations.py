@@ -60,6 +60,16 @@ def given_unrelated(ctx: dict, name: str, cls: str) -> None:
     )
 
 
+@given(parsers.parse('"{child}" is a subclass of "{parent}"'))
+def given_subclass(ctx: dict, child: str, parent: str) -> None:
+    t: Taxonomy = ctx["taxonomy"]
+    for cls in (child, parent):
+        if _u(cls) not in t.owl_classes:
+            t.owl_classes[_u(cls)] = RDFClass(uri=_u(cls), labels=[Label("en", cls)])
+    if _u(parent) not in t.owl_classes[_u(child)].sub_class_of:
+        t.owl_classes[_u(child)].sub_class_of.append(_u(parent))
+
+
 # ── When ──────────────────────────────────────────────────────────────────────
 
 
@@ -94,3 +104,11 @@ def then_edge(ctx: dict, src: str, tgt: str, lbl: str) -> None:
         and e["label"] == lbl
         for e in ctx["graph"]["edges"]
     ), f"no {src}->{tgt} '{lbl}' edge in {ctx['graph']['edges']}"
+
+
+@then(parsers.parse('there is a subClassOf edge from "{src}" to "{tgt}"'))
+def then_subclass_edge(ctx: dict, src: str, tgt: str) -> None:
+    assert any(
+        e["source"] == _u(src) and e["target"] == _u(tgt) and e["type"] == "subClassOf"
+        for e in ctx["graph"]["edges"]
+    ), f"no subClassOf {src}->{tgt} edge in {ctx['graph']['edges']}"

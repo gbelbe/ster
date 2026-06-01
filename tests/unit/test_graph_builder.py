@@ -365,3 +365,78 @@ def test_individual_relations_layout_is_cose():
 
     g = build_individual_relations_graph(_rel_tax(), _uri("Alice"))
     assert g["layout"] == "cose"
+
+
+# ── build_individual_relations_graph: superclass trail ─────────────────────────
+
+
+def _rel_tax_with_hierarchy():
+    """Alice:Person ⊑ Agent ⊑ Thing; Fido:Dog ⊑ Animal ⊑ Thing; Fido owns Alice."""
+    t = Taxonomy()
+    t.owl_classes[_uri("Thing")] = _cls("Thing")
+    t.owl_classes[_uri("Agent")] = _cls("Agent", sub_class_of=[_uri("Thing")])
+    t.owl_classes[_uri("Animal")] = _cls("Animal", sub_class_of=[_uri("Thing")])
+    t.owl_classes[_uri("Person")] = _cls("Person", sub_class_of=[_uri("Agent")])
+    t.owl_classes[_uri("Dog")] = _cls("Dog", sub_class_of=[_uri("Animal")])
+    t.owl_properties[_uri("owns")] = OWLProperty(uri=_uri("owns"), labels=[Label("en", "owns")])
+    t.owl_individuals[_uri("Alice")] = _ind("Alice", "Person")
+    t.owl_individuals[_uri("Fido")] = _ind("Fido", "Dog")
+    t.owl_individuals[_uri("Fido")].property_values.append((_uri("owns"), _uri("Alice")))
+    return t
+
+
+def test_individual_relations_includes_direct_superclass_of_focus_class():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    assert _uri("Agent") in _node_ids(g)
+
+
+def test_individual_relations_includes_transitive_superclasses():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    # Person ⊑ Agent ⊑ Thing — the whole trail above Alice's class
+    assert {_uri("Person"), _uri("Agent"), _uri("Thing")} <= _node_ids(g)
+
+
+def test_individual_relations_superclass_edge_is_subclassof_type():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    assert any(
+        e["source"] == _uri("Person") and e["target"] == _uri("Agent") and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+    assert any(
+        e["source"] == _uri("Agent") and e["target"] == _uri("Thing") and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+
+
+def test_individual_relations_includes_superclasses_of_related_individual_classes():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    # Fido (related) is a Dog ⊑ Animal ⊑ Thing
+    assert {_uri("Dog"), _uri("Animal")} <= _node_ids(g)
+
+
+def test_individual_relations_shared_ancestor_not_duplicated():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    thing_nodes = [n for n in g["nodes"] if n["id"] == _uri("Thing")]
+    assert len(thing_nodes) == 1
+
+
+def test_individual_relations_subclass_cycle_terminates():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    t = Taxonomy()
+    # A ⊑ B ⊑ A (pathological cycle) — must not loop forever
+    t.owl_classes[_uri("A")] = _cls("A", sub_class_of=[_uri("B")])
+    t.owl_classes[_uri("B")] = _cls("B", sub_class_of=[_uri("A")])
+    t.owl_individuals[_uri("X")] = _ind("X", "A")
+    g = build_individual_relations_graph(t, _uri("X"))
+    assert {_uri("A"), _uri("B")} <= _node_ids(g)
