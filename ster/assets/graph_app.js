@@ -51,43 +51,47 @@ function makeLayout(){
 const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:window.devicePixelRatio||1});
 
 // ── Graph state persistence (positions + viewport, survives browser/ster restart) ──
-const _stateKey='ster_state_'+location.pathname;
+// Keyed per-path AND guarded by a signature of the current node set, so a
+// different ontology (or an expanded subgraph) served at the same URL never
+// restores stale positions. The version prefix invalidates any state saved by
+// older builds that persisted the pre-layout pile-up.
+const _stateKey='ster_state_v2_'+location.pathname;
+function _graphSig(){
+  const ids=cy.nodes().map(n=>n.id()).sort().join('|');
+  let h=0;for(let i=0;i<ids.length;i++){h=(h*31+ids.charCodeAt(i))|0;}
+  return cy.nodes().size()+':'+h;
+}
 function _saveState(){
   try{
     const pos=[];
     cy.nodes().forEach(n=>{const p=n.position();pos.push({id:n.id(),x:p.x,y:p.y});});
-    localStorage.setItem(_stateKey,JSON.stringify({pos,zoom:cy.zoom(),pan:cy.pan()}));
+    localStorage.setItem(_stateKey,JSON.stringify({sig:_graphSig(),pos,zoom:cy.zoom(),pan:cy.pan()}));
   }catch(_){}
 }
 let _saveTimer;
 function _debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(_saveState,400);}
 
-// On load: restore saved state or run fresh layout
+// cose is asynchronous: persist positions only once the layout settles,
+// otherwise we'd save the initial origin pile-up and restore clutter next time.
+function runLayout(){
+  const l=cy.layout(makeLayout());
+  l.one('layoutstop',_saveState);
+  l.run();
+}
+
+// On load: restore saved state for THIS graph, else run a fresh layout.
 (function(){
   try{
     const s=JSON.parse(localStorage.getItem(_stateKey)||'null');
-    if(s&&s.pos&&s.pos.length){
+    if(s&&s.pos&&s.pos.length&&s.sig===_graphSig()){
       const posMap={};
       s.pos.forEach(p=>{posMap[p.id]={x:p.x,y:p.y};});
-      cy.nodes().forEach(n=>{
-        if(posMap[n.id()]){n.position(posMap[n.id()]);}
-        else{
-          // New node not in saved state — place near its neighbours
-          const nbrs=n.neighborhood('node').filter(nb=>!!posMap[nb.id()]);
-          if(nbrs.length){
-            let x=0,y=0;
-            nbrs.forEach(nb=>{x+=nb.position().x;y+=nb.position().y;});
-            n.position({x:x/nbrs.length+(Math.random()-.5)*80,y:y/nbrs.length+(Math.random()-.5)*80});
-          }else{n.position({x:500+(Math.random()-.5)*300,y:400+(Math.random()-.5)*300});}
-        }
-      });
+      cy.nodes().forEach(n=>{if(posMap[n.id()])n.position(posMap[n.id()]);});
       cy.viewport({zoom:s.zoom||1,pan:s.pan||{x:0,y:0}});
       return;
     }
   }catch(_){}
-  // No saved state — compute layout once and save it
-  cy.layout(makeLayout()).run();
-  _saveState();
+  runLayout();
 })();
 
 cy.on('viewport',_debouncedSave);
@@ -277,7 +281,7 @@ function togglePanel(show){
 }
 document.getElementById('panel-close').addEventListener('click',()=>togglePanel());
 document.getElementById('zoom-in').addEventListener('click',()=>zoomBy(1.3));
-document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(_){}cy.layout(makeLayout()).run();_saveState();});
+document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();});
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
 document.getElementById('ft-first-order').addEventListener('click',toggleFirstOrderClasses);
@@ -382,7 +386,7 @@ function toggleSuperclasses(){
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
-  if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}cy.layout(makeLayout()).run();_saveState();}
+  if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(0.77);}
 });
