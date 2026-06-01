@@ -12,3 +12,6 @@ venv/
 htmlcov/
 *.egg
 RELEASE_NOTES.md
+
+# Node / JS tooling
+node_modules/

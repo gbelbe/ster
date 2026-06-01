@@ -1,0 +1,16 @@
+{
+  "name": "ster-js",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JavaScript linting for ster's browser-side graph assets (not published).",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "check": "node --check ster/assets/graph_app.js && node --check kai-extension/popup.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "eslint": "^9.16.0",
+    "globals": "^15.13.0"
+  }
+}

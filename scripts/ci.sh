@@ -63,6 +63,18 @@ else
   uv run ruff format --check . && ok "ruff format"
 fi
 
+# ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
+step "JS lint (eslint + node --check)"
+if command -v npm >/dev/null 2>&1; then
+  if [[ ! -d node_modules ]]; then
+    npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1
+  fi
+  npx --no-install eslint . && ok "eslint"
+  for f in ster/assets/*.js kai-extension/*.js; do node --check "$f"; done && ok "node --check"
+else
+  warn "npm not found — skipping JS lint (CI installs Node)"
+fi
+
 # ── 3. Type check ─────────────────────────────────────────────────────────────
 step "Type check (mypy)"
 # --no-incremental: prevents stale cache masking errors that GitHub CI (cold run) would catch

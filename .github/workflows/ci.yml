@@ -33,6 +33,29 @@ jobs:
       - name: ruff — check formatting
         run: ruff format --check .
 
+  # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
+  js:
+    name: Lint JS (eslint + node --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS dev deps
+        run: npm ci
+
+      - name: eslint — lint browser assets
+        run: npx eslint .
+
+      - name: node --check — syntax of every browser .js
+        run: |
+          for f in ster/assets/*.js kai-extension/*.js; do
+            echo "checking $f"; node --check "$f";
+          done
+
   # ── 2. Static type checking ──────────────────────────────────────────────────
   typecheck:
     name: Type check (mypy)
@@ -83,6 +106,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Node lets the JS-validating tests (node --check on graph_app.js) run
+      # instead of skipping.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install deps
         run: uv sync --extra html --extra api --extra dev
 
@@ -112,7 +141,7 @@ jobs:
   #     Environment:    (leave blank)
   publish:
     name: Publish to PyPI
-    needs: [lint, typecheck, security, test]
+    needs: [lint, js, typecheck, security, test]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
