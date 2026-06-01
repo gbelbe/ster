@@ -13,11 +13,10 @@ const API_TOKEN=window.__STER_GRAPH__.token;
 const panelEl=document.getElementById('detail-panel');
 let panelVisible=true;
 let W=window.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:0);
-const H=window.innerHeight;
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function buildElements(data){
   return[
-    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,detail:n.detail||{},rootClass:n.rootClass||0}})),
+    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,detail:n.detail||{},rootClass:n.rootClass||0,superclass:n.superclass||0}})),
     ...data.edges.map(e=>({group:'edges',data:{id:e.id,source:e.source,target:e.target,type:e.type,label:e.label||'',cardinality:e.cardinality||''}})),
   ];
 }
@@ -116,6 +115,8 @@ function applyGraphUpdate(d){
   Object.assign(graphData,d);
   applyIndivVis();
   hiddenEdgeTypes.forEach(t=>cy.edges('[type="'+t+'"]').addClass('hidden'));
+  refreshSuperclassesBtn();
+  applySuperclassVis();
   _saveState();
 }
 
@@ -287,18 +288,27 @@ document.getElementById('ft-second-order').addEventListener('click',toggleSecond
   if(cy.edges('[type="'+t+'"]').length===0){btn.style.display='none';return;}
   btn.addEventListener('click',()=>toggleEdgeType(t));
 });
+const _scBtn=document.getElementById('ft-superclasses');
+if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);
+refreshSuperclassesBtn();
 // Expose wrappers for dynamically-created panel buttons (which run in global scope)
 window._sterNav=navigateTo;
 window._sterBack=function(){highlighted=null;applyHighlight();showDefault();};
 window._sterToggleIndiv=toggleAllIndividuals;
 
-// ── Expand relations (object-property neighbourhood of an individual) ─────────
-// Server-only: fetches a focused subgraph from the API, swaps it in, and keeps
-// the previous graph so Escape can restore the original view.
+// ── Explore: swap in a focused subgraph for a node ────────────────────────────
+// Server-only. Individuals → object-property relations; classes → linked
+// classes (superclasses + object-property domain/range). The previous graph is
+// saved so Escape restores the original view.
 let _savedGraph=null;
-function expandRelations(uri){
+const _EXPLORE_ENDPOINT={individual:'/api/individual-relations',class:'/api/class-links'};
+function exploreNode(uri){
   if(!API_TOKEN)return;
-  fetch('/api/individual-relations?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
+  const node=cy.$('#'+CSS.escape(uri));
+  if(!node.length)return;
+  const endpoint=_EXPLORE_ENDPOINT[node.data('type')];
+  if(!endpoint)return;
+  fetch(endpoint+'?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
     .then(r=>r.ok?r.json():null)
     .then(d=>{
       if(!d||!d.nodes||!d.nodes.length)return;
@@ -306,6 +316,8 @@ function expandRelations(uri){
       cy.elements().remove();
       cy.add(buildElements(d));
       cy.layout(makeLayout()).run();
+      refreshSuperclassesBtn();
+      applySuperclassVis();
       const n=cy.$('#'+CSS.escape(uri));
       if(n.length){highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());}
     }).catch(()=>{});
@@ -316,9 +328,56 @@ function restoreGraph(){
   cy.add(_savedGraph.els);
   cy.viewport({zoom:_savedGraph.zoom,pan:_savedGraph.pan});
   _savedGraph=null;
+  refreshSuperclassesBtn();
+  applySuperclassVis();
   highlighted=null;applyHighlight();showDefault();
 }
-window._sterExpandRelations=expandRelations;
+
+// ── Hover "explore relations" overlay button ──────────────────────────────────
+const exploreBtn=document.getElementById('explore-btn');
+let _exploreHoverUri=null,_exploreHideTimer=null;
+function _positionExploreBtn(node){
+  const bb=node.renderedBoundingBox();
+  exploreBtn.style.left=((bb.x1+bb.x2)/2)+'px';
+  exploreBtn.style.top=(bb.y1-6)+'px';
+}
+if(exploreBtn&&API_TOKEN){
+  cy.on('mouseover','node',e=>{
+    const t=e.target.data('type');
+    if(t!=='individual'&&t!=='class'){exploreBtn.style.display='none';return;}
+    if(_exploreHideTimer){clearTimeout(_exploreHideTimer);_exploreHideTimer=null;}
+    _exploreHoverUri=e.target.data('id');
+    _positionExploreBtn(e.target);
+    exploreBtn.style.display='block';
+  });
+  cy.on('mouseout','node',()=>{_exploreHideTimer=setTimeout(()=>{exploreBtn.style.display='none';},160);});
+  cy.on('viewport',()=>{exploreBtn.style.display='none';});
+  exploreBtn.addEventListener('mouseenter',()=>{if(_exploreHideTimer){clearTimeout(_exploreHideTimer);_exploreHideTimer=null;}});
+  exploreBtn.addEventListener('mouseleave',()=>{exploreBtn.style.display='none';});
+  exploreBtn.addEventListener('click',()=>{exploreBtn.style.display='none';if(_exploreHoverUri)exploreNode(_exploreHoverUri);});
+}
+
+// ── Superclasses toggle (subClassOf trail; shown by default) ──────────────────
+let superclassesHidden=false;
+function applySuperclassVis(){
+  cy.nodes('[superclass=1]').forEach(n=>{superclassesHidden?n.addClass('hidden'):n.removeClass('hidden');});
+  cy.edges('[type="subClassOf"]').forEach(e=>{
+    const s=cy.$('#'+CSS.escape(e.data('source'))),t=cy.$('#'+CSS.escape(e.data('target')));
+    const touchesSuper=(s.length&&s.data('superclass')===1)||(t.length&&t.data('superclass')===1);
+    if(superclassesHidden&&touchesSuper)e.addClass('hidden');else e.removeClass('hidden');
+  });
+}
+function refreshSuperclassesBtn(){
+  const btn=document.getElementById('ft-superclasses');
+  if(!btn)return;
+  btn.style.display=cy.nodes('[superclass=1]').size()?'':'none';
+}
+function toggleSuperclasses(){
+  superclassesHidden=!superclassesHidden;
+  const btn=document.getElementById('ft-superclasses');
+  applySuperclassVis();
+  if(btn){superclassesHidden?btn.classList.remove('active'):btn.classList.add('active');}
+}
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
@@ -380,7 +439,6 @@ function showDetail(d){
   h+='<button class="dp-back" onclick="window._sterBack()">← Overview</button>';
   h+='<span class="dp-badge dp-'+d.type+'">'+(KM[d.type]||d.type)+'</span>';
   h+='<div class="dp-h3">'+esc(d.label)+'</div><div class="dp-uri">'+esc(d.id)+'</div>';
-  if(d.type==='individual'&&API_TOKEN){h+=`<button class="dp-indiv-btn" onclick='window._sterExpandRelations(${JSON.stringify(d.id)})'>Expand relations</button>`;}
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
   if(showLbls.length){h+='<hr class="dp-hr"><div class="dp-sub">Labels</div>';showLbls.forEach(l=>{h+='<div class="dp-lbl">';if(l.lang)h+='<span class="dp-lang">['+esc(l.lang)+']</span>';h+='<span class="'+(l.kind==='alt'?'dp-alt':'dp-pref')+'">'+esc(l.value)+'</span></div>';});}
   const coms=det.comments||[];if(coms.length){h+='<hr class="dp-hr"><div class="dp-sub">Comments</div>';coms.forEach(c=>{h+='<div class="dp-desc">'+esc(c.value)+'</div>';});}

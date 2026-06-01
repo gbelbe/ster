@@ -338,6 +338,107 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
     return {"nodes": nodes, "edges": edges, "layout": "cose"}
 
 
+# ── class links subgraph ──────────────────────────────────────────────────────
+
+
+def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
+    """Serialise the linked-classes neighbourhood of *class_uri* into a payload.
+
+    Centred on one class, the subgraph contains:
+      * the focus class;
+      * its transitive ``subClassOf`` superclass trail (ancestor classes flagged
+        ``superclass=1``, with ``subClassOf`` edges);
+      * every class connected by an object property — both where the focus is the
+        property's domain (``focus --prop--> range``) and where it is the range
+        (``domain --prop--> focus``), as directed, property-labelled edges.
+
+    Returns an empty payload when *class_uri* is not a known class.  Layout is
+    always ``cose``.
+    """
+    if class_uri not in taxonomy.owl_classes:
+        return {"nodes": [], "edges": [], "layout": "cose"}
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen_nodes: set[str] = set()
+    seen_subclass_edges: set[tuple[str, str]] = set()
+    _ec = 0
+
+    def _eid() -> str:
+        nonlocal _ec
+        eid = f"e{_ec}"
+        _ec += 1
+        return eid
+
+    def add_class(uri: str, superclass: int = 0) -> None:
+        if uri in seen_nodes or is_builtin_uri(uri):
+            return
+        seen_nodes.add(uri)
+        cls = taxonomy.owl_classes.get(uri)
+        label = cls.label("en") if cls else _local(uri)
+        detail = _detail_class(cls, taxonomy) if cls else {}
+        nodes.append(
+            {
+                "id": uri,
+                "label": label,
+                "type": "class",
+                "detail": detail,
+                "rootClass": 0,
+                "superclass": superclass,
+            }
+        )
+
+    # ── object-property-linked classes (both directions) ──────────────────
+    linked: set[str] = set()
+    add_class(class_uri, superclass=0)
+    for prop in taxonomy.owl_properties.values():
+        if prop.prop_type != "ObjectProperty":
+            continue
+        plabel = prop.label("en")
+        for d in prop.domains:
+            for r in prop.ranges:
+                if is_builtin_uri(d) or is_builtin_uri(r):
+                    continue
+                if d == class_uri and r != class_uri:
+                    add_class(r, superclass=0)
+                    linked.add(r)
+                    edges.append(
+                        {"id": _eid(), "source": d, "target": r,
+                         "type": "objectProperty", "label": plabel}
+                    )
+                elif r == class_uri and d != class_uri:
+                    add_class(d, superclass=0)
+                    linked.add(d)
+                    edges.append(
+                        {"id": _eid(), "source": d, "target": r,
+                         "type": "objectProperty", "label": plabel}
+                    )
+
+    # ── superclass trail above the focus class ────────────────────────────
+    non_superclass = {class_uri, *linked}
+    stack = [class_uri]
+    visited: set[str] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in visited or is_builtin_uri(cur):
+            continue
+        visited.add(cur)
+        add_class(cur, superclass=0 if cur in non_superclass else 1)
+        cls = taxonomy.owl_classes.get(cur)
+        for parent in cls.sub_class_of if cls else []:
+            if is_builtin_uri(parent):
+                continue
+            if (cur, parent) not in seen_subclass_edges:
+                seen_subclass_edges.add((cur, parent))
+                edges.append(
+                    {"id": _eid(), "source": cur, "target": parent,
+                     "type": "subClassOf", "label": ""}
+                )
+            stack.append(parent)
+
+    return {"nodes": nodes, "edges": edges, "layout": "cose"}
+
+
 # ── individual relations subgraph ─────────────────────────────────────────────
 
 
@@ -369,7 +470,9 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
         _ec += 1
         return eid
 
-    def add_node(uri: str, label: str, node_type: str, detail: dict | None = None) -> None:
+    def add_node(
+        uri: str, label: str, node_type: str, detail: dict | None = None, superclass: int = 0
+    ) -> None:
         if uri not in seen_nodes:
             seen_nodes.add(uri)
             nodes.append(
@@ -379,6 +482,7 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
                     "type": node_type,
                     "detail": detail or {},
                     "rootClass": 0,
+                    "superclass": superclass,
                 }
             )
 
@@ -429,6 +533,15 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
 
     seen_subclass_edges: set[tuple[str, str]] = set()
 
+    # A class is a superclass-trail node when it is reached only as an ancestor —
+    # i.e. it is not the direct rdf:type of any individual shown here.
+    direct_types: set[str] = {
+        t
+        for x_uri in {ind_uri, *related}
+        for t in taxonomy.owl_individuals[x_uri].types
+        if not is_builtin_uri(t)
+    }
+
     def add_class_with_ancestors(cls_uri: str) -> None:
         """Add *cls_uri* and its transitive ``subClassOf`` ancestors as a trail.
 
@@ -446,7 +559,7 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
             cls = taxonomy.owl_classes.get(cur)
             label = cls.label("en") if cls else _local(cur)
             detail = _detail_class(cls, taxonomy) if cls else {}
-            add_node(cur, label, "class", detail)
+            add_node(cur, label, "class", detail, superclass=0 if cur in direct_types else 1)
             for parent in cls.sub_class_of if cls else []:
                 if is_builtin_uri(parent):
                     continue
@@ -997,6 +1110,8 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 #zoom-ctrl button{background:#f8fafc;border:1px solid #e2e8f0;color:#475569;cursor:pointer;font-size:14px;min-width:28px;height:28px;border-radius:4px;line-height:1;padding:0 6px}
 #zoom-ctrl button:hover{background:#e2e8f0}
 #tip{position:fixed;pointer-events:none;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:11px;color:#e2e8f0;max-width:280px;word-break:break-all;display:none;z-index:99}
+#explore-btn{position:absolute;display:none;transform:translate(-50%,-100%);z-index:40;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
+#explore-btn:hover{background:#1d4ed8}
 .ftbtn{background:none;border:1px solid #cbd5e1;color:#94a3b8;border-radius:6px;cursor:pointer;font-size:10px;padding:1px 6px;text-decoration:line-through}
 .ftbtn.active{color:#475569;border-color:#94a3b8;text-decoration:none}
 .ftbtn:hover{background:#f1f5f9}
@@ -1040,7 +1155,8 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 <div id="detail-panel"></div>
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>
 <div id="stats"></div>
-<div id="hint">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
+<div id="hint">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
+<button id="explore-btn">&#8857; explore relations</button>
 <div id="zoom-ctrl"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
 <div id="tip"></div>
 <div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search nodes…" autocomplete="off" spellcheck="false" autofocus><span id="search-count"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>

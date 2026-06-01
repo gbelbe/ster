@@ -1,52 +1,74 @@
-"""The graph app asset wires up the 'Expand relations' button + escape-restore."""
+"""The graph app asset wires up the hover 'explore relations' overlay, the
+class/individual expansion endpoints, escape-restore, and the superclasses
+toggle. The overlay button uses addEventListener (no inline onclick), so the
+only remaining inline-onclick handler is the relation navigation link, which
+must stay single-quoted."""
 
 from __future__ import annotations
 
-from ster.viz_vowl import _app_js
+from ster.model import Label, OWLIndividual, RDFClass, Taxonomy
+from ster.viz_vowl import _app_js, render_vowl_html
+
+NS = "https://example.org/onto#"
 
 
-def test_app_js_defines_expand_relations_handler():
-    js = _app_js()
-    assert "expandRelations" in js
+def _tax() -> Taxonomy:
+    t = Taxonomy()
+    t.owl_classes[NS + "Person"] = RDFClass(uri=NS + "Person", labels=[Label("en", "Person")])
+    t.owl_individuals[NS + "Alice"] = OWLIndividual(
+        uri=NS + "Alice", labels=[Label("en", "Alice")], types=[NS + "Person"]
+    )
+    return t
 
 
-def test_app_js_fetches_individual_relations_endpoint():
+# ── explore overlay + expansion ────────────────────────────────────────────────
+
+
+def test_app_js_defines_explore_dispatcher():
+    assert "exploreNode" in _app_js()
+
+
+def test_app_js_explore_handles_both_individual_and_class_endpoints():
     js = _app_js()
     assert "/api/individual-relations" in js
+    assert "/api/class-links" in js
+
+
+def test_app_js_references_explore_overlay_element():
+    assert "explore-btn" in _app_js()
+
+
+def test_app_js_overlay_is_guarded_by_server_token():
+    assert "API_TOKEN" in _app_js()
 
 
 def test_app_js_can_restore_original_graph():
+    assert "restoreGraph" in _app_js()
+
+
+# ── superclass flag + toggle ────────────────────────────────────────────────────
+
+
+def test_app_js_buildElements_carries_superclass_flag():
     js = _app_js()
-    # A saved-elements slot used to restore the pre-expand graph on Escape.
-    assert "restoreGraph" in js
+    assert "superclass" in js
 
 
-def test_app_js_button_is_guarded_by_server_token():
-    """The button is server-only: its rendering is gated on API_TOKEN."""
+def test_app_js_defines_superclasses_toggle():
     js = _app_js()
-    assert "expandRelations" in js
-    assert "API_TOKEN" in js
+    assert "toggleSuperclasses" in js or "ft-superclasses" in js
 
 
-def test_expand_button_onclick_uses_single_quoted_attribute():
-    """The URI passed via JSON.stringify is double-quoted, so the onclick HTML
-    attribute must be single-quoted — otherwise the quotes collide and the
-    browser truncates the handler (clicking does nothing)."""
-    js = _app_js()
-    assert "onclick='window._sterExpandRelations(" in js
-    assert 'onclick="window._sterExpandRelations(' not in js
+# ── inline onclick discipline (only the nav link remains) ───────────────────────
 
 
 def test_nav_link_onclick_uses_single_quoted_attribute():
-    """Same quote-collision applies to the in-panel relation navigation links."""
     js = _app_js()
     assert "onclick='window._sterNav(" in js
     assert 'onclick="window._sterNav(' not in js
 
 
-def test_panel_button_markup_survives_html_parsing():
-    """Reconstruct each URI-argument button as showDetail emits it and confirm
-    an HTML parser preserves the full onclick handler for a realistic URI."""
+def test_nav_link_markup_survives_html_parsing():
     from html.parser import HTMLParser
 
     uri = "https://example.org/onto#Alice"
@@ -61,9 +83,20 @@ def test_panel_button_markup_survives_html_parsing():
                 if k == "onclick":
                     self.onclick = v
 
-    for fn in ("window._sterExpandRelations", "window._sterNav"):
-        # As built by the asset: single-quoted attribute, JSON-stringified arg.
-        markup = f"<button onclick='{fn}(\"{uri}\")'>x</button>"
-        p = _P()
-        p.feed(markup)
-        assert p.onclick == f'{fn}("{uri}")', p.onclick
+    markup = f"<button onclick='window._sterNav(\"{uri}\")'>x</button>"
+    p = _P()
+    p.feed(markup)
+    assert p.onclick == f'window._sterNav("{uri}")'
+
+
+# ── rendered-page wiring ────────────────────────────────────────────────────────
+
+
+def test_rendered_html_has_explore_overlay_button():
+    html = render_vowl_html(_tax(), file_path=None, api_token="TESTTOKEN")
+    assert 'id="explore-btn"' in html
+
+
+def test_rendered_html_has_superclasses_toggle_button():
+    html = render_vowl_html(_tax(), file_path=None, api_token="TESTTOKEN")
+    assert 'id="ft-superclasses"' in html

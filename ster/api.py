@@ -323,6 +323,19 @@ def create_app(
         return build_individual_relations_graph(_tax(), uri)  # type: ignore[return-value]
 
     @app.get(
+        "/api/class-links",
+        summary="Return the linked-classes subgraph for a class",
+        tags=["Visualisation"],
+    )
+    def get_class_links(
+        uri: str = Query(description="URI of the class to explore"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import build_class_links_graph
+
+        return build_class_links_graph(_tax(), uri)  # type: ignore[return-value]
+
+    @app.get(
         "/api/events",
         summary="SSE stream — fires 'updated' whenever the ontology changes",
         tags=["Visualisation"],

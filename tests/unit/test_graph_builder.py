@@ -440,3 +440,114 @@ def test_individual_relations_subclass_cycle_terminates():
     t.owl_individuals[_uri("X")] = _ind("X", "A")
     g = build_individual_relations_graph(t, _uri("X"))
     assert {_uri("A"), _uri("B")} <= _node_ids(g)
+
+
+# ── build_class_links_graph ────────────────────────────────────────────────────
+
+
+def _node_by_id(result, uri):
+    return next(n for n in result["nodes"] if n["id"] == uri)
+
+
+def _class_links_tax():
+    """Person ⊑ Agent ⊑ Thing; Person --owns--> Pet; Company --employs--> Person."""
+    t = Taxonomy()
+    t.owl_classes[_uri("Thing")] = _cls("Thing")
+    t.owl_classes[_uri("Agent")] = _cls("Agent", sub_class_of=[_uri("Thing")])
+    t.owl_classes[_uri("Person")] = _cls("Person", sub_class_of=[_uri("Agent")])
+    t.owl_classes[_uri("Pet")] = _cls("Pet")
+    t.owl_classes[_uri("Company")] = _cls("Company")
+    t.owl_classes[_uri("Unrelated")] = _cls("Unrelated")
+    t.owl_properties[_uri("owns")] = OWLProperty(
+        uri=_uri("owns"), prop_type="ObjectProperty", labels=[Label("en", "owns")],
+        domains=[_uri("Person")], ranges=[_uri("Pet")],
+    )
+    t.owl_properties[_uri("employs")] = OWLProperty(
+        uri=_uri("employs"), prop_type="ObjectProperty", labels=[Label("en", "employs")],
+        domains=[_uri("Company")], ranges=[_uri("Person")],
+    )
+    return t
+
+
+def test_class_links_includes_focus_class():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert _uri("Person") in _node_ids(g)
+
+
+def test_class_links_includes_superclasses_with_edges():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert {_uri("Agent"), _uri("Thing")} <= _node_ids(g)
+    assert any(
+        e["source"] == _uri("Person") and e["target"] == _uri("Agent") and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+
+
+def test_class_links_includes_object_property_range_class():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert _uri("Pet") in _node_ids(g)
+    assert any(
+        e["source"] == _uri("Person") and e["target"] == _uri("Pet")
+        and e["type"] == "objectProperty" and e["label"] == "owns"
+        for e in g["edges"]
+    )
+
+
+def test_class_links_includes_object_property_domain_class():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert _uri("Company") in _node_ids(g)
+    assert any(
+        e["source"] == _uri("Company") and e["target"] == _uri("Person")
+        and e["type"] == "objectProperty" and e["label"] == "employs"
+        for e in g["edges"]
+    )
+
+
+def test_class_links_excludes_unrelated_class():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert _uri("Unrelated") not in _node_ids(g)
+
+
+def test_class_links_missing_uri_returns_empty():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Ghost"))
+    assert g["nodes"] == []
+    assert g["edges"] == []
+
+
+def test_class_links_layout_is_cose():
+    from ster.viz_vowl import build_class_links_graph
+
+    assert build_class_links_graph(_class_links_tax(), _uri("Person"))["layout"] == "cose"
+
+
+def test_class_links_marks_superclass_nodes():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"))
+    assert _node_by_id(g, _uri("Agent"))["superclass"] == 1
+    assert _node_by_id(g, _uri("Thing"))["superclass"] == 1
+    assert _node_by_id(g, _uri("Person"))["superclass"] == 0
+    assert _node_by_id(g, _uri("Pet"))["superclass"] == 0
+
+
+def test_individual_relations_marks_superclass_nodes():
+    from ster.viz_vowl import build_individual_relations_graph
+
+    g = build_individual_relations_graph(_rel_tax_with_hierarchy(), _uri("Alice"))
+    assert _node_by_id(g, _uri("Agent"))["superclass"] == 1
+    assert _node_by_id(g, _uri("Thing"))["superclass"] == 1
+    # Direct rdf:type classes and the focus individual are not superclasses
+    assert _node_by_id(g, _uri("Person"))["superclass"] == 0
+    assert _node_by_id(g, _uri("Alice"))["superclass"] == 0
