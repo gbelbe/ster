@@ -232,7 +232,8 @@ def test_build_detail_fields_has_uri_field(simple_taxonomy):
     uri_fields = [f for f in fields if f.key == "uri"]
     assert len(uri_fields) == 1
     assert uri_fields[0].value == BASE + "Top"
-    assert uri_fields[0].editable is False
+    # Editing the URI field initiates a rename (see _start_rename_uri).
+    assert uri_fields[0].editable is True
 
 
 def test_build_detail_fields_pref_labels(simple_taxonomy):

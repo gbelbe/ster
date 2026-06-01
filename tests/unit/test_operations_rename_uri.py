@@ -259,3 +259,70 @@ def test_rename_ontology_uri_updates_literal_value_predicates():
     lv = t.owl_individuals[rex_uri_new].literal_values
     assert (new_pred, "John", "") in lv
     assert (prop_uri, "John", "") not in lv
+
+
+# ── subPropertyOf / inverseOf — rename property ──────────────────────────────
+
+
+def test_rename_property_updates_other_subproperty_of():
+    t = Taxonomy()
+    t.owl_properties[uri("hasMaster")] = _prop("hasMaster")
+    t.owl_properties[uri("hasOwner")] = _prop("hasOwner")
+    t.owl_properties[uri("hasOwner")].sub_property_of.append(uri("hasMaster"))
+    rename_owl_uri(t, uri("hasMaster"), uri("ownedBy"))
+    spo = t.owl_properties[uri("hasOwner")].sub_property_of
+    assert uri("ownedBy") in spo
+    assert uri("hasMaster") not in spo
+
+
+def test_rename_property_updates_other_inverse_of():
+    t = Taxonomy()
+    t.owl_properties[uri("hasMaster")] = _prop("hasMaster")
+    t.owl_properties[uri("isMasterOf")] = _prop("isMasterOf")
+    t.owl_properties[uri("isMasterOf")].inverse_of.append(uri("hasMaster"))
+    rename_owl_uri(t, uri("hasMaster"), uri("ownedBy"))
+    inv = t.owl_properties[uri("isMasterOf")].inverse_of
+    assert uri("ownedBy") in inv
+    assert uri("hasMaster") not in inv
+
+
+# ── subPropertyOf / inverseOf — rename_ontology_uri ──────────────────────────
+
+
+def test_rename_ontology_uri_updates_subproperty_of_and_inverse_of():
+    from ster.operations import rename_ontology_uri
+
+    old_ns = "https://example.org/onto#"
+    t = Taxonomy()
+    t.ontology_uri = "https://example.org/onto"
+    master = old_ns + "hasMaster"
+    owner = old_ns + "hasOwner"
+    inverse = old_ns + "isMasterOf"
+    t.owl_properties[master] = OWLProperty(uri=master, labels=[Label("en", "hasMaster")])
+    t.owl_properties[owner] = OWLProperty(
+        uri=owner, labels=[Label("en", "hasOwner")], sub_property_of=[master]
+    )
+    t.owl_properties[inverse] = OWLProperty(
+        uri=inverse, labels=[Label("en", "isMasterOf")], inverse_of=[master]
+    )
+    rename_ontology_uri(t, "https://new.org/onto", "#")
+    new_master = "https://new.org/onto#hasMaster"
+    assert new_master in t.owl_properties["https://new.org/onto#hasOwner"].sub_property_of
+    assert master not in t.owl_properties["https://new.org/onto#hasOwner"].sub_property_of
+    assert new_master in t.owl_properties["https://new.org/onto#isMasterOf"].inverse_of
+    assert master not in t.owl_properties["https://new.org/onto#isMasterOf"].inverse_of
+
+
+# ── subPropertyOf / inverseOf — count references ─────────────────────────────
+
+
+def test_count_references_includes_subproperty_of_and_inverse_of():
+    t = Taxonomy()
+    t.owl_properties[uri("hasMaster")] = _prop("hasMaster")
+    t.owl_properties[uri("hasOwner")] = _prop("hasOwner")
+    t.owl_properties[uri("isMasterOf")] = _prop("isMasterOf")
+    t.owl_properties[uri("hasOwner")].sub_property_of.append(uri("hasMaster"))
+    t.owl_properties[uri("isMasterOf")].inverse_of.append(uri("hasMaster"))
+    count = count_owl_uri_references(t, uri("hasMaster"))
+    # 1 subPropertyOf + 1 inverseOf cross-reference, plus the entity's own triples
+    assert count >= 2

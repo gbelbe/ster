@@ -85,3 +85,27 @@ Feature: OWL URI rename propagated across the taxonomy
     Given a taxonomy with OWL individual "Rex"
     And individual "Rex" has a literal value with predicate "hasMaster" value "John"
     Then counting references to "hasMaster" returns at least 1
+
+  Scenario: Rename a property URI — subPropertyOf references are updated
+    Given a taxonomy with OWL property "hasMaster"
+    And property "hasOwner" is added to the taxonomy
+    And "hasOwner" is a subproperty of "hasMaster"
+    When I rename property "hasMaster" to "ownedBy"
+    Then "hasOwner" subPropertyOf contains "ownedBy"
+    And "hasOwner" subPropertyOf does not contain "hasMaster"
+
+  Scenario: Rename a property URI — inverseOf references are updated
+    Given a taxonomy with OWL property "hasMaster"
+    And property "isMasterOf" is added to the taxonomy
+    And "isMasterOf" is the inverse of "hasMaster"
+    When I rename property "hasMaster" to "ownedBy"
+    Then "isMasterOf" inverseOf contains "ownedBy"
+    And "isMasterOf" inverseOf does not contain "hasMaster"
+
+  Scenario: count_owl_uri_references counts subPropertyOf and inverseOf occurrences
+    Given a taxonomy with OWL property "hasMaster"
+    And property "hasOwner" is added to the taxonomy
+    And "hasOwner" is a subproperty of "hasMaster"
+    And property "isMasterOf" is added to the taxonomy
+    And "isMasterOf" is the inverse of "hasMaster"
+    Then counting references to "hasMaster" returns at least 2

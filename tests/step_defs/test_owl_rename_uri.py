@@ -122,6 +122,16 @@ def given_property_added(ctx: dict, prop: str) -> None:
         t.owl_properties[_u(prop)] = OWLProperty(uri=_u(prop), labels=[Label("en", prop)])
 
 
+@given(parsers.parse('"{child}" is a subproperty of "{parent}"'))
+def given_subproperty(ctx: dict, child: str, parent: str) -> None:
+    ctx["taxonomy"].owl_properties[_u(child)].sub_property_of.append(_u(parent))
+
+
+@given(parsers.parse('"{a}" is the inverse of "{b}"'))
+def given_inverse(ctx: dict, a: str, b: str) -> None:
+    ctx["taxonomy"].owl_properties[_u(a)].inverse_of.append(_u(b))
+
+
 # ── When ──────────────────────────────────────────────────────────────────────
 
 
@@ -270,6 +280,26 @@ def then_no_literal_predicate(ctx: dict, name: str, pred: str) -> None:
     assert not any(p == _u(pred) for p, _v, _ld in lv), (
         f"Unexpected literal value with predicate {_u(pred)} on {_u(name)}: {lv}"
     )
+
+
+@then(parsers.parse('"{child}" subPropertyOf contains "{parent}"'))
+def then_subproperty_contains(ctx: dict, child: str, parent: str) -> None:
+    assert _u(parent) in ctx["taxonomy"].owl_properties[_u(child)].sub_property_of
+
+
+@then(parsers.parse('"{child}" subPropertyOf does not contain "{parent}"'))
+def then_subproperty_not_contains(ctx: dict, child: str, parent: str) -> None:
+    assert _u(parent) not in ctx["taxonomy"].owl_properties[_u(child)].sub_property_of
+
+
+@then(parsers.parse('"{a}" inverseOf contains "{b}"'))
+def then_inverse_contains(ctx: dict, a: str, b: str) -> None:
+    assert _u(b) in ctx["taxonomy"].owl_properties[_u(a)].inverse_of
+
+
+@then(parsers.parse('"{a}" inverseOf does not contain "{b}"'))
+def then_inverse_not_contains(ctx: dict, a: str, b: str) -> None:
+    assert _u(b) not in ctx["taxonomy"].owl_properties[_u(a)].inverse_of
 
 
 @then(parsers.parse('counting references to "{uri}" returns at least {n:d}'))

@@ -27,6 +27,7 @@ from ster.nav.state import (
     CreateState,
     DetailState,
     EditState,
+    RenameUriConfirmState,
     SchemeCreateState,
     SearchState,
     TreeState,
@@ -1710,3 +1711,81 @@ def test_render_detail_col_navigable_empty_value_uses_full_width(tmp_path, monke
     assert any(_LONG_LABEL in s for s in rendered_strings), (
         f"Full label '{_LONG_LABEL}' not found in rendered strings: {rendered_strings}"
     )
+
+
+# ── concept URI rename in the viewer (common rename front) ────────────────────
+
+
+def _concept_uri_field_index(fields):
+    for i, f in enumerate(fields):
+        if f.meta.get("type") == "uri":
+            return i
+    raise AssertionError("no URI field found")
+
+
+def test_concept_uri_field_is_editable(simple_taxonomy):
+    """The concept detail URI field must be editable so it can trigger a rename."""
+    fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
+    uri_fields = [f for f in fields if f.meta.get("type") == "uri"]
+    assert len(uri_fields) == 1
+    assert uri_fields[0].editable
+
+
+def test_viewer_concept_uri_edit_enters_rename_confirm(simple_taxonomy, tmp_path):
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    old = BASE + "Child2"
+    v._detail_uri = old
+    v._detail_fields = build_detail_fields(simple_taxonomy, old, "en")
+    idx = _concept_uri_field_index(v._detail_fields)
+    v._field_cursor = idx
+    new_uri = BASE + "RenamedChild"
+    v._state = EditState(
+        buffer=new_uri, pos=len(new_uri), field=v._detail_fields[idx], return_to=None
+    )
+    v._commit_edit()
+    assert isinstance(v._state, RenameUriConfirmState)
+    assert v._state.kind == "concept"
+    assert v._state.old_uri == old
+    assert v._state.new_uri == new_uri
+    assert v._state.ref_count >= 1
+
+
+def test_viewer_concept_rename_confirm_applies_and_propagates_match(tmp_path):
+    t = Taxonomy()
+    t.concepts[BASE + "Cat"] = Concept(uri=BASE + "Cat", labels=[Label("en", "Cat")])
+    t.concepts[BASE + "Dog"] = Concept(
+        uri=BASE + "Dog", labels=[Label("en", "Dog")], exact_match=[BASE + "Cat"]
+    )
+    assign_handles(t)
+    v = _make_viewer(t, tmp_path)
+    v._detail_uri = BASE + "Cat"
+    v._start_rename_uri(BASE + "Feline")
+    assert isinstance(v._state, RenameUriConfirmState)
+    v._on_rename_uri_confirm(ord("y"))
+    assert BASE + "Feline" in t.concepts
+    assert BASE + "Cat" not in t.concepts
+    assert BASE + "Feline" in t.concepts[BASE + "Dog"].exact_match
+    assert v._detail_uri == BASE + "Feline"
+
+
+def test_viewer_promoted_rename_renames_both_layers(tmp_path):
+    t = Taxonomy()
+    t.concepts[BASE + "Animal"] = Concept(uri=BASE + "Animal", labels=[Label("en", "Animal")])
+    t.concepts[BASE + "Dog"] = Concept(
+        uri=BASE + "Dog", labels=[Label("en", "Dog")], broader=[BASE + "Animal"]
+    )
+    t.owl_classes[BASE + "Animal"] = RDFClass(uri=BASE + "Animal")
+    t.owl_classes[BASE + "Pet"] = RDFClass(uri=BASE + "Pet", sub_class_of=[BASE + "Animal"])
+    assign_handles(t)
+    v = _make_viewer(t, tmp_path)
+    v._detail_uri = BASE + "Animal"
+    v._start_rename_uri(BASE + "Creature")
+    assert isinstance(v._state, RenameUriConfirmState)
+    assert v._state.kind == "promoted"
+    v._on_rename_uri_confirm(ord("y"))
+    assert BASE + "Creature" in t.concepts
+    assert BASE + "Creature" in t.owl_classes
+    assert BASE + "Animal" not in t.concepts
+    assert BASE + "Animal" not in t.owl_classes
+    assert BASE + "Creature" in t.concepts[BASE + "Dog"].broader
+    assert BASE + "Creature" in t.owl_classes[BASE + "Pet"].sub_class_of

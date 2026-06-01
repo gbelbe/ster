@@ -2740,6 +2740,9 @@ class TaxonomyViewer:
             return
         ftype = f.meta.get("type")
         lang = f.meta.get("lang", "")
+        if ftype == "uri":
+            self._start_rename_uri(new_value)
+            return
         try:
             if ftype == "pref":
                 operations.set_label(
@@ -2932,25 +2935,23 @@ class TaxonomyViewer:
         self._save_file()
 
     def _start_rename_uri(self, new_uri: str) -> None:
-        """Initiate a URI rename: count references and enter RenameUriConfirmState."""
+        """Initiate a URI rename: count references and enter RenameUriConfirmState.
+
+        Layer-agnostic — works for SKOS concepts, OWL entities, and promoted
+        nodes alike via the common rename front in ``operations``.
+        """
         old_uri = self._detail_uri or ""
         if not new_uri or new_uri == old_uri:
             self._state = DetailState()
             return
-        from ..operations import count_owl_uri_references
+        from ..operations import count_uri_references, rename_kind
 
-        ref_count = count_owl_uri_references(self.taxonomy, old_uri)
-        if old_uri in self.taxonomy.owl_classes:
-            kind = "class"
-        elif old_uri in self.taxonomy.owl_individuals:
-            kind = "individual"
-        else:
-            kind = "property"
+        ref_count = count_uri_references(self.taxonomy, old_uri)
         self._state = RenameUriConfirmState(
             old_uri=old_uri,
             new_uri=new_uri,
             ref_count=ref_count,
-            kind=kind,
+            kind=rename_kind(self.taxonomy, old_uri),
         )
 
     def _commit_ontology_edit(self, f: DetailField, new_value: str) -> None:
@@ -6121,10 +6122,10 @@ class TaxonomyViewer:
 
         if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
             from ..exceptions import URIAlreadyExistsError
-            from ..operations import rename_owl_uri
+            from ..operations import rename_entity_uri
 
             try:
-                rename_owl_uri(self.taxonomy, rs.old_uri, rs.new_uri)
+                rename_entity_uri(self.taxonomy, rs.old_uri, rs.new_uri)
             except URIAlreadyExistsError as exc:
                 self._status = str(exc)
                 self._state = DetailState()
@@ -6133,7 +6134,11 @@ class TaxonomyViewer:
             self._save_file()
             self._detail_uri = rs.new_uri
             node_t = self.taxonomy.node_type(rs.new_uri)
-            if node_t == "individual":
+            if node_t == "concept":
+                self._detail_fields = self._bdf(rs.new_uri)
+            elif node_t == "promoted":
+                self._detail_fields = self._bpdf(rs.new_uri)
+            elif node_t == "individual":
                 self._detail_fields = self._bidf(rs.new_uri)
             elif node_t == "property":
                 self._detail_fields = self._bpropf(rs.new_uri)

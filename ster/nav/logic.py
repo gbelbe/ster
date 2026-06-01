@@ -825,7 +825,7 @@ def _section_text_list(
 
 def _concept_identity_fields(taxonomy: Taxonomy, uri: str, concept, lang: str) -> list[DetailField]:
     """URI + topConceptOf/inScheme (topConceptOf is navigable → scheme detail)."""
-    fields = [DetailField("uri", "URI", uri, editable=False, meta={"type": "uri"})]
+    fields = [DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"})]
     if concept.top_concept_of:
         scheme = taxonomy.schemes.get(concept.top_concept_of)
         scheme_label = scheme.title(lang) if scheme else concept.top_concept_of

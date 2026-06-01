@@ -347,6 +347,12 @@ def rename_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
         _replace_in_list(c.narrower, old_uri, new_uri)
         _replace_in_list(c.broader, old_uri, new_uri)
         _replace_in_list(c.related, old_uri, new_uri)
+        # SKOS mapping properties may point at the renamed concept too
+        _replace_in_list(c.broad_match, old_uri, new_uri)
+        _replace_in_list(c.narrow_match, old_uri, new_uri)
+        _replace_in_list(c.related_match, old_uri, new_uri)
+        _replace_in_list(c.exact_match, old_uri, new_uri)
+        _replace_in_list(c.close_match, old_uri, new_uri)
         if c.top_concept_of == old_uri:
             c.top_concept_of = new_uri
 
@@ -722,6 +728,11 @@ def _rename_owl_property(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None
             (new_uri if p == old_uri else p, v, ld) for p, v, ld in ind.literal_values
         ]
 
+    # Update other properties referencing this one via subPropertyOf / inverseOf
+    for other_prop in taxonomy.owl_properties.values():
+        _replace_in_list(other_prop.sub_property_of, old_uri, new_uri)
+        _replace_in_list(other_prop.inverse_of, old_uri, new_uri)
+
 
 def collect_ontology_entities(taxonomy: Taxonomy) -> list[str]:
     """Return all entity URIs that belong to the current ontology base.
@@ -818,6 +829,8 @@ def rename_ontology_uri(taxonomy: Taxonomy, new_uri: str, new_sep: str) -> None:
     for prop in taxonomy.owl_properties.values():
         _remap(prop.domains)
         _remap(prop.ranges)
+        _remap(prop.sub_property_of)
+        _remap(prop.inverse_of)
 
     taxonomy.ontology_uri = new_uri
 
@@ -906,5 +919,118 @@ def count_owl_uri_references(taxonomy: Taxonomy, uri: str) -> int:
             continue
         count += prop.domains.count(uri)
         count += prop.ranges.count(uri)
+        count += prop.sub_property_of.count(uri)
+        count += prop.inverse_of.count(uri)
 
     return count
+
+
+def count_concept_uri_references(taxonomy: Taxonomy, uri: str) -> int:
+    """Count RDF-model positions where *uri* appears in the SKOS layer.
+
+    SKOS-layer counterpart of :func:`count_owl_uri_references`: counts the
+    concept's own triples (subject) plus every cross-reference from other
+    concepts (broader / narrower / related / *Match) and from scheme
+    ``top_concepts`` lists (object).
+    """
+    count = 0
+
+    # ── subject: the concept's own triples ────────────────────────────────
+    if uri in taxonomy.concepts:
+        c = taxonomy.concepts[uri]
+        count += 1  # rdf:type skos:Concept
+        count += len(c.labels)
+        count += len(c.definitions)
+        count += len(c.scope_notes)
+        count += len(c.broader)
+        count += len(c.narrower)
+        count += len(c.related)
+        count += len(c.broad_match)
+        count += len(c.narrow_match)
+        count += len(c.related_match)
+        count += len(c.exact_match)
+        count += len(c.close_match)
+        if c.top_concept_of:
+            count += 1
+
+    # ── object: cross-references from other concepts ──────────────────────
+    for c_uri, c in taxonomy.concepts.items():
+        if c_uri == uri:
+            continue
+        count += c.broader.count(uri)
+        count += c.narrower.count(uri)
+        count += c.related.count(uri)
+        count += c.broad_match.count(uri)
+        count += c.narrow_match.count(uri)
+        count += c.related_match.count(uri)
+        count += c.exact_match.count(uri)
+        count += c.close_match.count(uri)
+
+    # ── object: scheme hasTopConcept references ───────────────────────────
+    for scheme in taxonomy.schemes.values():
+        count += scheme.top_concepts.count(uri)
+
+    return count
+
+
+# ──────────────────────── common rename front ────────────────────────────────
+# The generic flow — detect the layer(s) owning a URI, count affected
+# statements, and rename — is identical for SKOS and OWL.  These dispatchers
+# hide the SKOS-vs-OWL specifics so callers (e.g. the viewer) stay layer-
+# agnostic; a node promoted to both layers is handled in both.
+
+
+def rename_kind(taxonomy: Taxonomy, uri: str) -> str:
+    """Return the entity-kind label for *uri*.
+
+    One of ``"concept"``, ``"class"``, ``"individual"``, ``"property"``,
+    ``"promoted"`` (concept + class), or ``"unknown"``.
+    """
+    return taxonomy.node_type(uri)
+
+
+def _owns_owl(taxonomy: Taxonomy, uri: str) -> bool:
+    return (
+        uri in taxonomy.owl_classes
+        or uri in taxonomy.owl_individuals
+        or uri in taxonomy.owl_properties
+    )
+
+
+def count_uri_references(taxonomy: Taxonomy, uri: str) -> int:
+    """Total statements affected by renaming *uri*, across every layer it owns.
+
+    Dispatches to :func:`count_concept_uri_references` and/or
+    :func:`count_owl_uri_references`; a promoted node sums both.
+    """
+    total = 0
+    if uri in taxonomy.concepts:
+        total += count_concept_uri_references(taxonomy, uri)
+    if _owns_owl(taxonomy, uri):
+        total += count_owl_uri_references(taxonomy, uri)
+    return total
+
+
+def rename_entity_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
+    """Rename *old_uri* to *new_uri* in every layer that owns it.
+
+    Performs a single unified collision check (raising
+    :class:`URIAlreadyExistsError` if *new_uri* is already taken in any layer)
+    before delegating to the SKOS-specialized :func:`rename_uri` and/or the
+    OWL-specialized :func:`rename_owl_uri`.  Raises
+    :class:`ConceptNotFoundError` when *old_uri* exists in no layer.
+    """
+    in_concepts = old_uri in taxonomy.concepts
+    in_owl = _owns_owl(taxonomy, old_uri)
+    if not in_concepts and not in_owl:
+        raise ConceptNotFoundError(old_uri)
+
+    if new_uri in taxonomy.concepts or _owns_owl(taxonomy, new_uri):
+        raise URIAlreadyExistsError(new_uri)
+
+    if in_concepts:
+        rename_uri(taxonomy, old_uri, new_uri)
+    if in_owl:
+        rename_owl_uri(taxonomy, old_uri, new_uri)
+
+    assign_handles(taxonomy)
