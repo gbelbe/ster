@@ -581,7 +581,9 @@ def test_class_links_includes_superclasses_of_linked_classes():
     # Superclass of the range-linked class (Pet ⊑ LivingBeing)
     assert _uri("LivingBeing") in ids
     assert any(
-        e["source"] == _uri("Pet") and e["target"] == _uri("LivingBeing") and e["type"] == "subClassOf"
+        e["source"] == _uri("Pet")
+        and e["target"] == _uri("LivingBeing")
+        and e["type"] == "subClassOf"
         for e in g["edges"]
     )
     # Superclass of the domain-linked class (Company ⊑ Org)
