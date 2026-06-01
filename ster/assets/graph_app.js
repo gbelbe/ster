@@ -258,14 +258,28 @@ function clearSearch(){
 document.getElementById('search-box').addEventListener('input',e=>searchNodes(e.target.value));
 document.getElementById('search-clear').addEventListener('click',clearSearch);
 window.addEventListener('load',()=>document.getElementById('search-box').focus());
-
-// ── Click ─────────────────────────────────────────────────────────────────────
-cy.on('tap','node',function(e){
-  const d=e.target.data();
-  clearSearch();
-  if(highlighted===d.id){highlighted=null;applyHighlight();showDefault();return;}
-  highlighted=d.id;applyHighlight();togglePanel(true);showDetail(d);
+// Enter on the search box acts on the first match exactly like clicking it.
+document.getElementById('search-box').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const t=e.target.value.trim().toLowerCase();
+  if(!t)return;
+  const matched=cy.nodes().filter(n=>n.data('label').toLowerCase().includes(t)||n.data('id').toLowerCase().includes(t));
+  if(matched.length){e.preventDefault();activateNode(matched.first().data('id'));}
 });
+
+// ── Click / activate ──────────────────────────────────────────────────────────
+// Activating a node (click, or Enter on a search match) expands its relations by
+// default: individuals → object-property relations, classes → linked classes.
+// Node types without an expansion endpoint fall back to the detail panel.
+function activateNode(uri){
+  clearSearch();
+  const n=cy.$('#'+CSS.escape(uri));
+  if(!n.length)return;
+  if(API_TOKEN&&_EXPLORE_ENDPOINT[n.data('type')]){exploreNode(uri);return;}
+  if(highlighted===uri){highlighted=null;applyHighlight();showDefault();return;}
+  highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());
+}
+cy.on('tap','node',function(e){activateNode(e.target.data('id'));});
 cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
