@@ -380,12 +380,12 @@ function showDetail(d){
   h+='<button class="dp-back" onclick="window._sterBack()">← Overview</button>';
   h+='<span class="dp-badge dp-'+d.type+'">'+(KM[d.type]||d.type)+'</span>';
   h+='<div class="dp-h3">'+esc(d.label)+'</div><div class="dp-uri">'+esc(d.id)+'</div>';
-  if(d.type==='individual'&&API_TOKEN){h+='<button class="dp-indiv-btn" onclick="window._sterExpandRelations('+JSON.stringify(d.id)+')">Expand relations</button>';}
+  if(d.type==='individual'&&API_TOKEN){h+=`<button class="dp-indiv-btn" onclick='window._sterExpandRelations(${JSON.stringify(d.id)})'>Expand relations</button>`;}
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
   if(showLbls.length){h+='<hr class="dp-hr"><div class="dp-sub">Labels</div>';showLbls.forEach(l=>{h+='<div class="dp-lbl">';if(l.lang)h+='<span class="dp-lang">['+esc(l.lang)+']</span>';h+='<span class="'+(l.kind==='alt'?'dp-alt':'dp-pref')+'">'+esc(l.value)+'</span></div>';});}
   const coms=det.comments||[];if(coms.length){h+='<hr class="dp-hr"><div class="dp-sub">Comments</div>';coms.forEach(c=>{h+='<div class="dp-desc">'+esc(c.value)+'</div>';});}
   if(det.description)h+='<hr class="dp-hr"><div class="dp-desc">'+esc(det.description)+'</div>';
-  const rels=det.relations||[];if(rels.length){h+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';rels.forEach(r=>{const lbl=r.label||r.uri,inG=cy.$('#'+CSS.escape(r.uri)).length>0;h+='<div class="dp-rel"><span class="dp-rel-tag">'+esc(r.rel)+'</span>';h+=inG?'<button class="dp-link" onclick="window._sterNav('+JSON.stringify(r.uri)+')">'+esc(lbl)+'</button>':'<span>'+esc(lbl)+'</span>';h+='</div>';});}
+  const rels=det.relations||[];if(rels.length){h+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';rels.forEach(r=>{const lbl=r.label||r.uri,inG=cy.$('#'+CSS.escape(r.uri)).length>0;h+='<div class="dp-rel"><span class="dp-rel-tag">'+esc(r.rel)+'</span>';h+=inG?`<button class="dp-link" onclick='window._sterNav(${JSON.stringify(r.uri)})'>${esc(lbl)}</button>`:'<span>'+esc(lbl)+'</span>';h+='</div>';});}
   h+='</div>';panelEl.innerHTML=h;
 }
 function navigateTo(uri){
