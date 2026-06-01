@@ -33,3 +33,9 @@ Feature: Explore the linked classes around a class
   Scenario: Unrelated classes are excluded
     When I explore links for class "Person"
     Then class node "Unrelated" is absent
+
+  Scenario: Superclasses of object-property-linked classes are included
+    Given classes where "Pet" is a subclass of "LivingBeing"
+    When I explore links for class "Person"
+    Then class node "LivingBeing" is present
+    And there is a subClassOf class-edge from "Pet" to "LivingBeing"

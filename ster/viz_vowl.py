@@ -424,9 +424,9 @@ def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
                         }
                     )
 
-    # ── superclass trail above the focus class ────────────────────────────
+    # ── superclass trail above the focus class and every linked class ─────
     non_superclass = {class_uri, *linked}
-    stack = [class_uri]
+    stack = [class_uri, *linked]
     visited: set[str] = set()
     while stack:
         cur = stack.pop()
