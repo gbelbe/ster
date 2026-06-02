@@ -92,6 +92,21 @@ jobs:
         # CVE-2026-3219 / CVE-2026-6357 affect pip itself; not a ster dependency
         run: uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
 
+  # ── 3b. Import contracts (dependency isolation) ──────────────────────────────
+  imports:
+    name: Import contracts (import-linter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install deps
+        run: uv sync --extra dev
+
+      - name: lint-imports
+        run: uv run lint-imports
+
   # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }})
