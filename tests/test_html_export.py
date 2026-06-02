@@ -13,6 +13,8 @@ from ster.html_export import (
     _patch_missing_pyproject,
     detect_profile,
     generate_html,
+    is_pylode_available,
+    render_html,
 )
 from ster.model import (
     Concept,
@@ -408,3 +410,74 @@ def test_generate_html_both_profile_falls_back_to_vocpub(tmp_path):
         created = generate_html(both_ttl, tmp_path / "out", languages=["en"])
     assert len(created) == 1
     assert mock_vp_cls.called
+
+
+# ── render_html (adapter primitive) ───────────────────────────────────────────
+
+
+def test_render_html_vocpub_returns_string(ttl_file):
+    mock_vp_cls = _make_mock_vocpub("<html><body>vocpub-html</body></html>")
+    with patch("pylode.VocPub", mock_vp_cls):
+        html = render_html(ttl_file, profile="vocpub")
+    assert html == "<html><body>vocpub-html</body></html>"
+    assert mock_vp_cls.called
+
+
+def test_render_html_ontpub_returns_string(owl_ttl_file):
+    mock_ont_cls = _make_mock_ontpub("<html><body>ontpub-html</body></html>")
+    with patch("pylode.OntPub", mock_ont_cls):
+        html = render_html(owl_ttl_file, profile="ontpub")
+    assert html == "<html><body>ontpub-html</body></html>"
+    assert mock_ont_cls.called
+
+
+def test_render_html_autodetects_profile(owl_ttl_file):
+    mock_ont_cls = _make_mock_ontpub("<html><body>auto-ontpub</body></html>")
+    with patch("pylode.OntPub", mock_ont_cls):
+        html = render_html(owl_ttl_file)  # profile omitted → detected as ontpub
+    assert html == "<html><body>auto-ontpub</body></html>"
+    assert mock_ont_cls.called
+
+
+def test_render_html_passes_language_to_vocpub(ttl_file):
+    mock_vp_cls = _make_mock_vocpub()
+    with patch("pylode.VocPub", mock_vp_cls):
+        render_html(ttl_file, profile="vocpub", language="fr")
+    assert mock_vp_cls.call_args.kwargs.get("default_language") == "fr"
+
+
+def test_render_html_raises_without_pylode(ttl_file):
+    import sys
+
+    saved = sys.modules.get("pylode", ...)
+    sys.modules["pylode"] = None  # type: ignore[assignment]
+    try:
+        with pytest.raises(RuntimeError, match="pyLODE"):
+            render_html(ttl_file, profile="vocpub")
+    finally:
+        if saved is ...:
+            del sys.modules["pylode"]
+        else:
+            sys.modules["pylode"] = saved
+
+
+# ── is_pylode_available ───────────────────────────────────────────────────────
+
+
+def test_is_pylode_available_true():
+    with patch.dict("sys.modules", {"pylode": MagicMock()}):
+        assert is_pylode_available() is True
+
+
+def test_is_pylode_available_false():
+    import sys
+
+    saved = sys.modules.get("pylode", ...)
+    sys.modules["pylode"] = None  # type: ignore[assignment]
+    try:
+        assert is_pylode_available() is False
+    finally:
+        if saved is ...:
+            del sys.modules["pylode"]
+        else:
+            sys.modules["pylode"] = saved
