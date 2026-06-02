@@ -164,14 +164,34 @@ See [CLAUDE.md](CLAUDE.md) for the full style guide used in this project,
 including ruff rules, mypy patterns, and the mandatory TDD+BDD workflow for
 new features.
 
-Key points:
+### Development rules (mandatory)
 
-- Every new feature needs a Gherkin `.feature` file in `tests/features/` and
-  unit tests in `tests/unit/` before any implementation code
-- Do not suppress linter or type errors with `# noqa` / `# type: ignore`
-  unless it is a confirmed false positive — document why on the same line
-- Do not add comments that describe what the code does; only add them when
-  the **why** is non-obvious
+These apply to everyone. Most are enforced automatically by CI (and surfaced by
+the pull-request checklist); see [CLAUDE.md](CLAUDE.md) for the full version.
+
+1. **Clarify & simplify first** — restate the request, ask the questions that
+   change the design, and apply **YAGNI** to cut scope to the simplest thing
+   that works.
+2. **Test-first / BDD** — write the Gherkin `.feature` (`tests/features/`) and
+   unit tests (`tests/unit/`) before the implementation. Changed lines must be
+   ≥ 90% covered *(enforced by `diff-cover`)*, and every `.feature` must be
+   bound to a test *(enforced)*.
+3. **Bug fixes** — add a regression test that fails before the fix, plus the
+   related edge cases. A fix with no test is incomplete.
+4. **Refactor on touch** — when a change would add complexity, refactor instead
+   of piling on branches. New functions stay ≤ 10 cyclomatic complexity, and a
+   touched function already over 10 must come *down*, never up *(enforced by the
+   complexity ratchet)*. Update the affected tests.
+5. **External dependencies** — keep them minimal (YAGNI), constrain versions,
+   commit `uv.lock`, and import each heavy library from a single adapter module
+   only *(enforced by `import-linter`: `pylode`→`html_export`, `llm`→`ai`,
+   `fastapi`→`api`)*.
+6. **Hygiene** — don't suppress linter/type errors with `# noqa` / `# type:
+   ignore` unless it's a confirmed false positive (say why inline); comments
+   explain the **why**, not the **what**.
+
+All of the above run via `bash scripts/ci.sh` and GitHub Actions; commits must be
+**GPG-signed**.
 
 ---
 
