@@ -1,5 +1,6 @@
-"""Clicking a node — or pressing Enter on a search match — activates it the same
-way, expanding its relations by default (individuals and classes)."""
+"""Pressing Enter on a search match activates a node (expanding its relations).
+Clicking a node itself does nothing — expansion is driven only by the hover
+overlay buttons (explore/extend, hide)."""
 
 from __future__ import annotations
 
@@ -10,9 +11,12 @@ def test_app_js_defines_activate_node():
     assert "function activateNode" in _app_js()
 
 
-def test_node_click_goes_through_activate_node():
-    js = _app_js()
-    assert "cy.on('tap','node',function(e){activateNode(" in js.replace(" ", "")
+def test_node_click_does_not_activate():
+    # Tapping a node must NOT trigger activate/explore/extend; only empty-canvas
+    # taps remain wired (to clear the selection).
+    js = _app_js().replace(" ", "")
+    assert "cy.on('tap','node'" not in js
+    assert "cy.on('tap',function(e){if(e.target===cy)" in js
 
 
 def test_search_enter_activates_first_match():
@@ -25,5 +29,6 @@ def test_search_enter_activates_first_match():
 
 def test_activate_expands_explorable_nodes_by_default():
     js = _app_js().replace(" ", "")
-    # Inside activateNode, explorable node types call exploreNode.
-    assert "_EXPLORE_ENDPOINT[n.data('type')]){exploreNode(" in js
+    # Inside activateNode, explorable node types go through the mode-aware
+    # dispatcher: explore (replace) on the full graph, extend (merge) in a subgraph.
+    assert "_EXPLORE_ENDPOINT[n.data('type')]){exploreOrExtend(" in js

@@ -67,3 +67,17 @@ def test_class_links_unknown_uri_returns_empty(client):
     data = client.get("/api/class-links", params={"uri": uri("Ghost")}, headers=AUTH).json()
     assert data["nodes"] == []
     assert data["edges"] == []
+
+
+def test_class_links_subclass_only_omits_object_property_classes(client):
+    r = client.get(
+        "/api/class-links",
+        params={"uri": uri("Person"), "subclass_only": "true"},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    ids = {n["id"] for n in data["nodes"]}
+    assert uri("Agent") in ids  # subClassOf trail kept
+    assert uri("Pet") not in ids  # object-property link dropped
+    assert all(e["type"] != "objectProperty" for e in data["edges"])

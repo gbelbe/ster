@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime
 import subprocess
+import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -243,6 +245,52 @@ def write_dev_artifacts(
     ctx = _build_context(source_file, version_str, base)
     dirs = [publish_dir / "dev"]
     return _run_serializers(ctx, dirs, serializers or _default_serializers())
+
+
+# ── opening published artifacts in the browser ────────────────────────────────
+
+
+def _ordered_pages(artifacts: list[Path]) -> list[Path]:
+    """Return the TTL artifact(s) first, then the HTML page(s); ignore the rest."""
+    ttls = [a for a in artifacts if a.suffix.lower() == ".ttl"]
+    htmls = [a for a in artifacts if a.suffix.lower() in (".html", ".htm")]
+    return ttls + htmls
+
+
+def served_artifact_urls(base_url: str, publish_dir: Path, artifacts: list[Path]) -> list[str]:
+    """Map written *artifacts* to served URLs under the server's publish mount.
+
+    The graph server mounts *publish_dir* at ``/{publish_dir.name}`` (e.g.
+    ``/ontology``), so an artifact at ``<publish_dir>/dev/index.html`` is served
+    at ``<base_url>/ontology/dev/index.html``.  The TTL is listed before the HTML;
+    non-TTL/HTML artifacts are ignored.
+    """
+    base = base_url.rstrip("/")
+    mount = publish_dir.name
+    return [
+        f"{base}/{mount}/{a.relative_to(publish_dir).as_posix()}" for a in _ordered_pages(artifacts)
+    ]
+
+
+def open_dev_artifacts(
+    publish_dir: Path,
+    artifacts: list[Path],
+    base_url: str | None,
+    opener: Callable[[str], object] = webbrowser.open,
+) -> list[str]:
+    """Open the dev TTL and HTML artifacts (TTL first), returning the opened URLs.
+
+    When *base_url* is given the pages are opened as served URLs under the
+    server's ``/{publish_dir.name}`` mount; otherwise they fall back to
+    ``file://`` paths.  *opener* is injected for testing.
+    """
+    if base_url:
+        urls = served_artifact_urls(base_url, publish_dir, artifacts)
+    else:
+        urls = [a.as_uri() for a in _ordered_pages(artifacts)]
+    for url in urls:
+        opener(url)
+    return urls
 
 
 # ── pre-flight gate ───────────────────────────────────────────────────────────

@@ -46,6 +46,23 @@ def test_app_js_can_restore_original_graph():
     assert "restoreGraph" in _app_js()
 
 
+def _explore_node_body(js: str) -> str:
+    """Return the source of the exploreNode function (up to restoreGraph)."""
+    start = js.index("function exploreNode(")
+    end = js.index("function restoreGraph(", start)
+    return js[start:end]
+
+
+def test_explore_does_not_dim_the_expanded_subgraph():
+    # Regression: expanding an individual must not dim down to the focus node's
+    # immediate neighbourhood — that hid superclass trails and the related
+    # individuals' classes. exploreNode clears the highlight instead of pinning
+    # it to the focus URI (navigateTo still highlights, so check exploreNode only).
+    body = _explore_node_body(_app_js()).replace(" ", "")
+    assert "highlighted=null;applyHighlight()" in body
+    assert "highlighted=uri;applyHighlight()" not in body
+
+
 # ── superclass flag + toggle ────────────────────────────────────────────────────
 
 
