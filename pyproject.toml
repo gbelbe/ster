@@ -14,9 +14,12 @@ requires-python = ">=3.11"
 
 # ── Core runtime dependencies ─────────────────────────────────────────────────
 #
-#   rdflib  — RDF parsing / serialisation (.ttl, .rdf, .jsonld)
-#   typer   — CLI framework  (the [all] extra pulls in rich + shellingham)
-#   rich    — terminal rendering: colours, tables, prompts
+#   rdflib   — RDF parsing / serialisation (.ttl, .rdf, .jsonld)
+#   typer    — CLI framework  (the [all] extra pulls in rich + shellingham)
+#   rich     — terminal rendering: colours, tables, prompts
+#   fastapi  — graph/publish server (Version & Publish LD opens live web pages)
+#   pylode   — HTML documentation export (VocPub / OntPub profiles)
+#   llm      — LLM-powered concept suggestions (online & offline models)
 #
 dependencies = [
     "rdflib>=7.0",
@@ -24,30 +27,25 @@ dependencies = [
     "rich>=13.0",
     "semanticlint>=0.2",
     "idna>=3.15",
+    "fastapi[standard]>=0.110",   # includes uvicorn[standard]
+    "watchfiles>=0.21",           # file-change watcher for live push
+    "pylode>=3.0",                # HTML export
+    "llm>=0.19",                  # AI assist
 ]
 
 # ── Optional dependency groups ────────────────────────────────────────────────
 #
-#   html  — HTML export via pyLODE's VocPub profile
-#             install:  pip install "ster[html]"
+#   The former html / ai / api extras are now part of the core dependencies
+#   above, so a plain `pip install ster` (or `uv tool install ster`) ships the
+#   HTML export, AI assist, and graph/publish server out of the box.
 #
 #   dev   — test suite + all linting / security tools (mirrors CI)
 #             install:  pip install "ster[dev]"
 #
-#   all   — everything
+#   all   — everything (kept as an alias of dev for backwards compatibility)
 #             install:  pip install "ster[all]"
 #
 [project.optional-dependencies]
-html = [
-    "pylode>=3.0",
-]
-ai = [
-    "llm>=0.19",
-]
-api = [
-    "fastapi[standard]>=0.110",   # includes uvicorn[standard]
-    "watchfiles>=0.21",
-]
 dev = [
     # Testing
     "pytest>=9.0.3",
@@ -68,9 +66,6 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "ster[html]",
-    "ster[ai]",
-    "ster[api]",
     "ster[dev]",
 ]
 
