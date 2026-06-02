@@ -2091,30 +2091,28 @@ wheels = [
 
 [[package]]
 name = "ster"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi", extra = ["standard"] },
     { name = "idna" },
+    { name = "llm" },
+    { name = "pylode", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pylode", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "rdflib" },
     { name = "rich" },
     { name = "semanticlint" },
     { name = "typer" },
+    { name = "watchfiles" },
 ]
 
 [package.optional-dependencies]
-ai = [
-    { name = "llm" },
-]
 all = [
     { name = "bandit" },
     { name = "coverage", extra = ["toml"] },
-    { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
-    { name = "llm" },
     { name = "mypy" },
     { name = "pip-audit" },
-    { name = "pylode", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "pylode", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-bdd" },
@@ -2122,11 +2120,6 @@ all = [
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "types-pyyaml" },
-    { name = "watchfiles" },
-]
-api = [
-    { name = "fastapi", extra = ["standard"] },
-    { name = "watchfiles" },
 ]
 dev = [
     { name = "bandit" },
@@ -2142,22 +2135,18 @@ dev = [
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
-html = [
-    { name = "pylode", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "pylode", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "fastapi", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.110" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.110" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "idna", specifier = ">=3.15" },
-    { name = "llm", marker = "extra == 'ai'", specifier = ">=0.19" },
+    { name = "llm", specifier = ">=0.19" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
-    { name = "pylode", marker = "extra == 'html'", specifier = ">=3.0" },
+    { name = "pylode", specifier = ">=3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-bdd", marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -2167,15 +2156,12 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "semanticlint", specifier = ">=0.2" },
-    { name = "ster", extras = ["ai"], marker = "extra == 'all'" },
-    { name = "ster", extras = ["api"], marker = "extra == 'all'" },
     { name = "ster", extras = ["dev"], marker = "extra == 'all'" },
-    { name = "ster", extras = ["html"], marker = "extra == 'all'" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "watchfiles", marker = "extra == 'api'", specifier = ">=0.21" },
+    { name = "watchfiles", specifier = ">=0.21" },
 ]
-provides-extras = ["html", "ai", "api", "dev", "all"]
+provides-extras = ["dev", "all"]
 
 [[package]]
 name = "stevedore"

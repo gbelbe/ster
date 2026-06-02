@@ -19,7 +19,7 @@ blocks any `git push` that does not have a fresh CI pass within the last 60 minu
 
 Individual commands (same as ci.yml):
 ```bash
-uv sync --extra html --extra api --extra dev   # install all extras first
+uv sync --extra dev   # runtime deps are core; dev adds test/lint tools
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy ster/

@@ -28,8 +28,8 @@ uv python install 3.11 3.12 3.13
 git clone https://github.com/gbelbe/ster.git
 cd ster
 
-# Install all dependencies (dev + optional extras)
-uv sync --extra html --extra api --extra dev
+# Install all dependencies (runtime deps are core; dev adds the test/lint tools)
+uv sync --extra dev
 
 # Install the git pre-push hook (one-time, per clone)
 bash scripts/install-hooks.sh

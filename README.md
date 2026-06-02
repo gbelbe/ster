@@ -149,43 +149,22 @@ A dedicated full-screen settings panel, available from the main menu:
 
 ## Installation
 
-### Minimal (TUI + editing)
-
 ```bash
 pip install ster
 ```
 
-### With AI features
-
-```bash
-pip install "ster[ai]"
-```
-
-Then configure your model from the main menu: **⚙ Setup / Options**.
-No model needed if you use copy-paste mode.
-
-### With HTML export
-
-```bash
-pip install "ster[html]"
-```
-
-### With API server
-
-```bash
-pip install "ster[api]"
-```
+This ships everything: the TUI + editing, AI assist, HTML export, and the
+graph/publish server — no extras required. For AI features, configure your
+model from the main menu (**⚙ Setup / Options**); no model is needed if you use
+copy-paste mode.
 
 ### From source
 
 ```bash
 git clone https://github.com/gbelbe/ster.git
 cd ster
-pip install -e .           # core only
-pip install -e ".[ai]"     # with AI features
-pip install -e ".[html]"   # with HTML export
-pip install -e ".[api]"    # with API server
-pip install -e ".[dev]"    # with test suite
+pip install -e .           # everything (core)
+pip install -e ".[dev]"    # also install the test suite
 ```
 
 ---
@@ -197,14 +176,14 @@ pip install -e ".[dev]"    # with test suite
 | core | `rdflib>=7.0` | RDF parsing and serialisation |
 | core | `typer[all]>=0.12` | CLI framework |
 | core | `rich>=13.0` | Terminal rendering, prompts, tables |
-| `[ai]` | `llm>=0.19` | LLM abstraction layer (online & offline models) |
-| `[api]` | `fastapi[standard]>=0.110` | JSON + WebSocket API server |
-| `[api]` | `watchfiles>=0.21` | File-change watcher for live push |
-| `[html]` | `pylode>=3.0` | HTML generation from SKOS / OWL (VocPub / OntPub profiles) |
+| core | `llm>=0.19` | LLM abstraction layer (online & offline models) |
+| core | `fastapi[standard]>=0.110` | JSON + WebSocket API server |
+| core | `watchfiles>=0.21` | File-change watcher for live push |
+| core | `pylode>=3.0` | HTML generation from SKOS / OWL (VocPub / OntPub profiles) |
 | `[dev]` | `pytest>=9.0` | Test suite |
 | `[dev]` | `pytest-cov>=5.0` | Coverage reporting |
 
-Both `llm` and `pylode` are **not** installed by default. When you trigger a feature that needs them, ster will offer to install the package automatically.
+All runtime features (AI assist, HTML export, graph/publish server) ship by default — no extras required.
 
 ---
 
@@ -378,7 +357,7 @@ conventions, commit style, and pull request process.
 ```bash
 git clone https://github.com/gbelbe/ster.git
 cd ster
-uv sync --extra html --extra api --extra dev
+uv sync --extra dev
 bash scripts/install-hooks.sh   # install git pre-push hook (once per clone)
 ```
 
