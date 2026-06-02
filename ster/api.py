@@ -329,11 +329,14 @@ def create_app(
     )
     def get_class_links(
         uri: str = Query(description="URI of the class to explore"),
+        subclass_only: bool = Query(
+            False, description="Omit T-Box object-property links, keep only the subClassOf trail"
+        ),
         _: None = Depends(_check_auth),
     ) -> dict[str, Any]:
         from .viz_vowl import build_class_links_graph
 
-        return build_class_links_graph(_tax(), uri)  # type: ignore[return-value]
+        return build_class_links_graph(_tax(), uri, subclass_only=subclass_only)  # type: ignore[return-value]
 
     @app.get(
         "/api/events",
