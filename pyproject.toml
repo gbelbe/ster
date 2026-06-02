@@ -61,6 +61,8 @@ dev = [
     # Security
     "bandit[toml]>=1.7",
     "pip-audit>=2.7",
+    # Complexity ratchet (scripts/check_complexity_ratchet.py)
+    "radon>=6.0",
     # Templates / YAML
     "pyyaml>=6.0",
     "types-PyYAML>=6.0",
