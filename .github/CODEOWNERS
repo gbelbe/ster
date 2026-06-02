@@ -1,0 +1,12 @@
+# Code owners for ster.
+#
+# When "Require review from Code Owners" is enabled in the `main` branch
+# protection rule, a listed owner must approve a PR before it can merge — this
+# is what guarantees a human reviews the parts CI can't check (clarify/YAGNI,
+# test-first ordering, refactor quality). See CONTRIBUTING.md "Development rules".
+#
+# NOTE: replace @gbelbe with the maintainers' team handle once one exists,
+# e.g. `* @adeo/kai-maintainers`. A team avoids the "can't approve your own PR"
+# deadlock that a single owner creates.
+
+*       @gbelbe

@@ -1676,15 +1676,10 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
 
 def _ensure_pylode() -> bool:
     """Return True if pyLODE is importable, offering to install it if not."""
-    from .html_export import _patch_missing_pyproject
+    from .html_export import is_pylode_available
 
-    with _patch_missing_pyproject():
-        try:
-            import pylode  # noqa: F401
-
-            return True
-        except ImportError:
-            pass
+    if is_pylode_available():
+        return True
 
     console.print("\n[yellow]pyLODE is not installed.[/yellow]")
     try:

@@ -201,6 +201,81 @@ def _sanitize_ontpub_graph(taxonomy_path: Path) -> Path:
     return tmp
 
 
+# ── pyLODE adapter (the only place pyLODE is imported) ────────────────────────
+
+
+def is_pylode_available() -> bool:
+    """Return True if pyLODE can be imported."""
+    with _patch_missing_pyproject():
+        try:
+            import pylode  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
+
+
+def render_html(
+    taxonomy_path: Path,
+    *,
+    profile: Profile | None = None,
+    language: str | None = None,
+) -> str:
+    """Render one pyLODE HTML page for *taxonomy_path* and return it as a string.
+
+    This is the single function that imports pyLODE; every other module renders
+    documentation through it (or through ``generate_html``, which builds on it).
+    OWL/OntPub input is sanitised first (see ``_sanitize_ontpub_graph``); when
+    *language* is given it sets VocPub's default language.
+
+    Raises
+    ------
+    RuntimeError
+        If pyLODE is not installed.
+    """
+    import logging
+
+    with _patch_missing_pyproject():
+        try:
+            from pylode import OntPub, VocPub  # type: ignore[import]
+        except ImportError:
+            raise RuntimeError(
+                "pyLODE is not installed.\nRun:  pip install pylode\nThen try again."
+            )
+
+    if profile is None:
+        detected = detect_profile(taxonomy_path)
+        profile = "vocpub" if detected == "both" else detected  # type: ignore[assignment]
+
+    # Silence pyLODE's INFO/DEBUG chatter (root logger + asyncio).
+    _root_level = logging.root.level
+    _asyncio_logger = logging.getLogger("asyncio")
+    _asyncio_level = _asyncio_logger.level
+    logging.root.setLevel(logging.WARNING)
+    _asyncio_logger.setLevel(logging.WARNING)
+
+    try:
+        if profile == "ontpub":
+            tmp_path = _sanitize_ontpub_graph(taxonomy_path)
+            try:
+                return OntPub(ontology=str(tmp_path.resolve())).make_html()
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+        # vocpub
+        if language is not None:
+            try:
+                vp = VocPub(ontology=str(taxonomy_path.resolve()), default_language=language)
+            except TypeError:
+                vp = VocPub(ontology=str(taxonomy_path.resolve()))
+        else:
+            vp = VocPub(ontology=str(taxonomy_path.resolve()))
+        return vp.make_html()
+    finally:
+        logging.root.setLevel(_root_level)
+        _asyncio_logger.setLevel(_asyncio_level)
+
+
 # ── Core export ───────────────────────────────────────────────────────────────
 
 
@@ -233,14 +308,6 @@ def generate_html(
     RuntimeError
         If pyLODE is not installed.
     """
-    with _patch_missing_pyproject():
-        try:
-            from pylode import OntPub, VocPub  # type: ignore[import]
-        except ImportError:
-            raise RuntimeError(
-                "pyLODE is not installed.\nRun:  pip install pylode\nThen try again."
-            )
-
     if profile is None:
         detected = detect_profile(taxonomy_path)
         profile = "vocpub" if detected == "both" else detected  # type: ignore[assignment]
@@ -249,57 +316,30 @@ def generate_html(
     stem = taxonomy_path.stem
     created: list[Path] = []
 
-    import logging
+    if profile == "ontpub":
+        out_path = output_dir / f"{stem}.html"
+        out_path.write_text(render_html(taxonomy_path, profile="ontpub"), encoding="utf-8")
+        created.append(out_path)
+        return created
 
-    # Silence pyLODE's INFO/DEBUG chatter (root logger + asyncio).
-    _root_level = logging.root.level
-    _asyncio_logger = logging.getLogger("asyncio")
-    _asyncio_level = _asyncio_logger.level
-    logging.root.setLevel(logging.WARNING)
-    _asyncio_logger.setLevel(logging.WARNING)
+    # vocpub — one file per language, with a language switcher when multiple
+    from .store import load as _load
 
-    try:
-        if profile == "ontpub":
-            tmp_path = _sanitize_ontpub_graph(taxonomy_path)
-            try:
-                vp = OntPub(ontology=str(tmp_path.resolve()))
-                html = vp.make_html()
-            finally:
-                tmp_path.unlink(missing_ok=True)
+    taxonomy = _load(taxonomy_path)
+    if languages is None:
+        languages = _available_languages(taxonomy)
+    if not languages:
+        languages = ["en"]
+
+    multi = len(languages) > 1
+    for lang in languages:
+        html = render_html(taxonomy_path, profile="vocpub", language=lang)
+        if multi:
+            html = _inject_switcher(html, stem, lang, languages)
+            out_path = output_dir / f"{stem}_{lang}.html"
+        else:
             out_path = output_dir / f"{stem}.html"
-            out_path.write_text(html, encoding="utf-8")
-            created.append(out_path)
-
-        else:  # vocpub
-            from .store import load as _load
-
-            taxonomy = _load(taxonomy_path)
-            if languages is None:
-                languages = _available_languages(taxonomy)
-            if not languages:
-                languages = ["en"]
-
-            multi = len(languages) > 1
-            for lang in languages:
-                try:
-                    vp = VocPub(  # type: ignore[assignment]
-                        ontology=str(taxonomy_path.resolve()), default_language=lang
-                    )
-                except TypeError:
-                    vp = VocPub(ontology=str(taxonomy_path.resolve()))  # type: ignore[assignment]
-                html = vp.make_html()
-
-                if multi:
-                    html = _inject_switcher(html, stem, lang, languages)
-                    out_path = output_dir / f"{stem}_{lang}.html"
-                else:
-                    out_path = output_dir / f"{stem}.html"
-
-                out_path.write_text(html, encoding="utf-8")
-                created.append(out_path)
-
-    finally:
-        logging.root.setLevel(_root_level)
-        _asyncio_logger.setLevel(_asyncio_level)
+        out_path.write_text(html, encoding="utf-8")
+        created.append(out_path)
 
     return created

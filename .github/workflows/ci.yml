@@ -111,6 +111,21 @@ jobs:
         # CVE-2026-3219 / CVE-2026-6357 affect pip itself; not a ster dependency
         run: uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
 
+  # ── 3b. Import contracts (dependency isolation) ──────────────────────────────
+  imports:
+    name: Import contracts (import-linter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install deps
+        run: uv sync --extra dev
+
+      - name: lint-imports
+        run: uv run lint-imports
+
   # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -122,6 +137,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # diff-cover compares changed lines against the base branch
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -138,6 +155,11 @@ jobs:
 
       - name: Run tests with coverage
         run: uv run pytest --tb=short -q --cov=ster --cov-report=xml --cov-report=term-missing
+
+      - name: Patch coverage — changed lines must be ≥ 90% covered
+        # Diff-aware: only on PRs, once (latest Python).
+        if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
+        run: uv run diff-cover coverage.xml --compare-branch "origin/${{ github.base_ref }}" --fail-under 90
 
       - name: Upload coverage to Codecov
         # Upload only once (latest Python) to avoid duplicate reports

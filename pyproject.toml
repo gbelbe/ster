@@ -63,6 +63,10 @@ dev = [
     "pip-audit>=2.7",
     # Complexity ratchet (scripts/check_complexity_ratchet.py)
     "radon>=6.0",
+    # Patch-coverage gate (CI + scripts/ci.sh)
+    "diff-cover>=9.0",
+    # Architecture / dependency-isolation contracts
+    "import-linter>=2.0",
     # Templates / YAML
     "pyyaml>=6.0",
     "types-PyYAML>=6.0",
@@ -87,8 +91,11 @@ Issues     = "https://github.com/gbelbe/ster/issues"
 
 [tool.pytest.ini_options]
 testpaths    = ["tests"]
-addopts      = "--tb=short"
+addopts      = "--tb=short --strict-markers --strict-config"
 asyncio_mode = "auto"
+markers = [
+    "integration: end-to-end test that exercises real I/O (deselect with -m 'not integration')",
+]
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
@@ -165,3 +172,33 @@ skips        = [
     "B607",  # subprocess partial path — pip/pylode/git are trusted system tools
     "B107",  # hardcoded_password_default — false positive on api_token: str = "" (not a secret)
 ]
+
+# ── Import contracts (import-linter) — dependency isolation ───────────────────
+# Each heavy third-party library may be imported by exactly one adapter module,
+# so an upgrade or swap touches one file. See CLAUDE.md "External dependencies".
+# Run locally with: uv run lint-imports
+
+[tool.importlinter]
+root_package = "ster"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "pyLODE only via ster.html_export"
+type = "forbidden"
+source_modules = ["ster"]
+forbidden_modules = ["pylode"]
+ignore_imports = ["ster.html_export -> pylode"]
+
+[[tool.importlinter.contracts]]
+name = "llm only via ster.ai"
+type = "forbidden"
+source_modules = ["ster"]
+forbidden_modules = ["llm"]
+ignore_imports = ["ster.ai -> llm"]
+
+[[tool.importlinter.contracts]]
+name = "fastapi only via ster.api"
+type = "forbidden"
+source_modules = ["ster"]
+forbidden_modules = ["fastapi"]
+ignore_imports = ["ster.api -> fastapi"]
