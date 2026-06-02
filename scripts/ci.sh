@@ -45,7 +45,7 @@ ok "no ghost deletions"
 
 # ── 1. Ensure main dev deps are installed ─────────────────────────────────────
 step "Install deps (main env)"
-uv sync --extra html --extra api --extra dev --quiet
+uv sync --extra dev --quiet
 ok "deps synced (Python $(uv run python --version | awk '{print $2}'))"
 
 # ── 2. Lint ───────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ run_tests_for() {
 
   step "Tests (Python $PY)"
   UV_PROJECT_ENVIRONMENT="$VENV" uv sync --python "$PY" \
-    --extra html --extra api --extra dev --quiet
+    --extra dev --quiet
   UV_PROJECT_ENVIRONMENT="$VENV" uv run --python "$PY" pytest tests/ -q \
     --tb=short \
     --cov=ster \
@@ -120,7 +120,7 @@ else
 fi
 
 # ── Restore main venv ─────────────────────────────────────────────────────────
-uv sync --extra html --extra api --extra dev --quiet
+uv sync --extra dev --quiet
 
 # Write sentinel so the pre-push hook knows CI has passed
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SENTINEL"

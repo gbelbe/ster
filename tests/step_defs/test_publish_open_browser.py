@@ -58,7 +58,9 @@ def when_create_server(ctx: dict) -> None:
 @when("I open the dev artifacts with no server available")
 def when_open_no_server(ctx: dict) -> None:
     opened: list[str] = []
-    ctx["urls"] = open_dev_artifacts(ctx["pub"], [ctx["ttl"], ctx["html"]], None, opener=opened.append)
+    ctx["urls"] = open_dev_artifacts(
+        ctx["pub"], [ctx["ttl"], ctx["html"]], None, opener=opened.append
+    )
     ctx["opened"] = opened
 
 

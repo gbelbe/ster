@@ -357,7 +357,7 @@ conventions, commit style, and pull request process.
 ```bash
 git clone https://github.com/gbelbe/ster.git
 cd ster
-uv sync --extra html --extra api --extra dev
+uv sync --extra dev
 bash scripts/install-hooks.sh   # install git pre-push hook (once per clone)
 ```
 
