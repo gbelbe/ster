@@ -51,15 +51,40 @@ This project follows strict TDD with BDD for behaviour specification.
 
 **Before writing any implementation code for a new feature, you MUST:**
 
-1. Write the Gherkin `.feature` file under `tests/features/`
-2. List every unit test case — happy path, edge cases, error paths
-3. Show which files will receive them and the function names
-4. Wait for explicit user confirmation
+1. **Clarify and challenge the request — before any spec or code:**
+   - **Rephrase** the request in your own words (different phrasing, same meaning) to confirm you understood it.
+   - **Ask for clarification / validation** — 3–5 focused questions on scope, user-facing behaviour, edge cases, and the success criterion.
+   - **Apply YAGNI** ("You Aren't Gonna Need It"): actively challenge the use case. Question anything speculative or not strictly required to meet the goal, and propose the simplest design that satisfies it. Prefer cutting scope to adding it.
+   - Proceed only once the user has validated the (possibly reduced) scope.
+2. Write the Gherkin `.feature` file under `tests/features/`
+3. List every unit test case — happy path, edge cases, error paths
+4. Show which files will receive them and the function names
+5. Wait for explicit user confirmation
 
 **Only after approval:**
 - Write the `pytest-bdd` step definitions under `tests/step_defs/`
 - Write the unit tests under `tests/unit/`
 - Write the implementation
+
+## Bug fixes & regressions (mandatory)
+
+A fix is not done until it is locked in by a test:
+
+1. First write a **regression test that reproduces the bug** — it must *fail* against the current (broken) code, then pass once fixed.
+2. Cover the **related edge cases** the bug exposes (boundary values, empty / `None`, error paths) — not just the single reported input.
+3. Apply the fix; confirm the regression test **and** the full suite pass.
+4. Name the test for its intent (e.g. `test_<area>_<symptom>_regression`) and note the root cause in a comment.
+
+A bug-fix change with no new test is incomplete.
+
+## Refactor on touch (mandatory)
+
+When a change modifies existing code, leave it cleaner than you found it:
+
+- Before editing, look for a clean-code refactor of the code you're touching. When a feature would **add complexity** to existing code (yet another `if/elif/else` branch, a growing function, copy-pasted logic), **propose a refactor that factors it out** — dispatch table / polymorphism / strategy, an extracted helper, or a small dataclass — so the code stays easy to maintain and to test, *instead of* piling on branches.
+- **Complexity ratchet (cyclomatic complexity 10):** new functions must stay at or below complexity 10. A modification must **never increase** the complexity of a function that is already above 10 — if your change touches such a function, **refactor it to bring the complexity down** (toward ≤ 10) instead of adding another branch. Raising the limit is not an option.
+- Surface the refactor proposal (with its trade-off) to the user before implementing. YAGNI still applies — prefer the simplest structure; don't over-abstract.
+- After refactoring, **update the unit tests to match** the new structure: rename/move/retarget existing tests and add tests for any newly extracted unit. Tests must track the refactor, never lag it.
 
 ## BDD conventions
 
@@ -75,11 +100,12 @@ This project follows strict TDD with BDD for behaviour specification.
 
 Before writing any implementation code for a new feature, you MUST:
 
-1. List every test case you plan to add — happy path, edge cases, error paths
-2. Show which test file(s) will receive them and the test function names
-3. Wait for explicit user confirmation before writing any code
+1. Rephrase the request, ask for clarification/validation, and apply **YAGNI** to challenge and simplify the use case before committing to scope
+2. List every test case you plan to add — happy path, edge cases, error paths
+3. Show which test file(s) will receive them and the test function names
+4. Wait for explicit user confirmation before writing any code
 
-Only after the user approves the test plan should you proceed: write the tests first, then the implementation.
+Only after the user approves the simplified scope and test plan should you proceed: write the tests first, then the implementation.
 
 ## Project conventions
 
@@ -89,3 +115,13 @@ Only after the user approves the test plan should you proceed: write the tests f
 - AI functions in `ai.py` must go through `_call()` for copypaste/LLM dispatch
 - Curses must be suspended (`curses.endwin()`) before any non-curses terminal I/O (Rich, input()), then resumed (`stdscr.refresh()`)
 - All new features need tests; run the full suite before committing
+
+## External dependencies (mandatory)
+
+Third-party libraries must stay easy to upgrade without breaking changes:
+
+- **Isolate every external library behind a thin internal adapter** — the rest of the code imports our module, never the library directly. Follow the existing pattern: `llm` is reached only through `ai.py::_call()`, pyLODE only through `html_export.py`. A library swap or major upgrade should touch one file, not the whole tree.
+- **Keep the dependency list minimal** — apply YAGNI to dependencies too. Don't add a library for what the stdlib or an existing dependency already does; justify each new dependency in the PR.
+- **Constrain versions deliberately** in `pyproject.toml` (a lower bound on the features you actually use) and commit the resolved `uv.lock` so installs are reproducible.
+- **On every upgrade**: read the library's changelog for breaking changes, bump `uv.lock`, then run the full gate (`/ci`) plus `pip-audit` before committing. Pin away from a release only with a comment explaining why.
+- Prefer well-maintained, widely-used libraries with stable APIs; treat a hard-to-pin or fast-churning dependency as a risk to flag.
