@@ -341,7 +341,9 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
 # ── class links subgraph ──────────────────────────────────────────────────────
 
 
-def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
+def build_class_links_graph(
+    taxonomy: Taxonomy, class_uri: str, subclass_only: bool = False
+) -> dict:
     """Serialise the linked-classes neighbourhood of *class_uri* into a payload.
 
     Centred on one class, the subgraph contains:
@@ -391,7 +393,11 @@ def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
     # ── object-property-linked classes (both directions) ──────────────────
     linked: set[str] = set()
     add_class(class_uri, superclass=0)
-    for prop in taxonomy.owl_properties.values():
+    # In subclass-only mode the T-Box object-property links between classes are
+    # omitted (used when exploration started from an individual — the object
+    # properties are already shown between the individuals at the A-Box level).
+    props = [] if subclass_only else list(taxonomy.owl_properties.values())
+    for prop in props:
         if prop.prop_type != "ObjectProperty":
             continue
         plabel = prop.label("en")
@@ -424,9 +430,9 @@ def build_class_links_graph(taxonomy: Taxonomy, class_uri: str) -> dict:
                         }
                     )
 
-    # ── superclass trail above the focus class ────────────────────────────
+    # ── superclass trail above the focus class and every linked class ─────
     non_superclass = {class_uri, *linked}
-    stack = [class_uri]
+    stack = [class_uri, *linked]
     visited: set[str] = set()
     while stack:
         cur = stack.pop()
@@ -903,7 +909,16 @@ def _start_api_server(
         if on_change_fn is not None:
             on_change_fn()
 
-    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn)
+    # Mount the project's publish tree (ontology/) so published stable/dev
+    # artifacts are served at /ontology/... — created up-front so the mount
+    # exists even before the first publish (StaticFiles serves live from disk).
+    publish_dir = file_path.parent / "ontology" if file_path is not None else None
+    if publish_dir is not None:
+        publish_dir.mkdir(parents=True, exist_ok=True)
+
+    app = create_app(
+        taxonomy, token, broadcaster, save_fn, html_fn=html_fn, publish_dir=publish_dir
+    )
     app.state._ster["broadcaster"] = broadcaster
 
     _api_app = app
@@ -1035,6 +1050,22 @@ def _write_data_json(taxonomy: Taxonomy, out_path: Path) -> None:
     _data_path(out_path).write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
 
 
+def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -> str | None:
+    """Ensure the live API server is running and return its base URL.
+
+    Starts the FastAPI server (with the ``/ontology`` publish mount) if it is not
+    already up, without opening the graph page. Returns the base URL, e.g.
+    ``http://127.0.0.1:8765``, or ``None`` when the ``ster[api]`` extra is not
+    installed (so callers can fall back to ``file://``).
+    """
+    if not _start_api_server(taxonomy, file_path):
+        return None
+    from .api_server import load_server_config  # noqa: PLC0415
+
+    url, port = load_server_config()
+    return f"{url}:{port}"
+
+
 def open_in_browser(
     taxonomy: Taxonomy,
     file_path: Path | None = None,
@@ -1127,6 +1158,8 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 #tip{position:fixed;pointer-events:none;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:11px;color:#e2e8f0;max-width:280px;word-break:break-all;display:none;z-index:99}
 #explore-btn{position:absolute;display:none;transform:translate(-50%,-100%);z-index:40;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
 #explore-btn:hover{background:#1d4ed8}
+#hide-btn{position:absolute;display:none;transform:translate(-50%,0);z-index:40;background:#64748b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
+#hide-btn:hover{background:#475569}
 .ftbtn{background:none;border:1px solid #cbd5e1;color:#94a3b8;border-radius:6px;cursor:pointer;font-size:10px;padding:1px 6px;text-decoration:line-through}
 .ftbtn.active{color:#475569;border-color:#94a3b8;text-decoration:none}
 .ftbtn:hover{background:#f1f5f9}
@@ -1171,7 +1204,7 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>
 <div id="stats"></div>
 <div id="hint">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
-<button id="explore-btn">&#8857; explore relations</button>
+<button id="explore-btn">&#8857; explore relations</button><button id="hide-btn">&#8854; hide node + parents</button>
 <div id="zoom-ctrl"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
 <div id="tip"></div>
 <div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search nodes…" autocomplete="off" spellcheck="false" autofocus><span id="search-count"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>

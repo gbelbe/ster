@@ -51,43 +51,47 @@ function makeLayout(){
 const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:window.devicePixelRatio||1});
 
 // ── Graph state persistence (positions + viewport, survives browser/ster restart) ──
-const _stateKey='ster_state_'+location.pathname;
+// Keyed per-path AND guarded by a signature of the current node set, so a
+// different ontology (or an expanded subgraph) served at the same URL never
+// restores stale positions. The version prefix invalidates any state saved by
+// older builds that persisted the pre-layout pile-up.
+const _stateKey='ster_state_v2_'+location.pathname;
+function _graphSig(){
+  const ids=cy.nodes().map(n=>n.id()).sort().join('|');
+  let h=0;for(let i=0;i<ids.length;i++){h=(h*31+ids.charCodeAt(i))|0;}
+  return cy.nodes().size()+':'+h;
+}
 function _saveState(){
   try{
     const pos=[];
     cy.nodes().forEach(n=>{const p=n.position();pos.push({id:n.id(),x:p.x,y:p.y});});
-    localStorage.setItem(_stateKey,JSON.stringify({pos,zoom:cy.zoom(),pan:cy.pan()}));
+    localStorage.setItem(_stateKey,JSON.stringify({sig:_graphSig(),pos,zoom:cy.zoom(),pan:cy.pan()}));
   }catch(_){}
 }
 let _saveTimer;
 function _debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(_saveState,400);}
 
-// On load: restore saved state or run fresh layout
+// cose is asynchronous: persist positions only once the layout settles,
+// otherwise we'd save the initial origin pile-up and restore clutter next time.
+function runLayout(){
+  const l=cy.layout(makeLayout());
+  l.one('layoutstop',_saveState);
+  l.run();
+}
+
+// On load: restore saved state for THIS graph, else run a fresh layout.
 (function(){
   try{
     const s=JSON.parse(localStorage.getItem(_stateKey)||'null');
-    if(s&&s.pos&&s.pos.length){
+    if(s&&s.pos&&s.pos.length&&s.sig===_graphSig()){
       const posMap={};
       s.pos.forEach(p=>{posMap[p.id]={x:p.x,y:p.y};});
-      cy.nodes().forEach(n=>{
-        if(posMap[n.id()]){n.position(posMap[n.id()]);}
-        else{
-          // New node not in saved state — place near its neighbours
-          const nbrs=n.neighborhood('node').filter(nb=>!!posMap[nb.id()]);
-          if(nbrs.length){
-            let x=0,y=0;
-            nbrs.forEach(nb=>{x+=nb.position().x;y+=nb.position().y;});
-            n.position({x:x/nbrs.length+(Math.random()-.5)*80,y:y/nbrs.length+(Math.random()-.5)*80});
-          }else{n.position({x:500+(Math.random()-.5)*300,y:400+(Math.random()-.5)*300});}
-        }
-      });
+      cy.nodes().forEach(n=>{if(posMap[n.id()])n.position(posMap[n.id()]);});
       cy.viewport({zoom:s.zoom||1,pan:s.pan||{x:0,y:0}});
       return;
     }
   }catch(_){}
-  // No saved state — compute layout once and save it
-  cy.layout(makeLayout()).run();
-  _saveState();
+  runLayout();
 })();
 
 cy.on('viewport',_debouncedSave);
@@ -254,14 +258,30 @@ function clearSearch(){
 document.getElementById('search-box').addEventListener('input',e=>searchNodes(e.target.value));
 document.getElementById('search-clear').addEventListener('click',clearSearch);
 window.addEventListener('load',()=>document.getElementById('search-box').focus());
-
-// ── Click ─────────────────────────────────────────────────────────────────────
-cy.on('tap','node',function(e){
-  const d=e.target.data();
-  clearSearch();
-  if(highlighted===d.id){highlighted=null;applyHighlight();showDefault();return;}
-  highlighted=d.id;applyHighlight();togglePanel(true);showDetail(d);
+// Enter on the search box acts on the first match exactly like clicking it.
+document.getElementById('search-box').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const t=e.target.value.trim().toLowerCase();
+  if(!t)return;
+  const matched=cy.nodes().filter(n=>n.data('label').toLowerCase().includes(t)||n.data('id').toLowerCase().includes(t));
+  if(matched.length){e.preventDefault();activateNode(matched.first().data('id'));}
 });
+
+// ── Click / activate ──────────────────────────────────────────────────────────
+// Activating a node (Enter on a search match) expands its relations by default:
+// individuals → object-property relations, classes → linked classes. Node types
+// without an expansion endpoint fall back to the detail panel.
+function activateNode(uri){
+  clearSearch();
+  const n=cy.$('#'+CSS.escape(uri));
+  if(!n.length)return;
+  if(API_TOKEN&&_EXPLORE_ENDPOINT[n.data('type')]){exploreOrExtend(uri);return;}
+  if(highlighted===uri){highlighted=null;applyHighlight();showDefault();return;}
+  highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());
+}
+// Clicking a node itself does nothing: expansion is driven only by the hover
+// overlay ("explore/extend relations", "hide node + parents"). Tapping empty
+// canvas still clears the current selection.
 cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
@@ -277,7 +297,7 @@ function togglePanel(show){
 }
 document.getElementById('panel-close').addEventListener('click',()=>togglePanel());
 document.getElementById('zoom-in').addEventListener('click',()=>zoomBy(1.3));
-document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(_){}cy.layout(makeLayout()).run();_saveState();});
+document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();});
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
 document.getElementById('ft-first-order').addEventListener('click',toggleFirstOrderClasses);
@@ -301,6 +321,11 @@ window._sterToggleIndiv=toggleAllIndividuals;
 // classes (superclasses + object-property domain/range). The previous graph is
 // saved so Escape restores the original view.
 let _savedGraph=null;
+// The node type the current exploration started from. When it is 'individual',
+// object properties are shown between individuals, so extending a class brings in
+// only its subClassOf trail (subclass_only) — no redundant T-Box object-property
+// links. A class-rooted session shows those links.
+let _rootType=null;
 const _EXPLORE_ENDPOINT={individual:'/api/individual-relations',class:'/api/class-links'};
 function exploreNode(uri){
   if(!API_TOKEN)return;
@@ -308,6 +333,7 @@ function exploreNode(uri){
   if(!node.length)return;
   const endpoint=_EXPLORE_ENDPOINT[node.data('type')];
   if(!endpoint)return;
+  _rootType=node.data('type');
   fetch(endpoint+'?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
     .then(r=>r.ok?r.json():null)
     .then(d=>{
@@ -319,7 +345,11 @@ function exploreNode(uri){
       refreshSuperclassesBtn();
       applySuperclassVis();
       const n=cy.$('#'+CSS.escape(uri));
-      if(n.length){highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());}
+      // The expanded subgraph IS the focus: show every node. Dimming to the
+      // focus node's immediate neighbourhood used to blur the superclass trail
+      // and the related individuals' classes/superclasses. Clear the highlight
+      // so nothing is dimmed; the detail panel still pins the focus.
+      if(n.length){highlighted=null;applyHighlight();togglePanel(true);showDetail(n.data());}
     }).catch(()=>{});
 }
 function restoreGraph(){
@@ -327,34 +357,186 @@ function restoreGraph(){
   cy.elements().remove();
   cy.add(_savedGraph.els);
   cy.viewport({zoom:_savedGraph.zoom,pan:_savedGraph.pan});
-  _savedGraph=null;
+  _savedGraph=null;_rootType=null;
   refreshSuperclassesBtn();
   applySuperclassVis();
   highlighted=null;applyHighlight();showDefault();
 }
+// On the full graph, activating a node replaces it with that node's
+// neighbourhood (exploreNode). Once a subgraph is open, activating instead
+// EXTENDS — the neighbourhood is merged onto the current view, keeping the rest.
+function exploreOrExtend(uri){if(_savedGraph)extendNode(uri);else exploreNode(uri);}
+// Fetch a node's relations payload (individual or class), or null on failure.
+function _fetchRel(type,uri){
+  const ep=_EXPLORE_ENDPOINT[type];
+  if(!ep)return Promise.resolve(null);
+  let url=ep+'?uri='+encodeURIComponent(uri);
+  // Individual-rooted session: a class only contributes its subClassOf trail.
+  if(type==='class'&&_rootType==='individual')url+='&subclass_only=1';
+  return fetch(url,{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null).catch(()=>null);
+}
+// Seed the new nodes near their anchors, then spread them without piling up: pin
+// the existing graph and run a force pass over the newcomers only, then unpin.
+// fit:false keeps the current viewport; locked nodes stay exactly put.
+function _seedAndSpread(addedNodes,fp){
+  if(addedNodes.empty()){_saveState();return;}
+  addedNodes.forEach(n=>{
+    const anchors=n.neighborhood('node').filter(nb=>!addedNodes.contains(nb));
+    let x=fp.x,y=fp.y;
+    if(anchors.length){x=0;y=0;anchors.forEach(a=>{const p=a.position();x+=p.x;y+=p.y;});x/=anchors.length;y/=anchors.length;}
+    n.position({x:x+(Math.random()-.5)*40,y:y+(Math.random()-.5)*40});
+  });
+  const existing=cy.nodes().difference(addedNodes);
+  existing.lock();
+  const l=cy.layout({name:'cose',animate:false,fit:false,randomize:false,
+    nodeRepulsion:5000,nodeOverlap:20,idealEdgeLength:110,edgeElasticity:100,
+    gravity:50,numIter:600,coolingFactor:0.95,minTemp:1.0});
+  l.one('layoutstop',()=>{existing.unlock();_saveState();});
+  l.run();
+}
 
-// ── Hover "explore relations" overlay button ──────────────────────────────────
+// ── Extend: merge a node's neighbourhood onto the current subgraph ─────────────
+let _mergeCtr=0;
+function extendNode(uri){
+  if(!API_TOKEN)return;
+  const node=cy.$('#'+CSS.escape(uri));
+  if(!node.length)return;
+  const endpoint=_EXPLORE_ENDPOINT[node.data('type')];
+  if(!endpoint)return;
+  // Edges carry per-request ids (e0,e1,...) that collide across fetches, so add
+  // them de-duplicated by (source,target,type,label) and re-id'd. onlyVisible
+  // keeps only edges whose endpoints are already drawn -- used to bring in the
+  // newcomers' own property relations without dragging in further nodes.
+  const sigOf=(s,t,ty,l)=>s+'\u0001'+t+'\u0001'+ty+'\u0001'+(l||'');
+  const haveEdges=new Set(cy.edges().map(e=>sigOf(e.data('source'),e.data('target'),e.data('type'),e.data('label'))));
+  function addEdges(edges,onlyVisible){
+    const fresh=[];
+    edges.forEach(e=>{
+      const sig=sigOf(e.source,e.target,e.type,e.label);
+      if(haveEdges.has(sig))return;
+      if(onlyVisible&&(cy.getElementById(e.source).empty()||cy.getElementById(e.target).empty()))return;
+      haveEdges.add(sig);
+      fresh.push({...e,id:'x'+(_mergeCtr++)});
+    });
+    if(fresh.length)cy.add(buildElements({nodes:[],edges:fresh}));
+  }
+  _fetchRel(node.data('type'),uri).then(d=>{
+    if(!d||!d.nodes||!d.nodes.length)return;
+    // Nodes are keyed by URI id -- add only those not already present.
+    const existingIds=new Set(cy.nodes().map(n=>n.id()));
+    const newNodes=d.nodes.filter(n=>!existingIds.has(n.id));
+    const focus=cy.$('#'+CSS.escape(uri));
+    const fp=focus.length?focus.position():{x:0,y:0};
+    const added=cy.add(buildElements({nodes:newNodes,edges:[]}));
+    const addedNodes=added.nodes();
+    addEdges(d.edges,false);
+    // Bring in each newcomer's own property edges that link nodes already on
+    // screen, so adding a node also adds its relations (no extra nodes pulled in).
+    const explorable=addedNodes.filter(nn=>_EXPLORE_ENDPOINT[nn.data('type')]);
+    Promise.all(explorable.map(nn=>_fetchRel(nn.data('type'),nn.id()))).then(rs=>{
+      rs.forEach(rd=>{if(rd&&rd.edges)addEdges(rd.edges,true);});
+      _seedAndSpread(addedNodes,fp);
+      applyIndivVis();
+      hiddenEdgeTypes.forEach(t=>cy.edges('[type="'+t+'"]').addClass('hidden'));
+      refreshSuperclassesBtn();
+      applySuperclassVis();
+      const n=cy.$('#'+CSS.escape(uri));
+      if(n.length){highlighted=null;applyHighlight();togglePanel(true);showDetail(n.data());}
+    });
+  }).catch(()=>{});
+}
+
+// ── Hide a node together with its parent trail ────────────────────────────────
+// Individual → drop it, its rdf:type class(es) and their subClassOf superclasses.
+// Class → drop it and its subClassOf superclasses. A parent that another still
+// -visible node depends on (instanceOf or subClassOf) is kept, transitively.
+function hideNodeAndParents(uri){
+  const node=cy.$('#'+CSS.escape(uri));
+  if(!node.length)return;
+  const type=node.data('type');
+  const seeds=[];
+  if(type==='individual'){
+    cy.edges('[source="'+uri+'"][type="instanceOf"]').forEach(e=>seeds.push(e.data('target')));
+  }else if(type==='class'){
+    cy.edges('[source="'+uri+'"][type="subClassOf"]').forEach(e=>seeds.push(e.data('target')));
+  }
+  // Collect the transitive subClassOf parent trail above the seeds.
+  const parents=new Set();
+  const stack=[...seeds];
+  while(stack.length){
+    const c=stack.pop();
+    if(parents.has(c))continue;
+    parents.add(c);
+    cy.edges('[source="'+c+'"][type="subClassOf"]').forEach(e=>stack.push(e.data('target')));
+  }
+  // The focus node is always removed; parents start in the removal set then get
+  // released when some node outside the set still depends on them (fixpoint).
+  const removing=new Set([uri,...parents]);
+  let changed=true;
+  while(changed){
+    changed=false;
+    parents.forEach(id=>{
+      if(!removing.has(id))return;
+      let depended=false;
+      cy.edges('[target="'+id+'"]').forEach(e=>{
+        const et=e.data('type');
+        if((et==='instanceOf'||et==='subClassOf')&&!removing.has(e.data('source')))depended=true;
+      });
+      if(depended){removing.delete(id);changed=true;}
+    });
+  }
+  removing.forEach(id=>cy.$('#'+CSS.escape(id)).remove());
+  refreshSuperclassesBtn();
+  applySuperclassVis();
+  highlighted=null;applyHighlight();showDefault();
+  _saveState();
+}
+
+// ── Hover overlay: explore/extend + hide buttons ──────────────────────────────
 const exploreBtn=document.getElementById('explore-btn');
+const hideBtn=document.getElementById('hide-btn');
 let _exploreHoverUri=null,_exploreHideTimer=null;
 function _positionExploreBtn(node){
   const bb=node.renderedBoundingBox();
-  exploreBtn.style.left=((bb.x1+bb.x2)/2)+'px';
-  exploreBtn.style.top=(bb.y1-6)+'px';
+  const cx=(bb.x1+bb.x2)/2;
+  // Buttons touch the node (no gap) so the cursor can slide straight onto them
+  // without crossing empty canvas: explore/extend hugs the top edge (its bottom
+  // sits on the node top), hide hugs the bottom edge (its top sits on the node
+  // bottom). The differing transforms are set in CSS (#explore-btn vs #hide-btn).
+  exploreBtn.style.left=cx+'px';exploreBtn.style.top=bb.y1+'px';
+  if(hideBtn){hideBtn.style.left=cx+'px';hideBtn.style.top=bb.y2+'px';}
 }
+function _hideOverlay(){exploreBtn.style.display='none';if(hideBtn)hideBtn.style.display='none';}
+// The node and its two labels form one hover region: entering any of them keeps
+// the overlay up (cancels a pending hide); leaving any of them only *schedules*
+// a hide, so sliding label → node → label never flickers the buttons off. The
+// overlay disappears only once the cursor has left the node and both labels.
+function _cancelHide(){if(_exploreHideTimer){clearTimeout(_exploreHideTimer);_exploreHideTimer=null;}}
+function _scheduleHide(){_cancelHide();_exploreHideTimer=setTimeout(_hideOverlay,600);}
 if(exploreBtn&&API_TOKEN){
   cy.on('mouseover','node',e=>{
     const t=e.target.data('type');
-    if(t!=='individual'&&t!=='class'){exploreBtn.style.display='none';return;}
-    if(_exploreHideTimer){clearTimeout(_exploreHideTimer);_exploreHideTimer=null;}
+    if(t!=='individual'&&t!=='class'){_hideOverlay();return;}
+    _cancelHide();
     _exploreHoverUri=e.target.data('id');
+    // On the full graph the action is "explore" (replace); inside a subgraph it
+    // becomes "extend" (merge onto the current view).
+    exploreBtn.textContent='⊙ explore relations';
+    if(_savedGraph)exploreBtn.textContent='⊕ extend relations';
     _positionExploreBtn(e.target);
     exploreBtn.style.display='block';
+    if(hideBtn)hideBtn.style.display='block';
   });
-  cy.on('mouseout','node',()=>{_exploreHideTimer=setTimeout(()=>{exploreBtn.style.display='none';},160);});
-  cy.on('viewport',()=>{exploreBtn.style.display='none';});
-  exploreBtn.addEventListener('mouseenter',()=>{if(_exploreHideTimer){clearTimeout(_exploreHideTimer);_exploreHideTimer=null;}});
-  exploreBtn.addEventListener('mouseleave',()=>{exploreBtn.style.display='none';});
-  exploreBtn.addEventListener('click',()=>{exploreBtn.style.display='none';if(_exploreHoverUri)exploreNode(_exploreHoverUri);});
+  cy.on('mouseout','node',_scheduleHide);
+  cy.on('viewport',_hideOverlay);
+  [exploreBtn,hideBtn].forEach(b=>{
+    if(!b)return;
+    b.addEventListener('mouseenter',_cancelHide);
+    b.addEventListener('mouseleave',_scheduleHide);
+  });
+  exploreBtn.addEventListener('click',()=>{_hideOverlay();if(_exploreHoverUri)exploreOrExtend(_exploreHoverUri);});
+  if(hideBtn)hideBtn.addEventListener('click',()=>{_hideOverlay();if(_exploreHoverUri)hideNodeAndParents(_exploreHoverUri);});
 }
 
 // ── Superclasses toggle (subClassOf trail; shown by default) ──────────────────
@@ -382,7 +564,7 @@ function toggleSuperclasses(){
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
-  if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}cy.layout(makeLayout()).run();_saveState();}
+  if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(0.77);}
 });

@@ -5,8 +5,38 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 import ster._version as version_module
 from ster._version import check_update
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_version_check(monkeypatch):
+    """Keep check_update() hermetic.
+
+    check_update() spawns a daemon thread that fetches PyPI and rewrites the
+    shared cache file. Left live, that thread leaks across test cases and — now
+    that the real version is published on PyPI — rewrites another case's temp
+    cache (fresh timestamp + real latest), flipping an "expired" cache to fresh
+    and making assertions non-deterministic. These tests only exercise the
+    synchronous cache-reading logic, so stub out the background refresh and any
+    network entirely.
+    """
+
+    class _NoThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(version_module.threading, "Thread", _NoThread)
+
+    def _no_network(*args, **kwargs):
+        raise OSError("network disabled in tests")
+
+    monkeypatch.setattr(version_module.urllib.request, "urlopen", _no_network)
 
 
 def _write_cache(path, latest: str, age_hours: float = 1.0) -> None:

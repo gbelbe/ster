@@ -556,6 +556,30 @@ def test_class_links_marks_superclass_nodes():
     assert _node_by_id(g, _uri("Pet"))["superclass"] == 0
 
 
+# ── subclass_only mode (used when exploration started from an individual) ───────
+
+
+def test_class_links_subclass_only_keeps_superclass_trail():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"), subclass_only=True)
+    assert {_uri("Person"), _uri("Agent"), _uri("Thing")} <= _node_ids(g)
+    assert any(
+        e["source"] == _uri("Person") and e["target"] == _uri("Agent") and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+
+
+def test_class_links_subclass_only_drops_object_property_links():
+    from ster.viz_vowl import build_class_links_graph
+
+    g = build_class_links_graph(_class_links_tax(), _uri("Person"), subclass_only=True)
+    # Object-property-linked classes and their edges are omitted.
+    assert _uri("Pet") not in _node_ids(g)
+    assert _uri("Company") not in _node_ids(g)
+    assert all(e["type"] != "objectProperty" for e in g["edges"])
+
+
 def test_individual_relations_marks_superclass_nodes():
     from ster.viz_vowl import build_individual_relations_graph
 
@@ -565,3 +589,42 @@ def test_individual_relations_marks_superclass_nodes():
     # Direct rdf:type classes and the focus individual are not superclasses
     assert _node_by_id(g, _uri("Person"))["superclass"] == 0
     assert _node_by_id(g, _uri("Alice"))["superclass"] == 0
+
+
+def test_class_links_includes_superclasses_of_linked_classes():
+    """Object-property-linked classes should also carry their superclass trail."""
+    from ster.viz_vowl import build_class_links_graph
+
+    t = _class_links_tax()  # Person --owns--> Pet ; Company --employs--> Person
+    t.owl_classes[_uri("LivingBeing")] = _cls("LivingBeing")
+    t.owl_classes[_uri("Pet")].sub_class_of.append(_uri("LivingBeing"))
+    t.owl_classes[_uri("Org")] = _cls("Org")
+    t.owl_classes[_uri("Company")].sub_class_of.append(_uri("Org"))
+    g = build_class_links_graph(t, _uri("Person"))
+    ids = _node_ids(g)
+    # Superclass of the range-linked class (Pet ⊑ LivingBeing)
+    assert _uri("LivingBeing") in ids
+    assert any(
+        e["source"] == _uri("Pet")
+        and e["target"] == _uri("LivingBeing")
+        and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+    # Superclass of the domain-linked class (Company ⊑ Org)
+    assert _uri("Org") in ids
+    assert any(
+        e["source"] == _uri("Company") and e["target"] == _uri("Org") and e["type"] == "subClassOf"
+        for e in g["edges"]
+    )
+
+
+def test_class_links_marks_linked_class_superclasses_as_superclass():
+    from ster.viz_vowl import build_class_links_graph
+
+    t = _class_links_tax()
+    t.owl_classes[_uri("LivingBeing")] = _cls("LivingBeing")
+    t.owl_classes[_uri("Pet")].sub_class_of.append(_uri("LivingBeing"))
+    g = build_class_links_graph(t, _uri("Person"))
+    assert _node_by_id(g, _uri("LivingBeing"))["superclass"] == 1
+    # The linked class itself stays a direct (non-superclass) node.
+    assert _node_by_id(g, _uri("Pet"))["superclass"] == 0

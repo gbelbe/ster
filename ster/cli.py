@@ -1918,6 +1918,30 @@ def cmd_serve(
     serve(file.resolve(), host=host, port=port)
 
 
+def _open_dev_artifacts_in_browser(
+    taxonomy: object, file_path: Path, publish_dir: Path, artifacts: list[Path]
+) -> None:
+    """Open the freshly-published dev TTL + HTML on the running graph server.
+
+    Ensures the server is up so the pages are served at /ontology/dev/...; if the
+    ster[api] extra is missing it falls back to opening the files via file://.
+    """
+    from . import viz_vowl as _viz
+    from .publish import open_dev_artifacts
+
+    base = _viz.ensure_published_server(taxonomy, file_path)  # type: ignore[arg-type]
+    urls = open_dev_artifacts(publish_dir, artifacts, base)
+    if not urls:
+        return
+    if base:
+        console.print(f"[green]✓[/green]  Opened dev pages: {'  '.join(urls)}")
+    else:
+        console.print(
+            f"[yellow]![/yellow]  No live server (ster[api] not installed) — "
+            f"opened files directly: {'  '.join(urls)}"
+        )
+
+
 def _run_publish_interactive(files: list[Path]) -> None:
     """Interactive Version & Publish LD screen from the home-screen menu."""
     from rich.panel import Panel
@@ -2033,6 +2057,7 @@ def _run_publish_interactive(files: list[Path]) -> None:
         console.print(
             f"[green]✓[/green]  Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}"
         )
+        _open_dev_artifacts_in_browser(taxonomy, taxonomy_file, publish_dir, artifacts)
     else:
         artifacts = write_stable_artifacts(taxonomy_file, publish_dir, base_version, version_str)
         for a in artifacts:
@@ -2068,6 +2093,9 @@ def cmd_publish(
     channel: str = typer.Option("stable", "--channel", "-c", help="Channel: stable or dev."),
     publish_dir: Path = typer.Option(
         Path("ontology"), "--dir", "-d", help="Directory to write artifacts."
+    ),
+    open_pages: bool = typer.Option(
+        True, "--open/--no-open", help="Open the published dev pages in the browser (dev channel)."
     ),
 ) -> None:
     """Publish a new versioned release of the ontology.
@@ -2122,6 +2150,8 @@ def cmd_publish(
         _con.print(f"Publishing dev channel → [bold]{version_str}[/bold]")
         artifacts = write_dev_artifacts(path, publish_dir, version_str)
         _con.print(f"[green]Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}[/green]")
+        if open_pages:
+            _open_dev_artifacts_in_browser(taxonomy, path, publish_dir, artifacts)
     else:
         _con.print(f"Publishing stable [bold]{version_str}[/bold]")
         artifacts = write_stable_artifacts(path, publish_dir, version, version_str)
