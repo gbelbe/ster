@@ -61,6 +61,8 @@ dev = [
     # Security
     "bandit[toml]>=1.7",
     "pip-audit>=2.7",
+    # Patch-coverage gate (CI + scripts/ci.sh)
+    "diff-cover>=9.0",
     # Templates / YAML
     "pyyaml>=6.0",
     "types-PyYAML>=6.0",
