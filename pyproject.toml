@@ -85,8 +85,11 @@ Issues     = "https://github.com/gbelbe/ster/issues"
 
 [tool.pytest.ini_options]
 testpaths    = ["tests"]
-addopts      = "--tb=short"
+addopts      = "--tb=short --strict-markers --strict-config"
 asyncio_mode = "auto"
+markers = [
+    "integration: end-to-end test that exercises real I/O (deselect with -m 'not integration')",
+]
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
