@@ -88,6 +88,10 @@ step "Security — pip-audit"
 uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable \
   && ok "pip-audit"
 
+# ── 4b. Import contracts (dependency isolation) ──────────────────────────────
+step "Import contracts (import-linter)"
+uv run lint-imports && ok "import contracts"
+
 # ── 5. Tests (per Python version, isolated envs) ─────────────────────────────
 run_tests_for() {
   local PY="$1"

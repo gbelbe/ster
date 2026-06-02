@@ -138,27 +138,18 @@ class HtmlSerializer:
     def write(self, ctx: PublishContext, dest_dir: Path) -> list[Path]:
         import tempfile
 
-        try:
-            from .html_export import _patch_missing_pyproject, detect_profile
-
-            with _patch_missing_pyproject():
-                from pylode import OntPub, VocPub  # type: ignore[import-not-found]
-        except (ImportError, Exception):
-            return []
+        from .html_export import render_html
 
         with tempfile.NamedTemporaryFile(suffix=".ttl", delete=False) as tmp:
             tmp_path = Path(tmp.name)
             tmp_path.write_text(ctx.graph.serialize(format="turtle"))
 
         try:
-            profile = detect_profile(tmp_path)
-            renderer: type = VocPub if profile == "vocpub" else OntPub
-            html: str = renderer(ontology=str(tmp_path)).make_html()  # type: ignore[attr-defined]
+            html = render_html(tmp_path)
         except Exception:
-            tmp_path.unlink(missing_ok=True)
             return []
-
-        tmp_path.unlink(missing_ok=True)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
         html_path = dest_dir / "index.html"
         html_path.write_text(html)

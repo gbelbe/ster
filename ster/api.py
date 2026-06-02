@@ -455,29 +455,15 @@ def _serve_turtle(taxonomy: Taxonomy) -> Response:
 def _serve_pylode(file_path: Path | None) -> Response:
     if file_path is None:
         raise HTTPException(status_code=503, detail="No ontology file path configured")
-    try:
-        from .html_export import _patch_missing_pyproject, detect_profile
 
-        with _patch_missing_pyproject():
-            from pylode import OntPub, VocPub  # type: ignore[import]
-    except ImportError:
+    from .html_export import render_html
+
+    try:
+        html = render_html(file_path)
+    except RuntimeError:
         raise HTTPException(
             status_code=501,
             detail="pyLODE is not installed. Run: pip install 'ster[html]'",
         )
-
-    import logging
-
-    _root_level = logging.root.level
-    logging.root.setLevel(logging.WARNING)
-    try:
-        profile = detect_profile(file_path)
-        if profile in ("ontpub", "both"):
-            vp: Any = OntPub(ontology=str(file_path.resolve()))
-        else:
-            vp = VocPub(ontology=str(file_path.resolve()))
-        html: str = vp.make_html()
-    finally:
-        logging.root.setLevel(_root_level)
 
     return HTMLResponse(html)
