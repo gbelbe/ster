@@ -2173,9 +2173,11 @@ def main() -> None:
     """Entry point.
 
     • ``ster``                   — interactive home screen (loops until Ctrl+C)
-    • ``ster taxonomy.ttl``      — shortcut for ``ster show taxonomy.ttl``
+    • ``ster taxonomy.ttl``      — open the file, then the home screen for its folder
+    • ``ster show taxonomy.ttl`` — one-shot viewer (plus the other subcommands)
     • ``ster <subcommand> …``    — delegate to Typer
     """
+    import os
     import sys
 
     args = sys.argv[1:]
@@ -2186,29 +2188,49 @@ def main() -> None:
         if first not in _SUBCOMMANDS and not first.startswith("-"):
             p = Path(first)
             if p.suffix.lower() in _TAXONOMY_SUFFIXES:
+                # `ster PATH/file.ttl` (no other args) behaves like bare `ster`
+                # run inside the file's folder: open the file, then the menu.
+                if len(args) == 1 and p.exists():
+                    target = p.resolve()
+                    os.chdir(target.parent)
+                    _home_screen(initial_file=Path.cwd() / target.name)
+                    return
                 sys.argv.insert(1, "show")
         app()
         return
 
     # ── Bare invocation → interactive home screen loop ────────────────────────
+    _home_screen()
+
+
+def _home_screen(initial_file: Path | None = None) -> None:
+    """Interactive home-screen loop (bare ``ster``).
+
+    When *initial_file* is given (``ster PATH/file.ttl``) it is opened in the
+    workspace viewer first; on exit the normal file/action menu takes over, so
+    the experience matches bare ``ster`` run inside the file's folder.
+    """
+    global _ci_check_done, _session_file
+
     from .git.log import launch_git_log
 
+    pending_open = initial_file
     while True:
         try:
-            _print_welcome()
+            if pending_open is None:
+                _print_welcome()
 
-            global _ci_check_done
-            if not _ci_check_done:
-                _ci_check_done = True
-                from .init_ci import prompt_if_missing
-                from .project import _git_root as _find_git_root
+                if not _ci_check_done:
+                    _ci_check_done = True
+                    from .init_ci import prompt_if_missing
+                    from .project import _git_root as _find_git_root
 
-                _root = _find_git_root(Path.cwd())
-                if _root and prompt_if_missing(_root):
-                    console.print(
-                        "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
-                        "commit and push to activate CI\n"
-                    )
+                    _root = _find_git_root(Path.cwd())
+                    if _root and prompt_if_missing(_root):
+                        console.print(
+                            "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
+                            "commit and push to activate CI\n"
+                        )
 
             found: list[Path] = []
             for pattern in _TAXONOMY_GLOBS:
@@ -2223,13 +2245,18 @@ def main() -> None:
             # ── Load project for lang preference ──────────────────────────────
             project = Project.load(Path.cwd())
 
-            console.print("[bold]Taxonomy files in this folder:[/bold]\n")
-
-            try:
-                selected = _multi_file_picker(found)
-            except (KeyboardInterrupt, EOFError):
-                console.print()
-                break
+            # ── Open the command-line file first, otherwise show the menu ──────
+            selected: list[Path] | Path | None
+            if pending_open is not None:
+                selected = pending_open
+                pending_open = None
+            else:
+                console.print("[bold]Taxonomy files in this folder:[/bold]\n")
+                try:
+                    selected = _multi_file_picker(found)
+                except (KeyboardInterrupt, EOFError):
+                    console.print()
+                    break
         except (KeyboardInterrupt, EOFError):
             console.print()
             break
@@ -2298,7 +2325,6 @@ def main() -> None:
         # ── Open viewer ───────────────────────────────────────────────────────
         primary = selected[0]
         _save_session(primary)
-        global _session_file
         _session_file = primary
         try:
             _open_viewer(primary, lang=updated_project.lang, workspace=workspace)
