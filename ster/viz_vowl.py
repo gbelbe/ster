@@ -909,7 +909,16 @@ def _start_api_server(
         if on_change_fn is not None:
             on_change_fn()
 
-    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn)
+    # Mount the project's publish tree (ontology/) so published stable/dev
+    # artifacts are served at /ontology/... — created up-front so the mount
+    # exists even before the first publish (StaticFiles serves live from disk).
+    publish_dir = file_path.parent / "ontology" if file_path is not None else None
+    if publish_dir is not None:
+        publish_dir.mkdir(parents=True, exist_ok=True)
+
+    app = create_app(
+        taxonomy, token, broadcaster, save_fn, html_fn=html_fn, publish_dir=publish_dir
+    )
     app.state._ster["broadcaster"] = broadcaster
 
     _api_app = app
@@ -1039,6 +1048,22 @@ def _write_data_json(taxonomy: Taxonomy, out_path: Path) -> None:
     graph = build_vowl_graph(taxonomy)
     graph["_v"] = str(int(_t.time()))
     _data_path(out_path).write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
+
+
+def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -> str | None:
+    """Ensure the live API server is running and return its base URL.
+
+    Starts the FastAPI server (with the ``/ontology`` publish mount) if it is not
+    already up, without opening the graph page. Returns the base URL, e.g.
+    ``http://127.0.0.1:8765``, or ``None`` when the ``ster[api]`` extra is not
+    installed (so callers can fall back to ``file://``).
+    """
+    if not _start_api_server(taxonomy, file_path):
+        return None
+    from .api_server import load_server_config  # noqa: PLC0415
+
+    url, port = load_server_config()
+    return f"{url}:{port}"
 
 
 def open_in_browser(
