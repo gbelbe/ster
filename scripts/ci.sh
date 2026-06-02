@@ -88,6 +88,15 @@ step "Security — pip-audit"
 uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable \
   && ok "pip-audit"
 
+# ── 4c. Complexity ratchet (vs origin/main) ──────────────────────────────────
+# Mirrors the CI 'complexity' job: no function may grow worse past 10.
+step "Complexity ratchet (vs origin/main)"
+if git rev-parse --verify --quiet origin/main >/dev/null; then
+  uv run python scripts/check_complexity_ratchet.py --base origin/main \
+    && ok "complexity ratchet"
+else
+  warn "origin/main not found — skipping complexity ratchet (run: git fetch origin main)"
+fi
 # ── 4b. Import contracts (dependency isolation) ──────────────────────────────
 step "Import contracts (import-linter)"
 uv run lint-imports && ok "import contracts"

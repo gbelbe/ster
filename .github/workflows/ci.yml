@@ -58,6 +58,25 @@ jobs:
             echo "checking $f"; node --check "$f";
           done
 
+  # ── 1c. Complexity ratchet (diff-aware) ──────────────────────────────────────
+  complexity:
+    name: Complexity ratchet
+    runs-on: ubuntu-latest
+    # Diff-aware: only meaningful against a PR's base branch.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need the base branch to compare complexity against
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install deps
+        run: uv sync --extra dev
+
+      - name: Complexity ratchet — no function may grow worse past 10
+        run: uv run python scripts/check_complexity_ratchet.py --base "origin/${{ github.base_ref }}"
+
   # ── 2. Static type checking ──────────────────────────────────────────────────
   typecheck:
     name: Type check (mypy)
