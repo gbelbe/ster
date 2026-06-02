@@ -126,6 +126,18 @@ fi
 # ── Restore main venv ─────────────────────────────────────────────────────────
 uv sync --extra dev --quiet
 
+# ── Patch coverage gate (diff-cover vs origin/main) — full mode only ──────────
+# Mirrors the CI 'diff-cover' step: changed lines must be ≥ 90% covered.
+if [[ $FAST -eq 0 ]]; then
+  step "Patch coverage (diff-cover vs origin/main)"
+  if git rev-parse --verify --quiet origin/main >/dev/null; then
+    uv run diff-cover coverage.xml --compare-branch origin/main --fail-under 90 \
+      && ok "patch coverage ≥ 90%"
+  else
+    warn "origin/main not found — skipping patch coverage (run: git fetch origin main)"
+  fi
+fi
+
 # Write sentinel so the pre-push hook knows CI has passed
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$SENTINEL"
 
