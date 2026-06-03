@@ -216,3 +216,98 @@ def test_class_detail_shows_delete_action_when_has_note():
     actions = [f.meta.get("action") for f in fields if f.meta.get("action")]
     assert "delete_note" in actions
     assert "edit_note" in actions
+
+
+# ── Note detail preview: first line only + open button ────────────────────────
+
+
+def _class_note_fields(note: str):
+    from ster.model import RDFClass, Taxonomy
+    from ster.nav.logic import build_rdf_class_detail
+
+    t = Taxonomy()
+    t.owl_classes[_uri("A")] = RDFClass(uri=_uri("A"), note=note)
+    return build_rdf_class_detail(t, _uri("A"), "en")
+
+
+def test_multiline_note_shows_only_first_line():
+    fields = _class_note_fields("# Title\nbody one\nbody two\nbody three")
+    note_lines = [f for f in fields if f.meta.get("type") == "note_line"]
+    assert len(note_lines) == 1
+    assert note_lines[0].value == "Title"  # first line, heading marker stripped
+
+
+def test_multiline_note_shows_more_hint():
+    fields = _class_note_fields("# Title\na\nb\nc")  # 4 lines → 3 more
+    more = [f for f in fields if f.meta.get("type") == "note_more"]
+    assert len(more) == 1
+    assert "3 more" in more[0].value
+
+
+def test_single_line_note_has_no_more_hint():
+    fields = _class_note_fields("# Only title")
+    assert not [f for f in fields if f.meta.get("type") == "note_more"]
+    assert len([f for f in fields if f.meta.get("type") == "note_line"]) == 1
+
+
+def test_note_has_open_action_when_non_empty():
+    fields = _class_note_fields("# Title\nmore")
+    opens = [
+        f
+        for f in fields
+        if f.meta.get("type") == "action_add" and f.meta.get("action") == "edit_note"
+    ]
+    assert opens
+    assert "Open" in opens[0].display
+
+
+# ── Note editor: save behaviour ───────────────────────────────────────────────
+
+
+def _viewer_with_open_note(tmp_path, buffer: str):
+    """A viewer with the note editor open on a fresh class, backed by a saved file."""
+    from ster import store
+    from ster.model import RDFClass, Taxonomy
+    from ster.nav.state import NoteEditState
+    from ster.nav.viewer import TaxonomyViewer
+
+    t = Taxonomy()
+    t.owl_classes[_uri("A")] = RDFClass(uri=_uri("A"))
+    f = tmp_path / "v.ttl"
+    store.save(t, f)
+    v = TaxonomyViewer(t, f, lang="en")
+    v._detail_uri = _uri("A")
+    v._state = NoteEditState(
+        buffer=buffer, pos=len(buffer), return_uri=_uri("A"), entity_type="class"
+    )
+    return v, f, t
+
+
+def test_note_editor_esc_commits_in_memory(tmp_path):
+    v, _f, t = _viewer_with_open_note(tmp_path, "# Note\nbody")
+    v._on_note_edit(27)  # Esc
+    assert t.owl_classes[_uri("A")].note == "# Note\nbody"
+
+
+def test_note_editor_esc_persists_to_file(tmp_path):
+    from ster import store
+
+    v, f, _t = _viewer_with_open_note(tmp_path, "persisted on esc")
+    v._on_note_edit(27)  # Esc
+    assert store.load(f).owl_classes[_uri("A")].note == "persisted on esc"
+
+
+def test_note_editor_esc_returns_to_detail(tmp_path):
+    from ster.nav.state import DetailState
+
+    v, _f, _t = _viewer_with_open_note(tmp_path, "x")
+    v._on_note_edit(27)  # Esc
+    assert isinstance(v._state, DetailState)
+
+
+def test_note_editor_ctrl_s_persists_to_file(tmp_path):
+    from ster import store
+
+    v, f, _t = _viewer_with_open_note(tmp_path, "saved via ctrl s")
+    v._on_note_edit(19)  # Ctrl+S
+    assert store.load(f).owl_classes[_uri("A")].note == "saved via ctrl s"

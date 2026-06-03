@@ -579,27 +579,13 @@ def render_note_markdown(text: str) -> list[tuple[str, bool]]:
 
 
 def _note_display_fields(note: str, key_prefix: str) -> list[DetailField]:
-    """Detail panel rows for the ns1:note markdown annotation field."""
+    """Detail panel rows for the ns1:note markdown annotation field.
+
+    Only the first (title) line is shown as a preview; the full note opens in
+    the editor via the "Open note" action.
+    """
     fields: list[DetailField] = [_sep("Note (markdown)")]
-    if note:
-        for i, (rendered_line, is_bold) in enumerate(render_note_markdown(note)):
-            fields.append(
-                DetailField(
-                    f"{key_prefix}note_line:{i}",
-                    "",
-                    rendered_line,
-                    editable=False,
-                    meta={"type": "note_line", "bold": is_bold},
-                )
-            )
-        fields.append(
-            _add_action_del_field(
-                f"{key_prefix}action:delete_note",
-                "✗ Delete note",
-                "delete_note",
-            )
-        )
-    else:
+    if not note:
         fields.append(
             DetailField(
                 f"{key_prefix}note_empty",
@@ -609,12 +595,38 @@ def _note_display_fields(note: str, key_prefix: str) -> list[DetailField]:
                 meta={"type": "stat"},
             )
         )
-    fields.append(
-        _add_action_add_field(
-            f"{key_prefix}action:edit_note",
-            "✎ Edit note",
-            "edit_note",
+        fields.append(
+            _add_action_add_field(f"{key_prefix}action:edit_note", "✎ Edit note", "edit_note")
         )
+        return fields
+
+    lines = render_note_markdown(note)
+    first_line, is_bold = lines[0]
+    fields.append(
+        DetailField(
+            f"{key_prefix}note_line:0",
+            "",
+            first_line,
+            editable=False,
+            meta={"type": "note_line", "bold": is_bold},
+        )
+    )
+    extra = len(lines) - 1
+    if extra > 0:
+        fields.append(
+            DetailField(
+                f"{key_prefix}note_more",
+                "",
+                f"… {extra} more line{'s' if extra != 1 else ''}",
+                editable=False,
+                meta={"type": "note_more"},
+            )
+        )
+    fields.append(
+        _add_action_add_field(f"{key_prefix}action:open_note", "⊕ Open note", "edit_note")
+    )
+    fields.append(
+        _add_action_del_field(f"{key_prefix}action:delete_note", "✗ Delete note", "delete_note")
     )
     return fields
 

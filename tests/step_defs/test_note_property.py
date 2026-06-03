@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from pytest_bdd import given, scenarios, then, when
+from pytest_bdd import given, parsers, scenarios, then, when
 
 scenarios("../features/owl/note_property.feature")
 
@@ -184,3 +184,70 @@ def then_note_line_present(ctx):
     fields = ctx["fields"]
     types = [f.meta.get("type") for f in fields]
     assert "note_line" in types
+
+
+@then("exactly one note_line field is shown")
+def then_one_note_line(ctx):
+    note_lines = [f for f in ctx["fields"] if f.meta.get("type") == "note_line"]
+    assert len(note_lines) == 1
+
+
+@then("a more-lines hint is present")
+def then_more_hint(ctx):
+    assert any(f.meta.get("type") == "note_more" for f in ctx["fields"])
+
+
+@then("an open-note action is present")
+def then_open_action(ctx):
+    assert any(
+        f.meta.get("type") == "action_add" and f.meta.get("action") == "edit_note"
+        for f in ctx["fields"]
+    )
+
+
+# ── Note editor save behaviour ────────────────────────────────────────────────
+
+
+@given("a saved taxonomy file with a class")
+def given_saved_file_with_class(ctx, tmp_path):
+    from ster import store
+    from ster.model import RDFClass, Taxonomy
+
+    t = Taxonomy()
+    t.owl_classes[_uri("A")] = RDFClass(uri=_uri("A"))
+    f = tmp_path / "vocab.ttl"
+    store.save(t, f)
+    ctx["taxonomy"] = t
+    ctx["file"] = f
+    ctx["class_uri"] = _uri("A")
+
+
+@given(parsers.parse('the note editor is open with text "{text}"'))
+def given_note_editor_open(ctx, text):
+    from ster.nav.state import NoteEditState
+    from ster.nav.viewer import TaxonomyViewer
+
+    v = TaxonomyViewer(ctx["taxonomy"], ctx["file"], lang="en")
+    v._detail_uri = ctx["class_uri"]
+    v._state = NoteEditState(
+        buffer=text, pos=len(text), return_uri=ctx["class_uri"], entity_type="class"
+    )
+    ctx["viewer"] = v
+
+
+@when("I press Esc in the note editor")
+def when_press_esc(ctx):
+    ctx["viewer"]._on_note_edit(27)
+
+
+@when("I press Ctrl+S in the note editor")
+def when_press_ctrl_s(ctx):
+    ctx["viewer"]._on_note_edit(19)
+
+
+@then(parsers.parse('the saved file\'s class note is "{text}"'))
+def then_saved_file_note(ctx, text):
+    from ster import store
+
+    reloaded = store.load(ctx["file"])
+    assert reloaded.owl_classes[ctx["class_uri"]].note == text

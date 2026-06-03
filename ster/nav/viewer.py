@@ -2443,7 +2443,9 @@ class TaxonomyViewer:
         except curses.error:
             pass
 
-        _draw_bar(win, 0, 0, modal_w, " ✎ Note Editor (markdown)  ^S:save  Esc:cancel ", dim=False)
+        _draw_bar(
+            win, 0, 0, modal_w, " ✎ Note Editor (markdown)  Esc / ^S: save & close ", dim=False
+        )
 
         edit_h = max(3, modal_h - 8)
         sep_row = edit_h + 1
@@ -2514,9 +2516,7 @@ class TaxonomyViewer:
         ns = self._state
         v, p = ns.buffer, ns.pos
 
-        if key == 27:  # Esc — cancel
-            self._state = DetailState()
-        elif key == 19:  # Ctrl+S — save
+        if key in (27, 19):  # Esc or Ctrl+S — save & close (auto-save on exit)
             self._commit_note_edit()
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             ns.buffer = v[:p] + "\n" + v[p:]
@@ -2583,6 +2583,9 @@ class TaxonomyViewer:
             if entity:
                 entity.note = new_note
                 self._detail_fields = self._bpropf(uri)
+        self._detail_uri = uri
+        self._save_file()
+        self._state = DetailState()
         self._detail_uri = uri
         self._save_file()
         self._state = DetailState()
