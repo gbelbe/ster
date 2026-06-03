@@ -404,6 +404,7 @@ class GitManager:
             err.print(f"[red]Commit failed:[/red] {commit_r.stderr.strip()}")
             return
         console.print(f"[green]✓ Committed:[/green] {msg}")
+        self._refresh_dev_artifacts()
 
         if not self._cfg.get("remote_url"):
             display_violations(violations, fail_on)
@@ -437,6 +438,21 @@ class GitManager:
         # Show lint results after push so they are the last thing visible.
         if not has_blocking_violations(violations, fail_on):
             display_violations(violations, fail_on)
+
+    def _refresh_dev_artifacts(self) -> None:
+        """Best-effort: rebuild ontology/dev/ so it mirrors the just-committed file.
+
+        Never raises — a failed rebuild must not break the commit/push flow.
+        """
+        from ..publish import regenerate_dev_artifacts
+
+        try:
+            paths = regenerate_dev_artifacts(self.taxonomy_path)
+        except Exception as e:  # best-effort: dev refresh is non-critical
+            console.print(f"[dim]Could not refresh dev pages: {e}[/dim]")
+            return
+        if paths:
+            console.print(f"[green]✓[/green] [dim]Refreshed dev pages → {paths[0].parent}[/dim]")
 
     # ── private: setup helpers ────────────────────────────────────────────────
 

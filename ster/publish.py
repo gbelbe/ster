@@ -238,6 +238,32 @@ def write_dev_artifacts(
     return _run_serializers(ctx, dirs, serializers or _default_serializers())
 
 
+def _dev_base_version(version_info: str | None) -> str:
+    """Return the base semver for a dev rebuild, defaulting to 0.1.0.
+
+    Strips any ``+local`` build metadata; an empty/None version yields 0.1.0.
+    """
+    if not version_info:
+        return "0.1.0"
+    return version_info.split("+")[0]
+
+
+def regenerate_dev_artifacts(source_file: Path, publish_dir: Path | None = None) -> list[Path]:
+    """Rebuild the dev-channel TTL + HTML so ``<publish_dir>/dev/`` mirrors *source_file*.
+
+    Reads the base version from the file (falling back to 0.1.0), stamps a dev
+    version string (base + today + git short-sha), and writes the dev artifacts.
+    The source file is never modified and nothing is committed. *publish_dir*
+    defaults to ``<source_file parent>/ontology``. Returns the written paths.
+    """
+    from .store import load
+
+    base = _dev_base_version(load(source_file).version_info)
+    version_str = build_version_string(base, _today_str(), _git_short_sha(source_file.parent))
+    pub = publish_dir or source_file.parent / "ontology"
+    return write_dev_artifacts(source_file, pub, version_str)
+
+
 # ── opening published artifacts in the browser ────────────────────────────────
 
 
