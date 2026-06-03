@@ -311,3 +311,43 @@ def test_note_editor_ctrl_s_persists_to_file(tmp_path):
     v, f, _t = _viewer_with_open_note(tmp_path, "saved via ctrl s")
     v._on_note_edit(19)  # Ctrl+S
     assert store.load(f).owl_classes[_uri("A")].note == "saved via ctrl s"
+
+
+def test_note_editor_inserts_accented_char(tmp_path):
+    # Regression: accents were mangled because input was read byte-wise.
+    # Given the real codepoint, the editor inserts the character intact.
+    from ster.nav.state import NoteEditState
+
+    v, _f, _t = _viewer_with_open_note(tmp_path, "caf")
+    v._on_note_edit(0x00E9)  # é
+    assert isinstance(v._state, NoteEditState)
+    assert v._state.buffer == "café"
+
+
+def test_note_editor_inserts_symbol_above_latin1(tmp_path):
+    from ster.nav.state import NoteEditState
+
+    v, _f, _t = _viewer_with_open_note(tmp_path, "price ")
+    v._on_note_edit(0x20AC)  # €
+    assert isinstance(v._state, NoteEditState)
+    assert v._state.buffer == "price €"
+
+
+def test_note_editor_saves_property_note(tmp_path):
+    # The commit path differs per entity kind; cover the property branch.
+    from ster import store
+    from ster.model import OWLProperty, Taxonomy
+    from ster.nav.state import NoteEditState
+    from ster.nav.viewer import TaxonomyViewer
+
+    t = Taxonomy()
+    t.owl_properties[_uri("p")] = OWLProperty(uri=_uri("p"))
+    f = tmp_path / "v.ttl"
+    store.save(t, f)
+    v = TaxonomyViewer(t, f, lang="en")
+    v._detail_uri = _uri("p")
+    v._state = NoteEditState(
+        buffer="prop note", pos=9, return_uri=_uri("p"), entity_type="property"
+    )
+    v._on_note_edit(19)  # Ctrl+S
+    assert store.load(f).owl_properties[_uri("p")].note == "prop note"

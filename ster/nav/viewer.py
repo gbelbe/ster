@@ -9,6 +9,7 @@ TaxonomyViewer — full-screen curses navigator
 from __future__ import annotations
 
 import curses
+import locale
 import os
 import re
 import signal
@@ -27,7 +28,7 @@ from ..exceptions import SkostaxError
 from ..model import Definition, Label, LabelType, OWLIndividual, Taxonomy, is_builtin_uri
 from ..taxonomy_analysis import SchemeAnalysis
 from ..workspace import TaxonomyWorkspace
-from .editor import _apply_line_edit, _word_start_left, _word_start_right
+from .editor import _apply_line_edit, _word_start_left, _word_start_right, read_keycode
 from .logic import (  # noqa: F401
     _ACTION_ADD_PROPERTY,
     _ACTION_ADD_SCHEME,
@@ -150,6 +151,18 @@ from .draw import (  # noqa: F401
     _render_line_with_match,
     render_tree_col,
 )
+
+
+def _init_input_locale() -> None:
+    """Adopt the terminal's encoding for curses wide-char input.
+
+    Needed so multibyte UTF-8 (accents, symbols) is read as whole characters.
+    LC_CTYPE only, to avoid affecting number formatting elsewhere.
+    """
+    try:
+        locale.setlocale(locale.LC_CTYPE, "")
+    except locale.Error:
+        pass
 
 
 def _note_cursor_line_col(buffer: str, pos: int) -> tuple[int, int]:
@@ -639,6 +652,8 @@ class TaxonomyViewer:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             console.print(render_tree(self.taxonomy, lang=self.lang))
             return
+
+        _init_input_locale()
 
         import os as _os
 
@@ -1197,7 +1212,7 @@ class TaxonomyViewer:
             elif isinstance(self._state, NoteEditState):
                 self._draw_note_editor(stdscr, rows, cols)
                 stdscr.refresh()
-                key = stdscr.getch()
+                key = read_keycode(stdscr)
                 if key == curses.KEY_RESIZE:
                     curses.update_lines_cols()
                     continue
@@ -1400,7 +1415,7 @@ class TaxonomyViewer:
 
     def _getch_edit(self, stdscr: curses.window) -> int | str:
         """Read a key in edit mode; translate Alt/Ctrl+Arrow to action strings."""
-        key = stdscr.getch()
+        key = read_keycode(stdscr)
         if key != 27:
             return key
         # ESC — peek ahead to detect Alt/Ctrl sequences
@@ -2443,9 +2458,7 @@ class TaxonomyViewer:
         except curses.error:
             pass
 
-        _draw_bar(
-            win, 0, 0, modal_w, " ✎ Note Editor (markdown)  Esc / ^S: save & close ", dim=False
-        )
+        _draw_bar(win, 0, 0, modal_w, " ✎ Note Editor (markdown)  Esc: save & close ", dim=False)
 
         edit_h = max(3, modal_h - 8)
         sep_row = edit_h + 1
@@ -2516,7 +2529,11 @@ class TaxonomyViewer:
         ns = self._state
         v, p = ns.buffer, ns.pos
 
-        if key in (27, 19):  # Esc or Ctrl+S — save & close (auto-save on exit)
+        # Esc saves & closes (auto-save on exit). Ctrl+S (19) does the same, but
+        # is undocumented in the help bar: most terminals eat it as XOFF flow
+        # control (freezing output), so we don't advertise it — it only works
+        # where flow control is disabled.
+        if key in (27, 19):
             self._commit_note_edit()
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             ns.buffer = v[:p] + "\n" + v[p:]

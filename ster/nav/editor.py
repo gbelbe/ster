@@ -9,6 +9,23 @@ from __future__ import annotations
 import curses
 
 
+def read_keycode(window: curses.window) -> int:
+    """Read one keystroke from *window* as a Unicode codepoint.
+
+    Uses ``get_wch`` so multibyte UTF-8 input (accented letters, symbols) is
+    assembled into a single character instead of arriving one raw byte at a
+    time — reading byte-wise turned "é" (0xC3 0xA9) into two garbage chars.
+
+    Returns the codepoint for typed characters, the raw int for special keys
+    (arrows, function keys, resize), and -1 on timeout / no input.
+    """
+    try:
+        ch = window.get_wch()
+    except curses.error:
+        return -1
+    return ord(ch) if isinstance(ch, str) else ch
+
+
 def _word_start_left(v: str, p: int) -> int:
     """Return the position of the start of the word to the left of *p*."""
     i = p

@@ -35,6 +35,7 @@ from ster.nav.state import (
     MapConceptPickState,
     MapSchemePickState,
     MovePickState,
+    NoteEditState,
     OntologySetupState,
     QueryState,
     SchemeCreateState,
@@ -472,3 +473,45 @@ def test_draw_query_ac(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
         panel="editor",
     )
     viewer._draw_query(scr, *_rc(scr))  # type: ignore[arg-type]
+
+
+# ── note editor ───────────────────────────────────────────────────────────────
+
+
+def test_draw_note_editor(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
+    viewer._state = NoteEditState(
+        buffer="# Title\nbody", pos=2, return_uri=BASE + "Top", entity_type="class"
+    )
+    viewer._draw_note_editor(scr, *_rc(scr))  # type: ignore[arg-type]
+
+
+def test_getch_edit_returns_typed_codepoint(viewer: TaxonomyViewer) -> None:
+    # _getch_edit reads via read_keycode (get_wch); a typed accent comes back
+    # as its real codepoint, not a raw byte.
+    class _Win(FakeScreen):
+        def get_wch(self) -> str:
+            return "é"
+
+    assert viewer._getch_edit(_Win()) == ord("é")  # type: ignore[arg-type]
+
+
+def test_init_input_locale_is_safe() -> None:
+    from ster.nav.viewer import _init_input_locale
+
+    _init_input_locale()  # must not raise, regardless of environment
+
+
+def test_init_input_locale_swallows_error(monkeypatch: Any) -> None:
+    import locale as _locale
+
+    import ster.nav.viewer as vmod
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise _locale.Error("unsupported locale")
+
+    monkeypatch.setattr(vmod.locale, "setlocale", _boom)
+    vmod._init_input_locale()  # must swallow the error, not raise
+
+
+def test_render_line_with_match(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
+    viewer._render_line_with_match(scr, 0, 0, "Top Concept", scr.COLS, 0)  # type: ignore[arg-type]
