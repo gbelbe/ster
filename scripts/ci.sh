@@ -51,16 +51,20 @@ ok "deps synced (Python $(uv run python --version | awk '{print $2}'))"
 # ── 2. Lint ───────────────────────────────────────────────────────────────────
 step "Lint (ruff check)"
 if [[ $FIX -eq 1 ]]; then
-  uv run ruff check --fix . && ok "ruff check --fix applied"
+  uv run ruff check --fix .
+  ok "ruff check --fix applied"
 else
-  uv run ruff check . && ok "ruff check"
+  uv run ruff check .
+  ok "ruff check"
 fi
 
 step "Format (ruff format)"
 if [[ $FIX -eq 1 ]]; then
-  uv run ruff format . && ok "ruff format applied"
+  uv run ruff format .
+  ok "ruff format applied"
 else
-  uv run ruff format --check . && ok "ruff format"
+  uv run ruff format --check .
+  ok "ruff format"
 fi
 
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
@@ -69,8 +73,10 @@ if command -v npm >/dev/null 2>&1; then
   if [[ ! -d node_modules ]]; then
     npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1
   fi
-  npx --no-install eslint . && ok "eslint"
-  for f in ster/assets/*.js kai-extension/*.js; do node --check "$f"; done && ok "node --check"
+  npx --no-install eslint .
+  ok "eslint"
+  for f in ster/assets/*.js kai-extension/*.js; do node --check "$f"; done
+  ok "node --check"
 else
   warn "npm not found — skipping JS lint (CI installs Node)"
 fi
@@ -78,28 +84,31 @@ fi
 # ── 3. Type check ─────────────────────────────────────────────────────────────
 step "Type check (mypy)"
 # --no-incremental: prevents stale cache masking errors that GitHub CI (cold run) would catch
-uv run mypy ster/ --no-incremental && ok "mypy"
+uv run mypy ster/ --no-incremental
+ok "mypy"
 
 # ── 4. Security ───────────────────────────────────────────────────────────────
 step "Security — bandit"
-uv run bandit -r ster/ -c pyproject.toml -q && ok "bandit"
+uv run bandit -r ster/ -c pyproject.toml -q
+ok "bandit"
 
 step "Security — pip-audit"
-uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable \
-  && ok "pip-audit"
+uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
+ok "pip-audit"
 
 # ── 4c. Complexity ratchet (vs origin/main) ──────────────────────────────────
 # Mirrors the CI 'complexity' job: no function may grow worse past 10.
 step "Complexity ratchet (vs origin/main)"
 if git rev-parse --verify --quiet origin/main >/dev/null; then
-  uv run python scripts/check_complexity_ratchet.py --base origin/main \
-    && ok "complexity ratchet"
+  uv run python scripts/check_complexity_ratchet.py --base origin/main
+  ok "complexity ratchet"
 else
   warn "origin/main not found — skipping complexity ratchet (run: git fetch origin main)"
 fi
 # ── 4b. Import contracts (dependency isolation) ──────────────────────────────
 step "Import contracts (import-linter)"
-uv run lint-imports && ok "import contracts"
+uv run lint-imports
+ok "import contracts"
 
 # ── 5. Tests (per Python version, isolated envs) ─────────────────────────────
 run_tests_for() {
@@ -140,8 +149,8 @@ uv sync --extra dev --quiet
 if [[ $FAST -eq 0 ]]; then
   step "Patch coverage (diff-cover vs origin/main)"
   if git rev-parse --verify --quiet origin/main >/dev/null; then
-    uv run diff-cover coverage.xml --compare-branch origin/main --fail-under 90 \
-      && ok "patch coverage ≥ 90%"
+    uv run diff-cover coverage.xml --compare-branch origin/main --fail-under 90
+    ok "patch coverage ≥ 90%"
   else
     warn "origin/main not found — skipping patch coverage (run: git fetch origin main)"
   fi
