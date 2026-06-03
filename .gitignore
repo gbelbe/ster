@@ -9,6 +9,7 @@ venv/
 .ci-passed
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 *.egg
 RELEASE_NOTES.md
