@@ -61,3 +61,77 @@ def test_compute_complexity_scores_functions(tmp_path) -> None:  # type: ignore[
     branchy = next(v for k, v in cc.items() if k.endswith("::branchy"))
     assert simple == 1
     assert branchy > simple
+
+
+# ── refactor-on-touch ceiling (parse_changed_lines / touched_functions) ────────
+
+
+def test_parse_changed_lines_multiline_hunk() -> None:
+    from scripts.check_complexity_ratchet import parse_changed_lines
+
+    diff = (
+        "diff --git a/ster/x.py b/ster/x.py\n"
+        "--- a/ster/x.py\n"
+        "+++ b/ster/x.py\n"
+        "@@ -10,0 +11,3 @@ def f():\n"
+        "+a\n+b\n+c\n"
+    )
+    assert parse_changed_lines(diff) == {"ster/x.py": {11, 12, 13}}
+
+
+def test_parse_changed_lines_single_line_hunk() -> None:
+    from scripts.check_complexity_ratchet import parse_changed_lines
+
+    diff = "+++ b/ster/y.py\n@@ -5 +6 @@\n+x\n"
+    assert parse_changed_lines(diff) == {"ster/y.py": {6}}
+
+
+def test_parse_changed_lines_pure_deletion_adds_nothing() -> None:
+    from scripts.check_complexity_ratchet import parse_changed_lines
+
+    diff = "+++ b/ster/z.py\n@@ -5,2 +4,0 @@\n"
+    assert parse_changed_lines(diff) == {}
+
+
+def test_touched_functions_overlap() -> None:
+    from scripts.check_complexity_ratchet import touched_functions
+
+    changed = {"ster/nav/v.py": {15}}
+    ranges = {"nav/v.py::big": (10, 20), "nav/v.py::other": (30, 40)}
+    assert touched_functions(changed, ranges, "ster") == {"nav/v.py::big"}
+
+
+def test_touched_functions_no_overlap() -> None:
+    from scripts.check_complexity_ratchet import touched_functions
+
+    changed = {"ster/nav/v.py": {99}}
+    ranges = {"nav/v.py::big": (10, 20)}
+    assert touched_functions(changed, ranges, "ster") == set()
+
+
+# ── touch_ceiling_violations (the no-dodge rule) ──────────────────────────────
+
+
+def test_touching_god_function_without_reducing_is_violation() -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    # touched, still above ceiling, complexity flat → must refactor down
+    assert touch_ceiling_violations({"a::f"}, {"a::f": 127}, {"a::f": 127}, 25)
+
+
+def test_touching_god_function_and_reducing_is_allowed() -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    assert touch_ceiling_violations({"a::f"}, {"a::f": 127}, {"a::f": 120}, 25) == []
+
+
+def test_touched_function_below_ceiling_is_allowed() -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    assert touch_ceiling_violations({"a::f"}, {"a::f": 20}, {"a::f": 20}, 25) == []
+
+
+def test_untouched_god_function_is_allowed() -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    assert touch_ceiling_violations(set(), {"a::f": 127}, {"a::f": 127}, 25) == []

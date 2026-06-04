@@ -43,3 +43,34 @@ def _violation(ctx: dict[str, Any]) -> None:
 @then("the ratchet check reports no violation")
 def _no_violation(ctx: dict[str, Any]) -> None:
     assert find_violations(ctx["base"], ctx["head"]) == []
+
+
+@given(parsers.parse("a god-function with base complexity {score:d}"))
+def _god_base(ctx: dict[str, Any], score: int) -> None:
+    ctx["base"] = {"m.py::g": score}
+
+
+@given(parsers.parse("you modify it leaving complexity at {score:d}"))
+def _god_flat(ctx: dict[str, Any], score: int) -> None:
+    ctx["head"] = {"m.py::g": score}
+    ctx["touched"] = {"m.py::g"}
+
+
+@given(parsers.parse("you modify it reducing complexity to {score:d}"))
+def _god_reduce(ctx: dict[str, Any], score: int) -> None:
+    ctx["head"] = {"m.py::g": score}
+    ctx["touched"] = {"m.py::g"}
+
+
+@then("the ratchet reports a god-function violation")
+def _god_violation(ctx: dict[str, Any]) -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    assert touch_ceiling_violations(ctx["touched"], ctx["base"], ctx["head"])
+
+
+@then("the ratchet reports no god-function violation")
+def _god_no_violation(ctx: dict[str, Any]) -> None:
+    from scripts.check_complexity_ratchet import touch_ceiling_violations
+
+    assert touch_ceiling_violations(ctx["touched"], ctx["base"], ctx["head"]) == []
