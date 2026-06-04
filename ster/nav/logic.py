@@ -2553,6 +2553,25 @@ def _ontology_quality_fields(
     return fields
 
 
+def _ontology_identity_action_fields(taxonomy: Taxonomy) -> list[DetailField]:
+    """Edit-base-URI plus, for http(s) ontologies, edit-domain / edit-prefix actions."""
+    actions = [
+        _add_action_field("action:edit_ontology_uri", "✎ Edit base URI", "edit_ontology_uri")
+    ]
+    if (taxonomy.ontology_uri or "").startswith(("http://", "https://")):
+        actions.append(
+            _add_action_field(
+                "action:edit_ontology_domain", "✎ Edit domain", "edit_ontology_domain"
+            )
+        )
+        actions.append(
+            _add_action_field(
+                "action:edit_ontology_prefix", "✎ Edit prefix", "edit_ontology_prefix"
+            )
+        )
+    return actions
+
+
 def build_ontology_overview_fields(
     taxonomy: Taxonomy,
     file_path: Path | None,
@@ -2585,13 +2604,7 @@ def build_ontology_overview_fields(
                 meta={"type": "uri"},
             )
         )
-        fields.append(
-            _add_action_field(
-                "action:edit_ontology_uri",
-                "✎ Edit base URI",
-                "edit_ontology_uri",
-            )
-        )
+        fields.extend(_ontology_identity_action_fields(taxonomy))
     if taxonomy.version_info:
         fields.append(
             DetailField(

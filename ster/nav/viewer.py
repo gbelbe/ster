@@ -96,6 +96,7 @@ from .state import (
     MapSchemePickState,
     MovePickState,
     NoteEditState,
+    OntologyFieldEditState,
     OntologyRenameConfirmState,
     OntologySetupState,
     PropertyImpactState,
@@ -792,8 +793,8 @@ class TaxonomyViewer:
             rows, cols = stdscr.getmaxyx()
             stdscr.erase()
 
-            if isinstance(self._state, OntologySetupState):
-                self._draw_ontology_setup(stdscr, rows, cols)
+            if isinstance(self._state, (OntologySetupState, OntologyFieldEditState)):
+                self._draw_ontology_modal(stdscr, rows, cols)
                 stdscr.refresh()
                 key = stdscr.getch()
                 if key == curses.KEY_RESIZE:
@@ -801,7 +802,7 @@ class TaxonomyViewer:
                     continue
                 if key == -1:
                     continue
-                self._on_ontology_setup(key)
+                self._on_ontology_modal(key)
                 continue
 
             if isinstance(self._state, WelcomeState):
@@ -3653,22 +3654,8 @@ class TaxonomyViewer:
                     self._refresh_detail()
                     self._save_file()
 
-        elif action == "edit_ontology_uri":
-            uri_now = self.taxonomy.ontology_uri or ""
-            # Detect current separator from existing entity URIs
-            root = uri_now.rstrip("#/")
-            sep_cur = 0  # default to "#"
-            for u in list(self.taxonomy.owl_classes) + list(self.taxonomy.owl_individuals):
-                if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
-                    sep_cur = 0 if u[len(root)] == "#" else 1
-                    break
-            self._state = OntologySetupState(
-                mode="edit",
-                active=0,
-                uri_buf=root,
-                uri_pos=len(root),
-                sep_cursor=sep_cur,
-            )
+        elif action in ("edit_ontology_uri", "edit_ontology_domain", "edit_ontology_prefix"):
+            self._open_ontology_identity_editor(action)
 
         elif action == "view_ontology_graph":
             from .. import viz_vowl as _viz
@@ -5785,6 +5772,45 @@ class TaxonomyViewer:
     _SEP_OPTIONS = [("# (recommended)", "#"), ("/ (slash)", "/")]
     _W3C_COOL_URIS = "https://www.w3.org/TR/cooluris/"
 
+    def _open_ontology_identity_editor(self, action: str) -> None:  # pragma: no cover - opens modal
+        """Open the base-URI setup dialog, or the single-field domain / prefix editor."""
+        from ..operations import ontology_domain, ontology_prefix
+
+        if action == "edit_ontology_domain":
+            cur = ontology_domain(self.taxonomy)
+            self._state = OntologyFieldEditState(kind="domain", buffer=cur, pos=len(cur))
+            return
+        if action == "edit_ontology_prefix":
+            cur = ontology_prefix(self.taxonomy) or ""
+            self._state = OntologyFieldEditState(kind="prefix", buffer=cur, pos=len(cur))
+            return
+        # edit_ontology_uri — detect current separator from existing entity URIs
+        root = (self.taxonomy.ontology_uri or "").rstrip("#/")
+        sep_cur = 0  # default to "#"
+        for u in list(self.taxonomy.owl_classes) + list(self.taxonomy.owl_individuals):
+            if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+                sep_cur = 0 if u[len(root)] == "#" else 1
+                break
+        self._state = OntologySetupState(
+            mode="edit", active=0, uri_buf=root, uri_pos=len(root), sep_cursor=sep_cur
+        )
+
+    def _draw_ontology_modal(  # pragma: no cover - curses dispatch
+        self, stdscr: curses.window, rows: int, cols: int
+    ) -> None:
+        """Dispatch drawing for the base-URI setup dialog or the domain/prefix editor."""
+        if isinstance(self._state, OntologyFieldEditState):
+            self._draw_ontology_field_edit(stdscr, rows, cols)
+        else:
+            self._draw_ontology_setup(stdscr, rows, cols)
+
+    def _on_ontology_modal(self, key: int) -> None:  # pragma: no cover - curses dispatch
+        """Dispatch key handling for the base-URI setup dialog or the domain/prefix editor."""
+        if isinstance(self._state, OntologyFieldEditState):
+            self._on_ontology_field_edit(key)
+        else:
+            self._on_ontology_setup(key)
+
     def _draw_ontology_setup(self, stdscr: curses.window, rows: int, cols: int) -> None:
         if not isinstance(self._state, OntologySetupState):
             return
@@ -6050,6 +6076,101 @@ class TaxonomyViewer:
                 uri_pos=len(old_uri),
                 sep_cursor=sep_cursor,
             )
+
+    # ──────────────── ONTOLOGY domain / prefix single-field edit ──────────────
+
+    def _draw_ontology_field_edit(  # pragma: no cover - curses modal
+        self, stdscr: curses.window, rows: int, cols: int
+    ) -> None:
+        if not isinstance(self._state, OntologyFieldEditState):
+            return
+        st = self._state
+        width = cols
+        is_domain = st.kind == "domain"
+        _draw_bar(
+            stdscr, 0, 0, width, " ✎ Edit domain " if is_domain else " ✎ Edit prefix ", dim=False
+        )
+        try:
+            y = 2
+            label = "Domain (host):" if is_domain else "Prefix:"
+            stdscr.addstr(y, 2, label[: width - 3], curses.color_pair(_C_DIM))
+            y += 1
+            disp = st.buffer + "▌"
+            stdscr.addstr(
+                y,
+                4,
+                disp[: width - 5].ljust(width - 5),
+                curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD,
+            )
+            y += 2
+            hint = (
+                "Only the host changes; path and separator are kept — all entity URIs update."
+                if is_domain
+                else "Only the abbreviation changes; entity identities stay the same."
+            )
+            stdscr.addstr(y, 2, hint[: width - 3], curses.color_pair(_C_DIM) | curses.A_DIM)
+            y += 2
+            if st.error:
+                stdscr.addstr(y, 2, st.error[: width - 3], curses.color_pair(_C_DIFF_DEL))
+        except curses.error:
+            # addstr raises when text runs past the screen edge (e.g. a tiny
+            # terminal); the modal is non-essential, so skip the overflow.
+            pass
+        _draw_bar(stdscr, rows - 1, 0, width, " Enter: apply   Esc: cancel ", dim=True)
+
+    def _on_ontology_field_edit(self, key: int) -> None:  # pragma: no cover - curses handler
+        if not isinstance(self._state, OntologyFieldEditState):
+            return
+        st = self._state
+        if key == 27:  # Esc
+            self._state = DetailState()
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            self._submit_ontology_field(st)
+        else:
+            st.buffer, st.pos = _apply_line_edit(st.buffer, st.pos, key)
+            st.error = ""
+
+    def _submit_ontology_field(  # pragma: no cover - delegates to tested operations
+        self, st: OntologyFieldEditState
+    ) -> None:
+        from ..operations import (
+            count_domain_rename_changes,
+            count_prefix_uses,
+            ontology_prefix,
+            rename_prefix,
+            validate_domain,
+            validate_prefix,
+        )
+
+        value = st.buffer.strip()
+        if st.kind == "domain":
+            err = validate_domain(value)
+            if err:
+                st.error = err
+                return
+            old_base, new_base, count = count_domain_rename_changes(self.taxonomy, value)
+            self._state = OntologyRenameConfirmState(
+                old_base=old_base, new_base=new_base, entity_count=count
+            )
+            return
+
+        err = validate_prefix(value)
+        if err:
+            st.error = err
+            return
+        old = ontology_prefix(self.taxonomy)
+        if old is None:
+            base = self.taxonomy.base_uri()
+            if base:
+                self.taxonomy.namespace_bindings[value] = base
+            count = count_prefix_uses(self.taxonomy, value)
+        else:
+            count = rename_prefix(self.taxonomy, old, value)
+        self._save_file()
+        self._detail_fields = self._bgf()
+        self._field_cursor = 0
+        self._status = f"Prefix → {value} ({count} terms)"
+        self._state = DetailState()
 
     # ─────────────────────────── RENAME URI confirm ───────────────────────────
 

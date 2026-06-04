@@ -138,6 +138,16 @@ class OntologyRenameConfirmState:
 
 
 @dataclass
+class OntologyFieldEditState:
+    """Single-field editor for the ontology domain (host) or prefix label."""
+
+    kind: str = "domain"  # "domain" | "prefix"
+    buffer: str = ""
+    pos: int = 0
+    error: str = ""
+
+
+@dataclass
 class DeleteClassChoiceState:
     """Multi-step dialog for deleting an OWL class that has subclasses or individuals."""
 
@@ -376,6 +386,7 @@ ViewerState = (
     | ConfirmDeleteState
     | RenameUriConfirmState
     | OntologyRenameConfirmState
+    | OntologyFieldEditState
     | DeleteClassChoiceState
     | OntologySetupState
     | ClassToIndividualState

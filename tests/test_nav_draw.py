@@ -515,3 +515,22 @@ def test_init_input_locale_swallows_error(monkeypatch: Any) -> None:
 
 def test_render_line_with_match(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
     viewer._render_line_with_match(scr, 0, 0, "Top Concept", scr.COLS, 0)  # type: ignore[arg-type]
+
+
+# ── ontology domain / prefix single-field edit ────────────────────────────────
+
+
+def test_draw_ontology_field_edit_domain(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
+    from ster.nav.state import OntologyFieldEditState
+
+    viewer._state = OntologyFieldEditState(kind="domain", buffer="www.adeo.com", pos=12)
+    viewer._draw_ontology_field_edit(scr, *_rc(scr))  # type: ignore[arg-type]
+
+
+def test_draw_ontology_field_edit_prefix_with_error(
+    viewer: TaxonomyViewer, scr: FakeScreen
+) -> None:
+    from ster.nav.state import OntologyFieldEditState
+
+    viewer._state = OntologyFieldEditState(kind="prefix", buffer="1bad", pos=4, error="bad prefix")
+    viewer._draw_ontology_field_edit(scr, *_rc(scr))  # type: ignore[arg-type]
