@@ -10,6 +10,7 @@ import threading
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import BinaryIO
 
 import typer
 from rich.console import Console
@@ -1937,30 +1938,83 @@ def _open_dev_artifacts_in_browser(
         )
 
 
-def _run_publish_interactive(files: list[Path]) -> None:
-    """Interactive Version & Publish LD screen from the home-screen menu."""
-    from rich.panel import Panel
-    from rich.prompt import Confirm, Prompt
-    from rich.rule import Rule
+def _menu_action_for_key(ch: bytes, stream: BinaryIO) -> str:
+    """Map a raw keypress (with continuation bytes from *stream*) to a menu action.
 
-    from .publish import (
-        PublishError,
-        _git_short_sha,
-        _today_str,
-        build_version_string,
-        bump_version,
-        pre_flight,
-        write_dev_artifacts,
-        write_stable_artifacts,
-    )
+    Returns one of: 'up', 'down', 'select', 'quit', 'none'.
+    """
+    if ch in (b"\r", b"\n"):
+        return "select"
+    if ch == b"\x03":  # Ctrl+C
+        return "quit"
+    if ch != b"\x1b":  # not an escape sequence
+        return "none"
+    if stream.read(1) != b"[":
+        return "quit"  # plain Esc
+    code = stream.read(1)
+    if code == b"A":
+        return "up"
+    if code == b"B":
+        return "down"
+    return "none"
 
-    console.print()
+
+def _render_publish_menu(labels: list[str], sel: int, first: bool) -> None:  # pragma: no cover
+    """Redraw the publish menu in place (raw-terminal ANSI)."""
+    import sys
+
+    inv, r, b, d = "\033[7m", "\033[0m", "\033[1m", "\033[2m"
+    clear, nl = "\r\033[2K", "\r\n"
+    if not first:
+        sys.stdout.write(f"\033[{len(labels) + 1}A")
+    for i, lab in enumerate(labels):
+        if i == sel:
+            sys.stdout.write(f"{clear}  {b}{inv} {lab} {r}{nl}")
+        else:
+            sys.stdout.write(f"{clear}    {lab}{nl}")
+    sys.stdout.write(f"{clear}  {d}↑↓ navigate  Enter select  Esc back{r}{nl}")
+    sys.stdout.flush()
+
+
+def _arrow_menu_select(labels: list[str]) -> int | None:  # pragma: no cover
+    """Raw-terminal arrow menu over *labels*; return the chosen index or None."""
+    import sys
+    import termios
+    import tty
+
+    if not labels:
+        return None
+    n, sel = len(labels), 0
+    _render_publish_menu(labels, sel, first=True)
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            action = _menu_action_for_key(sys.stdin.buffer.read(1), sys.stdin.buffer)
+            if action == "up":
+                sel = (sel - 1) % n
+            elif action == "down":
+                sel = (sel + 1) % n
+            elif action == "select":
+                return sel
+            elif action == "quit":
+                return None
+            _render_publish_menu(labels, sel, first=False)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\r\n")
+        sys.stdout.flush()
+
+
+def _select_publish_target(files: list[Path]) -> tuple[Path, object] | None:  # pragma: no cover
+    """Pick a file, load it, and run pre-flight; return (path, taxonomy) or None."""
+    from .publish import PublishError, pre_flight
+    from .store import load as _load_tax
 
     if not files:
         err.print("[red]No taxonomy files found. Open a taxonomy file first.[/red]")
-        return
-
-    # Pick a file when multiple are available
+        return None
     if len(files) == 1:
         taxonomy_file = files[0]
     else:
@@ -1971,112 +2025,97 @@ def _run_publish_interactive(files: list[Path]) -> None:
             idx = int(Prompt.ask("File number", default="1")) - 1
             taxonomy_file = files[max(0, min(idx, len(files) - 1))]
         except (ValueError, KeyboardInterrupt):
-            return
-
-    from .store import load as _load_tax
-
+            return None
     try:
         taxonomy = _load_tax(taxonomy_file)
     except Exception as e:
         err.print(f"[red]Failed to load {taxonomy_file.name}:[/red] {e}")
-        return
-
+        return None
     try:
         pre_flight(taxonomy)
     except PublishError as e:
         err.print(f"[red]Publish blocked:[/red] {e}")
+        return None
+    return taxonomy_file, taxonomy
+
+
+def _publish_stable_flow(
+    taxonomy_file: Path, taxonomy: object, publish_dir: Path
+) -> None:  # pragma: no cover
+    """Prompt for a base version and write a stable release; print results + tips."""
+    from .publish import (
+        _git_short_sha,
+        _today_str,
+        build_version_string,
+        bump_version,
+        write_stable_artifacts,
+    )
+
+    vi = taxonomy.version_info  # type: ignore[attr-defined]
+    current_base = vi.split("+")[0] if vi and "+" in vi else (vi or "0.1.0")
+    try:
+        base_version = Prompt.ask("New base version", default=bump_version(current_base, "patch"))
+    except (KeyboardInterrupt, EOFError):
         return
+    version_str = build_version_string(
+        base_version, _today_str(), _git_short_sha(taxonomy_file.parent)
+    )
+    artifacts = write_stable_artifacts(taxonomy_file, publish_dir, base_version, version_str)
+    console.print(
+        f"[green]✓[/green]  Published stable [bold]{version_str}[/bold] ({len(artifacts)} files)"
+    )
+    console.print(
+        f"[dim]Next: git add {publish_dir.name}/ && "
+        f"git commit -m 'release: v{base_version}' && git push[/dim]"
+    )
+
+
+def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
+    """Interactive Version & Publish LD screen from the home-screen menu."""
+    import webbrowser
+
+    from rich.panel import Panel
+
+    from . import viz_vowl as _viz
+    from .publish import build_publish_menu, discover_published_pages
+
+    console.print()
+
+    target = _select_publish_target(files)
+    if target is None:
+        return
+    taxonomy_file, taxonomy = target
 
     console.print(
         Panel(
             f"[bold]📦 Version & Publish LD[/bold]\n"
             f"[dim]File: {taxonomy_file}[/dim]\n"
-            f"[dim]Ontology URI: {taxonomy.ontology_uri}[/dim]"
+            f"[dim]Ontology URI: {taxonomy.ontology_uri}[/dim]"  # type: ignore[attr-defined]
             + (
-                f"\n[dim]Current version: {taxonomy.version_info}[/dim]"
-                if taxonomy.version_info
+                f"\n[dim]Current version: {taxonomy.version_info}[/dim]"  # type: ignore[attr-defined]
+                if taxonomy.version_info  # type: ignore[attr-defined]
                 else ""
             ),
             border_style="green",
         )
     )
 
-    # Determine current base version
-    vi = taxonomy.version_info
-    current_base = vi.split("+")[0] if vi and "+" in vi else (vi or "0.1.0")
-    sha = _git_short_sha(taxonomy_file.parent)
-    today = _today_str()
-
-    # Channel selection
-    console.print()
-    console.print(
-        "  [cyan]1[/cyan]  [bold]stable[/bold]  — writes [dim]v{version}/[/dim] + [dim]latest/[/dim]  (tag + commit)"
-    )
-    console.print(
-        "  [cyan]2[/cyan]  [bold]dev[/bold]     — overwrites [dim]dev/[/dim]  (no history, no source file change)"
-    )
-    try:
-        channel_choice = Prompt.ask("Channel", choices=["1", "2"], default="1")
-    except (KeyboardInterrupt, EOFError):
-        return
-    channel = "stable" if channel_choice == "1" else "dev"
-
-    if channel == "stable":
-        suggested = bump_version(current_base, "patch")
-        try:
-            base_version = Prompt.ask("New base version", default=suggested)
-        except (KeyboardInterrupt, EOFError):
-            return
-    else:
-        base_version = current_base
-
-    version_str = build_version_string(base_version, today, sha)
     publish_dir = taxonomy_file.parent / "ontology"
+    base_url = _viz.ensure_published_server(taxonomy, taxonomy_file)  # type: ignore[arg-type]
 
-    console.print()
-    console.print(f"  Version string : [bold]{version_str}[/bold]")
-    console.print(f"  Channel        : [bold]{channel}[/bold]")
-    console.print(f"  Publish dir    : [dim]{publish_dir}[/dim]")
-    console.print()
-
-    try:
-        if not Confirm.ask("Proceed?", default=True):
-            return
-    except (KeyboardInterrupt, EOFError):
-        return
-
-    console.print()
-
-    if channel == "dev":
-        artifacts = write_dev_artifacts(taxonomy_file, publish_dir, version_str)
-        console.print(
-            f"[green]✓[/green]  Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}"
-        )
-        _open_dev_artifacts_in_browser(taxonomy, taxonomy_file, publish_dir, artifacts)
-    else:
-        artifacts = write_stable_artifacts(taxonomy_file, publish_dir, base_version, version_str)
-        for a in artifacts:
-            console.print(f"[green]✓[/green]  {a.relative_to(taxonomy_file.parent)}")
-
-    console.print()
-    console.print(Rule(style="green"))
-    console.print(
-        "[dim]Next step: commit the ontology/ directory and push.\n"
-        "  git add ontology/  &&  git commit -m 'release: v"
-        + base_version
-        + "'  &&  git push[/dim]"
-    )
-
-    if channel == "stable":
+    while True:
+        pages = discover_published_pages(publish_dir)
+        rows = build_publish_menu(pages, base_url, publish_dir)
         console.print()
-        console.print("[dim]GitHub Pages tip (one-time setup):[/dim]")
-        console.print(f"  [dim]Repo → Settings → Pages → Branch: main / /{publish_dir.name}[/dim]")
-
-    console.print()
-    try:
-        input("Press Enter to return to menu…")
-    except (KeyboardInterrupt, EOFError):
-        pass
+        sel = _arrow_menu_select([row.label for row in rows])
+        if sel is None:
+            return
+        row = rows[sel]
+        if row.action == "publish_stable":
+            _publish_stable_flow(taxonomy_file, taxonomy, publish_dir)
+        elif row.url:
+            webbrowser.open(row.url)
+            console.print(f"[green]✓[/green]  Opened {row.url}")
 
 
 @app.command("publish")

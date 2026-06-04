@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import subprocess
 import webbrowser
 from collections.abc import Callable
@@ -262,6 +263,97 @@ def regenerate_dev_artifacts(source_file: Path, publish_dir: Path | None = None)
     version_str = build_version_string(base, _today_str(), _git_short_sha(source_file.parent))
     pub = publish_dir or source_file.parent / "ontology"
     return write_dev_artifacts(source_file, pub, version_str)
+
+
+# ── publish screen: listing published pages ──────────────────────────────────
+
+_VERSION_DIR_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+@dataclass(frozen=True)
+class PublishedPage:
+    """One openable artifact under the publish tree."""
+
+    group: str  # "Dev" | "Latest" | "v1.2.0"
+    kind: str  # "html" | "ttl"
+    path: Path
+
+
+@dataclass(frozen=True)
+class PublishMenuRow:
+    """One row of the Version & Publish screen."""
+
+    label: str
+    action: str  # "publish_stable" | "open"
+    url: str | None = None
+    path: Path | None = None
+
+
+def _version_dirs_desc(publish_dir: Path) -> list[Path]:
+    """Version directories (v{semver}) under *publish_dir*, newest first."""
+    if not publish_dir.is_dir():
+        return []
+    vdirs = [d for d in publish_dir.iterdir() if d.is_dir() and _VERSION_DIR_RE.match(d.name)]
+    return sorted(
+        vdirs,
+        key=lambda d: tuple(int(x) for x in _VERSION_DIR_RE.match(d.name).groups()),  # type: ignore[union-attr]
+        reverse=True,
+    )
+
+
+def _ordered_group_dirs(publish_dir: Path) -> list[tuple[Path, str]]:
+    """(*directory*, *display label*) pairs in screen order: Dev, Latest, versions."""
+    out: list[tuple[Path, str]] = []
+    for name, label in (("dev", "Dev"), ("latest", "Latest")):
+        d = publish_dir / name
+        if d.is_dir():
+            out.append((d, label))
+    out.extend((d, d.name) for d in _version_dirs_desc(publish_dir))
+    return out
+
+
+def _group_pages(group_dir: Path, label: str) -> list[PublishedPage]:
+    """HTML page (if any) then the Turtle file (if any) for one group."""
+    pages: list[PublishedPage] = []
+    html = group_dir / "index.html"
+    if html.is_file():
+        pages.append(PublishedPage(label, "html", html))
+    ttls = sorted(group_dir.glob("*.ttl"))
+    if ttls:
+        pages.append(PublishedPage(label, "ttl", ttls[0]))
+    return pages
+
+
+def discover_published_pages(publish_dir: Path) -> list[PublishedPage]:
+    """Return the openable pages under *publish_dir*, in screen order.
+
+    Order: Dev, Latest, then each version newest-first; within a group the HTML
+    page precedes the Turtle file. Groups that do not exist are omitted.
+    """
+    pages: list[PublishedPage] = []
+    for group_dir, label in _ordered_group_dirs(publish_dir):
+        pages.extend(_group_pages(group_dir, label))
+    return pages
+
+
+def page_url(base_url: str | None, publish_dir: Path, path: Path) -> str:
+    """Full URL for *path*: a served URL under the server mount, else ``file://``."""
+    if not base_url:
+        return path.as_uri()
+    base = base_url.rstrip("/")
+    mount = publish_dir.name
+    return f"{base}/{mount}/{path.relative_to(publish_dir).as_posix()}"
+
+
+def build_publish_menu(
+    pages: list[PublishedPage], base_url: str | None, publish_dir: Path
+) -> list[PublishMenuRow]:
+    """Rows for the publish screen: the stable-publish action, then one row per page."""
+    rows = [PublishMenuRow("▸ Publish a new Stable version", "publish_stable")]
+    for pg in pages:
+        url = page_url(base_url, publish_dir, pg.path)
+        rows.append(PublishMenuRow(f"{pg.group} · {pg.kind}   {url}", "open", url, pg.path))
+    return rows
 
 
 # ── opening published artifacts in the browser ────────────────────────────────
