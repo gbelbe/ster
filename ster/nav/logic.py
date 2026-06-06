@@ -1825,6 +1825,35 @@ def _inherited_properties(taxonomy: Taxonomy, class_uri: str) -> list[tuple]:
     return result
 
 
+def _add_class_property_actions(class_uri: str) -> list[DetailField]:
+    """Action rows to define a new property on a class: a relationship, or an
+    attribute of each supported datatype. Each row carries the prop_type and
+    (for attributes) the datatype range in its meta."""
+    from ..operations import SUPPORTED_DATATYPES
+
+    rows = [
+        _add_action_add_field(
+            "action:add_class_property:rel",
+            "+ Add relationship (object property)",
+            "add_class_property",
+            class_uri=class_uri,
+            prop_type="ObjectProperty",
+        )
+    ]
+    for label, range_uri in SUPPORTED_DATATYPES:
+        rows.append(
+            _add_action_add_field(
+                f"action:add_class_property:dt:{range_uri}",
+                f"+ Add attribute · {label}",
+                "add_class_property",
+                class_uri=class_uri,
+                prop_type="DatatypeProperty",
+                range_uri=range_uri,
+            )
+        )
+    return rows
+
+
 def build_rdf_class_detail(
     taxonomy: Taxonomy,
     uri: str,
@@ -2019,14 +2048,7 @@ def build_rdf_class_detail(
                 meta={"type": "inherited_prop", "uri": prop.uri, "parent_uri": parent_uri},
             )
         )
-    fields.append(
-        _add_action_add_field(
-            "action:add_class_property",
-            "+ Add property for this class",
-            "add_class_property",
-            class_uri=uri,
-        )
-    )
+    fields.extend(_add_class_property_actions(uri))
 
     # ── Subtree quality stats ────────────────────────────────────────────────
     fields.extend(_class_quality_fields(taxonomy, uri, lang))

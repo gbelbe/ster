@@ -417,6 +417,44 @@ def add_owl_property(
     return prop
 
 
+_XSD = "http://www.w3.org/2001/XMLSchema#"
+
+# Datatypes offered when defining an attribute (datatype property) on a class.
+SUPPORTED_DATATYPES: list[tuple[str, str]] = [
+    ("string", _XSD + "string"),
+    ("URL (anyURI)", _XSD + "anyURI"),
+    ("integer", _XSD + "integer"),
+    ("decimal", _XSD + "decimal"),
+    ("boolean", _XSD + "boolean"),
+    ("date", _XSD + "date"),
+    ("dateTime", _XSD + "dateTime"),
+]
+
+# Kind picker rows: (label, prop_type). Index 0 = attribute, 1 = relationship.
+PROPERTY_KINDS: list[tuple[str, str]] = [
+    ("Attribute (data value)", "DatatypeProperty"),
+    ("Relationship (link to another entity)", "ObjectProperty"),
+]
+
+
+def advance_property_create(step: str, choice: int) -> tuple[str, str | None, str | None]:
+    """Advance the add-class-property picker by one selection.
+
+    Returns ``(next, prop_type, range_uri)``:
+    - ``("datatype", None, None)`` — show the datatype picker next (attribute kind);
+    - ``("create", "ObjectProperty", None)`` — prompt for a URI and create a relationship;
+    - ``("create", "DatatypeProperty", <xsd uri>)`` — prompt for a URI and create an
+      attribute with the chosen datatype as its range.
+    """
+    if step == "kind":
+        if choice == 0:  # Attribute → choose a datatype first
+            return ("datatype", None, None)
+        return ("create", "ObjectProperty", None)  # Relationship
+    # step == "datatype"
+    _label, range_uri = SUPPORTED_DATATYPES[choice]
+    return ("create", "DatatypeProperty", range_uri)
+
+
 def find_individuals_using_property(taxonomy: Taxonomy, prop_uri: str) -> list[str]:
     """Return URIs of all individuals that have at least one value for *prop_uri*."""
     return [

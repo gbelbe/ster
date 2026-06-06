@@ -2715,6 +2715,8 @@ class TaxonomyViewer:
         if f.meta.get("type") == "new_owl_class_property_uri":
             if new_value:
                 class_uri = f.meta.get("class_uri", "")
+                prop_type = f.meta.get("prop_type", "ObjectProperty")
+                range_uri = f.meta.get("range_uri")
                 if new_value not in self.taxonomy.owl_properties:
                     from ..handles import assign_handles
                     from ..operations import add_owl_property
@@ -2722,10 +2724,11 @@ class TaxonomyViewer:
                     add_owl_property(
                         self.taxonomy,
                         new_value,
-                        "ObjectProperty",
+                        prop_type,
                         new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1],
                         self.lang,
                         class_uri if class_uri else None,
+                        range_uri,
                     )
                     assign_handles(self.taxonomy)
                     self._rebuild()
@@ -3613,9 +3616,12 @@ class TaxonomyViewer:
                     self._state = TreeState()
 
         elif action == "add_class_property":
-            class_uri = (meta or {}).get("class_uri", "") or self._detail_uri or ""
+            m = meta or {}
+            class_uri = m.get("class_uri", "") or self._detail_uri or ""
             if class_uri:
-                self._trigger_create_class_property(class_uri)
+                self._trigger_create_class_property(
+                    class_uri, m.get("prop_type", "ObjectProperty"), m.get("range_uri")
+                )
 
         elif action in ("create_owl_class", "create_owl_property"):
             self._trigger_create_owl(action)
@@ -8173,15 +8179,25 @@ class TaxonomyViewer:
         )
         self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
 
-    def _trigger_create_class_property(self, class_uri: str) -> None:
-        """Prompt for a local name, then create a property with domain = class_uri."""
+    def _trigger_create_class_property(
+        self, class_uri: str, prop_type: str = "ObjectProperty", range_uri: str | None = None
+    ) -> None:
+        """Prompt for a URI, then create a property (of *prop_type*) with domain = class_uri.
+
+        For a DatatypeProperty, *range_uri* is the chosen datatype.
+        """
         base_uri = self.taxonomy.base_uri()
         synthetic = DetailField(
             "new:owl_class_property",
             "New property URI",
             base_uri,
             editable=True,
-            meta={"type": "new_owl_class_property_uri", "class_uri": class_uri},
+            meta={
+                "type": "new_owl_class_property_uri",
+                "class_uri": class_uri,
+                "prop_type": prop_type,
+                "range_uri": range_uri,
+            },
         )
         self._state = EditState(buffer=base_uri, pos=len(base_uri), field=synthetic, return_to=None)
 
