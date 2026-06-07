@@ -93,7 +93,7 @@ uv run bandit -r ster/ -c pyproject.toml -q
 ok "bandit"
 
 step "Security — pip-audit"
-uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
+uv run pip-audit --skip-editable
 ok "pip-audit"
 
 # ── 4c. Complexity ratchet (vs origin/main) ──────────────────────────────────

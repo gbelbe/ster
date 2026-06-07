@@ -1225,6 +1225,137 @@ def test_check_and_pull_user_declines(tmp_path, monkeypatch):
 # ── commit_new_taxonomy — remote push ─────────────────────────────────────────
 
 
+# ── list_tags / commit_paths / create_tag (release tagging) ──────────────────
+
+
+def test_list_tags_returns_repo_tags(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    mock = MagicMock(returncode=0, stdout="onto/v0.1.0\nonto/v0.2.0\nv9.9.9\n")
+    with patch("ster.git.manager._git", return_value=mock):
+        tags = mgr.list_tags()
+    assert tags == ["onto/v0.1.0", "onto/v0.2.0", "v9.9.9"]
+
+
+def test_list_tags_empty_on_error(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with patch("ster.git.manager._git", return_value=MagicMock(returncode=128, stdout="")):
+        assert mgr.list_tags() == []
+
+
+def test_commit_paths_stages_each_and_commits(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "rev-parse":
+            return MagicMock(returncode=0, stdout="abc1234\n")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        sha = mgr.commit_paths([tmp_path / "a.ttl", tmp_path / "ontology"], "release(onto): v0.1.1")
+    assert sha == "abc1234"
+    adds = [a for a in calls if a[0] == "add"]
+    assert len(adds) == 2
+    assert any(a[0] == "commit" and "release(onto): v0.1.1" in a for a in calls)
+
+
+def test_commit_paths_returns_none_when_commit_fails(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "commit":
+            return MagicMock(returncode=1, stdout="", stderr="nothing to commit")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        assert mgr.commit_paths([tmp_path / "a.ttl"], "msg") is None
+
+
+def test_create_tag_creates_annotated_tag(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        ok = mgr.create_tag("onto/v0.2.0", "onto 0.2.0")
+    assert ok is True
+    assert any(a[0] == "tag" and "-a" in a and "onto/v0.2.0" in a for a in calls)
+
+
+def test_create_tag_returns_false_on_error(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+    with patch(
+        "ster.git.manager._git",
+        return_value=MagicMock(returncode=128, stdout="", stderr="tag exists"),
+    ):
+        assert mgr.create_tag("onto/v0.2.0", "msg") is False
+
+
+def test_push_release_pushes_head_to_main_and_tag(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "main_branch": "main"})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "remote":  # get-url origin
+            return MagicMock(returncode=0, stdout="https://x.com/r\n")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        ok = mgr.push_release("onto/v0.2.0")
+    assert ok is True
+    pushes = [a for a in calls if a[0] == "push"]
+    assert any("HEAD:main" in a for a in pushes)  # to main, not the current branch
+    assert any("onto/v0.2.0" in a for a in pushes)
+
+
+def test_push_release_targets_configured_main_branch(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path), "main_branch": "master"})
+    calls = []
+
+    def git_side(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "remote":
+            return MagicMock(returncode=0, stdout="https://x.com/r\n")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        mgr.push_release("onto/v0.2.0")
+    assert any(a[0] == "push" and "HEAD:master" in a for a in calls)
+
+
+def test_push_release_false_when_no_remote(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "remote":
+            return MagicMock(returncode=2, stdout="", stderr="no origin")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        assert mgr.push_release("onto/v0.2.0") is False
+
+
+def test_push_release_false_when_push_fails(tmp_path):
+    mgr = _make_manager(tmp_path, {"repo_path": str(tmp_path)})
+
+    def git_side(*args, **kwargs):
+        if args[0] == "remote":
+            return MagicMock(returncode=0, stdout="https://x.com/r\n")
+        if args[0] == "branch":
+            return MagicMock(returncode=0, stdout="main\n")
+        if args[0] == "push":
+            return MagicMock(returncode=1, stdout="", stderr="rejected")
+        return MagicMock(returncode=0, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        assert mgr.push_release("onto/v0.2.0") is False
+
+
 def test_commit_new_taxonomy_pushes_with_remote(tmp_path, monkeypatch):
     mgr = _make_manager(
         tmp_path,

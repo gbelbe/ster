@@ -265,6 +265,109 @@ def regenerate_dev_artifacts(source_file: Path, publish_dir: Path | None = None)
     return write_dev_artifacts(source_file, pub, version_str)
 
 
+# ── git-tag-driven semver versioning ──────────────────────────────────────────
+
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VALID_BUMPS = ("major", "minor", "patch")
+
+
+@runtime_checkable
+class GitTagger(Protocol):
+    """The git operations a stable release needs: read tags, commit, tag, push."""
+
+    def list_tags(self) -> list[str]: ...
+
+    def commit_paths(self, paths: list[Path], message: str) -> str | None: ...
+
+    def create_tag(self, tag: str, message: str) -> bool: ...
+
+    def push_release(self, tag: str) -> bool: ...
+
+
+def semver_bump_from_choice(choice: str) -> str:
+    """Normalise a semver bump kind; raise ValueError unless major/minor/patch."""
+    kind = choice.strip().lower()
+    if kind not in _VALID_BUMPS:
+        raise ValueError(f"invalid bump {choice!r}: expected one of {', '.join(_VALID_BUMPS)}")
+    return kind
+
+
+def ontology_tag(stem: str, version: str) -> str:
+    """Git tag name for an ontology release: ``<stem>/v<version>``.
+
+    The ``<stem>/`` prefix keeps ontology tags out of the bare ``vX.Y.Z``
+    namespace used by the PyPI package release, and lets multiple ontologies
+    coexist in one repository.
+    """
+    return f"{stem}/v{version}"
+
+
+def parse_ontology_tag(tag: str, stem: str) -> str | None:
+    """Return the semver if *tag* is this ontology's ``<stem>/vX.Y.Z``, else None."""
+    prefix = f"{stem}/v"
+    if not tag.startswith(prefix):
+        return None
+    version = tag[len(prefix) :]
+    return version if _SEMVER_RE.match(version) else None
+
+
+def latest_ontology_version(tags: list[str], stem: str) -> str | None:
+    """Highest semver among this ontology's tags, or None when there are none."""
+    versions = [v for t in tags if (v := parse_ontology_tag(t, stem)) is not None]
+    if not versions:
+        return None
+    return max(versions, key=lambda v: tuple(int(x) for x in v.split(".")))
+
+
+def next_ontology_version(current: str | None, bump: str) -> str:
+    """Next semver after *current*, seeding ``0.1.0`` when there is no prior tag."""
+    kind = semver_bump_from_choice(bump)
+    return bump_version(current if current is not None else "0.1.0", kind)
+
+
+@dataclass(frozen=True)
+class ReleaseResult:
+    """Outcome of a stable release: the new version, its tag, files, and push state."""
+
+    version: str  # base semver e.g. "1.2.0"
+    version_str: str  # full version e.g. "1.2.0+20260606.abc1234"
+    tag: str  # ontology tag e.g. "onto/v1.2.0"
+    artifacts: list[Path]
+    pushed: bool  # True when the commit + tag were pushed to a remote
+
+
+def perform_stable_release(
+    taxonomy_file: Path,
+    publish_dir: Path,
+    bump: str,
+    git: GitTagger,
+    serializers: list[ArtifactSerializer] | None = None,
+) -> ReleaseResult:
+    """Run a git-tag-driven stable release and return its :class:`ReleaseResult`.
+
+    Reads the latest ontology tag to find the current version, applies *bump*,
+    stamps the new version into *taxonomy_file*, writes the versioned + latest
+    artifacts, commits the file and artifacts, creates the ontology tag, then
+    pushes the commit and tag to the remote (a no-op when none is configured).
+    """
+    kind = semver_bump_from_choice(bump)
+    stem = taxonomy_file.stem
+    current = latest_ontology_version(git.list_tags(), stem)
+    base_version = next_ontology_version(current, kind)
+    version_str = build_version_string(
+        base_version, _today_str(), _git_short_sha(taxonomy_file.parent)
+    )
+    patch_version_triples(taxonomy_file, version_str, base_version)
+    artifacts = write_stable_artifacts(
+        taxonomy_file, publish_dir, base_version, version_str, serializers
+    )
+    git.commit_paths([taxonomy_file, publish_dir], f"release({stem}): v{base_version}")
+    tag = ontology_tag(stem, base_version)
+    git.create_tag(tag, f"{stem} {base_version}")
+    pushed = git.push_release(tag)
+    return ReleaseResult(base_version, version_str, tag, artifacts, pushed)
+
+
 # ── publish screen: listing published pages ──────────────────────────────────
 
 _VERSION_DIR_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")

@@ -118,7 +118,7 @@ def when_load_taxonomy(ctx):
 def when_build_overview(ctx):
     from ster.nav.logic import build_ontology_overview_fields
 
-    ctx["fields"] = build_ontology_overview_fields(ctx["taxonomy"], file_path=None, lang="en")
+    ctx["fields"] = build_ontology_overview_fields(ctx["taxonomy"], lang="en")
 
 
 # ── Then ──────────────────────────────────────────────────────────────────────

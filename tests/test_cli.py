@@ -934,3 +934,81 @@ def test_load_workspace_returns_workspace(tmp_ttl):
     ws = cli_module._load_workspace([tmp_ttl], [tmp_ttl])
     assert isinstance(ws, TaxonomyWorkspace)
     assert tmp_ttl in ws.taxonomies
+
+
+# ── cmd_publish (git-tag-driven stable + dev channels) ────────────────────────
+
+_ONTO_TTL = """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://ex.org/onto#> .
+<https://ex.org/onto> a owl:Ontology .
+t:Top a skos:Concept ; skos:prefLabel "Top"@en .
+"""
+
+
+def _git_repo_with_onto(tmp_path: Path) -> Path:
+    """Init a git repo containing a committed onto.ttl; return the file path."""
+    import subprocess
+
+    def g(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], capture_output=True)
+
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True)
+    g("config", "user.email", "t@t.com")
+    g("config", "user.name", "T")
+    ttl = tmp_path / "onto.ttl"
+    ttl.write_text(_ONTO_TTL)
+    g("add", ".")
+    g("commit", "-m", "init")
+    return ttl
+
+
+def test_cmd_publish_stable_creates_ontology_tag(tmp_path):
+    import subprocess
+
+    ttl = _git_repo_with_onto(tmp_path)
+    result = _runner.invoke(
+        app, ["publish", str(ttl), "--bump", "minor", "--dir", str(tmp_path / "ontology")]
+    )
+    assert result.exit_code == 0, result.output
+    tags = subprocess.run(
+        ["git", "-C", str(tmp_path), "tag", "--list"], capture_output=True, text=True
+    ).stdout
+    assert "onto/v0.2.0" in tags
+    assert (tmp_path / "ontology" / "v0.2.0" / "onto.ttl").exists()
+
+
+def test_cmd_publish_stable_invalid_bump_exits(tmp_path):
+    ttl = _git_repo_with_onto(tmp_path)
+    result = _runner.invoke(
+        app, ["publish", str(ttl), "--bump", "huge", "--dir", str(tmp_path / "ontology")]
+    )
+    assert result.exit_code == 1
+
+
+def test_cmd_publish_dev_writes_dev_dir(tmp_path):
+    ttl = tmp_path / "onto.ttl"
+    ttl.write_text(_ONTO_TTL)
+    result = _runner.invoke(
+        app,
+        ["publish", str(ttl), "--channel", "dev", "--no-open", "--dir", str(tmp_path / "ontology")],
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "ontology" / "dev" / "onto.ttl").exists()
+
+
+def test_cmd_publish_missing_file_exits(tmp_path):
+    result = _runner.invoke(app, ["publish", str(tmp_path / "nope.ttl")])
+    assert result.exit_code == 1
+
+
+def test_cmd_publish_blocked_without_ontology_uri(tmp_path):
+    ttl = tmp_path / "bad.ttl"
+    ttl.write_text(
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+        "@prefix t: <https://ex.org/t#> .\n"
+        't:Top a skos:Concept ; skos:prefLabel "Top"@en .\n'
+    )
+    result = _runner.invoke(app, ["publish", str(ttl), "--dir", str(tmp_path / "ontology")])
+    assert result.exit_code == 1

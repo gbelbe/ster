@@ -97,20 +97,20 @@ def test_available_langs_empty_owl():
 
 def test_ontology_overview_has_display_lang():
     tax = _tax_with_owl(class_langs=["en"])
-    fields = build_ontology_overview_fields(tax, None, "en")
+    fields = build_ontology_overview_fields(tax, "en")
     keys = [f.key for f in fields]
     assert "display_lang" in keys
 
 
 def test_ontology_overview_display_lang_pick_lang():
     tax = _tax_with_owl(class_langs=["en"])
-    fields = build_ontology_overview_fields(tax, None, "en")
+    fields = build_ontology_overview_fields(tax, "en")
     f = next(f for f in fields if f.key == "display_lang")
     assert f.meta.get("action") == "pick_lang"
 
 
 def test_ontology_overview_lang_value_passed_through():
     tax = _tax_with_owl(class_langs=["fr"])
-    fields = build_ontology_overview_fields(tax, None, "fr")
+    fields = build_ontology_overview_fields(tax, "fr")
     f = next(f for f in fields if f.key == "display_lang")
     assert f.value == "fr"

@@ -460,9 +460,7 @@ class TaxonomyViewer:
         tax = (
             self._workspace.taxonomies.get(file_path, self.taxonomy) if file_path else self.taxonomy
         )
-        return build_ontology_overview_fields(
-            tax, file_path, self.lang, folded=self._overview_folded
-        )
+        return build_ontology_overview_fields(tax, self.lang, folded=self._overview_folded)
 
     def _bpropf(self, uri: str) -> list[DetailField]:
         """Build OWL property detail fields."""

@@ -323,6 +323,48 @@ class GitManager:
         r = _git("diff", "--cached", "--name-only", cwd=repo)
         return bool(r.returncode == 0 and r.stdout.strip())
 
+    # ── release tagging (git-tag-driven semver versioning) ─────────────────────
+
+    def _release_cwd(self) -> Path:
+        """Directory to run release git commands in: the linked repo, else the file's dir."""
+        return self._repo() or self.taxonomy_path.parent
+
+    def list_tags(self) -> list[str]:
+        """All git tags in the repository (empty list when not in a repo)."""
+        r = _git("tag", "--list", cwd=self._release_cwd())
+        if r.returncode != 0:
+            return []
+        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+    def commit_paths(self, paths: list[Path], message: str) -> str | None:
+        """Stage *paths* and commit them with *message*; return the new sha or None."""
+        cwd = self._release_cwd()
+        for p in paths:
+            _git("add", str(p), cwd=cwd)
+        if _git("commit", "-m", message, cwd=cwd).returncode != 0:
+            return None
+        head = _git("rev-parse", "HEAD", cwd=cwd)
+        return head.stdout.strip() if head.returncode == 0 else None
+
+    def create_tag(self, tag: str, message: str) -> bool:
+        """Create an annotated git tag at HEAD; return True on success."""
+        return _git("tag", "-a", tag, "-m", message, cwd=self._release_cwd()).returncode == 0
+
+    def push_release(self, tag: str) -> bool:
+        """Push the release commit to the main branch and *tag* to origin.
+
+        Pushes the current HEAD to the repo's main branch (``main_branch`` config,
+        default ``main``) rather than whatever branch is checked out, so releases
+        always land on main.  No-op (returns False) when no remote is configured.
+        """
+        cwd = self._release_cwd()
+        if _git("remote", "get-url", "origin", cwd=cwd).returncode != 0:
+            return False
+        main = self._cfg.get("main_branch", "main")
+        branch_ok = _git("push", "origin", f"HEAD:{main}", cwd=cwd).returncode == 0
+        tag_ok = _git("push", "origin", tag, cwd=cwd).returncode == 0
+        return branch_ok and tag_ok
+
     def commit_new_taxonomy(self, commit_msg: str) -> None:
         """Stage the taxonomy file, commit with *commit_msg*, and push if remote is set.
 

@@ -2039,35 +2039,33 @@ def _select_publish_target(files: list[Path]) -> tuple[Path, object] | None:  # 
     return taxonomy_file, taxonomy
 
 
-def _publish_stable_flow(
-    taxonomy_file: Path, taxonomy: object, publish_dir: Path
-) -> None:  # pragma: no cover
-    """Prompt for a base version and write a stable release; print results + tips."""
-    from .publish import (
-        _git_short_sha,
-        _today_str,
-        build_version_string,
-        bump_version,
-        write_stable_artifacts,
-    )
+def _publish_stable_flow(taxonomy_file: Path, publish_dir: Path) -> None:  # pragma: no cover
+    """Prompt for a semver bump, run the git-tag-driven release, print results."""
+    from .git.manager import GitManager
+    from .publish import perform_stable_release
 
-    vi = taxonomy.version_info  # type: ignore[attr-defined]
-    current_base = vi.split("+")[0] if vi and "+" in vi else (vi or "0.1.0")
+    console.print(
+        "[bold]Release type[/bold] (Semantic Versioning):\n"
+        "  [cyan]major[/cyan] — incompatible API changes\n"
+        "  [cyan]minor[/cyan] — backward-compatible new functionality\n"
+        "  [cyan]patch[/cyan] — backward-compatible bug fixes"
+    )
     try:
-        base_version = Prompt.ask("New base version", default=bump_version(current_base, "patch"))
+        bump = Prompt.ask("Bump", choices=["major", "minor", "patch"], default="patch")
     except (KeyboardInterrupt, EOFError):
         return
-    version_str = build_version_string(
-        base_version, _today_str(), _git_short_sha(taxonomy_file.parent)
-    )
-    artifacts = write_stable_artifacts(taxonomy_file, publish_dir, base_version, version_str)
+    result = perform_stable_release(taxonomy_file, publish_dir, bump, GitManager(taxonomy_file))
     console.print(
-        f"[green]✓[/green]  Published stable [bold]{version_str}[/bold] ({len(artifacts)} files)"
+        f"[green]✓[/green]  Published [bold]{result.version_str}[/bold], "
+        f"tagged [bold]{result.tag}[/bold] ({len(result.artifacts)} files)"
     )
-    console.print(
-        f"[dim]Next: git add {publish_dir.name}/ && "
-        f"git commit -m 'release: v{base_version}' && git push[/dim]"
-    )
+    if result.pushed:
+        console.print(f"[dim]Pushed the commit and tag {result.tag} to origin.[/dim]")
+    else:
+        console.print(
+            f"[dim]No remote configured — push manually: "
+            f"git push && git push origin {result.tag}[/dim]"
+        )
 
 
 def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
@@ -2112,7 +2110,7 @@ def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - i
             return
         row = rows[sel]
         if row.action == "publish_stable":
-            _publish_stable_flow(taxonomy_file, taxonomy, publish_dir)
+            _publish_stable_flow(taxonomy_file, publish_dir)
         elif row.url:
             webbrowser.open(row.url)
             console.print(f"[green]✓[/green]  Opened {row.url}")
@@ -2121,8 +2119,8 @@ def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - i
 @app.command("publish")
 def cmd_publish(
     path: Path = typer.Argument(..., help="Taxonomy file to publish."),
-    version: str | None = typer.Option(
-        None, "--version", "-v", help="Base semver (e.g. 1.2.0). Prompted if omitted."
+    bump: str = typer.Option(
+        "patch", "--bump", "-b", help="Semver bump for the stable release: major, minor, or patch."
     ),
     channel: str = typer.Option("stable", "--channel", "-c", help="Channel: stable or dev."),
     publish_dir: Path = typer.Option(
@@ -2134,22 +2132,14 @@ def cmd_publish(
 ) -> None:
     """Publish a new versioned release of the ontology.
 
-    Stable channel: writes ontology/v{version}/ and ontology/latest/.
+    Stable channel: reads the latest ``<stem>/vX.Y.Z`` ontology tag, applies the
+    bump, stamps the version into the file, commits, tags, and writes
+    ontology/v{version}/ + ontology/latest/.
     Dev channel:    writes ontology/dev/ (overwrites, no history).
     """
     from rich.console import Console
-    from rich.prompt import Prompt
 
-    from .publish import (
-        PublishError,
-        _git_short_sha,
-        _today_str,
-        build_version_string,
-        bump_version,
-        pre_flight,
-        write_dev_artifacts,
-        write_stable_artifacts,
-    )
+    from .publish import PublishError, pre_flight
     from .store import load
 
     _con = Console()
@@ -2166,41 +2156,57 @@ def cmd_publish(
         err.print(f"[red]Publish blocked:[/red] {e}")
         raise typer.Exit(1)
 
-    sha = _git_short_sha(path.parent)
-    today = _today_str()
-
-    if version is None:
-        current = (
-            taxonomy.version_info.split("+")[0]
-            if taxonomy.version_info and "+" in taxonomy.version_info
-            else (taxonomy.version_info or "0.1.0")
-        )
-        suggested = bump_version(current, "patch")
-        version = Prompt.ask("Base version", default=suggested)
-
-    version_str = build_version_string(version, today, sha)
-
     if channel == "dev":
-        _con.print(f"Publishing dev channel → [bold]{version_str}[/bold]")
-        artifacts = write_dev_artifacts(path, publish_dir, version_str)
-        _con.print(f"[green]Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}[/green]")
-        if open_pages:
-            _open_dev_artifacts_in_browser(taxonomy, path, publish_dir, artifacts)
+        _publish_dev_channel(path, taxonomy, publish_dir, open_pages, _con)
     else:
-        _con.print(f"Publishing stable [bold]{version_str}[/bold]")
-        artifacts = write_stable_artifacts(path, publish_dir, version, version_str)
-        _con.print(f"[green]Written {len(artifacts)} artifact(s):[/green]")
-        for a in artifacts:
-            _con.print(f"  {a}")
-        _con.print()
-        _con.rule("Tip")
-        _con.print("To serve publicly via GitHub Pages:")
-        _con.print(f"  1. Repo → Settings → Pages → Deploy from branch: main / /{publish_dir.name}")
-        _con.print(
-            f"  2. Your ontology will be live at: https://yourorg.github.io/repo/{publish_dir.name}/latest/"
+        _publish_stable_channel(path, bump, publish_dir, _con)
+
+
+def _publish_dev_channel(
+    path: Path, taxonomy: object, publish_dir: Path, open_pages: bool, con: object
+) -> None:
+    """Write the dev channel from the file's current version (no tag, no commit)."""
+    from .publish import _git_short_sha, _today_str, build_version_string, write_dev_artifacts
+
+    vi = taxonomy.version_info  # type: ignore[attr-defined]
+    base = vi.split("+")[0] if vi and "+" in vi else (vi or "0.1.0")
+    version_str = build_version_string(base, _today_str(), _git_short_sha(path.parent))
+    con.print(f"Publishing dev channel → [bold]{version_str}[/bold]")  # type: ignore[attr-defined]
+    artifacts = write_dev_artifacts(path, publish_dir, version_str)
+    con.print(  # type: ignore[attr-defined]
+        f"[green]Written {len(artifacts)} artifact(s) → {publish_dir / 'dev'}[/green]"
+    )
+    if open_pages:
+        _open_dev_artifacts_in_browser(taxonomy, path, publish_dir, artifacts)
+
+
+def _publish_stable_channel(path: Path, bump: str, publish_dir: Path, con: object) -> None:
+    """Run the git-tag-driven stable release and report what it published/pushed."""
+    from .git.manager import GitManager
+    from .publish import perform_stable_release, semver_bump_from_choice
+
+    try:
+        kind = semver_bump_from_choice(bump)
+    except ValueError as e:
+        err.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    result = perform_stable_release(path, publish_dir, kind, GitManager(path))
+    con.print(  # type: ignore[attr-defined]
+        f"[green]✓[/green] Published [bold]{result.version_str}[/bold], "
+        f"tagged [bold]{result.tag}[/bold] ({len(result.artifacts)} files)"
+    )
+    for a in result.artifacts:
+        con.print(f"  {a}")  # type: ignore[attr-defined]
+    if result.pushed:
+        con.print(  # type: ignore[attr-defined]
+            f"[dim]Pushed the commit and tag {result.tag} to origin.[/dim]"
         )
-        _con.print("  3. Each git push automatically updates the public site.")
-        _con.rule()
+    else:
+        con.print(  # type: ignore[attr-defined]
+            f"[dim]No remote configured — push manually: "
+            f"git push && git push origin {result.tag}[/dim]"
+        )
 
 
 def main() -> None:

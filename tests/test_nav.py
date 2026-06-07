@@ -1668,7 +1668,7 @@ def _owl_taxonomy_with_long_class() -> Taxonomy:
 def test_ontology_overview_parent_class_display_preserves_full_label():
     """Parent class row (type='action') display must contain the full label."""
     tax = _owl_taxonomy_with_long_class()
-    fields = build_ontology_overview_fields(tax, None, "en")
+    fields = build_ontology_overview_fields(tax, "en")
     parent_row = next(f for f in fields if f.meta.get("action") == "toggle_class_fold")
     assert _LONG_LABEL in parent_row.display
     assert len(parent_row.display) > 20
@@ -1679,7 +1679,7 @@ def test_ontology_overview_leaf_class_display_preserves_full_label():
     tax = Taxonomy()
     uri = BASE + "StandaloneClass"
     tax.owl_classes[uri] = RDFClass(uri=uri, labels=[Label(lang="en", value=_LONG_LABEL)])
-    fields = build_ontology_overview_fields(tax, None, "en")
+    fields = build_ontology_overview_fields(tax, "en")
     leaf_row = next(f for f in fields if f.meta.get("type") == "rdf_relation")
     assert _LONG_LABEL in leaf_row.display
     assert len(leaf_row.display) > 20
@@ -1697,7 +1697,7 @@ def test_render_detail_col_navigable_empty_value_uses_full_width(tmp_path, monke
     uri = BASE + "StandaloneClass"
     tax.owl_classes[uri] = RDFClass(uri=uri, labels=[Label(lang="en", value=_LONG_LABEL)])
     v = _make_viewer(tax, tmp_path)
-    v._detail_fields = build_ontology_overview_fields(tax, None, "en")
+    v._detail_fields = build_ontology_overview_fields(tax, "en")
     from ster.nav.logic import _ontology_sentinel
 
     v._detail_uri = _ontology_sentinel(tmp_path / "vocab.ttl")

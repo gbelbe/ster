@@ -131,7 +131,7 @@ def _overview_fields(title=None, description=None, label=None):
     from ster.nav.logic import build_ontology_overview_fields
 
     t = _make_taxonomy_with_ontology(label=label, title=title, description=description)
-    return build_ontology_overview_fields(t, file_path=None, lang="en")
+    return build_ontology_overview_fields(t, lang="en")
 
 
 def _field_index(fields, meta_type):

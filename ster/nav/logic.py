@@ -415,18 +415,6 @@ def _sep(label: str) -> DetailField:
     )
 
 
-def _read_last_publish(work_dir: Path) -> dict | None:
-    import json
-
-    last = work_dir / ".ster-publish-last.json"
-    if not last.exists():
-        return None
-    try:
-        return json.loads(last.read_text())
-    except Exception:
-        return None
-
-
 # ──────────────────────────── scheme dashboard helpers ───────────────────────
 
 _SEVERITY_ICONS = {"error": "⊘", "warning": "⚠", "info": "ℹ"}
@@ -2596,7 +2584,6 @@ def _ontology_identity_action_fields(taxonomy: Taxonomy) -> list[DetailField]:
 
 def build_ontology_overview_fields(
     taxonomy: Taxonomy,
-    file_path: Path | None,
     lang: str,
     folded: set[str] | None = None,
 ) -> list[DetailField]:
@@ -2637,21 +2624,6 @@ def build_ontology_overview_fields(
                 meta={"type": "stat"},
             )
         )
-    if file_path:
-        _last = _read_last_publish(file_path.parent)
-        if _last:
-            _ch = _last.get("channel", "")
-            _ts = _last.get("finished_at", "")[:10]
-            _sha = _last.get("commit_sha", "")[:7]
-            fields.append(
-                DetailField(
-                    "ont:last_published",
-                    "last published",
-                    f"{_ch} · {_ts} [{_sha}]",
-                    editable=False,
-                    meta={"type": "stat"},
-                )
-            )
     if taxonomy.ontology_label:
         fields.append(
             DetailField(

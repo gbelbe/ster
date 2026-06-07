@@ -24,7 +24,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy ster/
 uv run bandit -r ster/ -c pyproject.toml
-uv run pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --skip-editable
+uv run pip-audit --skip-editable
 uv run pytest tests/ -q --cov=ster --cov-report=term-missing
 ```
 
