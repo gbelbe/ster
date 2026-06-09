@@ -350,7 +350,9 @@ def test_viewer_commit_edit_updates_label(viewer, simple_taxonomy):
         buffer="Updated Top", pos=len("Updated Top"), field=fields[pref_idx], return_to=None
     )
     viewer._commit_edit()
-    assert simple_taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
+    # The edit now goes through TaxonomyService (clone-apply-swap): the viewer's
+    # live taxonomy reflects it; the original passed-in object stays isolated.
+    assert viewer.taxonomy.concepts[BASE + "Top"].pref_label("en") == "Updated Top"
 
 
 # ── multi-scheme flatten_tree ─────────────────────────────────────────────────
@@ -1762,9 +1764,11 @@ def test_viewer_concept_rename_confirm_applies_and_propagates_match(tmp_path):
     v._start_rename_uri(BASE + "Feline")
     assert isinstance(v._state, RenameUriConfirmState)
     v._on_rename_uri_confirm(ord("y"))
-    assert BASE + "Feline" in t.concepts
-    assert BASE + "Cat" not in t.concepts
-    assert BASE + "Feline" in t.concepts[BASE + "Dog"].exact_match
+    # Rename goes through TaxonomyService (clone-apply-swap): assert on the viewer's
+    # live taxonomy; the original passed-in object stays isolated.
+    assert BASE + "Feline" in v.taxonomy.concepts
+    assert BASE + "Cat" not in v.taxonomy.concepts
+    assert BASE + "Feline" in v.taxonomy.concepts[BASE + "Dog"].exact_match
     assert v._detail_uri == BASE + "Feline"
 
 
@@ -1783,9 +1787,10 @@ def test_viewer_promoted_rename_renames_both_layers(tmp_path):
     assert isinstance(v._state, RenameUriConfirmState)
     assert v._state.kind == "promoted"
     v._on_rename_uri_confirm(ord("y"))
-    assert BASE + "Creature" in t.concepts
-    assert BASE + "Creature" in t.owl_classes
-    assert BASE + "Animal" not in t.concepts
-    assert BASE + "Animal" not in t.owl_classes
-    assert BASE + "Creature" in t.concepts[BASE + "Dog"].broader
-    assert BASE + "Creature" in t.owl_classes[BASE + "Pet"].sub_class_of
+    # clone-apply-swap: the viewer's live taxonomy reflects the rename
+    assert BASE + "Creature" in v.taxonomy.concepts
+    assert BASE + "Creature" in v.taxonomy.owl_classes
+    assert BASE + "Animal" not in v.taxonomy.concepts
+    assert BASE + "Animal" not in v.taxonomy.owl_classes
+    assert BASE + "Creature" in v.taxonomy.concepts[BASE + "Dog"].broader
+    assert BASE + "Creature" in v.taxonomy.owl_classes[BASE + "Pet"].sub_class_of

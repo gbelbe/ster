@@ -23,7 +23,6 @@ from .model import (
     Label,
     LabelType,
     OWLProperty,
-    RDFClass,
     Taxonomy,
 )
 
@@ -286,20 +285,40 @@ def remove_label(
 # ──────────────────────────── definitions ────────────────────────────────────
 
 
+def _replace_literal(taxonomy: Taxonomy, uri: str, attr: str, lang: str, value: str) -> None:
+    """Replace the *lang* entry of a concept's literal list *attr* (definitions/scope_notes)."""
+    concept = taxonomy.concepts.get(uri)
+    if concept is None:
+        raise ConceptNotFoundError(uri)
+    items = [it for it in getattr(concept, attr) if it.lang != lang]
+    items.append(Definition(lang=lang, value=value))
+    setattr(concept, attr, items)
+
+
 def set_definition(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    _replace_literal(taxonomy, uri, "definitions", lang, value)
+
+
+def set_scope_note(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    _replace_literal(taxonomy, uri, "scope_notes", lang, value)
+
+
+def remove_definition(taxonomy: Taxonomy, uri: str, lang: str) -> None:
+    """Remove the concept's ``skos:definition`` for *lang*."""
     concept = taxonomy.concepts.get(uri)
     if concept is None:
         raise ConceptNotFoundError(uri)
     concept.definitions = [d for d in concept.definitions if d.lang != lang]
-    concept.definitions.append(Definition(lang=lang, value=value))
 
 
-def set_scope_note(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+def remove_scope_note(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    """Remove the concept's matching ``skos:scopeNote`` (*lang* + *value*)."""
     concept = taxonomy.concepts.get(uri)
     if concept is None:
         raise ConceptNotFoundError(uri)
-    concept.scope_notes = [sn for sn in concept.scope_notes if sn.lang != lang]
-    concept.scope_notes.append(Definition(lang=lang, value=value))
+    concept.scope_notes = [
+        sn for sn in concept.scope_notes if not (sn.lang == lang and sn.value == value)
+    ]
 
 
 # ──────────────────────────── relations ──────────────────────────────────────
@@ -573,35 +592,6 @@ def delete_owl_class(
 
 
 # ──────────────────────────── OWL promotion ──────────────────────────────────
-
-
-def promote_to_class(taxonomy: Taxonomy, uri: str) -> RDFClass:
-    """Add an owl:Class layer to an existing SKOS concept at the same URI.
-
-    Labels are copied from skos:prefLabel → rdfs:label and definitions from
-    skos:definition → rdfs:comment.  The skos:broader hierarchy is mirrored
-    into sub_class_of only for parents that are already OWL classes, keeping
-    the two hierarchies independent by default.
-    """
-    if uri not in taxonomy.concepts:
-        raise ConceptNotFoundError(uri)
-    if uri in taxonomy.owl_classes:
-        return taxonomy.owl_classes[uri]
-
-    concept = taxonomy.concepts[uri]
-    rdf_class = RDFClass(
-        uri=uri,
-        labels=list(concept.labels),
-        comments=list(concept.definitions),
-        sub_class_of=[p for p in concept.broader if p in taxonomy.owl_classes],
-    )
-    taxonomy.owl_classes[uri] = rdf_class
-    return rdf_class
-
-
-def demote_from_class(taxonomy: Taxonomy, uri: str) -> None:
-    """Remove the owl:Class layer from a promoted concept, leaving the SKOS concept intact."""
-    taxonomy.owl_classes.pop(uri, None)
 
 
 # ──────────────────────────── OWL subclass hierarchy ─────────────────────────
@@ -1126,15 +1116,6 @@ def count_concept_uri_references(taxonomy: Taxonomy, uri: str) -> int:
 # statements, and rename — is identical for SKOS and OWL.  These dispatchers
 # hide the SKOS-vs-OWL specifics so callers (e.g. the viewer) stay layer-
 # agnostic; a node promoted to both layers is handled in both.
-
-
-def rename_kind(taxonomy: Taxonomy, uri: str) -> str:
-    """Return the entity-kind label for *uri*.
-
-    One of ``"concept"``, ``"class"``, ``"individual"``, ``"property"``,
-    ``"promoted"`` (concept + class), or ``"unknown"``.
-    """
-    return taxonomy.node_type(uri)
 
 
 def _owns_owl(taxonomy: Taxonomy, uri: str) -> bool:

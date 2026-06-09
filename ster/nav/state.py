@@ -400,35 +400,6 @@ ViewerState = (
 )
 
 
-# ── Effects ────────────────────────────────────────────────────────────────────
-# Pure functions return a list of Effects instead of executing side effects
-# directly. The curses loop (TaxonomyViewer._execute) runs them.
-
-
-@dataclass(frozen=True)
-class Rebuild:
-    """Rebuild the flat tree (after fold/unfold, taxonomy mutation, etc.)."""
-
-
-@dataclass(frozen=True)
-class SaveFile:
-    uri: str | None = None
-    path: Path | None = None
-
-
-@dataclass(frozen=True)
-class StageGit:
-    pass
-
-
-@dataclass(frozen=True)
-class Quit:
-    pass
-
-
-Effect = Rebuild | SaveFile | StageGit | Quit
-
-
 # ── Tree navigation (pure — no curses, no taxonomy access) ────────────────────
 
 

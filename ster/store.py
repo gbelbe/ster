@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
@@ -182,11 +184,33 @@ def load(path: str | Path) -> Taxonomy:
 
 
 def save(taxonomy: Taxonomy, path: str | Path) -> None:
-    """Serialize a Taxonomy back to an RDF file (format detected from extension)."""
+    """Serialize a Taxonomy back to an RDF file (format detected from extension).
+
+    The write is atomic: the serialized data goes to a sibling temp file that is
+    fsync'd and then ``os.replace``-d onto *path*. A crash or a concurrent reader
+    never observes a truncated file, and a failed write leaves the previous file
+    intact (no partial overwrite, no leftover temp file).
+    """
     path = Path(path)
     fmt = _detect_format(path)
     g = taxonomy_to_graph(taxonomy)
-    g.serialize(destination=str(path), format=fmt)
+    data = g.serialize(format=fmt)
+    _atomic_write_text(path, data)
+
+
+def _atomic_write_text(path: Path, data: str) -> None:
+    """Write *data* to *path* atomically via a sibling temp file + os.replace."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 # ──────────────────────────── conversion ─────────────────────────────────────

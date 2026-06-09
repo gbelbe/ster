@@ -2057,14 +2057,6 @@ def build_rdf_class_detail(
             "class_to_individual",
         )
     )
-    if node_t == "promoted":
-        fields.append(
-            _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
-        )
-    elif node_t == "concept":
-        fields.append(
-            _add_action_field("action:promote", "↑ Promote to owl:Class", "promote_to_class")
-        )
     fields.append(
         _add_action_del_field("action:delete_class", "⊘ Delete this class", "delete_class")
     )
@@ -2183,9 +2175,6 @@ def build_promoted_detail(
 
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
-    fields.append(
-        _add_action_field("action:demote", "↓ Remove owl:Class layer", "demote_from_class")
-    )
     fields.extend(_concept_action_fields(lang, concept, show_mappings))
 
     return fields

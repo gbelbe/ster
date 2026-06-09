@@ -26,7 +26,6 @@ from ster.operations import (
     count_owl_uri_references,
     count_uri_references,
     rename_entity_uri,
-    rename_kind,
 )
 
 NS = "https://example.org/onto#"
@@ -40,38 +39,38 @@ def _concept(name: str) -> Concept:
     return Concept(uri=uri(name), labels=[Label("en", name, LabelType.PREF)])
 
 
-# ── rename_kind ─────────────────────────────────────────────────────────────
+# ── node_type (entity-kind dispatch) ─────────────────────────────────────────────────────────────
 
 
-def test_rename_kind_concept():
+def test_node_type_concept():
     t = Taxonomy()
     t.concepts[uri("Dog")] = _concept("Dog")
-    assert rename_kind(t, uri("Dog")) == "concept"
+    assert t.node_type(uri("Dog")) == "concept"
 
 
-def test_rename_kind_class():
+def test_node_type_class():
     t = Taxonomy()
     t.owl_classes[uri("Dog")] = RDFClass(uri=uri("Dog"))
-    assert rename_kind(t, uri("Dog")) == "class"
+    assert t.node_type(uri("Dog")) == "class"
 
 
-def test_rename_kind_individual():
+def test_node_type_individual():
     t = Taxonomy()
     t.owl_individuals[uri("Rex")] = OWLIndividual(uri=uri("Rex"))
-    assert rename_kind(t, uri("Rex")) == "individual"
+    assert t.node_type(uri("Rex")) == "individual"
 
 
-def test_rename_kind_property():
+def test_node_type_property():
     t = Taxonomy()
     t.owl_properties[uri("knows")] = OWLProperty(uri=uri("knows"))
-    assert rename_kind(t, uri("knows")) == "property"
+    assert t.node_type(uri("knows")) == "property"
 
 
-def test_rename_kind_promoted():
+def test_node_type_promoted():
     t = Taxonomy()
     t.concepts[uri("Dog")] = _concept("Dog")
     t.owl_classes[uri("Dog")] = RDFClass(uri=uri("Dog"))
-    assert rename_kind(t, uri("Dog")) == "promoted"
+    assert t.node_type(uri("Dog")) == "promoted"
 
 
 # ── count_uri_references routing ──────────────────────────────────────────────

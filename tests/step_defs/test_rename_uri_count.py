@@ -11,7 +11,6 @@ from ster.operations import (
     count_owl_uri_references,
     count_uri_references,
     rename_entity_uri,
-    rename_kind,
 )
 
 scenarios("../features/model/rename_uri_count.feature")
@@ -73,7 +72,7 @@ def given_also_class(ctx: dict, a: str, child: str) -> None:
 
 @when(parsers.parse('I ask for the rename kind of "{name}"'))
 def when_ask_kind(ctx: dict, name: str) -> None:
-    ctx["kind"] = rename_kind(ctx["taxonomy"], _u(name))
+    ctx["kind"] = ctx["taxonomy"].node_type(_u(name))
 
 
 @when(parsers.parse('I rename entity "{old}" to "{new}"'))

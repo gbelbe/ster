@@ -16,6 +16,7 @@ import signal
 import sys
 import threading
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 
 from rich.console import Console
@@ -581,26 +582,47 @@ class TaxonomyViewer:
                 target_path = self.file_path
             target_tax = self._workspace.taxonomies.get(target_path, self.taxonomy)
             store.save(target_tax, target_path)
-            self._status = f"Saved  {target_path.name}"
-            if self._git_manager:
-                self._git_manager.stage_file()  # type: ignore[attr-defined]
-            self._refresh_analysis(target_path)
-            from .. import viz_vowl as _viz
-
-            _viz.push_update(target_tax)
-            from .. import sparql_query as _sq  # noqa: PLC0415
-
-            _warm_paths = (
-                list(self._workspace.taxonomies.keys()) if self._workspace else [target_path]
-            )
-            threading.Thread(
-                target=_sq.warm_graph_caches,
-                args=(_warm_paths,),
-                daemon=True,
-                name="ster-cache-warm",
-            ).start()
+            self._post_save_effects(target_path, target_tax)
         except Exception as exc:
             self._status = f"Error saving: {exc}"
+
+    def _post_save_effects(self, target_path: Path, target_tax: Taxonomy) -> None:
+        """Non-persistence fan-out after a file is written: git stage, viz, analysis, caches.
+
+        Shared by ``_save_file`` and the TaxonomyService path so a mutation routed
+        through the core has the same observable effects as the legacy inline save.
+        """
+        self._status = f"Saved  {target_path.name}"
+        if self._git_manager:
+            self._git_manager.stage_file()  # type: ignore[attr-defined]
+        self._refresh_analysis(target_path)
+        from .. import viz_vowl as _viz
+
+        _viz.push_update(target_tax)
+        from .. import sparql_query as _sq  # noqa: PLC0415
+
+        _warm_paths = list(self._workspace.taxonomies.keys()) if self._workspace else [target_path]
+        threading.Thread(
+            target=_sq.warm_graph_caches,
+            args=(_warm_paths,),
+            daemon=True,
+            name="ster-cache-warm",
+        ).start()
+
+    def _service(self) -> object:
+        """Lazily build the shared TaxonomyService over this viewer's workspace."""
+        svc = getattr(self, "_svc", None)
+        if svc is None:
+            from ..core.service import TaxonomyService
+            from ..core.validation import SkosValidatorAdapter
+
+            class _StorePersistence:
+                def save(self, taxonomy: Taxonomy, path: Path) -> None:
+                    store.save(taxonomy, path)
+
+            svc = TaxonomyService(self._workspace, _StorePersistence(), SkosValidatorAdapter())
+            self._svc = svc
+        return svc
 
     def _open_detail(self) -> None:
         if not (0 <= self._tree.cursor < len(self._tree.flat)):
@@ -2758,33 +2780,53 @@ class TaxonomyViewer:
             return
 
         # ── concept field editing ─────────────────────────────────────────────
-        if not new_value:
+        self._commit_concept_field(f, new_value)
+
+    def _concept_field_command(self, uri: str, ftype: str | None, lang: str, value: str) -> object:
+        """Build the Command for a concept field edit, or None for an unhandled field."""
+        from ..core.commands import SkosSetDefinition, SkosSetLabel, SkosSetScopeNote
+
+        path = self._owner_path(uri)
+        if ftype in ("pref", "alt"):
+            return SkosSetLabel(path, uri, lang, value, ftype)
+        if ftype == "def":
+            return SkosSetDefinition(path, uri, lang, value)
+        if ftype == "scope_note":
+            return SkosSetScopeNote(path, uri, lang, value)
+        return None
+
+    def _commit_concept_field(self, f: DetailField, new_value: str) -> None:
+        """Commit a concept label/definition/scope-note edit via the shared TaxonomyService."""
+        if not new_value or self._detail_uri is None:
             return
         ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
         if ftype == "uri":
             self._start_rename_uri(new_value)
             return
-        try:
-            if ftype == "pref":
-                operations.set_label(
-                    self.taxonomy, self._detail_uri, lang, new_value, LabelType.PREF
-                )
-            elif ftype == "alt":
-                operations.set_label(
-                    self.taxonomy, self._detail_uri, lang, new_value, LabelType.ALT
-                )
-            elif ftype == "def":
-                operations.set_definition(self.taxonomy, self._detail_uri, lang, new_value)
-            elif ftype == "scope_note":
-                concept = self.taxonomy.concepts.get(self._detail_uri)
-                if concept:
-                    concept.scope_notes = [sn for sn in concept.scope_notes if sn.lang != lang]
-                    concept.scope_notes.append(Definition(lang=lang, value=new_value))
-        except SkostaxError:
+        uri = self._detail_uri
+        command = self._concept_field_command(uri, ftype, f.meta.get("lang", ""), new_value)
+        if command is None:
             return
-        self._detail_fields = self._bdf(self._detail_uri)
-        self._save_file()
+        result = self._service().execute(command)  # type: ignore[attr-defined]
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _finish_field_edit(self, result: object, uri: str, target_path: Path) -> None:
+        """Light result handler for in-place field edits: refresh detail, surface validation.
+
+        Unlike _finish_mutation it keeps the cursor/state, but it must still
+        _rebuild() so self.taxonomy re-syncs to the clone the service swapped in.
+        """
+        validation = getattr(result, "validation", None)
+        if result.ok:  # type: ignore[attr-defined]
+            self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+            self._rebuild()  # re-point self.taxonomy at the committed clone
+            if validation and validation.warnings:
+                self._status += f"  ({len(validation.warnings)} warning(s))"
+        elif validation and validation.errors:
+            self._status = validation.errors[0].message
+        else:
+            self._status = result.error or "Edit failed"  # type: ignore[attr-defined]
+        self._detail_fields = self._bdf(uri)
 
     def _commit_scheme_edit(self, f: DetailField, new_value: str) -> None:
         """Commit an edit to a ConceptScheme field."""
@@ -2966,14 +3008,14 @@ class TaxonomyViewer:
         if not new_uri or new_uri == old_uri:
             self._state = DetailState()
             return
-        from ..operations import count_uri_references, rename_kind
+        from ..operations import count_uri_references
 
         ref_count = count_uri_references(self.taxonomy, old_uri)
         self._state = RenameUriConfirmState(
             old_uri=old_uri,
             new_uri=new_uri,
             ref_count=ref_count,
-            kind=rename_kind(self.taxonomy, old_uri),
+            kind=self.taxonomy.node_type(old_uri),
         )
 
     def _commit_ontology_edit(self, f: DetailField, new_value: str) -> None:
@@ -3021,32 +3063,32 @@ class TaxonomyViewer:
             self._field_cursor = 0
             self._state = DetailState()
 
+    def _delete_field_command(self, uri: str, ftype: str | None, lang: str, value: str) -> object:
+        """Build the Command for deleting a concept field, or None if unhandled."""
+        from ..core.commands import SkosRemoveDefinition, SkosRemoveLabel, SkosRemoveScopeNote
+
+        path = self._owner_path(uri)
+        if ftype in ("pref", "alt"):
+            return SkosRemoveLabel(path, uri, lang, value, ftype)
+        if ftype == "def":
+            return SkosRemoveDefinition(path, uri, lang)
+        if ftype == "scope_note":
+            return SkosRemoveScopeNote(path, uri, lang, value)
+        return None
+
     def _delete_field(self, f: DetailField) -> None:
+        """Delete a concept label/definition/scope-note via the shared TaxonomyService."""
         if not self._detail_uri:
             return
-        ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
-        try:
-            if ftype in ("pref", "alt"):
-                lt = LabelType.PREF if ftype == "pref" else LabelType.ALT
-                operations.remove_label(self.taxonomy, self._detail_uri, lang, f.value, lt)
-            elif ftype == "def":
-                concept = self.taxonomy.concepts.get(self._detail_uri)
-                if concept:
-                    concept.definitions = [d for d in concept.definitions if d.lang != lang]
-            elif ftype == "scope_note":
-                concept = self.taxonomy.concepts.get(self._detail_uri)
-                if concept:
-                    concept.scope_notes = [
-                        sn
-                        for sn in concept.scope_notes
-                        if not (sn.lang == lang and sn.value == f.value)
-                    ]
-        except SkostaxError:
+        uri = self._detail_uri
+        command = self._delete_field_command(
+            uri, f.meta.get("type"), f.meta.get("lang", ""), f.value
+        )
+        if command is None:
             return
-        self._detail_fields = self._bdf(self._detail_uri)
+        result = self._service().execute(command)  # type: ignore[attr-defined]
+        self._finish_field_edit(result, uri, self._owner_path(uri))
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file()
 
     _ATTR_TO_SKOS: dict[str, str] = {
         "exact_match": "exactMatch",
@@ -5710,60 +5752,49 @@ class TaxonomyViewer:
         elif key == 27:  # Esc — cancel
             self._state = TreeState() if scs.came_from_tree else DetailState()
 
+    @staticmethod
+    def _read_scheme_form(scs: SchemeCreateState) -> tuple[str, str, str]:
+        """Pull (title, uri, base_uri) out of the scheme-create form fields."""
+        vals = {f.meta.get("field"): f.value.strip() for f in scs.fields}
+        return vals.get("title", ""), vals.get("uri", ""), vals.get("base_uri", "")
+
+    def _scheme_form_error(self, scs: SchemeCreateState, title: str, uri: str) -> str | None:
+        """Validate the scheme-create form; return an error message or None."""
+        if not title:
+            return "Title is required"
+        if not uri:
+            return "URI is required"
+        if "://" not in uri:
+            return "URI must be a full URL (e.g. https://…)"
+        prim_tax = self._workspace.taxonomies.get(self.file_path, self.taxonomy)
+        if uri in prim_tax.schemes:
+            return "Scheme URI already exists"
+        return None
+
     def _submit_scheme_create(self) -> None:
         if not isinstance(self._state, SchemeCreateState):
             return
         scs = self._state
-        title = ""
-        uri = ""
-        base_uri = ""
-
-        for f in scs.fields:
-            fld = f.meta.get("field")
-            if fld == "title":
-                title = f.value.strip()
-            elif fld == "uri":
-                uri = f.value.strip()
-            elif fld == "base_uri":
-                base_uri = f.value.strip()
-
-        if not title:
-            scs.error = "Title is required"
+        title, uri, base_uri = self._read_scheme_form(scs)
+        err = self._scheme_form_error(scs, title, uri)
+        if err:
+            scs.error = err
             return
-        if not uri:
-            scs.error = "URI is required"
-            return
-        if "://" not in uri:
-            scs.error = "URI must be a full URL (e.g. https://…)"
-            return
-        prim_tax = self._workspace.taxonomies.get(self.file_path, self.taxonomy)
-        if uri in prim_tax.schemes:
-            scs.error = "Scheme URI already exists"
-            return
-
         if base_uri and not base_uri.endswith(("/", "#")):
             base_uri += "/"
 
-        try:
-            operations.create_scheme(
-                prim_tax,
-                uri,
-                labels={self.lang: title},
-                base_uri=base_uri,
-                languages=[self.lang],
-            )
-        except SkostaxError as exc:
-            scs.error = str(exc)
+        from ..core.commands import SkosCreateScheme
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosCreateScheme(self.file_path, uri, {self.lang: title}, base_uri, (self.lang,))
+        )
+        if not result.ok:
+            scs.error = result.error or "Create failed"
             return
 
+        self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
         self._rebuild()
-        self._save_file(path=self.file_path)
-
-        # Navigate to the new scheme detail
-        for i, line in enumerate(self._tree.flat):
-            if line.uri == uri:
-                self._tree.cursor = i
-                break
+        self._focus_tree_on(uri)
         self._detail_uri = uri
         self._detail_fields = build_scheme_fields(self.taxonomy, self.lang, scheme_uri=uri)
         self._field_cursor = 0
@@ -6052,22 +6083,33 @@ class TaxonomyViewer:
         )
         _draw_bar(stdscr, rows - 1, 0, width, hint, dim=True)
 
+    def _perform_ontology_rename(self, cs: OntologyRenameConfirmState) -> None:
+        """Rename the ontology base URI via the service, then return to the global view."""
+        from ..core.commands import OntoRenameUri
+
+        new_uri = cs.new_base.rstrip("#/")
+        new_sep = cs.new_base[-1] if cs.new_base and cs.new_base[-1] in ("#", "/") else "#"
+        target_path = self.file_path
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OntoRenameUri(target_path, new_uri, new_sep)
+        )
+        if not result.ok:
+            self._status = result.error or "Ontology rename failed"
+            self._state = DetailState()
+            return
+        self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+        self._rebuild()
+        self._detail_fields = self._bgf()
+        self._field_cursor = 0
+        self._state = DetailState()
+
     def _on_ontology_rename_confirm(self, key: int) -> None:
         if not isinstance(self._state, OntologyRenameConfirmState):
             return
         cs = self._state
 
         if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
-            from ..operations import rename_ontology_uri
-
-            new_uri = cs.new_base.rstrip("#/")
-            new_sep = cs.new_base[-1] if cs.new_base and cs.new_base[-1] in ("#", "/") else "#"
-            rename_ontology_uri(self.taxonomy, new_uri, new_sep)
-            self._rebuild()
-            self._save_file()
-            self._detail_fields = self._bgf()
-            self._field_cursor = 0
-            self._state = DetailState()
+            self._perform_ontology_rename(cs)
 
         elif key in (ord("n"), 27):  # Esc / n — go back to edit form
             old_uri = cs.old_base.rstrip("#/")
@@ -6260,35 +6302,35 @@ class TaxonomyViewer:
             dim=True,
         )
 
+    def _detail_builder_for(self, uri: str) -> Callable[[str], list[DetailField]]:
+        """The detail-field builder matching *uri*'s node type (concept/class/…)."""
+        return {
+            "concept": self._bdf,
+            "promoted": self._bpdf,
+            "individual": self._bidf,
+            "property": self._bpropf,
+        }.get(self.taxonomy.node_type(uri), self._bcdf)
+
     def _on_rename_uri_confirm(self, key: int) -> None:
         if not isinstance(self._state, RenameUriConfirmState):
             return
         rs = self._state
 
         if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
-            from ..exceptions import URIAlreadyExistsError
-            from ..operations import rename_entity_uri
+            from ..core.commands import RenameEntity
 
-            try:
-                rename_entity_uri(self.taxonomy, rs.old_uri, rs.new_uri)
-            except URIAlreadyExistsError as exc:
-                self._status = str(exc)
+            target_path = self._owner_path(rs.old_uri)
+            result = self._service().execute(  # type: ignore[attr-defined]
+                RenameEntity(target_path, rs.old_uri, rs.new_uri)
+            )
+            if not result.ok:
+                self._status = result.error or "Rename failed"
                 self._state = DetailState()
                 return
+            self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
             self._rebuild()
-            self._save_file()
             self._detail_uri = rs.new_uri
-            node_t = self.taxonomy.node_type(rs.new_uri)
-            if node_t == "concept":
-                self._detail_fields = self._bdf(rs.new_uri)
-            elif node_t == "promoted":
-                self._detail_fields = self._bpdf(rs.new_uri)
-            elif node_t == "individual":
-                self._detail_fields = self._bidf(rs.new_uri)
-            elif node_t == "property":
-                self._detail_fields = self._bpropf(rs.new_uri)
-            else:
-                self._detail_fields = self._bcdf(rs.new_uri)
+            self._detail_fields = self._detail_builder_for(rs.new_uri)(rs.new_uri)
             self._field_cursor = 0
             self._state = DetailState()
 
@@ -6387,16 +6429,19 @@ class TaxonomyViewer:
 
     def _on_confirm_delete(self, key: int) -> None:
         if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
+            from ..core.commands import SkosRemoveConcept
+
             target_tax, target_path = self._individual_taxonomy_for(self._detail_uri)
             concept = target_tax.concepts.get(self._detail_uri) if self._detail_uri else None
             has_children = bool(concept and concept.narrower)
-            try:
-                operations.remove_concept(target_tax, self._detail_uri or "", cascade=has_children)
-            except SkostaxError as exc:
-                self._status = str(exc)
+            result = self._service().execute(  # type: ignore[attr-defined]
+                SkosRemoveConcept(target_path, self._detail_uri or "", cascade=has_children)
+            )
+            if not result.ok:
+                self._status = result.error or "Delete failed"
                 self._state = DetailState()
                 return
-            self._save_file(path=target_path)
+            self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
             self._rebuild()
             self._history.clear()
             self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
@@ -6569,6 +6614,26 @@ class TaxonomyViewer:
 
         _draw_bar(stdscr, rows - 1, x0, width, " y/Enter: confirm   Esc: back ", dim=True)
 
+    def _perform_class_delete(self, ds: DeleteClassChoiceState) -> None:
+        """Delete the chosen OWL class via the service and return to the tree."""
+        from ..core.commands import OwlDeleteClass
+
+        target_path = self._owner_path(ds.class_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlDeleteClass(target_path, ds.class_uri, self._DELETE_CLASS_MODES[ds.cursor])
+        )
+        if not result.ok:
+            self._status = result.error or "Delete failed"
+            self._state = DetailState()
+            return
+        self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+        self._rebuild()
+        self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+        self._detail_uri = _GLOBAL_URI
+        self._detail_fields = self._bgf()
+        self._field_cursor = 0
+        self._state = TreeState()
+
     def _on_delete_class_confirm(self, key: int) -> None:
         if not isinstance(self._state, DeleteClassChoiceState):
             return
@@ -6576,17 +6641,7 @@ class TaxonomyViewer:
 
         if ds.confirming:
             if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
-                from ..operations import delete_owl_class
-
-                mode = self._DELETE_CLASS_MODES[ds.cursor]
-                delete_owl_class(self.taxonomy, ds.class_uri, mode=mode)
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
+                self._perform_class_delete(ds)
             elif key == 27:  # Esc → back to choice
                 ds.confirming = False
         else:
@@ -7144,38 +7199,62 @@ class TaxonomyViewer:
         candidates.append(("__BROWSE_EXT__", "  🌐  Browse external ontology…"))
         return candidates
 
+    def _owner_path(self, uri: str) -> Path:
+        """The file that owns *uri* in the workspace, falling back to the primary file."""
+        return (self._workspace.uri_to_file(uri) if self._workspace else None) or self.file_path
+
+    def _focus_tree_on(self, uri: str) -> None:
+        """Move the tree cursor to the row for *uri* (no-op if not present)."""
+        for i, line in enumerate(self._tree.flat):
+            if line.uri == uri:
+                self._tree.cursor = i
+                break
+
+    def _finish_mutation(
+        self,
+        result: object,
+        source_uri: str,
+        target_path: Path,
+        build_detail: Callable[[str], list[DetailField]],
+    ) -> None:
+        """Apply a CommandResult: save effects + refocus on success, or show why it failed.
+
+        Shared by every service-routed mutation handler; *build_detail* is the
+        layer-specific detail builder (``_bcdf`` for classes, ``_bdf`` for concepts).
+        """
+        validation = getattr(result, "validation", None)
+        if result.ok:  # type: ignore[attr-defined]
+            self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+            if validation and validation.warnings:
+                self._status += f"  ({len(validation.warnings)} warning(s))"
+            self._rebuild()
+            self._focus_tree_on(source_uri)
+            self._field_cursor = 0
+            self._history.clear()
+        elif validation and validation.errors:
+            self._status = validation.errors[0].message  # the blocking issue
+        else:
+            self._status = result.error or "Operation failed"  # type: ignore[attr-defined]
+        self._detail_uri = source_uri
+        self._detail_fields = build_detail(source_uri)
+        self._state = DetailState()
+
     def _confirm_owl_reparent(self, new_parent_uri: str | None, replace: bool) -> None:
-        """Set (or add) subClassOf for the source OWL class, then return to detail."""
+        """Reparent the source OWL class via the shared TaxonomyService, then return to detail."""
         if not isinstance(self._state, MovePickState):
             return
         source_uri = self._state.source_uri
-        rdf_class = self.taxonomy.owl_classes.get(source_uri)
-        if not rdf_class:
+        if source_uri not in self.taxonomy.owl_classes:
             self._state = DetailState()
             return
-        if replace:
-            rdf_class.sub_class_of = [new_parent_uri] if new_parent_uri else []
-        else:
-            if new_parent_uri:
-                from ..exceptions import CircularHierarchyError, ClassNotFoundError
-                from ..operations import add_subclass_of
 
-                try:
-                    add_subclass_of(self.taxonomy, source_uri, new_parent_uri)
-                except (CircularHierarchyError, ClassNotFoundError):
-                    self._state = DetailState()
-                    return
-        self._rebuild()
-        self._save_file()
-        for i, line in enumerate(self._tree.flat):
-            if line.uri == source_uri:
-                self._tree.cursor = i
-                break
-        self._detail_uri = source_uri
-        self._detail_fields = self._bcdf(source_uri)
-        self._field_cursor = 0
-        self._history.clear()
-        self._state = DetailState()
+        from ..core.commands import OwlMoveClass
+
+        target_path = self._owner_path(source_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlMoveClass(target_path, source_uri, new_parent_uri, replace)
+        )
+        self._finish_mutation(result, source_uri, target_path, self._bcdf)
 
     def _make_ext_ns_pick_state(self, source_uri: str) -> MovePickState:
         """Return a MovePickState for the external-namespace picker."""
@@ -7428,28 +7507,18 @@ class TaxonomyViewer:
             ms.scroll = 0
 
     def _confirm_move(self, target_uri: str | None) -> None:
+        """Move the source SKOS concept under *target_uri* via the shared TaxonomyService."""
         if not isinstance(self._state, MovePickState):
             return
         source_uri = self._state.source_uri
-        try:
-            operations.move_concept(self.taxonomy, source_uri, target_uri)
-        except SkostaxError as exc:
-            self._status = str(exc)
-            self._detail_uri = source_uri
-            self._detail_fields = self._bdf(self._detail_uri)
-            self._state = DetailState()
-            return
-        self._rebuild()
-        self._save_file()
-        for i, line in enumerate(self._tree.flat):
-            if line.uri == source_uri:
-                self._tree.cursor = i
-                break
-        self._detail_uri = source_uri
-        self._detail_fields = self._bdf(source_uri)
-        self._field_cursor = 0
-        self._history.clear()
-        self._state = DetailState()
+
+        from ..core.commands import SkosMoveConcept
+
+        target_path = self._owner_path(source_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosMoveConcept(target_path, source_uri, target_uri)
+        )
+        self._finish_mutation(result, source_uri, target_path, self._bdf)
 
     def _on_link_pick(self, key: int, rows: int) -> None:
         if not isinstance(self._state, MovePickState):
@@ -8263,52 +8332,32 @@ class TaxonomyViewer:
         self._save_file()
 
     def _confirm_related(self, target_uri: str) -> None:
+        """Add a skos:related link via the shared TaxonomyService."""
         if not isinstance(self._state, MovePickState):
             return
         src = self._state.source_uri
-        try:
-            operations.add_related(self.taxonomy, src, target_uri)
-        except SkostaxError as exc:
-            self._status = str(exc)
-            self._detail_uri = src
-            self._detail_fields = self._bdf(self._detail_uri)
-            self._state = DetailState()
-            return
-        self._rebuild()
-        self._save_file()
-        for i, line in enumerate(self._tree.flat):
-            if line.uri == src:
-                self._tree.cursor = i
-                break
-        self._detail_uri = src
-        self._detail_fields = self._bdf(src)
-        self._field_cursor = 0
-        self._history.clear()
-        self._state = DetailState()
+
+        from ..core.commands import SkosAddRelated
+
+        target_path = self._owner_path(src)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosAddRelated(target_path, src, target_uri)
+        )
+        self._finish_mutation(result, src, target_path, self._bdf)
 
     def _confirm_link(self, target_uri: str) -> None:
+        """Add an extra skos:broader parent (polyhierarchy) via the shared TaxonomyService."""
         if not isinstance(self._state, MovePickState):
             return
         src = self._state.source_uri
-        try:
-            operations.add_broader_link(self.taxonomy, src, target_uri)
-        except SkostaxError as exc:
-            self._status = str(exc)
-            self._detail_uri = src
-            self._detail_fields = self._bdf(src)
-            self._state = DetailState()
-            return
-        self._rebuild()
-        self._save_file()
-        for i, line in enumerate(self._tree.flat):
-            if line.uri == src:
-                self._tree.cursor = i
-                break
-        self._detail_uri = src
-        self._detail_fields = self._bdf(src)
-        self._field_cursor = 0
-        self._history.clear()
-        self._state = DetailState()
+
+        from ..core.commands import SkosMoveConcept
+
+        target_path = self._owner_path(src)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosMoveConcept(target_path, src, target_uri, replace=False)
+        )
+        self._finish_mutation(result, src, target_path, self._bdf)
 
     # ─────────────────── MAPPING (cross-scheme) pickers ─────────────────────
 

@@ -202,3 +202,19 @@ type = "forbidden"
 source_modules = ["ster"]
 forbidden_modules = ["fastapi"]
 ignore_imports = ["ster.api -> fastapi"]
+
+# ── Layering (core-service refactor) ─────────────────────────────────────────
+# The application core stays front-end agnostic; the domain stays below the core.
+# See docs/architecture/module-layout.md.
+
+[[tool.importlinter.contracts]]
+name = "core is front-end agnostic"
+type = "forbidden"
+source_modules = ["ster.core"]
+forbidden_modules = ["ster.nav", "ster.cli", "ster.api"]
+
+[[tool.importlinter.contracts]]
+name = "domain does not depend on the core"
+type = "forbidden"
+source_modules = ["ster.operations"]
+forbidden_modules = ["ster.core"]
