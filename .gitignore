@@ -13,6 +13,12 @@ coverage.xml
 htmlcov/
 *.egg
 RELEASE_NOTES.md
+.DS_Store
+
+# Internal-only docs — must never reach the public mirror.
+# See scripts/check_no_internal_docs.sh (enforced by the "Leak scan" workflow).
+docs/internal/
+*.internal.md
 
 # Node / JS tooling
 node_modules/

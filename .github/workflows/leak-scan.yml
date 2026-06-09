@@ -1,0 +1,36 @@
+name: Leak scan (docs + secrets)
+
+# Two guards before code can reach the public mirror:
+#   - no-internal-docs: internal-only docs must not be tracked on main
+#   - secrets:          no credentials/keys committed (gitleaks)
+# Runs on the private repo (catch it before mirroring) and the public one (backstop).
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  no-internal-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure no internal-only docs are tracked
+        run: bash scripts/check_no_internal_docs.sh
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          VER=8.18.4
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+      - name: Scan working tree for secrets
+        run: gitleaks detect --no-git --redact --verbose

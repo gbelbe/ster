@@ -42,7 +42,7 @@ passed the local CI gate (see step 4).
 
 ## 3. Create a branch
 
-Always work on a feature branch, never directly on `master`:
+Always work on a feature branch, never directly on `main`:
 
 ```bash
 git checkout -b feat/my-feature
@@ -106,12 +106,19 @@ uv run ruff format .
 
 ## 5. Commit
 
-Write clear, focused commits. One logical change per commit.
+Write clear, focused commits. One logical change per commit. Sign off every
+commit under the **Developer Certificate of Origin** (DCO) with `-s`:
 
 ```bash
 git add path/to/changed/file.py
-git commit -m "feat(module): short description of what and why"
+git commit -s -m "feat(module): short description of what and why"
 ```
+
+`-s` appends a `Signed-off-by: Your Name <you@example.com>` line, certifying you
+have the right to submit the change under the project's [LICENSE](LICENSE) (see
+<https://developercertificate.org/>). The **DCO** check rejects any PR whose
+commits are not signed off — fix an existing branch with `git rebase --signoff main`.
+Commits should also be **GPG-signed** (`-S`).
 
 Commit message conventions:
 
@@ -127,7 +134,7 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
 
 ## 6. Open a pull request
 
-Push your branch and open a PR against `master`:
+Push your branch and open a PR against `main`:
 
 ```bash
 git push -u origin feat/my-feature
@@ -223,6 +230,19 @@ bash scripts/ci.sh
 
 Only use `--ignore-vuln` for CVEs that affect pip itself (not ster's
 dependencies), and only after confirming the CVE does not apply.
+
+---
+
+## Internal docs (maintainers)
+
+`ster` is developed in a private repository and mirrored to this public one, so
+**anything tracked on `main` becomes public**. Keep internal-only material out of
+the tracked tree — put it in `docs/internal/` (gitignored) or on a private-only
+branch that is never pushed to the public remote. The **Leak scan** workflow
+(`scripts/check_no_internal_docs.sh`) fails the build if a tracked file lives
+under `docs/internal/` / `*.internal.md`, or carries the `STER-INTERNAL-ONLY`
+marker. External contributions are integrated *through* the private repo via
+`bash scripts/ster-pr.sh <PR-number>`.
 
 ---
 
