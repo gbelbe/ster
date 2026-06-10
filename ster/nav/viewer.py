@@ -148,7 +148,6 @@ from .draw import (  # noqa: F401
     _C_SH_VAR,
     _C_TOP_CONCEPT,
     _draw_bar,
-    _draw_text_input,
     _init_colors,
     _render_line_with_match,
     render_tree_col,
@@ -1419,18 +1418,6 @@ class TaxonomyViewer:
             self._tree.search.matches
         )
         self._tree.cursor = self._tree.search.matches[self._tree.search.current_idx]
-
-    def _render_line_with_match(
-        self,
-        stdscr: curses.window,
-        y: int,
-        x0: int,
-        text: str,
-        width: int,
-        base_attr: int,
-        is_current_match: bool = False,
-    ) -> None:
-        _render_line_with_match(stdscr, y, x0, text, width, base_attr, self._tree.search.pattern)
 
     # ─────────────────────────── key reading ─────────────────────────────────
 
@@ -7736,41 +7723,6 @@ class TaxonomyViewer:
             ms.filter_text += chr(key)
             ms.cursor = 0
             ms.scroll = 0
-
-    def _build_range_class_candidates(self, prop: object) -> list[tuple[str, str]]:
-        """Build a hierarchically-indented class list for the range of *prop*.
-
-        If prop has no declared ranges, all known OWL classes are offered.
-        Subclasses are indented under their parent with two spaces per level.
-        The root class is always shown even if not explicitly in owl_classes.
-        """
-        from ..model import OWLProperty as _OWLProp
-
-        range_roots: list[str] = (
-            list(prop.ranges)
-            if isinstance(prop, _OWLProp) and prop.ranges
-            else sorted(self.taxonomy.owl_classes)
-        )
-
-        seen: set[str] = set()
-        candidates: list[tuple[str, str]] = []
-
-        def visit(cls_uri: str, depth: int) -> None:
-            if cls_uri in seen:
-                return
-            seen.add(cls_uri)
-            cls = self.taxonomy.owl_classes.get(cls_uri)
-            lbl = cls.label(self.lang) if cls else cls_uri
-            candidates.append((cls_uri, "  " * depth + lbl))
-            for sub_uri in sorted(
-                u for u, c in self.taxonomy.owl_classes.items() if cls_uri in c.sub_class_of
-            ):
-                visit(sub_uri, depth + 1)
-
-        for root in range_roots:
-            visit(root, 0)  # always visit — visit() handles missing owl_classes entry
-
-        return candidates
 
     def _make_class_or_individual_state(
         self,

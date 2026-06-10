@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .draw import _draw_bar, _draw_text_input, _init_colors, render_tree_col  # noqa: F401
+from .draw import _draw_bar, _init_colors, render_tree_col  # noqa: F401
 from .logic import (  # noqa: F401
     _ACTION_ADD_SCHEME,
     _FILE_URI_PREFIX,

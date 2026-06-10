@@ -39,11 +39,6 @@ class CircularHierarchyError(SkostaxError):
         )
 
 
-class DuplicatePrefLabelError(SkostaxError):
-    def __init__(self, uri: str, lang: str) -> None:
-        super().__init__(f"Concept {uri!r} already has a prefLabel for lang {lang!r}.")
-
-
 class RelatedHierarchyConflictError(SkostaxError):
     def __init__(self, uri_a: str, uri_b: str) -> None:
         super().__init__(

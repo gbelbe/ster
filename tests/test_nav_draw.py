@@ -513,10 +513,6 @@ def test_init_input_locale_swallows_error(monkeypatch: Any) -> None:
     vmod._init_input_locale()  # must swallow the error, not raise
 
 
-def test_render_line_with_match(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._render_line_with_match(scr, 0, 0, "Top Concept", scr.COLS, 0)  # type: ignore[arg-type]
-
-
 # ── ontology domain / prefix single-field edit ────────────────────────────────
 
 

@@ -501,31 +501,3 @@ def render_tree_col(
 
 
 # ──────────────────────────── AI taxonomy wizard helpers ─────────────────────
-
-
-def _draw_text_input(
-    stdscr: curses.window,
-    rows: int,
-    cols: int,
-    prompt: str,
-    buffer: str,
-    pos: int,
-    error: str = "",
-    hint: str = "",
-) -> None:
-    """Draw a simple centred text-input widget."""
-    try:
-        row = rows // 2 - 2
-        stdscr.addstr(row, 2, prompt[: cols - 3], curses.A_BOLD)
-        row += 2
-        before = buffer[:pos]
-        after = buffer[pos:]
-        line = f"  {before}▌{after}"
-        stdscr.addstr(row, 0, line[: cols - 1], curses.color_pair(_C_SEL) | curses.A_BOLD)
-        row += 1
-        if error:
-            stdscr.addstr(row + 1, 2, error[: cols - 3], curses.color_pair(_C_SEL) | curses.A_BOLD)
-        if hint:
-            _draw_bar(stdscr, rows - 1, 0, cols, hint, dim=True)
-    except curses.error:
-        pass

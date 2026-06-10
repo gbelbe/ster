@@ -20,19 +20,6 @@ from .ontology_imports import (
 console = Console()
 
 
-def _cache_files() -> dict[str, Path]:
-    """Return {namespace_url: cache_path} for all cached ontologies."""
-    if not _DEFAULT_CACHE_DIR.exists():
-        return {}
-    result: dict[str, Path] = {}
-    for p in sorted(_DEFAULT_CACHE_DIR.glob("*.ttl")):
-        # Reconstruct the namespace URL from the filename slug
-        # slug = namespace_url.replace("https://", "").replace("http://", "").replace("/", "_")
-        # We store the full URL only via slug reconstruction — best-effort reverse
-        result[p.stem] = p
-    return result
-
-
 def _cached_namespaces() -> list[tuple[str, Path, int]]:
     """Return list of (namespace_url_guess, path, triple_count) from cache."""
     if not _DEFAULT_CACHE_DIR.exists():
