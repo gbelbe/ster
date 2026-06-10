@@ -216,5 +216,18 @@ forbidden_modules = ["ster.nav", "ster.cli", "ster.api"]
 [[tool.importlinter.contracts]]
 name = "domain does not depend on the core"
 type = "forbidden"
-source_modules = ["ster.operations"]
+source_modules = ["ster.operations", "ster.domain"]
 forbidden_modules = ["ster.core"]
+
+# The domain leaf layers (skos / owl / onto) stay independent of one another;
+# only the cross dispatcher may reach into skos + owl. See module-layout.md.
+[[tool.importlinter.contracts]]
+name = "domain leaf layers are independent"
+type = "independence"
+modules = ["ster.domain.skos", "ster.domain.owl", "ster.domain.onto"]
+
+[[tool.importlinter.contracts]]
+name = "domain leaf layers do not import the cross dispatcher"
+type = "forbidden"
+source_modules = ["ster.domain.skos", "ster.domain.owl", "ster.domain.onto"]
+forbidden_modules = ["ster.domain.cross"]
