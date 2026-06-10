@@ -8,8 +8,10 @@ from pathlib import Path
 
 from ster import store
 from ster.core.commands import (
+    ChangeSet,
     OntoRenameUri,
     OwlDeleteClass,
+    OwlDeleteProperty,
     OwlMoveClass,
     RenameEntity,
     SkosAddRelated,
@@ -25,7 +27,16 @@ from ster.core.commands import (
 )
 from ster.core.service import TaxonomyService
 from ster.core.validation import SkosValidatorAdapter
-from ster.model import Concept, ConceptScheme, Label, LabelType, RDFClass, Taxonomy
+from ster.model import (
+    Concept,
+    ConceptScheme,
+    Label,
+    LabelType,
+    OWLIndividual,
+    OWLProperty,
+    RDFClass,
+    Taxonomy,
+)
 
 NS = "https://ex.org/t/"
 PATH = Path("/tmp/onto.ttl")
@@ -343,6 +354,39 @@ def test_create_scheme_adds_scheme() -> None:
     assert len(pers.saved) == 1
 
 
+# ── OwlDeleteProperty (declaration only vs clear-values-then-delete) ───────────
+
+
+def _service_with_property() -> tuple[TaxonomyService, _FakeWorkspace, _FakePersistence]:
+    svc, ws, pers = _service()
+    tax = ws.taxonomies[PATH]
+    tax.owl_properties[f"{NS}hasColor"] = OWLProperty(
+        uri=f"{NS}hasColor", prop_type="DatatypeProperty"
+    )
+    tax.owl_individuals[f"{NS}d"] = OWLIndividual(
+        uri=f"{NS}d", property_values=[(f"{NS}hasColor", f"{NS}red")]
+    )
+    return svc, ws, pers
+
+
+def test_delete_property_declaration_only_keeps_values() -> None:
+    svc, ws, _ = _service_with_property()
+    result = svc.execute(OwlDeleteProperty(PATH, f"{NS}hasColor", clear_values=False))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert f"{NS}hasColor" not in tax.owl_properties
+    assert tax.owl_individuals[f"{NS}d"].property_values == [(f"{NS}hasColor", f"{NS}red")]
+
+
+def test_delete_property_clear_values_strips_them_first() -> None:
+    svc, ws, _ = _service_with_property()
+    result = svc.execute(OwlDeleteProperty(PATH, f"{NS}hasColor", clear_values=True))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert f"{NS}hasColor" not in tax.owl_properties
+    assert tax.owl_individuals[f"{NS}d"].property_values == []
+
+
 # ── OntoRenameUri (ontology-level) ─────────────────────────────────────────────
 
 
@@ -489,3 +533,41 @@ def test_concurrent_executes_do_not_lose_updates() -> None:
 
     assert svc.version(PATH) == 8  # every commit counted, no lost update
     assert len(pers.saved) == 8
+
+
+# ── ChangeSet (atomic batch transaction) ───────────────────────────────────────
+
+
+def test_changeset_applies_all_commands_atomically() -> None:
+    svc, ws, pers = _skos_service()
+    cs = ChangeSet(
+        PATH,
+        (
+            SkosSetDefinition(PATH, f"{NS}Top", "en", "the top"),
+            SkosSetDefinition(PATH, f"{NS}Child", "en", "a child"),
+        ),
+    )
+    result = svc.execute(cs)
+    assert result.ok
+    assert svc.version(PATH) == 1  # one version bump for the whole batch
+    assert len(pers.saved) == 1  # persisted once
+    tax = ws.taxonomies[PATH]
+    assert any(d.value == "the top" for d in tax.concepts[f"{NS}Top"].definitions)
+    assert any(d.value == "a child" for d in tax.concepts[f"{NS}Child"].definitions)
+
+
+def test_changeset_rolls_back_entirely_when_one_command_fails() -> None:
+    svc, ws, pers = _skos_service()
+    cs = ChangeSet(
+        PATH,
+        (
+            SkosSetDefinition(PATH, f"{NS}Top", "en", "applied first"),
+            SkosRemoveConcept(PATH, f"{NS}DoesNotExist"),  # raises ConceptNotFoundError
+        ),
+    )
+    result = svc.execute(cs)
+    assert result.status == "failed"
+    assert svc.version(PATH) == 0  # no bump
+    assert pers.saved == []  # nothing persisted
+    # the first command's effect was rolled back with the batch
+    assert ws.taxonomies[PATH].concepts[f"{NS}Top"].definitions == []

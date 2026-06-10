@@ -3618,29 +3618,7 @@ class TaxonomyViewer:
                         self._save_file()
 
         elif action == "delete_property":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
-                from ..operations import find_individuals_using_property
-
-                prop_uri = self._detail_uri
-                impacted = find_individuals_using_property(self.taxonomy, prop_uri)
-                if impacted:
-                    self._state = PropertyImpactState(
-                        prop_uri=prop_uri,
-                        affected_uris=impacted,
-                        cursor=0,
-                        return_to_uri=prop_uri,
-                    )
-                else:
-                    from ..operations import delete_owl_property
-
-                    delete_owl_property(self.taxonomy, prop_uri)
-                    self._rebuild()
-                    self._save_file()
-                    self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                    self._detail_uri = _GLOBAL_URI
-                    self._detail_fields = self._bgf()
-                    self._field_cursor = 0
-                    self._state = TreeState()
+            self._on_delete_property_action()
 
         elif action == "add_class_property":
             m = meta or {}
@@ -6937,6 +6915,42 @@ class TaxonomyViewer:
             dim=True,
         )
 
+    def _on_delete_property_action(self) -> None:
+        """Delete the focused OWL property: show the impact dialog if individuals use it,
+        otherwise delete it directly (both routes go through the service)."""
+        if not (self._detail_uri and self._detail_uri in self.taxonomy.owl_properties):
+            return
+        from ..operations import find_individuals_using_property
+
+        prop_uri = self._detail_uri
+        impacted = find_individuals_using_property(self.taxonomy, prop_uri)
+        if impacted:
+            self._state = PropertyImpactState(
+                prop_uri=prop_uri, affected_uris=impacted, cursor=0, return_to_uri=prop_uri
+            )
+        else:
+            self._perform_property_delete(prop_uri, clear_values=False)
+
+    def _perform_property_delete(self, prop_uri: str, *, clear_values: bool) -> None:
+        """Delete an OWL property via the service (optionally clearing its values first)."""
+        from ..core.commands import OwlDeleteProperty
+
+        target_path = self._owner_path(prop_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlDeleteProperty(target_path, prop_uri, clear_values=clear_values)
+        )
+        if not result.ok:
+            self._status = result.error or "Delete failed"
+            self._state = TreeState()
+            return
+        self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+        self._rebuild()
+        self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+        self._detail_uri = _GLOBAL_URI
+        self._detail_fields = self._bgf()
+        self._field_cursor = 0
+        self._state = TreeState()
+
     def _on_property_impact_confirm(self, key: int) -> None:
         if not isinstance(self._state, PropertyImpactState):
             return
@@ -6947,31 +6961,9 @@ class TaxonomyViewer:
         elif key in (curses.KEY_DOWN, ord("j")):
             ps.cursor = min(2, ps.cursor + 1)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if ps.cursor == 0:
-                # Keep values — delete property declaration only
-                from ..operations import delete_owl_property
-
-                delete_owl_property(self.taxonomy, ps.prop_uri)
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
-            elif ps.cursor == 1:
-                # Remove values then delete
-                from ..operations import clear_property_values, delete_owl_property
-
-                clear_property_values(self.taxonomy, ps.prop_uri)
-                delete_owl_property(self.taxonomy, ps.prop_uri)
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
+            if ps.cursor in (0, 1):
+                # 0 = delete declaration only; 1 = clear values then delete
+                self._perform_property_delete(ps.prop_uri, clear_values=ps.cursor == 1)
             else:
                 # Cancel — return to property detail
                 self._detail_uri = ps.return_to_uri

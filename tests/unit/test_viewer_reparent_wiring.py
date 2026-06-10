@@ -20,8 +20,10 @@ from ster.nav.state import (
     DetailState,
     MovePickState,
     OntologyRenameConfirmState,
+    PropertyImpactState,
     RenameUriConfirmState,
     SchemeCreateState,
+    TreeState,
 )
 from ster.nav.viewer import TaxonomyViewer
 
@@ -345,3 +347,59 @@ def test_submit_scheme_create_routes_through_service(tmp_path: Path) -> None:
     assert f"{NS}Scheme2" in v.taxonomy.schemes
     assert f"{NS}Scheme2" in store.load(v.file_path).schemes
     assert isinstance(v._state, DetailState)
+
+
+def test_perform_property_delete_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual, OWLProperty
+
+    v = _viewer(tmp_path)  # OWL taxonomy
+    prop = f"{NS}hasColor"
+    v.taxonomy.owl_properties[prop] = OWLProperty(uri=prop, prop_type="DatatypeProperty")
+    v.taxonomy.owl_individuals[f"{NS}d"] = OWLIndividual(
+        uri=f"{NS}d", property_values=[(prop, f"{NS}red")]
+    )
+    store.save(v.taxonomy, v.file_path)
+    v._perform_property_delete(prop, clear_values=True)
+    assert prop not in v.taxonomy.owl_properties
+    assert prop not in store.load(v.file_path).owl_properties
+    assert v.taxonomy.owl_individuals[f"{NS}d"].property_values == []
+
+
+def test_property_impact_confirm_deletes_via_service(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    prop = f"{NS}hasColor"
+    v.taxonomy.owl_properties[prop] = OWLProperty(uri=prop, prop_type="ObjectProperty")
+    store.save(v.taxonomy, v.file_path)
+    v._state = PropertyImpactState(prop_uri=prop, return_to_uri=prop, cursor=0)
+    v._on_property_impact_confirm(ord("\n"))  # Enter on "keep values, delete declaration"
+    assert prop not in v.taxonomy.owl_properties
+    assert prop not in store.load(v.file_path).owl_properties
+    assert isinstance(v._state, TreeState)
+
+
+def test_perform_property_delete_surfaces_service_error(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    prop = f"{NS}hasColor"
+    v.taxonomy.owl_properties[prop] = OWLProperty(uri=prop, prop_type="ObjectProperty")
+    failed = SimpleNamespace(ok=False, error="cannot delete", validation=None)
+    v._service = lambda: SimpleNamespace(execute=lambda _cmd: failed)  # type: ignore[method-assign]
+    v._perform_property_delete(prop, clear_values=False)
+    assert v._status == "cannot delete"
+    assert isinstance(v._state, TreeState)
+
+
+def test_delete_property_no_impact_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    prop = f"{NS}orphanProp"  # declared but used by no individual → no impact dialog
+    v.taxonomy.owl_properties[prop] = OWLProperty(uri=prop, prop_type="ObjectProperty")
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = prop
+    v._trigger_action("delete_property")
+    assert prop not in v.taxonomy.owl_properties
+    assert prop not in store.load(v.file_path).owl_properties

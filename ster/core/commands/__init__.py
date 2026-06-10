@@ -15,10 +15,10 @@ import …`` regardless of which layer module a command lives in.
 
 from __future__ import annotations
 
-from .base import Command
+from .base import ChangeSet, Command
 from .cross import RenameEntity
 from .onto import OntoRenameUri
-from .owl import OwlDeleteClass, OwlMoveClass
+from .owl import OwlDeleteClass, OwlDeleteProperty, OwlMoveClass
 from .skos import (
     SkosAddRelated,
     SkosCreateScheme,
@@ -33,9 +33,11 @@ from .skos import (
 )
 
 __all__ = [
+    "ChangeSet",
     "Command",
     "OntoRenameUri",
     "OwlDeleteClass",
+    "OwlDeleteProperty",
     "OwlMoveClass",
     "RenameEntity",
     "SkosAddRelated",
