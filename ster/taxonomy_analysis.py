@@ -36,7 +36,6 @@ _SEVERITY_RANK = {SEVERITY_ERROR: 0, SEVERITY_WARNING: 1, SEVERITY_INFO: 2}
 ISSUE_DISPLAY_NAMES: dict[str, str] = {
     "missing_pref_label": "No prefLabel",
     "missing_pref_label_lang": "prefLabel missing",
-    "missing_definition": "No definition",
     "missing_scope_note": "No scopeNote",
     "broken_broader": "Broken broader",
     "broken_narrower": "Broken narrower",
@@ -271,20 +270,6 @@ def _detect_missing_pref_label_lang(
     return issues
 
 
-def _detect_missing_definition(
-    taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
-) -> list[TaxonomyIssue]:
-    issues = []
-    for uri in concept_uris:
-        c = taxonomy.concepts.get(uri)
-        if c and not c.definitions:
-            h = taxonomy.uri_to_handle(uri) or c.local_name
-            issues.append(
-                TaxonomyIssue("missing_definition", SEVERITY_INFO, uri, f"No definition  [{h}]")
-            )
-    return issues
-
-
 def _detect_missing_scope_note(
     taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
 ) -> list[TaxonomyIssue]:
@@ -515,9 +500,12 @@ ISSUE_DETECTORS: list[IssueDetector] = [
     _detect_broken_broader,  # ERROR — broken skos:broader link
     _detect_circular_hierarchy,  # ERROR — skos:narrower cycle
     _detect_missing_pref_label,  # ERROR — mandatory SKOS property
+    _detect_alt_same_as_pref,  # ERROR — skos:altLabel equals skos:prefLabel (same lang)
     _detect_broken_narrower,  # WARNING — broken skos:narrower link
     _detect_broken_mappings,  # WARNING — broken cross-scheme mapping links
     _detect_duplicate_pref_label,  # WARNING — duplicate prefLabel same language
+    _detect_missing_pref_label_lang,  # WARNING — no prefLabel in a scheme-declared language
+    _detect_missing_scope_note,  # INFO — no skos:scopeNote (only when peers have them)
 ]
 
 

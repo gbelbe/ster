@@ -18,10 +18,10 @@ from ster.taxonomy_analysis import (
     _detect_broken_top_concepts,
     _detect_circular_hierarchy,
     _detect_duplicate_pref_label,
-    _detect_missing_definition,
     _detect_missing_in_scheme,
     _detect_missing_pref_label,
     _detect_missing_pref_label_lang,
+    _detect_missing_scope_note,
     analyze_scheme,
     analyze_taxonomy,
     get_scheme_concepts,
@@ -187,12 +187,22 @@ def test_detect_missing_pref_label_lang_no_declared_langs():
     assert issues == []
 
 
-def test_detect_missing_definition():
-    t, s = _tax_with_concepts([("en", "A")])
+def test_detect_missing_scope_note():
+    # one concept has a scope note, the other doesn't → the bare one is flagged (INFO)
+    t, s = _tax_with_concepts([("en", "A")], [("en", "B")])
+    t.concepts[BASE + "C0"].scope_notes.append(Definition("en", "a note"))
     uris = get_scheme_concepts(t, s)
-    issues = _detect_missing_definition(t, s, uris)
+    issues = _detect_missing_scope_note(t, s, uris)
     assert len(issues) == 1
     assert issues[0].severity == SEVERITY_INFO
+    assert issues[0].concept_uri == BASE + "C1"
+
+
+def test_detect_missing_scope_note_silent_when_no_peer_has_one():
+    # when no concept has scope notes, the detector stays silent (consistent choice)
+    t, s = _tax_with_concepts([("en", "A")], [("en", "B")])
+    uris = get_scheme_concepts(t, s)
+    assert _detect_missing_scope_note(t, s, uris) == []
 
 
 def test_detect_broken_broader():
@@ -384,6 +394,14 @@ def test_analyze_scheme_issues_sorted_by_severity():
     info_idx = next((i for i, v in enumerate(sevs) if v == SEVERITY_INFO), None)
     if error_idx is not None and info_idx is not None:
         assert error_idx < info_idx
+
+
+def test_analyze_scheme_surfaces_newly_registered_detectors():
+    # alt_same_as_pref is registered → analyze_scheme must now surface it
+    t, s = _tax_with_concepts([("en", "A")])
+    t.concepts[BASE + "C0"].labels.append(Label("en", "A", LabelType.ALT))  # altLabel == prefLabel
+    result = analyze_scheme(t, s)
+    assert any(i.issue_key == "alt_same_as_pref" for i in result.issues)
 
 
 def test_analyze_taxonomy_all_schemes():
