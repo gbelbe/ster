@@ -16,6 +16,7 @@ from ster import store
 from ster.model import RDFClass, Taxonomy
 from ster.nav.state import (
     ConfirmDeleteState,
+    CreateState,
     DeleteClassChoiceState,
     DetailState,
     MovePickState,
@@ -152,6 +153,36 @@ def test_add_broader_link_routes_through_service_and_saves(tmp_path: Path) -> No
     v._state = MovePickState(source_uri=f"{NS}Child")
     v._confirm_link(f"{NS}Other")
     assert set(v.taxonomy.concepts[f"{NS}Child"].broader) == {f"{NS}Top", f"{NS}Other"}
+
+
+def test_save_context_definition_routes_through_service(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._save_context_definition(f"{NS}Child", "a young dog")
+    defs = [d.value for d in v.taxonomy.concepts[f"{NS}Child"].definitions if d.lang == "en"]
+    assert defs == ["a young dog"]
+    saved = store.load(v.file_path).concepts[f"{NS}Child"].definitions
+    assert any(d.value == "a young dog" for d in saved)
+
+
+def test_save_context_definition_empty_or_missing_is_noop(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._save_context_definition(f"{NS}Child", "")  # empty → no-op
+    v._save_context_definition(f"{NS}Ghost", "x")  # unknown concept → no-op
+    assert v.taxonomy.concepts[f"{NS}Child"].definitions == []
+
+
+def test_save_context_scheme_description_by_uri(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._save_context_scheme_description(f"{NS}Scheme", "all the animals")
+    descs = [d.value for d in v.taxonomy.schemes[f"{NS}Scheme"].descriptions]
+    assert "all the animals" in descs
+
+
+def test_save_context_scheme_description_falls_back_to_primary(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._save_context_scheme_description(None, "primary scheme desc")
+    descs = [d.value for d in v.taxonomy.schemes[f"{NS}Scheme"].descriptions]
+    assert "primary scheme desc" in descs
 
 
 def test_concept_field_edit_sets_pref_label_via_service(tmp_path: Path) -> None:
@@ -403,3 +434,551 @@ def test_delete_property_no_impact_routes_through_service(tmp_path: Path) -> Non
     v._trigger_action("delete_property")
     assert prop not in v.taxonomy.owl_properties
     assert prop not in store.load(v.file_path).owl_properties
+
+
+def test_delete_class_no_subclasses_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    # Mammal has no subclasses and no typed individuals → direct keep_all delete
+    v._detail_uri = f"{NS}Mammal"
+    v._trigger_action("delete_class")
+    assert f"{NS}Mammal" not in v.taxonomy.owl_classes
+    assert f"{NS}Mammal" not in store.load(v.file_path).owl_classes
+
+
+def test_commit_new_property_bare_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    f = SimpleNamespace(meta={"type": "new_owl_property_uri"})
+    v._commit_new_property(f, f"{NS}likes")
+    assert f"{NS}likes" in v.taxonomy.owl_properties
+    assert f"{NS}likes" in store.load(v.file_path).owl_properties
+
+
+def test_commit_new_property_domain_typed_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    f = SimpleNamespace(
+        meta={
+            "type": "new_owl_class_property_uri",
+            "prop_type": "ObjectProperty",
+            "class_uri": f"{NS}Dog",
+            "range_uri": f"{NS}Animal",
+        }
+    )
+    v._commit_new_property(f, f"{NS}chases")
+    prop = v.taxonomy.owl_properties[f"{NS}chases"]
+    assert prop.domains == [f"{NS}Dog"]
+    assert prop.ranges == [f"{NS}Animal"]
+
+
+def test_delete_class_with_subclasses_opens_choice_dialog(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)  # Dog is a subclass of Animal
+    v._detail_uri = f"{NS}Animal"
+    v._trigger_action("delete_class")
+    assert isinstance(v._state, DeleteClassChoiceState)
+    assert f"{NS}Dog" in v._state.subclass_uris
+    assert f"{NS}Animal" in v.taxonomy.owl_classes  # not deleted — dialog shown first
+
+
+def test_submit_create_requires_a_name(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._state = CreateState(
+        parent_uri=None, fields=[SimpleNamespace(meta={"field": "name"}, value="  ")], step="form"
+    )
+    v._submit_create()
+    assert v._state.error == "Concept name is required"
+
+
+def test_commit_new_subclass_routes_through_service(tmp_path: Path) -> None:
+    from ster.nav.logic import DetailField
+    from ster.nav.state import EditState
+
+    v = _viewer(tmp_path)  # has Animal, Mammal, Dog
+    field = DetailField(
+        "x", "x", "", editable=True, meta={"type": "new_subclass_uri", "parent_uri": f"{NS}Dog"}
+    )
+    v._detail_uri = f"{NS}Dog"  # commit routes via _commit_owl_class_edit (parent is a class)
+    v._detail_fields = [field]
+    v._field_cursor = 0
+    v._state = EditState(buffer=f"{NS}Puppy", field=field, return_to=DetailState())
+    v._commit_edit()
+    assert v.taxonomy.owl_classes[f"{NS}Puppy"].sub_class_of == [f"{NS}Dog"]
+    assert f"{NS}Puppy" in store.load(v.file_path).owl_classes
+
+
+def test_commit_new_property_surfaces_service_error(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    failed = SimpleNamespace(ok=False, error="boom", validation=None)
+    v._service = lambda: SimpleNamespace(execute=lambda _c: failed)  # type: ignore[method-assign]
+    f = SimpleNamespace(meta={"type": "new_owl_property_uri"})
+    v._commit_new_property(f, f"{NS}likes")
+    assert v._status == "boom"
+
+
+def test_commit_new_subclass_surfaces_service_error(tmp_path: Path) -> None:
+    from ster.nav.logic import DetailField
+    from ster.nav.state import EditState
+
+    v = _viewer(tmp_path)
+    v._detail_uri = f"{NS}Dog"
+    field = DetailField(
+        "x", "x", "", editable=True, meta={"type": "new_subclass_uri", "parent_uri": f"{NS}Dog"}
+    )
+    v._detail_fields = [field]
+    v._field_cursor = 0
+    v._state = EditState(buffer=f"{NS}Puppy", field=field, return_to=DetailState())
+    failed = SimpleNamespace(ok=False, error="nope", validation=None)
+    v._service = lambda: SimpleNamespace(execute=lambda _c: failed)  # type: ignore[method-assign]
+    v._commit_edit()
+    assert v._status == "nope"
+
+
+# ── OWL class / individual / property label & comment edits (OwlSetLabel/Comment) ──
+
+
+def _field(ftype: str, lang: str = "en") -> SimpleNamespace:
+    return SimpleNamespace(meta={"type": ftype, "lang": lang})
+
+
+def test_commit_owl_class_label_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._detail_uri = f"{NS}Dog"
+    v._commit_owl_class_edit(_field("rdf_label"), "Hound")
+    labels = [(lbl.lang, lbl.value) for lbl in v.taxonomy.owl_classes[f"{NS}Dog"].labels]
+    assert ("en", "Hound") in labels
+    saved = store.load(v.file_path).owl_classes[f"{NS}Dog"].labels
+    assert ("en", "Hound") in [(lbl.lang, lbl.value) for lbl in saved]
+
+
+def test_commit_individual_comment_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    v._detail_uri = f"{NS}Rex"
+    v._commit_individual_edit(_field("ind_comment"), "a good dog")
+    comments = [(c.lang, c.value) for c in v.taxonomy.owl_individuals[f"{NS}Rex"].comments]
+    assert ("en", "a good dog") in comments
+
+
+def test_commit_property_label_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_properties[f"{NS}hasColor"] = OWLProperty(uri=f"{NS}hasColor")
+    v._detail_uri = f"{NS}hasColor"
+    v._commit_property_edit(_field("prop_label"), "has colour")
+    labels = [(lbl.lang, lbl.value) for lbl in v.taxonomy.owl_properties[f"{NS}hasColor"].labels]
+    assert ("en", "has colour") in labels
+
+
+def test_commit_promoted_class_label_rebuilds_promoted_fields(tmp_path: Path) -> None:
+    from ster.model import Concept, ConceptScheme, Label
+
+    v = _viewer(tmp_path)
+    # Promote Dog: same URI exists as both an OWL class and a SKOS concept.
+    scheme = ConceptScheme(uri=f"{NS}Scheme")
+    v.taxonomy.schemes[scheme.uri] = scheme
+    v.taxonomy.concepts[f"{NS}Dog"] = Concept(
+        uri=f"{NS}Dog",
+        top_concept_of=scheme.uri,
+        labels=[Label(lang="en", value="Dog")],
+    )
+    scheme.top_concepts.append(f"{NS}Dog")
+    assert v.taxonomy.node_type(f"{NS}Dog") == "promoted"
+    v._detail_uri = f"{NS}Dog"
+    v._commit_owl_class_edit(_field("rdf_label"), "Hound")
+    labels = [(lbl.lang, lbl.value) for lbl in v.taxonomy.owl_classes[f"{NS}Dog"].labels]
+    assert ("en", "Hound") in labels
+
+
+def test_commit_owl_label_surfaces_service_error(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._detail_uri = f"{NS}Dog"
+    failed = SimpleNamespace(ok=False, error="boom", validation=None)
+    v._service = lambda: SimpleNamespace(execute=lambda _c: failed)  # type: ignore[method-assign]
+    v._commit_owl_class_edit(_field("rdf_label"), "Hound")
+    assert v._status == "boom"
+
+
+def test_commit_new_individual_routes_through_service(tmp_path: Path) -> None:
+    from ster.nav.logic import DetailField
+    from ster.nav.state import EditState
+
+    v = _viewer(tmp_path)
+    field = DetailField(
+        "x",
+        "x",
+        "",
+        editable=True,
+        meta={"type": "new_owl_individual_uri", "class_uri": f"{NS}Dog"},
+    )
+    v._detail_uri = f"{NS}Dog"  # individual is created from a class detail panel
+    v._detail_fields = [field]
+    v._field_cursor = 0
+    v._state = EditState(buffer=f"{NS}Rex", field=field, return_to=DetailState())
+    v._commit_edit()  # full dispatch through _commit_edit
+    assert v.taxonomy.owl_individuals[f"{NS}Rex"].types == [f"{NS}Dog"]
+    assert f"{NS}Rex" in store.load(v.file_path).owl_individuals
+    assert v._detail_uri == f"{NS}Rex"
+    assert isinstance(v._state, DetailState)
+
+
+def test_commit_new_individual_surfaces_service_error(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    failed = SimpleNamespace(ok=False, error="nope", validation=None)
+    v._service = lambda: SimpleNamespace(execute=lambda _c: failed)  # type: ignore[method-assign]
+    f = SimpleNamespace(meta={"type": "new_owl_individual_uri", "class_uri": f"{NS}Dog"})
+    v._commit_new_individual(f, f"{NS}Rex")
+    assert v._status == "nope"
+
+
+def test_commit_ontology_label_routes_through_service(tmp_path: Path) -> None:
+    from ster.nav.logic import _ontology_sentinel
+
+    v = _viewer(tmp_path)
+    v._detail_uri = _ontology_sentinel(None)
+    v._commit_ontology_edit(SimpleNamespace(meta={"type": "ont_label"}), "My Ontology")
+    assert v.taxonomy.ontology_label == "My Ontology"
+    assert store.load(v.file_path).ontology_label == "My Ontology"
+
+
+def test_commit_ontology_unknown_field_is_noop(tmp_path: Path) -> None:
+    from ster.nav.logic import _ontology_sentinel
+
+    v = _viewer(tmp_path)
+    v._detail_uri = _ontology_sentinel(None)
+    v._commit_ontology_edit(SimpleNamespace(meta={"type": "bogus"}), "x")
+    assert v.taxonomy.ontology_label is None
+
+
+def test_commit_new_ontology_class_routes_through_service(tmp_path: Path) -> None:
+    from ster.nav.logic import _ontology_sentinel
+
+    v = _viewer(tmp_path)
+    v._detail_uri = _ontology_sentinel(None)
+    v._commit_ontology_edit(SimpleNamespace(meta={"type": "new_owl_class_uri"}), f"{NS}Plant")
+    assert f"{NS}Plant" in v.taxonomy.owl_classes
+    assert f"{NS}Plant" in store.load(v.file_path).owl_classes
+    assert v._detail_uri == f"{NS}Plant"
+    assert isinstance(v._state, DetailState)
+
+
+def test_add_individual_type_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    store.save(v.taxonomy, v.file_path)
+    v._add_individual_type(f"{NS}Rex", f"{NS}Animal")
+    assert f"{NS}Animal" in v.taxonomy.owl_individuals[f"{NS}Rex"].types
+    assert f"{NS}Animal" in store.load(v.file_path).owl_individuals[f"{NS}Rex"].types
+    assert v._detail_uri == f"{NS}Rex"
+    assert isinstance(v._state, DetailState)
+
+
+def test_set_individual_value_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex", property_values=[(f"{NS}owner", f"{NS}Ann")]
+    )
+    store.save(v.taxonomy, v.file_path)
+    # replace the existing owner pair
+    v._set_individual_value(f"{NS}Rex", f"{NS}owner", f"{NS}Bob", old_val_uri=f"{NS}Ann")
+    vals = v.taxonomy.owl_individuals[f"{NS}Rex"].property_values
+    assert vals == [(f"{NS}owner", f"{NS}Bob")]
+    assert store.load(v.file_path).owl_individuals[f"{NS}Rex"].property_values == [
+        (f"{NS}owner", f"{NS}Bob")
+    ]
+
+
+def _two_file_mapping_viewer(tmp_path: Path):
+    """A workspace with two single-concept schemes in separate files (a.ttl, b.ttl)."""
+    from ster.model import Concept, ConceptScheme, Label, LabelType
+
+    def _mk(base: str, name: str) -> Taxonomy:
+        t = Taxonomy()
+        sch = ConceptScheme(uri=base + "scheme")
+        t.schemes[sch.uri] = sch
+        c = Concept(
+            uri=base + name,
+            top_concept_of=sch.uri,
+            labels=[Label(lang="en", value=name, type=LabelType.PREF)],
+        )
+        sch.top_concepts.append(c.uri)
+        t.concepts[c.uri] = c
+        return t
+
+    a_base, b_base = "https://a.org/", "https://b.org/"
+    ta, tb = _mk(a_base, "Dog"), _mk(b_base, "Mammal")
+    pa, pb = tmp_path / "a.ttl", tmp_path / "b.ttl"
+    store.save(ta, pa)
+    store.save(tb, pb)
+    v = TaxonomyViewer(ta, pa, lang="en")
+    v._workspace.taxonomies[pa] = ta
+    v._workspace.taxonomies[pb] = tb
+    v.taxonomy = ta
+    return v, a_base, b_base, pa, pb
+
+
+def test_apply_mapping_cross_file_add_with_inverse(tmp_path: Path) -> None:
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    ok = v._apply_mapping_links(a + "Dog", "exact_match", b + "Mammal", add=True, with_inverse=True)
+    assert ok
+    assert store.load(pa).concepts[a + "Dog"].exact_match == [b + "Mammal"]
+    assert store.load(pb).concepts[b + "Mammal"].exact_match == [a + "Dog"]  # inverse on file B
+
+
+def test_apply_mapping_remove_with_inverse(tmp_path: Path) -> None:
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    v._apply_mapping_links(a + "Dog", "exact_match", b + "Mammal", add=True, with_inverse=True)
+    ok = v._apply_mapping_links(
+        a + "Dog", "exact_match", b + "Mammal", add=False, with_inverse=True
+    )
+    assert ok
+    assert store.load(pa).concepts[a + "Dog"].exact_match == []
+    assert store.load(pb).concepts[b + "Mammal"].exact_match == []
+
+
+def test_apply_mapping_source_not_found(tmp_path: Path) -> None:
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    ok = v._apply_mapping_links(
+        a + "Ghost", "exact_match", b + "Mammal", add=True, with_inverse=True
+    )
+    assert ok is False
+    assert "not found" in v._status.lower()
+
+
+def test_confirm_mapping_adds_link(tmp_path: Path) -> None:
+    from ster.nav.state import MapConceptPickState
+
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    v._state = MapConceptPickState(source_uri=a + "Dog", map_type="exactMatch")
+    v._confirm_mapping(b + "Mammal")
+    assert store.load(pa).concepts[a + "Dog"].exact_match == [b + "Mammal"]
+    assert isinstance(v._state, DetailState)
+
+
+def test_confirm_mapping_target_not_found(tmp_path: Path) -> None:
+    from ster.nav.state import MapConceptPickState
+
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    v._state = MapConceptPickState(source_uri=a + "Dog", map_type="exactMatch")
+    v._confirm_mapping(a + "Nonexistent")
+    assert store.load(pa).concepts[a + "Dog"].exact_match == []
+    assert "not found" in v._status.lower()
+
+
+def test_remove_mapping_field_drops_both_sides(tmp_path: Path) -> None:
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    v._apply_mapping_links(a + "Dog", "exact_match", b + "Mammal", add=True, with_inverse=True)
+    v._detail_uri = a + "Dog"
+    f = SimpleNamespace(meta={"attr": "exact_match", "uri": b + "Mammal"})
+    v._remove_mapping_field(f)
+    assert store.load(pa).concepts[a + "Dog"].exact_match == []
+    assert store.load(pb).concepts[b + "Mammal"].exact_match == []
+
+
+def test_repair_mapping_field_forward_only(tmp_path: Path) -> None:
+    v, a, b, pa, pb = _two_file_mapping_viewer(tmp_path)
+    # a broken link: source asserts it but the inverse on B is absent
+    v.taxonomy.concepts[a + "Dog"].exact_match.append(b + "Mammal")
+    store.save(v.taxonomy, pa)
+    v._detail_uri = a + "scheme"
+    f = SimpleNamespace(
+        meta={"source_uri": a + "Dog", "attr": "exact_match", "target_uri": b + "Mammal"}
+    )
+    v._repair_mapping_field(f)
+    assert store.load(pa).concepts[a + "Dog"].exact_match == []
+    # B was never touched (forward-only repair)
+    assert store.load(pb).concepts[b + "Mammal"].exact_match == []
+
+
+def test_set_note_via_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._detail_uri = f"{NS}Dog"
+    v._set_note(f"{NS}Dog", "a helpful note")
+    assert v.taxonomy.owl_classes[f"{NS}Dog"].note == "a helpful note"
+    assert store.load(v.file_path).owl_classes[f"{NS}Dog"].note == "a helpful note"
+
+
+def test_delete_note_via_trigger_action(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_classes[f"{NS}Dog"].note = "remove me"
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = f"{NS}Dog"
+    v._trigger_action("delete_note")
+    assert v.taxonomy.owl_classes[f"{NS}Dog"].note == ""
+    assert store.load(v.file_path).owl_classes[f"{NS}Dog"].note == ""
+
+
+def test_apply_ext_superclass_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    ext = "https://schema.org/Thing"
+    v._detail_uri = f"{NS}Dog"
+    v._apply_ext_superclass(f"{NS}Dog", ext)
+    assert ext in v.taxonomy.owl_classes[f"{NS}Dog"].sub_class_of
+    assert ext in v.taxonomy.owl_classes  # stubbed
+    assert ext in store.load(v.file_path).owl_classes[f"{NS}Dog"].sub_class_of
+    assert isinstance(v._state, DetailState)
+
+
+def test_initialize_ontology_via_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._initialize_ontology("https://new.example.org/onto", "#", "My Ontology")
+    assert v.taxonomy.ontology_label == "My Ontology"
+    assert "new.example.org/onto" in (v.taxonomy.ontology_uri or "")
+    assert store.load(v.file_path).ontology_label == "My Ontology"
+
+
+def test_do_class_to_individual_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)  # Dog sub_class_of Animal
+    v._detail_uri = f"{NS}Dog"
+    v._do_class_to_individual(f"{NS}Dog")
+    assert f"{NS}Dog" not in v.taxonomy.owl_classes
+    assert v.taxonomy.owl_individuals[f"{NS}Dog"].types == [f"{NS}Animal"]
+    assert f"{NS}Dog" in store.load(v.file_path).owl_individuals
+    assert isinstance(v._state, DetailState)
+
+
+def test_do_individual_to_class_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = f"{NS}Rex"
+    v._do_individual_to_class(f"{NS}Rex")
+    assert f"{NS}Rex" not in v.taxonomy.owl_individuals
+    assert v.taxonomy.owl_classes[f"{NS}Rex"].sub_class_of == [f"{NS}Dog"]
+    assert f"{NS}Rex" in store.load(v.file_path).owl_classes
+
+
+def test_remove_superclass_via_trigger_action(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)  # Dog sub_class_of Animal
+    v._detail_uri = f"{NS}Dog"
+    v._trigger_action("remove_superclass", {"parent_uri": f"{NS}Animal"})
+    assert v.taxonomy.owl_classes[f"{NS}Dog"].sub_class_of == []
+    assert store.load(v.file_path).owl_classes[f"{NS}Dog"].sub_class_of == []
+
+
+def test_delete_individual_via_trigger_action(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+    from ster.nav.state import TreeState
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    store.save(v.taxonomy, v.file_path)
+    v._rebuild()
+    v._detail_uri = f"{NS}Rex"
+    v._trigger_action("delete_individual")
+    assert f"{NS}Rex" not in v.taxonomy.owl_individuals
+    assert f"{NS}Rex" not in store.load(v.file_path).owl_individuals
+    assert isinstance(v._state, TreeState)
+
+
+def test_remove_individual_value_and_type_via_trigger_action(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex",
+        types=[f"{NS}Dog", f"{NS}Animal"],
+        property_values=[(f"{NS}owner", f"{NS}Ann")],
+        literal_values=[(f"{NS}age", "3", "")],
+    )
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = f"{NS}Rex"
+    v._trigger_action("remove_prop_value", {"prop_uri": f"{NS}owner", "val_uri": f"{NS}Ann"})
+    v._trigger_action(
+        "remove_literal_value", {"prop_uri": f"{NS}age", "val_str": "3", "lang_or_dt": ""}
+    )
+    v._trigger_action("remove_ind_type", {"type_uri": f"{NS}Animal"})
+    ind = v.taxonomy.owl_individuals[f"{NS}Rex"]
+    assert ind.property_values == []
+    assert ind.literal_values == []
+    assert ind.types == [f"{NS}Dog"]
+
+
+def test_add_property_class_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_properties[f"{NS}rel"] = OWLProperty(uri=f"{NS}rel")
+    v._add_property_class(f"{NS}rel", "domain", f"{NS}Dog")
+    assert v.taxonomy.owl_properties[f"{NS}rel"].domains == [f"{NS}Dog"]
+    assert store.load(v.file_path).owl_properties[f"{NS}rel"].domains == [f"{NS}Dog"]
+    assert v._detail_uri == f"{NS}rel"
+    assert isinstance(v._state, DetailState)
+
+
+def test_remove_property_class_via_trigger_action(tmp_path: Path) -> None:
+    from ster.model import OWLProperty
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_properties[f"{NS}rel"] = OWLProperty(uri=f"{NS}rel", ranges=[f"{NS}Animal"])
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = f"{NS}rel"
+    v._trigger_action("remove_prop_range", {"range_uri": f"{NS}Animal"})
+    assert v.taxonomy.owl_properties[f"{NS}rel"].ranges == []
+    assert store.load(v.file_path).owl_properties[f"{NS}rel"].ranges == []
+
+
+def test_commit_schema_image_routes_through_service(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v._detail_uri = f"{NS}Dog"
+    f = SimpleNamespace(meta={"type": "schema_image_input"})
+    v._commit_schema_media(f, "https://ex.org/dog.png")
+    assert v.taxonomy.owl_classes[f"{NS}Dog"].schema_images == ["https://ex.org/dog.png"]
+    assert store.load(v.file_path).owl_classes[f"{NS}Dog"].schema_images == [
+        "https://ex.org/dog.png"
+    ]
+
+
+def test_remove_schema_media_via_trigger_action(tmp_path: Path) -> None:
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_classes[f"{NS}Dog"].schema_urls.append("https://ex.org/d")
+    store.save(v.taxonomy, v.file_path)
+    v._detail_uri = f"{NS}Dog"
+    v._trigger_action("remove_schema_url", {"url": "https://ex.org/d"})
+    assert v.taxonomy.owl_classes[f"{NS}Dog"].schema_urls == []
+    assert store.load(v.file_path).owl_classes[f"{NS}Dog"].schema_urls == []
+
+
+def test_commit_scheme_title_routes_through_service(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._detail_uri = f"{NS}Scheme"
+    f = SimpleNamespace(meta={"type": "scheme_title", "lang": "en"})
+    v._commit_scheme_edit(f, "Animals")
+    assert v.taxonomy.schemes[f"{NS}Scheme"].title("en") == "Animals"
+    assert store.load(v.file_path).schemes[f"{NS}Scheme"].title("en") == "Animals"
+
+
+def test_commit_scheme_field_unknown_type_is_noop(tmp_path: Path) -> None:
+    v = _skos_viewer(tmp_path)
+    v._detail_uri = f"{NS}Scheme"
+    before = v.taxonomy.schemes[f"{NS}Scheme"].creator
+    v._commit_scheme_edit(SimpleNamespace(meta={"type": "bogus", "lang": "en"}), "x")
+    assert v.taxonomy.schemes[f"{NS}Scheme"].creator == before
+
+
+def test_commit_individual_literal_routes_through_service(tmp_path: Path) -> None:
+    from ster.model import OWLIndividual
+
+    v = _viewer(tmp_path)
+    v.taxonomy.owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex", types=[f"{NS}Dog"], literal_values=[(f"{NS}age", "3", "")]
+    )
+    v._detail_uri = f"{NS}Rex"
+    f = SimpleNamespace(
+        meta={
+            "type": "ind_lit_val_edit",
+            "prop_uri": f"{NS}age",
+            "old_val_str": "3",
+            "lang_or_dt": "",
+        }
+    )
+    v._commit_individual_edit(f, "4")
+    vals = v.taxonomy.owl_individuals[f"{NS}Rex"].literal_values
+    assert (f"{NS}age", "4", "") in vals
+    assert (f"{NS}age", "3", "") not in vals

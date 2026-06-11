@@ -6,9 +6,29 @@ Part of the domain layer (docs/architecture/module-layout.md): reached through
 
 from __future__ import annotations
 
+from typing import Protocol, TypeVar
+
 from ..exceptions import CircularHierarchyError, ClassNotFoundError, URIAlreadyExistsError
-from ..model import Label, OWLIndividual, OWLProperty, Taxonomy
+from ..model import (
+    Definition,
+    Label,
+    OWLIndividual,
+    OWLProperty,
+    RDFClass,
+    Taxonomy,
+    is_builtin_uri,
+)
 from ._shared import _replace_in_list
+
+
+class _Localized(Protocol):
+    """Anything carrying a ``lang`` and a ``value`` (Label or Definition)."""
+
+    lang: str
+    value: str
+
+
+_LocalizedT = TypeVar("_LocalizedT", bound=_Localized)
 
 
 def add_owl_property(
@@ -32,6 +52,190 @@ def add_owl_property(
     prop = OWLProperty(uri=uri, prop_type=prop_type, labels=labels, domains=domains, ranges=ranges)
     taxonomy.owl_properties[uri] = prop
     return prop
+
+
+def remove_subclass_of(taxonomy: Taxonomy, child_uri: str, parent_uri: str) -> None:
+    """Detach one ``rdfs:subClassOf`` parent from *child_uri* (no-op if absent)."""
+    rdf_class = taxonomy.owl_classes.get(child_uri)
+    if rdf_class is not None and parent_uri in rdf_class.sub_class_of:
+        rdf_class.sub_class_of.remove(parent_uri)
+
+
+def delete_owl_individual(taxonomy: Taxonomy, uri: str) -> None:
+    """Delete an OWL individual (no-op if absent)."""
+    taxonomy.owl_individuals.pop(uri, None)
+
+
+def remove_individual_property_value(
+    taxonomy: Taxonomy, ind_uri: str, prop_uri: str, val_uri: str
+) -> None:
+    """Remove a ``(prop, value)`` object-property pair from an individual (no-op if absent)."""
+    ind = taxonomy.owl_individuals.get(ind_uri)
+    if ind is None:
+        return
+    pair = (prop_uri, val_uri)
+    if pair in ind.property_values:
+        ind.property_values.remove(pair)
+
+
+def remove_individual_literal(
+    taxonomy: Taxonomy, ind_uri: str, prop_uri: str, val_str: str, lang_or_dt: str
+) -> None:
+    """Remove a ``(prop, value, lang/dt)`` literal triple from an individual (no-op if absent)."""
+    ind = taxonomy.owl_individuals.get(ind_uri)
+    if ind is None:
+        return
+    triple = (prop_uri, val_str, lang_or_dt)
+    if triple in ind.literal_values:
+        ind.literal_values.remove(triple)
+
+
+def remove_individual_type(taxonomy: Taxonomy, ind_uri: str, type_uri: str) -> None:
+    """Remove an ``rdf:type`` from an individual (no-op if absent)."""
+    ind = taxonomy.owl_individuals.get(ind_uri)
+    if ind is not None and type_uri in ind.types:
+        ind.types.remove(type_uri)
+
+
+def add_individual_type(taxonomy: Taxonomy, ind_uri: str, type_uri: str) -> None:
+    """Add an ``rdf:type`` to an individual (dedup; no-op for an unknown individual)."""
+    ind = taxonomy.owl_individuals.get(ind_uri)
+    if ind is not None and type_uri not in ind.types:
+        ind.types.append(type_uri)
+
+
+# ── class ↔ individual conversion (punning) ───────────────────────────────────
+
+
+def _scrub_class_references(taxonomy: Taxonomy, uri: str) -> None:
+    """Drop *uri* from every class hierarchy list and property domain/range."""
+    for cls in taxonomy.owl_classes.values():
+        for lst in (cls.sub_class_of, cls.equivalent_class, cls.disjoint_with):
+            if uri in lst:
+                lst.remove(uri)
+    for prop in taxonomy.owl_properties.values():
+        for lst in (prop.domains, prop.ranges):
+            if uri in lst:
+                lst.remove(uri)
+
+
+def _retype_or_delete_affected(
+    taxonomy: Taxonomy, uri: str, affected: list[str], reattach_to: list[str] | None
+) -> None:
+    """Detach *uri* as a type from each *affected* individual; re-type to *reattach_to* or delete."""
+    for ind_uri in affected:
+        ind = taxonomy.owl_individuals.get(ind_uri)
+        if ind is None:
+            continue
+        if uri in ind.types:
+            ind.types.remove(uri)
+        if reattach_to is not None:
+            for parent in reattach_to:
+                if parent not in ind.types:
+                    ind.types.append(parent)
+        else:
+            del taxonomy.owl_individuals[ind_uri]
+
+
+def convert_class_to_individual(
+    taxonomy: Taxonomy, uri: str, reattach_to: list[str] | None = None
+) -> None:
+    """Turn an OWL class into an individual (punning), carrying over labels/comments.
+
+    Non-builtin superclasses become the new individual's ``rdf:type``s. Individuals
+    typed as the class are re-typed to *reattach_to* (if given) or deleted. No-op for
+    an unknown class."""
+    rdf_class = taxonomy.owl_classes.get(uri)
+    if rdf_class is None:
+        return
+    affected = [iu for iu, ind in taxonomy.owl_individuals.items() if uri in ind.types]
+    taxonomy.owl_individuals[uri] = OWLIndividual(
+        uri=uri,
+        labels=list(rdf_class.labels),
+        comments=list(rdf_class.comments),
+        types=[p for p in rdf_class.sub_class_of if not is_builtin_uri(p)],
+    )
+    del taxonomy.owl_classes[uri]
+    _scrub_class_references(taxonomy, uri)
+    _retype_or_delete_affected(taxonomy, uri, affected, reattach_to)
+
+
+def convert_individual_to_class(taxonomy: Taxonomy, uri: str) -> None:
+    """Turn an OWL individual into a class (punning), carrying over labels/comments.
+
+    Non-builtin types become the new class's ``rdfs:subClassOf``. Any object-property
+    value pointing at *uri* is dropped. No-op for an unknown individual."""
+    individual = taxonomy.owl_individuals.get(uri)
+    if individual is None:
+        return
+    taxonomy.owl_classes[uri] = RDFClass(
+        uri=uri,
+        labels=list(individual.labels),
+        comments=list(individual.comments),
+        sub_class_of=[t for t in individual.types if not is_builtin_uri(t)],
+    )
+    del taxonomy.owl_individuals[uri]
+    for ind in taxonomy.owl_individuals.values():
+        ind.property_values = [(p, v) for p, v in ind.property_values if v != uri]
+
+
+def set_individual_property_value(
+    taxonomy: Taxonomy, ind_uri: str, prop_uri: str, new_val_uri: str, old_val_uri: str = ""
+) -> None:
+    """Add or replace an object-property ``(prop, value)`` pair on an individual.
+
+    When *old_val_uri* names an existing pair it is replaced in place; otherwise the
+    new pair is appended (deduped). No-op for an unknown individual."""
+    ind = taxonomy.owl_individuals.get(ind_uri)
+    if ind is None:
+        return
+    new_pair = (prop_uri, new_val_uri)
+    if old_val_uri:
+        old_pair = (prop_uri, old_val_uri)
+        if old_pair in ind.property_values:
+            ind.property_values[ind.property_values.index(old_pair)] = new_pair
+            return
+    if new_pair not in ind.property_values:
+        ind.property_values.append(new_pair)
+
+
+_PROP_SLOT_ATTRS = {"domain": "domains", "range": "ranges"}
+
+
+def add_property_class(taxonomy: Taxonomy, prop_uri: str, slot: str, class_uri: str) -> None:
+    """Add *class_uri* to a property's domain or range (*slot* ∈ ``domain``/``range``).
+
+    Dedups; no-op for an unknown property or slot."""
+    prop = taxonomy.owl_properties.get(prop_uri)
+    attr = _PROP_SLOT_ATTRS.get(slot)
+    if prop is None or attr is None:
+        return
+    lst: list[str] = getattr(prop, attr)
+    if class_uri not in lst:
+        lst.append(class_uri)
+
+
+def remove_property_class(taxonomy: Taxonomy, prop_uri: str, slot: str, class_uri: str) -> None:
+    """Remove *class_uri* from a property's domain or range (no-op if absent)."""
+    prop = taxonomy.owl_properties.get(prop_uri)
+    attr = _PROP_SLOT_ATTRS.get(slot)
+    if prop is None or attr is None:
+        return
+    lst: list[str] = getattr(prop, attr)
+    if class_uri in lst:
+        lst.remove(class_uri)
+
+
+def add_owl_individual(taxonomy: Taxonomy, uri: str, class_uri: str | None = None) -> OWLIndividual:
+    """Create an OWL individual *uri* (typed as *class_uri* when given).
+
+    No-op returning the existing individual when *uri* is already present."""
+    existing = taxonomy.owl_individuals.get(uri)
+    if existing is not None:
+        return existing
+    individual = OWLIndividual(uri=uri, types=[class_uri] if class_uri else [])
+    taxonomy.owl_individuals[uri] = individual
+    return individual
 
 
 _XSD = "http://www.w3.org/2001/XMLSchema#"
@@ -357,6 +561,98 @@ def _count_individual_refs_to(ind: OWLIndividual, uri: str) -> int:
     n += sum(1 for p, v in ind.property_values if uri in (p, v))
     n += sum(1 for p, _v, _ld in ind.literal_values if p == uri)
     return n
+
+
+# ── rdfs:label / rdfs:comment upsert (class / individual / property) ──────────
+
+
+def _owl_entity(taxonomy: Taxonomy, uri: str) -> RDFClass | OWLIndividual | OWLProperty | None:
+    """The OWL class, individual, or property identified by *uri* — or ``None``."""
+    return (
+        taxonomy.owl_classes.get(uri)
+        or taxonomy.owl_individuals.get(uri)
+        or taxonomy.owl_properties.get(uri)
+    )
+
+
+def _upsert_localized(items: list[_LocalizedT], lang: str, value: str, item: _LocalizedT) -> None:
+    """Replace the entry for *lang* in place, or append *item* if none matches."""
+    for existing in items:
+        if existing.lang == lang:
+            existing.value = value
+            return
+    items.append(item)
+
+
+def set_owl_label(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    """Set the ``rdfs:label`` of an OWL class/individual/property for *lang*.
+
+    No-op when *uri* is unknown (the inline handler returned early too)."""
+    entity = _owl_entity(taxonomy, uri)
+    if entity is not None:
+        _upsert_localized(entity.labels, lang, value, Label(lang=lang, value=value))
+
+
+def set_owl_comment(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None:
+    """Set the ``rdfs:comment`` of an OWL class/individual/property for *lang*.
+
+    No-op when *uri* is unknown (the inline handler returned early too)."""
+    entity = _owl_entity(taxonomy, uri)
+    if entity is not None:
+        _upsert_localized(entity.comments, lang, value, Definition(lang=lang, value=value))
+
+
+def set_owl_note(taxonomy: Taxonomy, uri: str, note: str) -> None:
+    """Set the free-text editor note of an OWL class/individual/property (``""`` clears it)."""
+    entity = _owl_entity(taxonomy, uri)
+    if entity is not None:
+        entity.note = note
+
+
+def add_external_superclass(
+    taxonomy: Taxonomy,
+    source_uri: str,
+    ext_class_uri: str,
+    namespace: str = "",
+    prefix: str = "",
+) -> None:
+    """Add an external ``rdfs:subClassOf`` to *source_uri*, stubbing the external class.
+
+    Registers *ext_class_uri* as a stub class (so it shows in the tree) and binds its
+    *namespace* to *prefix* when not already present. No-op for an unknown source."""
+    rdf_class = taxonomy.owl_classes.get(source_uri)
+    if rdf_class is None:
+        return
+    if ext_class_uri not in rdf_class.sub_class_of:
+        rdf_class.sub_class_of.append(ext_class_uri)
+    if ext_class_uri not in taxonomy.owl_classes:
+        taxonomy.owl_classes[ext_class_uri] = RDFClass(uri=ext_class_uri)
+    if namespace and namespace not in taxonomy.namespace_bindings.values():
+        taxonomy.namespace_bindings[prefix] = namespace
+
+
+def set_individual_literal(
+    taxonomy: Taxonomy,
+    ind_uri: str,
+    prop_uri: str,
+    old_value: str,
+    new_value: str,
+    lang_or_dt: str,
+) -> None:
+    """Edit one of an individual's literal property values (``(prop, value, lang/dt)``).
+
+    Replaces the ``old_value`` triple in place, or appends the ``new_value`` triple
+    when no old one matches (skipping an exact duplicate). No-op for an unknown
+    individual — matching the inline handler."""
+    individual = taxonomy.owl_individuals.get(ind_uri)
+    if individual is None:
+        return
+    triple_old = (prop_uri, old_value, lang_or_dt)
+    triple_new = (prop_uri, new_value, lang_or_dt)
+    if triple_old in individual.literal_values:
+        individual.literal_values[individual.literal_values.index(triple_old)] = triple_new
+    elif triple_new not in individual.literal_values:
+        individual.literal_values.append(triple_new)
 
 
 def _count_owl_incoming_refs(taxonomy: Taxonomy, uri: str) -> int:

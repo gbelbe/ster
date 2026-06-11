@@ -10,7 +10,6 @@ from ster.model import Concept, ConceptScheme, Label, LabelType, Taxonomy
 from ster.project import Project
 from ster.validator import SkosValidator
 from ster.workspace import TaxonomyWorkspace
-from ster.workspace_ops import add_mapping, remove_mapping
 
 BASE_A = "https://a.example.org/"
 BASE_B = "https://b.example.org/"
@@ -353,48 +352,3 @@ def test_validator_cycle(tmp_path):
     ws.taxonomies[tmp_path / "a.ttl"] = t
     issues = SkosValidator().validate(ws)
     assert any(i.code == "cycle" for i in issues)
-
-
-# ──────────────────────────── workspace_ops ──────────────────────────────────
-
-
-def test_add_mapping_cross_file(workspace, tmp_path):
-    src_file, tgt_file = add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
-    assert src_file == tmp_path / "a.ttl"
-    assert tgt_file == tmp_path / "b.ttl"
-
-    src_concept = workspace.concept_for(BASE_A + "Dog")[1]
-    tgt_concept = workspace.concept_for(BASE_B + "Mammal")[1]
-    assert BASE_B + "Mammal" in src_concept.broad_match
-    assert BASE_A + "Dog" in tgt_concept.narrow_match
-
-
-def test_add_mapping_no_duplicate(workspace):
-    add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
-    add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
-    src = workspace.concept_for(BASE_A + "Dog")[1]
-    assert src.broad_match.count(BASE_B + "Mammal") == 1
-
-
-def test_add_mapping_symmetric_related(workspace):
-    add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "relatedMatch")
-    src = workspace.concept_for(BASE_A + "Dog")[1]
-    tgt = workspace.concept_for(BASE_B + "Mammal")[1]
-    assert BASE_B + "Mammal" in src.related_match
-    assert BASE_A + "Dog" in tgt.related_match
-
-
-def test_remove_mapping(workspace):
-    add_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
-    remove_mapping(workspace, BASE_A + "Dog", BASE_B + "Mammal", "broadMatch")
-    src = workspace.concept_for(BASE_A + "Dog")[1]
-    tgt = workspace.concept_for(BASE_B + "Mammal")[1]
-    assert BASE_B + "Mammal" not in src.broad_match
-    assert BASE_A + "Dog" not in tgt.narrow_match
-
-
-def test_add_mapping_unknown_source_raises(workspace):
-    from ster.exceptions import SkostaxError
-
-    with pytest.raises(SkostaxError):
-        add_mapping(workspace, "https://unknown.org/X", BASE_B + "Mammal", "broadMatch")

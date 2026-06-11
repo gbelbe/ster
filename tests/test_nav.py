@@ -464,7 +464,8 @@ def test_viewer_commit_scheme_title_edit(viewer, simple_taxonomy):
         return_to=None,
     )
     viewer._commit_edit()
-    scheme = simple_taxonomy.schemes[BASE + "Scheme"]
+    # the service swaps in a fresh clone, so assert on viewer.taxonomy (re-synced)
+    scheme = viewer.taxonomy.schemes[BASE + "Scheme"]
     assert any(lbl.value == "Renamed Taxonomy" for lbl in scheme.labels)
 
 
@@ -534,14 +535,14 @@ def test_add_top_concept_creates_top_concept(viewer, simple_taxonomy):
 
     viewer._submit_create()
 
-    # Concept should exist
+    # Concept should exist (the service swaps in a fresh authority — assert on it)
     new_uri = BASE + "BrandNew"
-    assert new_uri in simple_taxonomy.concepts
+    assert new_uri in viewer.taxonomy.concepts
 
     # It must be a top concept of the scheme (not a narrower of another concept)
-    scheme = simple_taxonomy.schemes[scheme_uri]
+    scheme = viewer.taxonomy.schemes[scheme_uri]
     assert new_uri in scheme.top_concepts
-    concept = simple_taxonomy.concepts[new_uri]
+    concept = viewer.taxonomy.concepts[new_uri]
     assert concept.broader == []
     assert concept.top_concept_of == scheme_uri
 
@@ -565,7 +566,7 @@ def test_add_top_concept_uses_scheme_base_uri(viewer, simple_taxonomy):
             f.value = "AlphaTest"
 
     viewer._submit_create()
-    assert BASE + "AlphaTest" in simple_taxonomy.concepts
+    assert BASE + "AlphaTest" in viewer.taxonomy.concepts
 
 
 # ── scheme create flow ────────────────────────────────────────────────────────
@@ -952,7 +953,8 @@ def test_commit_scheme_base_uri_edit(viewer, simple_taxonomy):
         return_to=None,
     )
     viewer._commit_edit()
-    scheme = simple_taxonomy.schemes[BASE + "Scheme"]
+    # the service swaps in a fresh clone, so assert on viewer.taxonomy (re-synced)
+    scheme = viewer.taxonomy.schemes[BASE + "Scheme"]
     assert scheme.base_uri == "https://example.org/new/"
 
 
@@ -1373,7 +1375,7 @@ def test_on_batch_alt_labels_enter_on_done_creates_and_confirms(simple_taxonomy,
     v._on_batch_alt_labels(ord("\n"), 24, bcs)
 
     assert bcs.step == "confirm"
-    assert any("OnlyUnique2" in uri for uri in simple_taxonomy.concepts)
+    assert any("OnlyUnique2" in uri for uri in v.taxonomy.concepts)
 
 
 def test_on_batch_alt_labels_esc_returns_to_alt_prompt_review(simple_taxonomy, tmp_path):
@@ -1794,3 +1796,58 @@ def test_viewer_promoted_rename_renames_both_layers(tmp_path):
     assert BASE + "Animal" not in v.taxonomy.owl_classes
     assert BASE + "Creature" in v.taxonomy.concepts[BASE + "Dog"].broader
     assert BASE + "Creature" in v.taxonomy.owl_classes[BASE + "Pet"].sub_class_of
+
+
+def test_submit_batch_create_creates_all_atomically(simple_taxonomy, tmp_path):
+    """Create-all commits every valid draft (with alt labels) in one transaction."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        parent_uri=BASE + "Scheme",
+        drafts=[
+            BatchConceptDraft(
+                name="Cat", pref_label="Cat", alt_labels=["Feline"], alt_checked=[True]
+            ),
+            BatchConceptDraft(name="Fish", pref_label="Fish"),
+        ],
+        current=0,
+        step="recap",
+    )
+    v._state = bcs
+    v._submit_batch_create(bcs)
+    assert BASE + "Cat" in v.taxonomy.concepts
+    assert BASE + "Fish" in v.taxonomy.concepts
+    cat = v.taxonomy.concepts[BASE + "Cat"]
+    assert any(lbl.value == "Feline" and lbl.type.name == "ALT" for lbl in cat.labels)
+
+
+def test_submit_batch_create_skips_intra_batch_duplicate(simple_taxonomy, tmp_path):
+    """Two drafts with the same name → second is skipped, first still created."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        parent_uri=BASE + "Scheme",
+        drafts=[
+            BatchConceptDraft(name="Dup", pref_label="Dup"),
+            BatchConceptDraft(name="Dup", pref_label="Dup again"),
+        ],
+        current=0,
+        step="recap",
+    )
+    v._state = bcs
+    v._submit_batch_create(bcs)
+    assert "already exists" in bcs.error
+    assert BASE + "Dup" in v.taxonomy.concepts
+
+
+def test_batch_create_current_under_primary_scheme(simple_taxonomy, tmp_path):
+    """Per-draft create with no explicit parent → top concept of the primary scheme."""
+    v = _make_viewer(simple_taxonomy, tmp_path)
+    bcs = BatchCreateState(
+        parent_uri=None,
+        drafts=[BatchConceptDraft(name="Loner", pref_label="Loner")],
+        current=0,
+        step="alt_labels",
+    )
+    v._state = bcs
+    v._batch_create_current_and_confirm(bcs)
+    assert bcs.step == "confirm"
+    assert any("Loner" in u for u in v.taxonomy.concepts)

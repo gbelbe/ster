@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...model import Taxonomy
-from ...operations import rename_entity_uri
+from ...operations import add_schema_media, remove_schema_media, rename_entity_uri
 
 
 @dataclass(frozen=True)
@@ -25,3 +25,31 @@ class RenameEntity:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
         return (self.new_uri,)
+
+
+@dataclass(frozen=True)
+class AddSchemaMedia:
+    """Append a schema:image/video/url URL to a concept/class/individual (*kind* ∈ image/video/url)."""
+
+    target_path: Path
+    uri: str
+    kind: str
+    url: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_schema_media(taxonomy, self.uri, self.kind, self.url)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class RemoveSchemaMedia:
+    """Remove a schema:image/video/url URL from a concept/class/individual."""
+
+    target_path: Path
+    uri: str
+    kind: str
+    url: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_schema_media(taxonomy, self.uri, self.kind, self.url)
+        return (self.uri,)

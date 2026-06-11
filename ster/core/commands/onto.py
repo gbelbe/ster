@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...model import Taxonomy
-from ...operations import rename_ontology_uri
+from ...operations import rename_ontology_uri, set_ontology_metadata, set_ontology_prefix
 
 
 @dataclass(frozen=True)
@@ -28,4 +28,32 @@ class OntoRenameUri:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         rename_ontology_uri(taxonomy, self.new_uri, self.new_sep)
+        return ()
+
+
+@dataclass(frozen=True)
+class OntoSetMetadata:
+    """Set an ontology metadata field (``label`` / ``title`` / ``description``).
+
+    A blank value clears the field. Ontology-wide, so it reports no affected URI.
+    """
+
+    target_path: Path
+    field_name: str
+    value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_ontology_metadata(taxonomy, self.field_name, self.value)
+        return ()
+
+
+@dataclass(frozen=True)
+class OntoSetPrefix:
+    """Set the ontology namespace prefix (bind to the base, or rename the existing one)."""
+
+    target_path: Path
+    new_prefix: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_ontology_prefix(taxonomy, self.new_prefix)
         return ()

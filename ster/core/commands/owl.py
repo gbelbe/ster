@@ -5,13 +5,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...exceptions import ClassNotFoundError
-from ...model import Taxonomy
+from ...exceptions import CircularHierarchyError, ClassNotFoundError
+from ...handles import assign_handles
+from ...model import RDFClass, Taxonomy
 from ...operations import (
+    add_external_superclass,
+    add_individual_type,
+    add_owl_individual,
+    add_owl_property,
+    add_property_class,
     add_subclass_of,
     clear_property_values,
+    convert_class_to_individual,
+    convert_individual_to_class,
     delete_owl_class,
+    delete_owl_individual,
     delete_owl_property,
+    remove_individual_literal,
+    remove_individual_property_value,
+    remove_individual_type,
+    remove_property_class,
+    remove_subclass_of,
+    set_individual_literal,
+    set_individual_property_value,
+    set_owl_comment,
+    set_owl_label,
+    set_owl_note,
 )
 
 
@@ -50,6 +69,312 @@ class OwlDeleteClass:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         delete_owl_class(taxonomy, self.class_uri, mode=self.mode)
         return (self.class_uri,)
+
+
+@dataclass(frozen=True)
+class OwlCreateSubclass:
+    """Create an OWL class (if absent) and link it under *parent_uri* (rdfs:subClassOf).
+
+    A circular or missing-parent link is ignored — the class is still created (the
+    inline handler swallowed those errors too).
+    """
+
+    target_path: Path
+    class_uri: str
+    parent_uri: str | None
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        if self.class_uri not in taxonomy.owl_classes:
+            taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
+        if self.parent_uri:
+            try:
+                add_subclass_of(taxonomy, self.class_uri, self.parent_uri)
+            except (CircularHierarchyError, ClassNotFoundError):
+                pass
+        assign_handles(taxonomy)
+        return (self.class_uri,)
+
+
+@dataclass(frozen=True)
+class OwlCreateIndividual:
+    """Create an OWL individual, typed as *class_uri* when given (no-op if present)."""
+
+    target_path: Path
+    uri: str
+    class_uri: str | None
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_owl_individual(taxonomy, self.uri, self.class_uri)
+        assign_handles(taxonomy)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlAddProperty:
+    """Create an OWL property. A bare property passes prop_type='ObjectProperty'
+    with an empty label and no domain/range — matching ``OWLProperty(uri=…)``."""
+
+    target_path: Path
+    uri: str
+    prop_type: str
+    label: str
+    lang: str
+    domain_uri: str | None = None
+    range_uri: str | None = None
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_owl_property(
+            taxonomy,
+            self.uri,
+            self.prop_type,
+            self.label,
+            self.lang,
+            self.domain_uri,
+            self.range_uri,
+        )
+        assign_handles(taxonomy)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlSetLabel:
+    """Set an OWL class/individual/property ``rdfs:label`` for *lang* (upsert)."""
+
+    target_path: Path
+    uri: str
+    lang: str
+    value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_owl_label(taxonomy, self.uri, self.lang, self.value)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlSetComment:
+    """Set an OWL class/individual/property ``rdfs:comment`` for *lang* (upsert)."""
+
+    target_path: Path
+    uri: str
+    lang: str
+    value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_owl_comment(taxonomy, self.uri, self.lang, self.value)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlSetNote:
+    """Set (or clear, with ``""``) the editor note on an OWL class/individual/property."""
+
+    target_path: Path
+    uri: str
+    note: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_owl_note(taxonomy, self.uri, self.note)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlAddExternalSuperclass:
+    """Add an external ``rdfs:subClassOf`` to a class, stubbing the external class + namespace."""
+
+    target_path: Path
+    source_uri: str
+    ext_class_uri: str
+    namespace: str = ""
+    prefix: str = ""
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_external_superclass(
+            taxonomy, self.source_uri, self.ext_class_uri, self.namespace, self.prefix
+        )
+        assign_handles(taxonomy)
+        return (self.source_uri,)
+
+
+@dataclass(frozen=True)
+class OwlSetIndividualLiteral:
+    """Edit one of an individual's literal property values (replace in place or append)."""
+
+    target_path: Path
+    ind_uri: str
+    prop_uri: str
+    old_value: str
+    new_value: str
+    lang_or_dt: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_individual_literal(
+            taxonomy,
+            self.ind_uri,
+            self.prop_uri,
+            self.old_value,
+            self.new_value,
+            self.lang_or_dt,
+        )
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlAddPropertyClass:
+    """Add a class to a property's domain or range (*slot* ∈ ``domain``/``range``)."""
+
+    target_path: Path
+    prop_uri: str
+    slot: str
+    class_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_property_class(taxonomy, self.prop_uri, self.slot, self.class_uri)
+        return (self.prop_uri,)
+
+
+@dataclass(frozen=True)
+class OwlRemovePropertyClass:
+    """Remove a class from a property's domain or range."""
+
+    target_path: Path
+    prop_uri: str
+    slot: str
+    class_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_property_class(taxonomy, self.prop_uri, self.slot, self.class_uri)
+        return (self.prop_uri,)
+
+
+@dataclass(frozen=True)
+class OwlRemoveSuperclass:
+    """Detach one ``rdfs:subClassOf`` parent from a class."""
+
+    target_path: Path
+    child_uri: str
+    parent_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_subclass_of(taxonomy, self.child_uri, self.parent_uri)
+        return (self.child_uri,)
+
+
+@dataclass(frozen=True)
+class OwlDeleteIndividual:
+    """Delete an OWL individual."""
+
+    target_path: Path
+    uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        delete_owl_individual(taxonomy, self.uri)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlRemoveIndividualValue:
+    """Remove a ``(prop, value)`` object-property pair from an individual."""
+
+    target_path: Path
+    ind_uri: str
+    prop_uri: str
+    val_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_individual_property_value(taxonomy, self.ind_uri, self.prop_uri, self.val_uri)
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlRemoveIndividualLiteral:
+    """Remove a ``(prop, value, lang/dt)`` literal triple from an individual."""
+
+    target_path: Path
+    ind_uri: str
+    prop_uri: str
+    val_str: str
+    lang_or_dt: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_individual_literal(
+            taxonomy, self.ind_uri, self.prop_uri, self.val_str, self.lang_or_dt
+        )
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlConvertClassToIndividual:
+    """Convert an OWL class into an individual (punning).
+
+    *reattach_to* re-types individuals that were typed as the class; ``None`` deletes them.
+    """
+
+    target_path: Path
+    uri: str
+    reattach_to: tuple[str, ...] | None = None
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        convert_class_to_individual(
+            taxonomy, self.uri, list(self.reattach_to) if self.reattach_to is not None else None
+        )
+        assign_handles(taxonomy)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlConvertIndividualToClass:
+    """Convert an OWL individual into a class (punning)."""
+
+    target_path: Path
+    uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        convert_individual_to_class(taxonomy, self.uri)
+        assign_handles(taxonomy)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlAddIndividualType:
+    """Add an ``rdf:type`` (class) to an individual."""
+
+    target_path: Path
+    ind_uri: str
+    type_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_individual_type(taxonomy, self.ind_uri, self.type_uri)
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlSetIndividualValue:
+    """Add or replace an object-property ``(prop, value)`` pair on an individual."""
+
+    target_path: Path
+    ind_uri: str
+    prop_uri: str
+    new_val_uri: str
+    old_val_uri: str = ""
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_individual_property_value(
+            taxonomy, self.ind_uri, self.prop_uri, self.new_val_uri, self.old_val_uri
+        )
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlRemoveIndividualType:
+    """Remove an ``rdf:type`` from an individual."""
+
+    target_path: Path
+    ind_uri: str
+    type_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_individual_type(taxonomy, self.ind_uri, self.type_uri)
+        return (self.ind_uri,)
 
 
 @dataclass(frozen=True)

@@ -284,9 +284,10 @@ def _viewer_with_open_note(tmp_path, buffer: str):
 
 
 def test_note_editor_esc_commits_in_memory(tmp_path):
-    v, _f, t = _viewer_with_open_note(tmp_path, "# Note\nbody")
+    v, _f, _t = _viewer_with_open_note(tmp_path, "# Note\nbody")
     v._on_note_edit(27)  # Esc
-    assert t.owl_classes[_uri("A")].note == "# Note\nbody"
+    # the service swaps in a fresh clone, so assert on viewer.taxonomy (re-synced)
+    assert v.taxonomy.owl_classes[_uri("A")].note == "# Note\nbody"
 
 
 def test_note_editor_esc_persists_to_file(tmp_path):

@@ -220,3 +220,34 @@ def rename_prefix(taxonomy: Taxonomy, old_prefix: str, new_prefix: str) -> int:
         ns = taxonomy.namespace_bindings.pop(old_prefix)
         taxonomy.namespace_bindings[new_prefix] = ns
     return count_prefix_uses(taxonomy, new_prefix)
+
+
+# Ontology metadata field → the Taxonomy attribute it sets (None-empties a blank value).
+_ONTOLOGY_METADATA_ATTRS = {
+    "label": "ontology_label",
+    "title": "ontology_title",
+    "description": "ontology_description",
+}
+
+
+def set_ontology_prefix(taxonomy: Taxonomy, new_prefix: str) -> None:
+    """Set the ontology's namespace prefix.
+
+    Binds *new_prefix* to the base URI when none is bound yet; otherwise renames the
+    existing prefix (entity URIs are unchanged)."""
+    old = ontology_prefix(taxonomy)
+    if old is None:
+        base = taxonomy.base_uri()
+        if base:
+            taxonomy.namespace_bindings[new_prefix] = base
+    else:
+        rename_prefix(taxonomy, old, new_prefix)
+
+
+def set_ontology_metadata(taxonomy: Taxonomy, field_name: str, value: str) -> None:
+    """Set an ontology metadata field (``label`` / ``title`` / ``description``).
+
+    A blank *value* clears the field (stored as ``None``). Unknown fields are a no-op."""
+    attr = _ONTOLOGY_METADATA_ATTRS.get(field_name)
+    if attr is not None:
+        setattr(taxonomy, attr, value or None)

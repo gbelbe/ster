@@ -359,6 +359,97 @@ def create_scheme(
     return scheme
 
 
+def _set_scheme_base_uri(scheme: ConceptScheme, value: str, _lang: str) -> None:
+    scheme.base_uri = value or ""
+
+
+def _set_scheme_title(scheme: ConceptScheme, value: str, lang: str) -> None:
+    for lbl in scheme.labels:
+        if lbl.type == LabelType.PREF and lbl.lang == lang:
+            lbl.value = value
+            return
+    scheme.labels.append(Label(lang=lang, value=value, type=LabelType.PREF))
+
+
+def _set_scheme_desc(scheme: ConceptScheme, value: str, lang: str) -> None:
+    for desc in scheme.descriptions:
+        if desc.lang == lang:
+            desc.value = value
+            return
+    scheme.descriptions.append(Definition(lang=lang, value=value))
+
+
+def _set_scheme_creator(scheme: ConceptScheme, value: str, _lang: str) -> None:
+    scheme.creator = value
+
+
+def _set_scheme_created(scheme: ConceptScheme, value: str, _lang: str) -> None:
+    scheme.created = value
+
+
+def _set_scheme_languages(scheme: ConceptScheme, value: str, _lang: str) -> None:
+    scheme.languages = [lg.strip() for lg in value.split(",") if lg.strip()]
+
+
+# Dispatch table: scheme field name → setter. Keeps set_scheme_field flat (no
+# if/elif ladder) and makes adding a field a one-row change.
+_SCHEME_FIELD_SETTERS = {
+    "base_uri": _set_scheme_base_uri,
+    "title": _set_scheme_title,
+    "desc": _set_scheme_desc,
+    "creator": _set_scheme_creator,
+    "created": _set_scheme_created,
+    "languages": _set_scheme_languages,
+}
+
+
+# Concept attributes holding cross-scheme SKOS mapping links.
+_MAPPING_ATTRS = {"broad_match", "narrow_match", "related_match", "exact_match", "close_match"}
+
+
+def add_concept_mapping_link(
+    taxonomy: Taxonomy, concept_uri: str, attr: str, target_uri: str
+) -> None:
+    """Append *target_uri* to one mapping-property list on a concept (dedup).
+
+    *attr* is a Python mapping attribute (e.g. ``exact_match``). One *direction*
+    only — the inverse link is a separate call on the target's file. No-op for an
+    unknown concept or non-mapping attr."""
+    concept = taxonomy.concepts.get(concept_uri)
+    if concept is None or attr not in _MAPPING_ATTRS:
+        return
+    lst: list[str] = getattr(concept, attr)
+    if target_uri not in lst:
+        lst.append(target_uri)
+
+
+def remove_concept_mapping_link(
+    taxonomy: Taxonomy, concept_uri: str, attr: str, target_uri: str
+) -> None:
+    """Remove *target_uri* from one mapping-property list on a concept (no-op if absent)."""
+    concept = taxonomy.concepts.get(concept_uri)
+    if concept is None or attr not in _MAPPING_ATTRS:
+        return
+    lst: list[str] = getattr(concept, attr)
+    if target_uri in lst:
+        lst.remove(target_uri)
+
+
+def set_scheme_field(
+    taxonomy: Taxonomy, scheme_uri: str, field_name: str, value: str, lang: str = ""
+) -> None:
+    """Set one field of a ``skos:ConceptScheme`` (no-op for an unknown scheme or field).
+
+    *field_name* is one of ``base_uri`` / ``title`` / ``desc`` / ``creator`` /
+    ``created`` / ``languages``; *lang* applies to the localized ones."""
+    scheme = taxonomy.schemes.get(scheme_uri)
+    if scheme is None:
+        return
+    setter = _SCHEME_FIELD_SETTERS.get(field_name)
+    if setter is not None:
+        setter(scheme, value, lang)
+
+
 def _subtree_uris(taxonomy: Taxonomy, root_uri: str) -> set[str]:
     """Return all URIs in the subtree rooted at root_uri (inclusive)."""
     result: set[str] = set()

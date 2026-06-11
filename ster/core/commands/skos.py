@@ -8,15 +8,19 @@ from pathlib import Path
 from ...model import LabelType, Taxonomy
 from ...operations import (
     add_broader_link,
+    add_concept,
+    add_concept_mapping_link,
     add_related,
     create_scheme,
     move_concept,
     remove_concept,
+    remove_concept_mapping_link,
     remove_definition,
     remove_label,
     remove_scope_note,
     set_definition,
     set_label,
+    set_scheme_field,
     set_scope_note,
 )
 
@@ -58,6 +62,38 @@ class SkosRemoveConcept:
 
 
 @dataclass(frozen=True)
+class SkosAddMappingLink:
+    """Add one directional cross-scheme mapping link to a concept's mapping list.
+
+    *attr* is the Python mapping attribute (``exact_match`` etc.). The inverse link
+    on the target's file is a separate command — the viewer orchestrates both.
+    """
+
+    target_path: Path
+    concept_uri: str
+    attr: str
+    target_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_concept_mapping_link(taxonomy, self.concept_uri, self.attr, self.target_uri)
+        return (self.concept_uri,)
+
+
+@dataclass(frozen=True)
+class SkosRemoveMappingLink:
+    """Remove one directional cross-scheme mapping link from a concept's mapping list."""
+
+    target_path: Path
+    concept_uri: str
+    attr: str
+    target_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_concept_mapping_link(taxonomy, self.concept_uri, self.attr, self.target_uri)
+        return (self.concept_uri,)
+
+
+@dataclass(frozen=True)
 class SkosAddRelated:
     """Add a symmetric ``skos:related`` link between two concepts."""
 
@@ -90,6 +126,43 @@ class SkosCreateScheme:
             labels=dict(self.labels),
             base_uri=self.base_uri,
             languages=list(self.languages),
+        )
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class SkosSetSchemeField:
+    """Set one field of a ``skos:ConceptScheme`` (title/desc/base_uri/creator/created/languages)."""
+
+    target_path: Path
+    scheme_uri: str
+    field_name: str
+    value: str
+    lang: str = ""
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_scheme_field(taxonomy, self.scheme_uri, self.field_name, self.value, self.lang)
+        return (self.scheme_uri,)
+
+
+@dataclass(frozen=True)
+class SkosAddConcept:
+    """Add a new ``skos:Concept``. *parent_handle* may be a concept or scheme
+    handle/URI (None → top concept of the primary scheme)."""
+
+    target_path: Path
+    uri: str
+    pref_labels: dict[str, str]
+    parent_handle: str | None = None
+    definitions: dict[str, str] | None = None
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_concept(
+            taxonomy,
+            self.uri,
+            dict(self.pref_labels),
+            parent_handle=self.parent_handle,
+            definitions=dict(self.definitions) if self.definitions else None,
         )
         return (self.uri,)
 

@@ -8,21 +8,48 @@ from pathlib import Path
 
 from ster import store
 from ster.core.commands import (
+    AddSchemaMedia,
     ChangeSet,
     OntoRenameUri,
+    OntoSetMetadata,
+    OntoSetPrefix,
+    OwlAddExternalSuperclass,
+    OwlAddIndividualType,
+    OwlAddProperty,
+    OwlAddPropertyClass,
+    OwlConvertClassToIndividual,
+    OwlConvertIndividualToClass,
+    OwlCreateIndividual,
+    OwlCreateSubclass,
     OwlDeleteClass,
+    OwlDeleteIndividual,
     OwlDeleteProperty,
     OwlMoveClass,
+    OwlRemoveIndividualLiteral,
+    OwlRemoveIndividualType,
+    OwlRemoveIndividualValue,
+    OwlRemovePropertyClass,
+    OwlRemoveSuperclass,
+    OwlSetComment,
+    OwlSetIndividualLiteral,
+    OwlSetIndividualValue,
+    OwlSetLabel,
+    OwlSetNote,
+    RemoveSchemaMedia,
     RenameEntity,
+    SkosAddConcept,
+    SkosAddMappingLink,
     SkosAddRelated,
     SkosCreateScheme,
     SkosMoveConcept,
     SkosRemoveConcept,
     SkosRemoveDefinition,
     SkosRemoveLabel,
+    SkosRemoveMappingLink,
     SkosRemoveScopeNote,
     SkosSetDefinition,
     SkosSetLabel,
+    SkosSetSchemeField,
     SkosSetScopeNote,
 )
 from ster.core.service import TaxonomyService
@@ -354,6 +381,60 @@ def test_create_scheme_adds_scheme() -> None:
     assert len(pers.saved) == 1
 
 
+# ── SkosSetSchemeField (one command, dispatch-table over the 6 scheme fields) ───
+
+
+def _scheme(ws: _FakeWorkspace) -> ConceptScheme:
+    return ws.taxonomies[PATH].schemes[f"{NS}Scheme"]
+
+
+def test_set_scheme_title_upserts_pref_label() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "title", "Animals", "en"))
+    assert result.ok
+    assert _scheme(ws).title("en") == "Animals"
+
+
+def test_set_scheme_desc_sets_description() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "desc", "all the animals", "en"))
+    assert [(d.lang, d.value) for d in _scheme(ws).descriptions] == [("en", "all the animals")]
+
+
+def test_set_scheme_base_uri() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "base_uri", "https://ex.org/a/"))
+    assert _scheme(ws).base_uri == "https://ex.org/a/"
+
+
+def test_set_scheme_creator_and_created() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "creator", "Ada"))
+    svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "created", "2026-06-11"))
+    assert _scheme(ws).creator == "Ada"
+    assert _scheme(ws).created == "2026-06-11"
+
+
+def test_set_scheme_languages_parses_csv() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "languages", " en , fr ,, nl "))
+    assert _scheme(ws).languages == ["en", "fr", "nl"]
+
+
+def test_set_scheme_field_unknown_field_is_noop() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosSetSchemeField(PATH, f"{NS}Scheme", "bogus", "x"))
+    assert result.ok
+    assert _scheme(ws).creator == ""
+
+
+def test_set_scheme_field_unknown_scheme_is_noop() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosSetSchemeField(PATH, f"{NS}Ghost", "title", "x", "en"))
+    assert result.ok
+    assert f"{NS}Ghost" not in ws.taxonomies[PATH].schemes
+
+
 # ── OwlDeleteProperty (declaration only vs clear-values-then-delete) ───────────
 
 
@@ -398,6 +479,39 @@ def test_onto_rename_uri_propagates_to_local_entities() -> None:
     assert tax.ontology_uri == "https://new.org/onto"
     assert "https://new.org/onto/Dog" in tax.owl_classes
     assert "https://ex.org/t/Dog" not in tax.owl_classes
+
+
+# ── OntoSetMetadata (ontology label / title / description) ──────────────────────
+
+
+def test_set_ontology_label() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OntoSetMetadata(PATH, "label", "My Ontology"))
+    assert result.ok
+    assert ws.taxonomies[PATH].ontology_label == "My Ontology"
+
+
+def test_set_ontology_title_and_description() -> None:
+    svc, ws, _ = _service()
+    svc.execute(OntoSetMetadata(PATH, "title", "Title"))
+    svc.execute(OntoSetMetadata(PATH, "description", "A description"))
+    tax = ws.taxonomies[PATH]
+    assert tax.ontology_title == "Title"
+    assert tax.ontology_description == "A description"
+
+
+def test_set_ontology_metadata_blank_clears_to_none() -> None:
+    svc, ws, _ = _service()
+    svc.execute(OntoSetMetadata(PATH, "label", "X"))
+    svc.execute(OntoSetMetadata(PATH, "label", ""))
+    assert ws.taxonomies[PATH].ontology_label is None
+
+
+def test_set_ontology_metadata_unknown_field_is_noop() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OntoSetMetadata(PATH, "bogus", "x"))
+    assert result.ok
+    assert ws.taxonomies[PATH].ontology_label is None
 
 
 # ── RenameEntity (cross-layer) ─────────────────────────────────────────────────
@@ -571,3 +685,518 @@ def test_changeset_rolls_back_entirely_when_one_command_fails() -> None:
     assert pers.saved == []  # nothing persisted
     # the first command's effect was rolled back with the batch
     assert ws.taxonomies[PATH].concepts[f"{NS}Top"].definitions == []
+
+
+# ── SkosAddConcept ──────────────────────────────────────────────────────────────
+
+
+def test_add_concept_as_scheme_top_concept() -> None:
+    svc, ws, pers = _skos_service()
+    result = svc.execute(
+        SkosAddConcept(PATH, f"{NS}New", {"en": "New"}, parent_handle=f"{NS}Scheme")
+    )
+    assert result.ok
+    assert result.affected_uris == (f"{NS}New",)
+    tax = ws.taxonomies[PATH]
+    assert f"{NS}New" in tax.concepts
+    assert f"{NS}New" in tax.schemes[f"{NS}Scheme"].top_concepts
+    assert len(pers.saved) == 1
+
+
+def test_add_concept_under_a_parent_concept() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosAddConcept(PATH, f"{NS}Pup", {"en": "Pup"}, parent_handle=f"{NS}Top"))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert tax.concepts[f"{NS}Pup"].broader == [f"{NS}Top"]
+    assert f"{NS}Pup" in tax.concepts[f"{NS}Top"].narrower
+
+
+# ── OwlAddProperty (bare vs domain-typed) ──────────────────────────────────────
+
+
+def test_add_property_bare_matches_default_owl_property() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlAddProperty(PATH, f"{NS}rel", "ObjectProperty", "", "en"))
+    assert result.ok
+    prop = ws.taxonomies[PATH].owl_properties[f"{NS}rel"]
+    assert prop.prop_type == "ObjectProperty"
+    assert prop.labels == [] and prop.domains == [] and prop.ranges == []
+
+
+def test_add_property_with_domain_and_range() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(
+        OwlAddProperty(PATH, f"{NS}eats", "ObjectProperty", "eats", "en", f"{NS}Dog", f"{NS}Animal")
+    )
+    assert result.ok
+    prop = ws.taxonomies[PATH].owl_properties[f"{NS}eats"]
+    assert prop.domains == [f"{NS}Dog"]
+    assert prop.ranges == [f"{NS}Animal"]
+    assert any(lbl.value == "eats" for lbl in prop.labels)
+
+
+# ── OwlCreateSubclass (create class + link, swallowing bad links) ──────────────
+
+
+def test_create_subclass_creates_and_links() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlCreateSubclass(PATH, f"{NS}Puppy", f"{NS}Dog"))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert tax.owl_classes[f"{NS}Puppy"].sub_class_of == [f"{NS}Dog"]
+
+
+def test_create_subclass_no_parent_is_a_root() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlCreateSubclass(PATH, f"{NS}Thing", None))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Thing"].sub_class_of == []
+
+
+def test_create_subclass_swallows_missing_parent() -> None:
+    svc, ws, _ = _service()
+    # parent does not exist → the link is skipped, but the class is still created
+    result = svc.execute(OwlCreateSubclass(PATH, f"{NS}Orphan", f"{NS}Ghost"))
+    assert result.ok
+    assert f"{NS}Orphan" in ws.taxonomies[PATH].owl_classes
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Orphan"].sub_class_of == []
+
+
+# ── OwlSetLabel / OwlSetComment (rdfs:label / rdfs:comment, upsert by lang) ─────
+
+
+def _owl_entities_service() -> tuple[TaxonomyService, _FakeWorkspace]:
+    """Taxonomy with one class, one individual, one property — each label-bearing."""
+    t = Taxonomy()
+    t.ontology_uri = "https://ex.org/t"
+    t.owl_classes[f"{NS}Dog"] = RDFClass(uri=f"{NS}Dog", labels=[Label(lang="en", value="Dog")])
+    t.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    t.owl_properties[f"{NS}hasColor"] = OWLProperty(uri=f"{NS}hasColor")
+    ws = _FakeWorkspace({PATH: t})
+    return TaxonomyService(ws, _FakePersistence()), ws
+
+
+def test_set_owl_label_replaces_existing_lang_on_class() -> None:
+    svc, ws = _owl_entities_service()
+    result = svc.execute(OwlSetLabel(PATH, f"{NS}Dog", "en", "Hound"))
+    assert result.ok
+    labels = ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].labels
+    assert [(l.lang, l.value) for l in labels] == [("en", "Hound")]
+
+
+def test_set_owl_label_appends_new_lang_on_individual() -> None:
+    svc, ws = _owl_entities_service()
+    result = svc.execute(OwlSetLabel(PATH, f"{NS}Rex", "fr", "Rex"))
+    assert result.ok
+    labels = ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].labels
+    assert ("fr", "Rex") in [(l.lang, l.value) for l in labels]
+
+
+def test_set_owl_comment_on_property() -> None:
+    svc, ws = _owl_entities_service()
+    result = svc.execute(OwlSetComment(PATH, f"{NS}hasColor", "en", "the colour"))
+    assert result.ok
+    comments = ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"].comments
+    assert [(c.lang, c.value) for c in comments] == [("en", "the colour")]
+
+
+def test_set_owl_label_missing_entity_is_noop() -> None:
+    svc, ws = _owl_entities_service()
+    result = svc.execute(OwlSetLabel(PATH, f"{NS}Ghost", "en", "x"))
+    # unknown uri: command succeeds but changes nothing (matches the inline handler)
+    assert result.ok
+    assert f"{NS}Ghost" not in ws.taxonomies[PATH].owl_classes
+
+
+# ── OwlCreateIndividual (create an individual, optionally typed) ────────────────
+
+
+def test_create_individual_typed() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlCreateIndividual(PATH, f"{NS}Rex", f"{NS}Dog"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].types == [f"{NS}Dog"]
+
+
+def test_create_individual_untyped() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlCreateIndividual(PATH, f"{NS}Thing", None))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Thing"].types == []
+
+
+def test_create_individual_existing_is_noop() -> None:
+    svc, ws, _ = _service()
+    svc.execute(OwlCreateIndividual(PATH, f"{NS}Rex", f"{NS}Dog"))
+    # second create with a different type must not retype the existing individual
+    result = svc.execute(OwlCreateIndividual(PATH, f"{NS}Rex", f"{NS}Mammal"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].types == [f"{NS}Dog"]
+
+
+# ── OwlSetIndividualLiteral (edit a literal property value) ─────────────────────
+
+
+def _service_with_individual_literal() -> tuple[TaxonomyService, _FakeWorkspace]:
+    t = Taxonomy()
+    t.ontology_uri = "https://ex.org/t"
+    ind = OWLIndividual(uri=f"{NS}Rex", literal_values=[(f"{NS}age", "3", "")])
+    t.owl_individuals[ind.uri] = ind
+    ws = _FakeWorkspace({PATH: t})
+    return TaxonomyService(ws, _FakePersistence()), ws
+
+
+def test_set_individual_literal_replaces_existing() -> None:
+    svc, ws = _service_with_individual_literal()
+    result = svc.execute(OwlSetIndividualLiteral(PATH, f"{NS}Rex", f"{NS}age", "3", "4", ""))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].literal_values == [(f"{NS}age", "4", "")]
+
+
+def test_set_individual_literal_appends_when_no_match() -> None:
+    svc, ws = _service_with_individual_literal()
+    # old value "9" matches no existing triple → the new triple is appended
+    result = svc.execute(OwlSetIndividualLiteral(PATH, f"{NS}Rex", f"{NS}age", "9", "5", ""))
+    assert result.ok
+    vals = ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].literal_values
+    assert (f"{NS}age", "5", "") in vals
+
+
+def test_set_individual_literal_missing_individual_is_noop() -> None:
+    svc, ws = _service_with_individual_literal()
+    result = svc.execute(OwlSetIndividualLiteral(PATH, f"{NS}Ghost", f"{NS}age", "3", "4", ""))
+    assert result.ok
+    assert f"{NS}Ghost" not in ws.taxonomies[PATH].owl_individuals
+
+
+# ── AddSchemaMedia / RemoveSchemaMedia (cross-layer schema.org media) ───────────
+
+
+def test_add_schema_media_image_on_class() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(AddSchemaMedia(PATH, f"{NS}Dog", "image", "https://ex.org/dog.png"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].schema_images == ["https://ex.org/dog.png"]
+
+
+def test_add_schema_media_dedups() -> None:
+    svc, ws, _ = _service()
+    svc.execute(AddSchemaMedia(PATH, f"{NS}Dog", "url", "https://ex.org/d"))
+    svc.execute(AddSchemaMedia(PATH, f"{NS}Dog", "url", "https://ex.org/d"))
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].schema_urls == ["https://ex.org/d"]
+
+
+def test_add_schema_media_unknown_kind_is_noop() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(AddSchemaMedia(PATH, f"{NS}Dog", "bogus", "x"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].schema_images == []
+
+
+def test_remove_schema_media_video() -> None:
+    svc, ws, _ = _service()
+    svc.execute(AddSchemaMedia(PATH, f"{NS}Dog", "video", "https://ex.org/v.mp4"))
+    result = svc.execute(RemoveSchemaMedia(PATH, f"{NS}Dog", "video", "https://ex.org/v.mp4"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].schema_videos == []
+
+
+def test_remove_schema_media_missing_url_is_noop() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(RemoveSchemaMedia(PATH, f"{NS}Dog", "image", "https://ex.org/none.png"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].schema_images == []
+
+
+# ── OwlAddPropertyClass / OwlRemovePropertyClass (property domain & range) ──────
+
+
+def test_add_property_domain_and_range() -> None:
+    svc, ws, _ = _service_with_property()
+    svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "domain", f"{NS}Dog"))
+    svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "range", f"{NS}Animal"))
+    prop = ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"]
+    assert prop.domains == [f"{NS}Dog"]
+    assert prop.ranges == [f"{NS}Animal"]
+
+
+def test_add_property_class_dedups() -> None:
+    svc, ws, _ = _service_with_property()
+    svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "domain", f"{NS}Dog"))
+    svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "domain", f"{NS}Dog"))
+    assert ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"].domains == [f"{NS}Dog"]
+
+
+def test_add_property_class_unknown_slot_is_noop() -> None:
+    svc, ws, _ = _service_with_property()
+    result = svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "bogus", f"{NS}Dog"))
+    assert result.ok
+    prop = ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"]
+    assert prop.domains == [] and prop.ranges == []
+
+
+def test_remove_property_domain() -> None:
+    svc, ws, _ = _service_with_property()
+    svc.execute(OwlAddPropertyClass(PATH, f"{NS}hasColor", "domain", f"{NS}Dog"))
+    result = svc.execute(OwlRemovePropertyClass(PATH, f"{NS}hasColor", "domain", f"{NS}Dog"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"].domains == []
+
+
+def test_remove_property_class_absent_is_noop() -> None:
+    svc, ws, _ = _service_with_property()
+    result = svc.execute(OwlRemovePropertyClass(PATH, f"{NS}hasColor", "range", f"{NS}Ghost"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_properties[f"{NS}hasColor"].ranges == []
+
+
+# ── _trigger_action removes: superclass / individual / value / literal / type ───
+
+
+def _service_with_rich_individual() -> tuple[TaxonomyService, _FakeWorkspace]:
+    t = _taxonomy()  # Animal, Mammal, Dog(sub_class_of Animal)
+    t.owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex",
+        types=[f"{NS}Dog", f"{NS}Mammal"],
+        property_values=[(f"{NS}owner", f"{NS}Ann")],
+        literal_values=[(f"{NS}age", "3", "")],
+    )
+    ws = _FakeWorkspace({PATH: t})
+    return TaxonomyService(ws, _FakePersistence()), ws
+
+
+def test_remove_superclass_detaches_one_parent() -> None:
+    svc, ws, _ = _service()
+    result = svc.execute(OwlRemoveSuperclass(PATH, f"{NS}Dog", f"{NS}Animal"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].sub_class_of == []
+
+
+def test_delete_individual_removes_it() -> None:
+    svc, ws = _service_with_rich_individual()
+    result = svc.execute(OwlDeleteIndividual(PATH, f"{NS}Rex"))
+    assert result.ok
+    assert f"{NS}Rex" not in ws.taxonomies[PATH].owl_individuals
+
+
+def test_remove_individual_property_value() -> None:
+    svc, ws = _service_with_rich_individual()
+    result = svc.execute(OwlRemoveIndividualValue(PATH, f"{NS}Rex", f"{NS}owner", f"{NS}Ann"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].property_values == []
+
+
+def test_remove_individual_literal() -> None:
+    svc, ws = _service_with_rich_individual()
+    result = svc.execute(OwlRemoveIndividualLiteral(PATH, f"{NS}Rex", f"{NS}age", "3", ""))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].literal_values == []
+
+
+def test_remove_individual_type() -> None:
+    svc, ws = _service_with_rich_individual()
+    result = svc.execute(OwlRemoveIndividualType(PATH, f"{NS}Rex", f"{NS}Mammal"))
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].types == [f"{NS}Dog"]
+
+
+def test_remove_individual_ops_missing_individual_are_noops() -> None:
+    svc, ws = _service_with_rich_individual()
+    assert svc.execute(OwlRemoveIndividualType(PATH, f"{NS}Ghost", f"{NS}Dog")).ok
+    assert svc.execute(OwlRemoveIndividualValue(PATH, f"{NS}Ghost", f"{NS}o", f"{NS}v")).ok
+    assert svc.execute(OwlRemoveIndividualLiteral(PATH, f"{NS}Ghost", f"{NS}age", "3", "")).ok
+    assert f"{NS}Ghost" not in ws.taxonomies[PATH].owl_individuals
+
+
+# ── add_prop_value / add_ind_type confirm paths (OwlSetIndividualValue / Type) ──
+
+
+def test_add_individual_type_dedups() -> None:
+    svc, ws = _service_with_rich_individual()  # Rex types [Dog, Mammal]
+    svc.execute(OwlAddIndividualType(PATH, f"{NS}Rex", f"{NS}Animal"))
+    svc.execute(OwlAddIndividualType(PATH, f"{NS}Rex", f"{NS}Animal"))
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].types == [
+        f"{NS}Dog",
+        f"{NS}Mammal",
+        f"{NS}Animal",
+    ]
+
+
+def test_set_individual_value_appends_new_pair() -> None:
+    svc, ws = _service_with_rich_individual()  # Rex owner Ann
+    result = svc.execute(OwlSetIndividualValue(PATH, f"{NS}Rex", f"{NS}owner", f"{NS}Bob"))
+    assert result.ok
+    assert (f"{NS}owner", f"{NS}Bob") in ws.taxonomies[PATH].owl_individuals[
+        f"{NS}Rex"
+    ].property_values
+
+
+def test_set_individual_value_replaces_old_pair() -> None:
+    svc, ws = _service_with_rich_individual()
+    result = svc.execute(
+        OwlSetIndividualValue(PATH, f"{NS}Rex", f"{NS}owner", f"{NS}Bob", old_val_uri=f"{NS}Ann")
+    )
+    assert result.ok
+    vals = ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].property_values
+    assert vals == [(f"{NS}owner", f"{NS}Bob")]
+
+
+def test_set_individual_value_dedups_when_present() -> None:
+    svc, ws = _service_with_rich_individual()
+    svc.execute(OwlSetIndividualValue(PATH, f"{NS}Rex", f"{NS}owner", f"{NS}Ann"))
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].property_values == [
+        (f"{NS}owner", f"{NS}Ann")
+    ]
+
+
+# ── SkosAddMappingLink / SkosRemoveMappingLink (one directional cross-scheme link) ──
+
+
+def test_add_mapping_link_appends_to_concept() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosAddMappingLink(PATH, f"{NS}Child", "exact_match", f"{NS}Other"))
+    assert result.ok
+    assert ws.taxonomies[PATH].concepts[f"{NS}Child"].exact_match == [f"{NS}Other"]
+
+
+def test_add_mapping_link_dedups() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosAddMappingLink(PATH, f"{NS}Child", "broad_match", f"{NS}Other"))
+    svc.execute(SkosAddMappingLink(PATH, f"{NS}Child", "broad_match", f"{NS}Other"))
+    assert ws.taxonomies[PATH].concepts[f"{NS}Child"].broad_match == [f"{NS}Other"]
+
+
+def test_remove_mapping_link() -> None:
+    svc, ws, _ = _skos_service()
+    svc.execute(SkosAddMappingLink(PATH, f"{NS}Child", "exact_match", f"{NS}Other"))
+    result = svc.execute(SkosRemoveMappingLink(PATH, f"{NS}Child", "exact_match", f"{NS}Other"))
+    assert result.ok
+    assert ws.taxonomies[PATH].concepts[f"{NS}Child"].exact_match == []
+
+
+def test_mapping_link_unknown_attr_is_noop() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosAddMappingLink(PATH, f"{NS}Child", "bogus_match", f"{NS}Other"))
+    assert result.ok
+    assert ws.taxonomies[PATH].concepts[f"{NS}Child"].exact_match == []
+
+
+def test_mapping_link_unknown_concept_is_noop() -> None:
+    svc, ws, _ = _skos_service()
+    result = svc.execute(SkosAddMappingLink(PATH, f"{NS}Ghost", "exact_match", f"{NS}Other"))
+    assert result.ok
+    assert f"{NS}Ghost" not in ws.taxonomies[PATH].concepts
+
+
+# ── class ↔ individual conversion (punning) ─────────────────────────────────────
+
+
+def test_convert_class_to_individual_carries_supertypes() -> None:
+    svc, ws, _ = _service()  # Dog sub_class_of Animal
+    result = svc.execute(OwlConvertClassToIndividual(PATH, f"{NS}Dog"))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert f"{NS}Dog" not in tax.owl_classes
+    assert tax.owl_individuals[f"{NS}Dog"].types == [f"{NS}Animal"]
+
+
+def test_convert_class_to_individual_reattaches_affected() -> None:
+    svc, ws, _ = _service()
+    ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex", types=[f"{NS}Dog"]
+    )
+    result = svc.execute(
+        OwlConvertClassToIndividual(PATH, f"{NS}Dog", reattach_to=(f"{NS}Animal",))
+    )
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"].types == [f"{NS}Animal"]
+
+
+def test_convert_class_to_individual_deletes_affected_without_reattach() -> None:
+    svc, ws, _ = _service()
+    ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex", types=[f"{NS}Dog"]
+    )
+    result = svc.execute(OwlConvertClassToIndividual(PATH, f"{NS}Dog"))
+    assert result.ok
+    assert f"{NS}Rex" not in ws.taxonomies[PATH].owl_individuals
+
+
+def test_convert_class_to_individual_scrubs_references() -> None:
+    svc, ws, _ = _service()
+    tax = ws.taxonomies[PATH]
+    tax.owl_classes[f"{NS}Puppy"] = RDFClass(uri=f"{NS}Puppy", sub_class_of=[f"{NS}Dog"])
+    tax.owl_properties[f"{NS}p"] = OWLProperty(uri=f"{NS}p", domains=[f"{NS}Dog"])
+    svc.execute(OwlConvertClassToIndividual(PATH, f"{NS}Dog"))
+    tax = ws.taxonomies[PATH]
+    assert tax.owl_classes[f"{NS}Puppy"].sub_class_of == []
+    assert tax.owl_properties[f"{NS}p"].domains == []
+
+
+def test_convert_individual_to_class_carries_types() -> None:
+    svc, ws, _ = _service()
+    ws.taxonomies[PATH].owl_individuals[f"{NS}Rex"] = OWLIndividual(
+        uri=f"{NS}Rex", types=[f"{NS}Dog"]
+    )
+    result = svc.execute(OwlConvertIndividualToClass(PATH, f"{NS}Rex"))
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert f"{NS}Rex" not in tax.owl_individuals
+    assert tax.owl_classes[f"{NS}Rex"].sub_class_of == [f"{NS}Dog"]
+
+
+def test_convert_individual_to_class_strips_pointing_values() -> None:
+    svc, ws, _ = _service()
+    tax = ws.taxonomies[PATH]
+    tax.owl_individuals[f"{NS}Rex"] = OWLIndividual(uri=f"{NS}Rex", types=[f"{NS}Dog"])
+    tax.owl_individuals[f"{NS}Ann"] = OWLIndividual(
+        uri=f"{NS}Ann", property_values=[(f"{NS}owns", f"{NS}Rex")]
+    )
+    svc.execute(OwlConvertIndividualToClass(PATH, f"{NS}Rex"))
+    assert ws.taxonomies[PATH].owl_individuals[f"{NS}Ann"].property_values == []
+
+
+def test_convert_unknown_entity_is_noop() -> None:
+    svc, ws, _ = _service()
+    assert svc.execute(OwlConvertClassToIndividual(PATH, f"{NS}Ghost")).ok
+    assert svc.execute(OwlConvertIndividualToClass(PATH, f"{NS}Ghost")).ok
+
+
+# ── OwlSetNote / OwlAddExternalSuperclass / OntoSetPrefix (final sweep) ──────────
+
+
+def test_set_owl_note_and_clear() -> None:
+    svc, ws, _ = _service()
+    svc.execute(OwlSetNote(PATH, f"{NS}Dog", "a note"))
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].note == "a note"
+    svc.execute(OwlSetNote(PATH, f"{NS}Dog", ""))
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].note == ""
+
+
+def test_add_external_superclass_stubs_class_and_namespace() -> None:
+    svc, ws, _ = _service()
+    ext = "https://schema.org/Thing"
+    result = svc.execute(
+        OwlAddExternalSuperclass(PATH, f"{NS}Dog", ext, "https://schema.org/", "schema")
+    )
+    assert result.ok
+    tax = ws.taxonomies[PATH]
+    assert ext in tax.owl_classes[f"{NS}Dog"].sub_class_of
+    assert ext in tax.owl_classes  # stubbed
+    assert tax.namespace_bindings.get("schema") == "https://schema.org/"
+
+
+def test_set_ontology_prefix_binds_when_absent() -> None:
+    svc, ws, _ = _service()  # ontology_uri https://ex.org/t (no prefix bound)
+    result = svc.execute(OntoSetPrefix(PATH, "ex"))
+    assert result.ok
+    assert "ex" in ws.taxonomies[PATH].namespace_bindings
+
+
+def test_set_ontology_prefix_renames_existing() -> None:
+    svc, ws, _ = _service()
+    ws.taxonomies[PATH].namespace_bindings["old"] = "https://ex.org/t/"
+    svc.execute(OntoSetPrefix(PATH, "neo"))
+    binds = ws.taxonomies[PATH].namespace_bindings
+    assert "neo" in binds and "old" not in binds

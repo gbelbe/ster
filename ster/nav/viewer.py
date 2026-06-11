@@ -25,8 +25,7 @@ from .. import analysis_cache, operations, store
 from .._version import __version__ as _VERSION
 from .._version import check_update as _check_update
 from ..display import console, render_tree
-from ..exceptions import SkostaxError
-from ..model import Definition, Label, LabelType, OWLIndividual, Taxonomy, is_builtin_uri
+from ..model import Taxonomy, is_builtin_uri
 from ..taxonomy_analysis import SchemeAnalysis
 from ..workspace import TaxonomyWorkspace
 from .editor import _apply_line_edit, _word_start_left, _word_start_right, read_keycode
@@ -2586,33 +2585,91 @@ class TaxonomyViewer:
             except (ValueError, OverflowError):
                 pass
 
+    def _initialize_ontology(self, uri: str, sep: str, name: str) -> None:
+        """First-time ontology declaration: set the base URI + label via the service,
+        reusing the rename + metadata commands in one atomic change."""
+        from ..core.commands import ChangeSet, OntoRenameUri, OntoSetMetadata
+
+        init_cmds: list = [
+            OntoRenameUri(self.file_path, uri, sep),
+            OntoSetMetadata(self.file_path, "label", name),
+        ]
+        self._service().execute(ChangeSet(self.file_path, tuple(init_cmds)))  # type: ignore[attr-defined]
+        self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
+        self._rebuild()
+
+    def _set_note(self, uri: str, note: str) -> None:
+        """Set/clear an OWL entity's editor note via the service (entity kind auto-detected)."""
+        from ..core.commands import OwlSetNote
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlSetNote(self._owner_path(uri), uri, note)
+        )
+        self._detail_uri = uri
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
     def _commit_note_edit(self) -> None:
         if not isinstance(self._state, NoteEditState):
             return
         ns = self._state
-        uri = ns.return_uri
-        etype = ns.entity_type
-        new_note = ns.buffer
-        if etype == "class":
-            entity = self.taxonomy.owl_classes.get(uri)
-            if entity:
-                entity.note = new_note
-                self._detail_fields = self._bcdf(uri)
-        elif etype == "individual":
-            entity = self.taxonomy.owl_individuals.get(uri)  # type: ignore[assignment]
-            if entity:
-                entity.note = new_note
-                self._detail_fields = self._bidf(uri)
-        elif etype == "property":
-            entity = self.taxonomy.owl_properties.get(uri)  # type: ignore[assignment]
-            if entity:
-                entity.note = new_note
-                self._detail_fields = self._bpropf(uri)
-        self._detail_uri = uri
-        self._save_file()
+        self._set_note(ns.return_uri, ns.buffer)
         self._state = DetailState()
+
+    def _add_owl_property_via_service(
+        self, uri: str, prop_type: str, label: str, domain_uri: str | None, range_uri: str | None
+    ) -> None:
+        """Create *uri* as an OWL property via the service (no-op if it exists), then show it."""
+        if uri not in self.taxonomy.owl_properties:
+            from ..core.commands import OwlAddProperty
+
+            result = self._service().execute(  # type: ignore[attr-defined]
+                OwlAddProperty(
+                    self.file_path, uri, prop_type, label, self.lang, domain_uri, range_uri
+                )
+            )
+            if not result.ok:
+                self._status = result.error or "Create failed"
+                return
+            self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
+            self._rebuild()
         self._detail_uri = uri
-        self._save_file()
+        self._detail_fields = self._bpropf(uri)
+        self._field_cursor = 0
+
+    def _commit_new_property(self, f: DetailField, new_value: str) -> None:
+        """Create an OWL property from a 'new property' field (bare or domain-typed)."""
+        if f.meta.get("type") == "new_owl_property_uri":
+            uri = _ensure_full_uri(new_value, self.taxonomy) if new_value else ""
+            if uri:
+                self._add_owl_property_via_service(uri, "ObjectProperty", "", None, None)
+        elif new_value:  # new_owl_class_property_uri
+            label = new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+            self._add_owl_property_via_service(
+                new_value,
+                f.meta.get("prop_type", "ObjectProperty"),
+                label,
+                f.meta.get("class_uri") or None,
+                f.meta.get("range_uri"),
+            )
+        self._state = DetailState()
+
+    def _commit_new_individual(self, f: DetailField, new_value: str) -> None:
+        """Create an OWL individual via the service (no-op if it exists), then show it."""
+        if new_value and new_value not in self.taxonomy.owl_individuals:
+            from ..core.commands import OwlCreateIndividual
+
+            result = self._service().execute(  # type: ignore[attr-defined]
+                OwlCreateIndividual(self.file_path, new_value, f.meta.get("class_uri") or None)
+            )
+            if not result.ok:
+                self._status = result.error or "Create failed"
+                self._state = DetailState()
+                return
+            self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
+            self._rebuild()
+        self._detail_uri = new_value
+        self._detail_fields = self._bidf(new_value)
+        self._field_cursor = 0
         self._state = DetailState()
 
     def _commit_edit(self) -> None:
@@ -2682,68 +2739,12 @@ class TaxonomyViewer:
 
         # ── new OWL individual (action-triggered from a class detail panel) ─────
         if f.meta.get("type") == "new_owl_individual_uri":
-            if new_value and new_value not in self.taxonomy.owl_individuals:
-                class_uri = f.meta.get("class_uri", "")
-                self.taxonomy.owl_individuals[new_value] = OWLIndividual(
-                    uri=new_value,
-                    types=[class_uri] if class_uri else [],
-                )
-                from ..handles import assign_handles
-
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            self._detail_uri = new_value
-            self._detail_fields = self._bidf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
+            self._commit_new_individual(f, new_value)
             return
 
-        # ── new OWL property (triggered from Properties section, tree, or overview) ──
-        if f.meta.get("type") == "new_owl_property_uri":
-            if new_value:
-                new_value = _ensure_full_uri(new_value, self.taxonomy)
-            if new_value and new_value not in self.taxonomy.owl_properties:
-                from ..handles import assign_handles
-                from ..model import OWLProperty
-
-                self.taxonomy.owl_properties[new_value] = OWLProperty(uri=new_value)
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            if new_value:
-                self._detail_uri = new_value
-                self._detail_fields = self._bpropf(new_value)
-                self._field_cursor = 0
-            self._state = DetailState()
-            return
-
-        # ── new property with pre-set domain (triggered from a class detail panel) ──
-        if f.meta.get("type") == "new_owl_class_property_uri":
-            if new_value:
-                class_uri = f.meta.get("class_uri", "")
-                prop_type = f.meta.get("prop_type", "ObjectProperty")
-                range_uri = f.meta.get("range_uri")
-                if new_value not in self.taxonomy.owl_properties:
-                    from ..handles import assign_handles
-                    from ..operations import add_owl_property
-
-                    add_owl_property(
-                        self.taxonomy,
-                        new_value,
-                        prop_type,
-                        new_value.rsplit("#", 1)[-1].rsplit("/", 1)[-1],
-                        self.lang,
-                        class_uri if class_uri else None,
-                        range_uri,
-                    )
-                    assign_handles(self.taxonomy)
-                    self._rebuild()
-                    self._save_file()
-                self._detail_uri = new_value
-                self._detail_fields = self._bpropf(new_value)
-                self._field_cursor = 0
-            self._state = DetailState()
+        # ── new OWL property (bare, or domain-typed from a class detail panel) ──
+        if f.meta.get("type") in ("new_owl_property_uri", "new_owl_class_property_uri"):
+            self._commit_new_property(f, new_value)
             return
 
         # ── OWL class field editing ───────────────────────────────────────────
@@ -2797,6 +2798,47 @@ class TaxonomyViewer:
         result = self._service().execute(command)  # type: ignore[attr-defined]
         self._finish_field_edit(result, uri, self._owner_path(uri))
 
+    def _rebuild_detail_fields(self, uri: str) -> list[DetailField]:
+        """Rebuild detail fields for *uri* after a field edit, dispatching by entity kind."""
+        if _is_ontology_sentinel(uri):
+            return self._boof(self._ontology_sentinel_path(uri))
+        if uri in self.taxonomy.schemes:
+            return self._bsf(uri)
+        if uri in self.taxonomy.owl_classes:
+            if self.taxonomy.node_type(uri) == "promoted":
+                return self._bpdf(uri)
+            return self._bcdf(uri)
+        if uri in self.taxonomy.owl_individuals:
+            return self._bidf(uri)
+        if uri in self.taxonomy.owl_properties:
+            return self._bpropf(uri)
+        return self._bdf(uri)
+
+    def _owl_field_command(self, uri: str, ftype: str | None, lang: str, value: str) -> object:
+        """Build the Command for an OWL class/individual/property label or comment edit."""
+        from ..core.commands import OwlSetComment, OwlSetLabel
+
+        path = self._owner_path(uri)
+        if ftype in ("rdf_label", "ind_label", "prop_label"):
+            return OwlSetLabel(path, uri, lang, value)
+        if ftype in ("rdf_comment", "ind_comment", "prop_comment"):
+            return OwlSetComment(path, uri, lang, value)
+        return None
+
+    def _commit_owl_field(self, f: DetailField, new_value: str) -> bool:
+        """Route an OWL label/comment edit through the service; True when handled."""
+        if self._detail_uri is None:
+            return False
+        uri = self._detail_uri
+        command = self._owl_field_command(
+            uri, f.meta.get("type"), f.meta.get("lang", ""), new_value
+        )
+        if command is None:
+            return False
+        result = self._service().execute(command)  # type: ignore[attr-defined]
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+        return True
+
     def _finish_field_edit(self, result: object, uri: str, target_path: Path) -> None:
         """Light result handler for in-place field edits: refresh detail, surface validation.
 
@@ -2813,44 +2855,42 @@ class TaxonomyViewer:
             self._status = validation.errors[0].message
         else:
             self._status = result.error or "Edit failed"  # type: ignore[attr-defined]
-        self._detail_fields = self._bdf(uri)
+        self._detail_fields = self._rebuild_detail_fields(uri)
+        # a removal shrinks the list — keep the cursor in range
+        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+
+    # Detail-field type → ConceptScheme field name (the service-side vocabulary).
+    _SCHEME_FTYPE_TO_FIELD = {
+        "scheme_base_uri": "base_uri",
+        "scheme_title": "title",
+        "scheme_desc": "desc",
+        "scheme_creator": "creator",
+        "scheme_created": "created",
+        "scheme_languages": "languages",
+    }
+
+    def _scheme_field_command(self, scheme_uri: str, ftype: str | None, lang: str, value: str):
+        """Build the Command for a scheme field edit, or None for an unhandled field."""
+        from ..core.commands import SkosSetSchemeField
+
+        field_name = self._SCHEME_FTYPE_TO_FIELD.get(ftype or "")
+        if field_name is None:
+            return None
+        return SkosSetSchemeField(self._owner_path(scheme_uri), scheme_uri, field_name, value, lang)
 
     def _commit_scheme_edit(self, f: DetailField, new_value: str) -> None:
-        """Commit an edit to a ConceptScheme field."""
-        scheme = self.taxonomy.schemes.get(self._detail_uri or "")
-        if not scheme:
+        """Commit a ConceptScheme field edit via the shared TaxonomyService."""
+        if self._detail_uri not in self.taxonomy.schemes:
             return
-        ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
-
-        if ftype == "scheme_base_uri":
-            scheme.base_uri = new_value or ""
-
-        elif ftype == "scheme_title":
-            for lbl in scheme.labels:
-                if lbl.type == LabelType.PREF and lbl.lang == lang:
-                    lbl.value = new_value
-                    break
-            else:
-                scheme.labels.append(Label(lang=lang, value=new_value, type=LabelType.PREF))
-        elif ftype == "scheme_desc":
-            for desc in scheme.descriptions:
-                if desc.lang == lang:
-                    desc.value = new_value
-                    break
-            else:
-                scheme.descriptions.append(Definition(lang=lang, value=new_value))
-        elif ftype == "scheme_creator":
-            scheme.creator = new_value
-        elif ftype == "scheme_created":
-            scheme.created = new_value
-        elif ftype == "scheme_languages":
-            scheme.languages = [lg.strip() for lg in new_value.split(",") if lg.strip()]
-
-        assert self._detail_uri is not None
-        self._detail_fields = self._bsf(self._detail_uri)
-        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file(uri=self._detail_uri)
+        uri = self._detail_uri
+        assert uri is not None
+        command = self._scheme_field_command(
+            uri, f.meta.get("type"), f.meta.get("lang", ""), new_value
+        )
+        if command is None:
+            return
+        result = self._service().execute(command)  # type: ignore[attr-defined]
+        self._finish_field_edit(result, uri, self._owner_path(uri))
 
     def _commit_owl_class_edit(self, f: DetailField, new_value: str) -> None:
         """Commit an edit to an OWL/RDFS class field (rdfs:label or rdfs:comment)."""
@@ -2858,101 +2898,58 @@ class TaxonomyViewer:
         if not rdf_class or not new_value:
             return
         ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
         if ftype == "uri":
             self._start_rename_uri(new_value)
             return
         if ftype == "new_subclass_uri":
-            parent_uri = f.meta.get("parent_uri", "")
-            from ..exceptions import CircularHierarchyError, ClassNotFoundError
-            from ..handles import assign_handles
-            from ..model import RDFClass
-            from ..operations import add_subclass_of
-
             new_value = _ensure_full_uri(new_value, self.taxonomy)
             if not new_value:
                 return
-            if new_value not in self.taxonomy.owl_classes:
-                self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
-                assign_handles(self.taxonomy)
-            if parent_uri:
-                try:
-                    add_subclass_of(self.taxonomy, new_value, parent_uri)
-                except (CircularHierarchyError, ClassNotFoundError):
-                    pass
+            from ..core.commands import OwlCreateSubclass
+
+            parent_uri = f.meta.get("parent_uri", "")
+            result = self._service().execute(  # type: ignore[attr-defined]
+                OwlCreateSubclass(self.file_path, new_value, parent_uri or None)
+            )
+            if not result.ok:
+                self._status = result.error or "Create failed"
+                self._state = DetailState()
+                return
+            self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
             self._rebuild()
-            self._save_file()
             self._detail_uri = parent_uri or new_value
             self._detail_fields = self._bcdf(self._detail_uri) if self._detail_uri else []
             self._field_cursor = 0
             self._state = DetailState()
             return
-        if ftype == "rdf_label":
-            for lbl in rdf_class.labels:
-                if lbl.lang == lang:
-                    lbl.value = new_value
-                    break
-            else:
-                rdf_class.labels.append(Label(lang=lang, value=new_value))
-        elif ftype == "rdf_comment":
-            for cmt in rdf_class.comments:
-                if cmt.lang == lang:
-                    cmt.value = new_value
-                    break
-            else:
-                rdf_class.comments.append(Definition(lang=lang, value=new_value))
-        else:
-            return
-        assert self._detail_uri is not None
-        node_t = self.taxonomy.node_type(self._detail_uri)
-        if node_t == "promoted":
-            self._detail_fields = self._bpdf(self._detail_uri)
-        else:
-            self._detail_fields = self._bcdf(self._detail_uri)
-        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file()
+        self._commit_owl_field(f, new_value)
 
     def _commit_individual_edit(self, f: DetailField, new_value: str) -> None:
-        """Commit an edit to an OWL individual field (rdfs:label or rdfs:comment)."""
-        individual = self.taxonomy.owl_individuals.get(self._detail_uri or "")
-        if not individual:
+        """Commit an edit to an OWL individual field (label / comment / literal value)."""
+        if self._detail_uri not in self.taxonomy.owl_individuals:
             return
         ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
         if ftype == "uri":
             self._start_rename_uri(new_value)
             return
-        if ftype == "ind_label":
-            for lbl in individual.labels:
-                if lbl.lang == lang:
-                    lbl.value = new_value
-                    break
-            else:
-                individual.labels.append(Label(lang=lang, value=new_value))
-        elif ftype == "ind_comment":
-            for cmt in individual.comments:
-                if cmt.lang == lang:
-                    cmt.value = new_value
-                    break
-            else:
-                individual.comments.append(Definition(lang=lang, value=new_value))
-        elif ftype == "ind_lit_val_edit":
-            prop_uri = f.meta.get("prop_uri", "")
-            old_val = f.meta.get("old_val_str", "")
-            lang_or_dt = f.meta.get("lang_or_dt", "")
-            triple_old = (prop_uri, old_val, lang_or_dt)
-            triple_new = (prop_uri, new_value, lang_or_dt)
-            if triple_old in individual.literal_values:
-                idx = individual.literal_values.index(triple_old)
-                individual.literal_values[idx] = triple_new
-            elif triple_new not in individual.literal_values:
-                individual.literal_values.append(triple_new)
-        else:
+        if self._commit_owl_field(f, new_value):
             return
-        assert self._detail_uri is not None
-        self._detail_fields = self._bidf(self._detail_uri)
-        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file()
+        if ftype != "ind_lit_val_edit":
+            return
+        uri = self._detail_uri
+        assert uri is not None
+        from ..core.commands import OwlSetIndividualLiteral
+
+        command = OwlSetIndividualLiteral(
+            self._owner_path(uri),
+            uri,
+            f.meta.get("prop_uri", ""),
+            f.meta.get("old_val_str", ""),
+            new_value,
+            f.meta.get("lang_or_dt", ""),
+        )
+        result = self._service().execute(command)  # type: ignore[attr-defined]
+        self._finish_field_edit(result, uri, self._owner_path(uri))
 
     def _commit_property_edit(self, f: DetailField, new_value: str) -> None:
         """Commit an edit to an OWL property field (rdfs:label or rdfs:comment)."""
@@ -2960,30 +2957,10 @@ class TaxonomyViewer:
         if not prop or not new_value:
             return
         ftype = f.meta.get("type")
-        lang = f.meta.get("lang", "")
         if ftype == "uri":
             self._start_rename_uri(new_value)
             return
-        if ftype == "prop_label":
-            for lbl in prop.labels:
-                if lbl.lang == lang:
-                    lbl.value = new_value
-                    break
-            else:
-                prop.labels.append(Label(lang=lang, value=new_value))
-        elif ftype == "prop_comment":
-            for cmt in prop.comments:
-                if cmt.lang == lang:
-                    cmt.value = new_value
-                    break
-            else:
-                prop.comments.append(Definition(lang=lang, value=new_value))
-        else:
-            return
-        assert self._detail_uri is not None
-        self._detail_fields = self._bpropf(self._detail_uri)
-        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-        self._save_file()
+        self._commit_owl_field(f, new_value)
 
     def _start_rename_uri(self, new_uri: str) -> None:
         """Initiate a URI rename: count references and enter RenameUriConfirmState.
@@ -3005,50 +2982,60 @@ class TaxonomyViewer:
             kind=self.taxonomy.node_type(old_uri),
         )
 
+    @staticmethod
+    def _ontology_sentinel_path(sentinel: str) -> Path | None:
+        """Decode the file path an ontology-overview sentinel points at (None = primary)."""
+        fp_str = sentinel[len(_OWL_ONTOLOGY_PREFIX) :]
+        return Path(fp_str) if fp_str and fp_str != "__" else None
+
+    _ONT_FTYPE_TO_FIELD = {
+        "ont_label": "label",
+        "ont_title": "title",
+        "ont_description": "description",
+    }
+
     def _commit_ontology_edit(self, f: DetailField, new_value: str) -> None:
-        """Commit an edit to the ontology metadata or OWL creation prompt."""
+        """Commit an ontology metadata edit, or the 'new OWL class' prompt, via the service."""
         ftype = f.meta.get("type")
         assert self._detail_uri is not None
-        fp_str = self._detail_uri[len(_OWL_ONTOLOGY_PREFIX) :]
-        file_path: Path | None = Path(fp_str) if fp_str and fp_str != "__" else None
+        sentinel = self._detail_uri
+        if ftype == "new_owl_class_uri":
+            self._commit_new_ontology_class(new_value)
+            return
+        field_name = self._ONT_FTYPE_TO_FIELD.get(ftype or "")
+        if field_name is None:
+            return
+        from ..core.commands import OntoSetMetadata
 
-        if ftype == "ont_label":
-            self.taxonomy.ontology_label = new_value or None
-            self._detail_fields = self._boof(file_path)
-            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-            self._save_file()
+        target_path = self._ontology_sentinel_path(sentinel) or self.file_path
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OntoSetMetadata(target_path, field_name, new_value)
+        )
+        self._finish_field_edit(result, sentinel, target_path)
 
-        elif ftype == "ont_title":
-            self.taxonomy.ontology_title = new_value or None
-            self._detail_fields = self._boof(file_path)
-            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-            self._save_file()
+    def _commit_new_ontology_class(self, new_value: str) -> None:
+        """Create a bare OWL class from the ontology overview prompt, via the service."""
+        if not new_value:
+            return
+        new_value = _ensure_full_uri(new_value, self.taxonomy)
+        if not new_value:
+            return
+        if new_value not in self.taxonomy.owl_classes:
+            from ..core.commands import OwlCreateSubclass
 
-        elif ftype == "ont_description":
-            self.taxonomy.ontology_description = new_value or None
-            self._detail_fields = self._boof(file_path)
-            self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
-            self._save_file()
-
-        elif ftype == "new_owl_class_uri":
-            if not new_value:
+            result = self._service().execute(  # type: ignore[attr-defined]
+                OwlCreateSubclass(self.file_path, new_value, None)
+            )
+            if not result.ok:
+                self._status = result.error or "Create failed"
+                self._state = DetailState()
                 return
-            new_value = _ensure_full_uri(new_value, self.taxonomy)
-            if not new_value:
-                return
-            from ..model import RDFClass
-
-            if new_value not in self.taxonomy.owl_classes:
-                self.taxonomy.owl_classes[new_value] = RDFClass(uri=new_value)
-                from ..handles import assign_handles
-
-                assign_handles(self.taxonomy)
-                self._rebuild()
-                self._save_file()
-            self._detail_uri = new_value
-            self._detail_fields = self._bcdf(new_value)
-            self._field_cursor = 0
-            self._state = DetailState()
+            self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
+            self._rebuild()
+        self._detail_uri = new_value
+        self._detail_fields = self._bcdf(new_value)
+        self._field_cursor = 0
+        self._state = DetailState()
 
     def _delete_field_command(self, uri: str, ftype: str | None, lang: str, value: str) -> object:
         """Build the Command for deleting a concept field, or None if unhandled."""
@@ -3085,73 +3072,78 @@ class TaxonomyViewer:
         "related_match": "relatedMatch",
     }
 
+    def _map_link_command(
+        self, path: Path, concept_uri: str, attr: str, target_uri: str, *, add: bool
+    ) -> object:
+        """Build a Skos{Add,Remove}MappingLink command for one directional link."""
+        from ..core.commands import SkosAddMappingLink, SkosRemoveMappingLink
+
+        cls = SkosAddMappingLink if add else SkosRemoveMappingLink
+        return cls(path, concept_uri, attr, target_uri)
+
+    def _apply_mapping_links(
+        self, src_uri: str, attr: str, tgt_uri: str, *, add: bool, with_inverse: bool
+    ) -> bool:
+        """Apply one mapping direction on the source's file via the service, and (when
+        *with_inverse*) the inverse on the target's file. Returns True on success."""
+        src_info = self._workspace.concept_for(src_uri)
+        if src_info is None:
+            self._status = f"Source concept not found: {src_uri}"
+            return False
+        src_path, _ = src_info
+        result = self._service().execute(  # type: ignore[attr-defined]
+            self._map_link_command(src_path, src_uri, attr, tgt_uri, add=add)
+        )
+        if not result.ok:
+            self._status = result.error or "Mapping failed"
+            return False
+        self._post_save_effects(src_path, self._workspace.taxonomies[src_path])
+        if with_inverse:
+            tgt_info = self._workspace.concept_for(tgt_uri)
+            if tgt_info is not None:
+                tgt_path, _ = tgt_info
+                skos_type = self._ATTR_TO_SKOS.get(attr, "")
+                from ..workspace_ops import _ATTR, _INVERSE
+
+                inv_attr = _ATTR[_INVERSE[skos_type]]
+                inv_result = self._service().execute(  # type: ignore[attr-defined]
+                    self._map_link_command(tgt_path, tgt_uri, inv_attr, src_uri, add=add)
+                )
+                if inv_result.ok and tgt_path != src_path:
+                    self._post_save_effects(tgt_path, self._workspace.taxonomies[tgt_path])
+        self._rebuild()
+        return True
+
     def _remove_mapping_field(self, f: DetailField) -> None:
-        """Remove a cross-scheme mapping link shown in the detail view."""
+        """Remove a cross-scheme mapping link shown in the detail view (drops the inverse too)."""
         attr = f.meta.get("attr", "")
         tgt_uri = f.meta.get("uri", "")
         skos_type = self._ATTR_TO_SKOS.get(attr)
         if not skos_type or not tgt_uri or not self._detail_uri:
             return
-
-        src_tax, src_path = self._individual_taxonomy_for(self._detail_uri)
-        src_concept = src_tax.concepts.get(self._detail_uri)
-        if not src_concept:
+        src_uri = self._detail_uri
+        if not self._apply_mapping_links(src_uri, attr, tgt_uri, add=False, with_inverse=True):
             return
-
-        # Remove from source side
-        src_list: list = getattr(src_concept, attr)
-        if tgt_uri in src_list:
-            src_list.remove(tgt_uri)
-
-        # Remove inverse from target side if it exists in the workspace
-        tgt_info = self._workspace.concept_for(tgt_uri)
-        if tgt_info is not None:
-            tgt_path, tgt_concept = tgt_info
-            from ..workspace_ops import _ATTR, _INVERSE
-
-            inv_list: list = getattr(tgt_concept, _ATTR[_INVERSE[skos_type]])
-            if self._detail_uri in inv_list:
-                inv_list.remove(self._detail_uri)
-            self._workspace.save_file(tgt_path)
-            if self._git_manager:
-                self._git_manager.stage_path(tgt_path)  # type: ignore[attr-defined]
-
-        self._workspace.save_file(src_path)
-        if self._git_manager:
-            self._git_manager.stage_path(src_path)  # type: ignore[attr-defined]
-        src_h = self.taxonomy.uri_to_handle(self._detail_uri) or self._detail_uri
+        src_h = self.taxonomy.uri_to_handle(src_uri) or src_uri
         tgt_h = self.taxonomy.uri_to_handle(tgt_uri) or tgt_uri
         self._status = f"Removed {skos_type}: {src_h} → {tgt_h}"
-        self._rebuild()
-        self._detail_fields = self._bdf(self._detail_uri)
+        self._detail_uri = src_uri
+        self._detail_fields = self._bdf(src_uri)
         self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
         self._skip_sep(-1)
 
     def _repair_mapping_field(self, f: DetailField) -> None:
-        """Remove a broken cross-scheme mapping link from the scheme dashboard."""
+        """Remove a broken cross-scheme mapping link from the scheme dashboard (forward only)."""
         src_uri = f.meta.get("source_uri", "")
         attr = f.meta.get("attr", "")
         tgt_uri = f.meta.get("target_uri", "")
         skos_type = self._ATTR_TO_SKOS.get(attr)
         if not skos_type or not src_uri or not tgt_uri:
             return
-
-        src_tax, src_path = self._individual_taxonomy_for(src_uri)
-        src_concept = src_tax.concepts.get(src_uri)
-        if not src_concept:
+        if not self._apply_mapping_links(src_uri, attr, tgt_uri, add=False, with_inverse=False):
             return
-
-        src_list: list = getattr(src_concept, attr)
-        if tgt_uri in src_list:
-            src_list.remove(tgt_uri)
-
-        self._workspace.save_file(src_path)
-        if self._git_manager:
-            self._git_manager.stage_path(src_path)  # type: ignore[attr-defined]
         src_h = self.taxonomy.uri_to_handle(src_uri) or src_uri
         self._status = f"Removed broken {skos_type}: {src_h} → {tgt_uri}"
-        self._rebuild()
-        self._refresh_analysis(src_path)
         # Rebuild the scheme dashboard (detail_uri is still the scheme)
         if self._detail_uri:
             self._detail_fields = self._bsf(self._detail_uri)
@@ -3259,52 +3251,10 @@ class TaxonomyViewer:
                 )
 
         elif action == "remove_superclass":
-            if self._detail_uri:
-                parent_uri = (meta or {}).get("parent_uri", "")
-                rdf_class = self.taxonomy.owl_classes.get(self._detail_uri)
-                if rdf_class and parent_uri in rdf_class.sub_class_of:
-                    rdf_class.sub_class_of.remove(parent_uri)
-                    self._rebuild()
-                    self._save_file()
-                    self._detail_fields = self._bcdf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            self._remove_superclass((meta or {}).get("parent_uri", ""))
 
         elif action == "delete_class":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_classes:
-                from ..operations import _owl_subclass_tree
-
-                cls_uri = self._detail_uri
-                rdf_cls = self.taxonomy.owl_classes[cls_uri]
-                all_tree = _owl_subclass_tree(self.taxonomy, cls_uri)
-                subclass_uris = [u for u in all_tree if u != cls_uri]
-                individual_uris = [
-                    ind_uri
-                    for ind_uri, ind in self.taxonomy.owl_individuals.items()
-                    if any(t in all_tree for t in ind.types)
-                ]
-                parent_uris = [p for p in rdf_cls.sub_class_of if p in self.taxonomy.owl_classes]
-                if subclass_uris or individual_uris:
-                    self._state = DeleteClassChoiceState(
-                        class_uri=cls_uri,
-                        subclass_uris=subclass_uris,
-                        parent_uris=parent_uris,
-                        individual_uris=individual_uris,
-                        cursor=0,
-                        confirming=False,
-                    )
-                else:
-                    from ..operations import delete_owl_class
-
-                    delete_owl_class(self.taxonomy, cls_uri, mode="keep_all")
-                    self._rebuild()
-                    self._save_file()
-                    self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                    self._detail_uri = _GLOBAL_URI
-                    self._detail_fields = self._bgf()
-                    self._field_cursor = 0
-                    self._state = TreeState()
+            self._on_delete_class_action()
 
         elif action == "class_to_individual":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_classes:
@@ -3376,16 +3326,7 @@ class TaxonomyViewer:
             self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "delete_individual":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
-                uri = self._detail_uri
-                del self.taxonomy.owl_individuals[uri]
-                self._rebuild()
-                self._save_file()
-                self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
-                self._detail_uri = _GLOBAL_URI
-                self._detail_fields = self._bgf()
-                self._field_cursor = 0
-                self._state = TreeState()
+            self._on_delete_individual_action()
 
         elif action == "add_prop_value":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
@@ -3426,18 +3367,9 @@ class TaxonomyViewer:
                 )
 
         elif action == "remove_prop_value":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
-                prop_uri = (meta or {}).get("prop_uri", "")
-                val_uri = (meta or {}).get("val_uri", "")
-                individual = self.taxonomy.owl_individuals[self._detail_uri]
-                pair = (prop_uri, val_uri)
-                if pair in individual.property_values:
-                    individual.property_values.remove(pair)
-                    self._save_file()
-                    self._detail_fields = self._bidf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            self._remove_individual_value(
+                (meta or {}).get("prop_uri", ""), (meta or {}).get("val_uri", "")
+            )
 
         elif action == "edit_prop_value":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
@@ -3450,19 +3382,10 @@ class TaxonomyViewer:
                 )
 
         elif action == "remove_literal_value":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
-                prop_uri = (meta or {}).get("prop_uri", "")
-                val_str = (meta or {}).get("val_str", "")
-                lang_or_dt = (meta or {}).get("lang_or_dt", "")
-                individual = self.taxonomy.owl_individuals[self._detail_uri]
-                triple = (prop_uri, val_str, lang_or_dt)
-                if triple in individual.literal_values:
-                    individual.literal_values.remove(triple)
-                    self._save_file()
-                    self._detail_fields = self._bidf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            m = meta or {}
+            self._remove_individual_literal(
+                m.get("prop_uri", ""), m.get("val_str", ""), m.get("lang_or_dt", "")
+            )
 
         elif action == "edit_literal_value":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
@@ -3492,17 +3415,7 @@ class TaxonomyViewer:
                 )
 
         elif action == "remove_ind_type":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
-                type_uri = (meta or {}).get("type_uri", "")
-                individual = self.taxonomy.owl_individuals[self._detail_uri]
-                if type_uri in individual.types:
-                    individual.types.remove(type_uri)
-                    self._save_file()
-                    self._rebuild()
-                    self._detail_fields = self._bidf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            self._remove_individual_type((meta or {}).get("type_uri", ""))
 
         elif action == "add_ind_type":
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_individuals:
@@ -3544,28 +3457,10 @@ class TaxonomyViewer:
                 )
 
         elif action == "remove_prop_domain":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
-                d_uri = (meta or {}).get("domain_uri", "")
-                prop = self.taxonomy.owl_properties[self._detail_uri]
-                if d_uri in prop.domains:
-                    prop.domains.remove(d_uri)
-                    self._save_file()
-                    self._detail_fields = self._bpropf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            self._remove_property_class("domain", (meta or {}).get("domain_uri", ""))
 
         elif action == "remove_prop_range":
-            if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
-                r_uri = (meta or {}).get("range_uri", "")
-                prop = self.taxonomy.owl_properties[self._detail_uri]
-                if r_uri in prop.ranges:
-                    prop.ranges.remove(r_uri)
-                    self._save_file()
-                    self._detail_fields = self._bpropf(self._detail_uri)
-                    self._field_cursor = min(
-                        self._field_cursor, max(0, len(self._detail_fields) - 1)
-                    )
+            self._remove_property_class("range", (meta or {}).get("range_uri", ""))
 
         elif action == "edit_note":
             if self._detail_uri:
@@ -3596,26 +3491,7 @@ class TaxonomyViewer:
 
         elif action == "delete_note":
             if self._detail_uri:
-                uri = self._detail_uri
-                node_t = self.taxonomy.node_type(uri)
-                if node_t in ("class", "promoted"):
-                    ent_cls2 = self.taxonomy.owl_classes.get(uri)
-                    if ent_cls2 is not None:
-                        ent_cls2.note = ""
-                        self._detail_fields = self._bcdf(uri)
-                        self._save_file()
-                elif node_t == "individual":
-                    ent_ind2 = self.taxonomy.owl_individuals.get(uri)
-                    if ent_ind2 is not None:
-                        ent_ind2.note = ""
-                        self._detail_fields = self._bidf(uri)
-                        self._save_file()
-                elif node_t == "property":
-                    ent_prop2 = self.taxonomy.owl_properties.get(uri)
-                    if ent_prop2 is not None:
-                        ent_prop2.note = ""
-                        self._detail_fields = self._bpropf(uri)
-                        self._save_file()
+                self._set_note(self._detail_uri, "")
 
         elif action == "delete_property":
             self._on_delete_property_action()
@@ -3655,15 +3531,7 @@ class TaxonomyViewer:
             )
 
         elif action in ("remove_schema_image", "remove_schema_video", "remove_schema_url"):
-            url = (meta or {}).get("url", "")
-            entity = self._schema_entity()
-            if url and entity is not None:
-                kind = action[len("remove_schema_") :]  # "image" | "video" | "url"
-                lst: list[str] = getattr(entity, f"schema_{kind}s")  # type: ignore[attr-defined]
-                if url in lst:
-                    lst.remove(url)
-                    self._refresh_detail()
-                    self._save_file()
+            self._remove_schema_media(action[len("remove_schema_") :], (meta or {}).get("url", ""))
 
         elif action in ("edit_ontology_uri", "edit_ontology_domain", "edit_ontology_prefix"):
             self._open_ontology_identity_editor(action)
@@ -4679,54 +4547,67 @@ class TaxonomyViewer:
         elif key == 27:
             bcs.step = "alt_prompt_review"
 
-    def _batch_create_current_and_confirm(self, bcs: BatchCreateState) -> None:
-        """Create the concept at bcs.current, then transition to the confirm step."""
-        import re
-
-        draft = bcs.drafts[bcs.current]
-        target_tax, _target_path = self._individual_taxonomy_for(bcs.parent_uri)
-
-        if bcs.parent_uri and bcs.parent_uri in target_tax.schemes:
-            s = target_tax.schemes[bcs.parent_uri]
-            base = s.base_uri or target_tax.base_uri()
+    def _concept_create_context(
+        self, parent_uri: str | None
+    ) -> tuple[Taxonomy, Path, str, str | None]:
+        """(authority taxonomy, target path, base URI, parent handle) for a new concept."""
+        target_tax, target_path = self._individual_taxonomy_for(parent_uri)
+        if parent_uri and parent_uri in target_tax.schemes:
+            base = target_tax.schemes[parent_uri].base_uri or target_tax.base_uri()
         else:
             base = target_tax.base_uri()
+        parent_handle = (target_tax.uri_to_handle(parent_uri) or parent_uri) if parent_uri else None
+        return target_tax, target_path, base, parent_handle
 
-        parent_handle = None
-        if bcs.parent_uri:
-            parent_handle = target_tax.uri_to_handle(bcs.parent_uri) or bcs.parent_uri
+    @staticmethod
+    def _draft_uri(base: str, name: str) -> str:
+        """Build the URI for a batch draft from its name (slugified)."""
+        import re
 
-        slug = re.sub(r"[^A-Za-z0-9_-]", "", draft.name.replace(" ", ""))
-        new_uri = base + (slug or draft.name)
+        slug = re.sub(r"[^A-Za-z0-9_-]", "", name.replace(" ", ""))
+        return base + (slug or name)
+
+    def _draft_create_commands(
+        self, draft: BatchConceptDraft, target_path: Path, uri: str, parent_handle: str | None
+    ) -> list:
+        """SkosAddConcept + one SkosSetLabel per checked alt label for a batch draft."""
+        from ..core.commands import SkosAddConcept, SkosSetLabel
+
+        defs = {self.lang: draft.definition.strip()} if draft.definition.strip() else None
+        cmds: list = [
+            SkosAddConcept(
+                target_path,
+                uri,
+                {self.lang: draft.pref_label.strip() or draft.name},
+                parent_handle=parent_handle,
+                definitions=defs,
+            )
+        ]
+        cmds += [
+            SkosSetLabel(target_path, uri, self.lang, alt.strip(), kind="alt")
+            for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False)
+            if chk and alt.strip()
+        ]
+        return cmds
+
+    def _batch_create_current_and_confirm(self, bcs: BatchCreateState) -> None:
+        """Create the concept at bcs.current (atomically with its alt labels), then confirm."""
+        from ..core.commands import ChangeSet
+
+        draft = bcs.drafts[bcs.current]
+        target_tax, target_path, base, parent_handle = self._concept_create_context(bcs.parent_uri)
+        new_uri = self._draft_uri(base, draft.name)
         if new_uri in target_tax.concepts:
             bcs.error = f"'{draft.name}' already exists — skipped"
-            bcs.step = "confirm"
-            bcs.confirm_cursor = 0
-            return
-
-        pref_label = draft.pref_label.strip() or draft.name
-        definitions = {self.lang: draft.definition.strip()} if draft.definition.strip() else None
-        try:
-            operations.add_concept(
-                target_tax,
-                new_uri,
-                {self.lang: pref_label},
-                parent_handle=parent_handle,
-                definitions=definitions,
-            )
-        except SkostaxError as exc:
-            bcs.error = str(exc)
-            bcs.step = "confirm"
-            bcs.confirm_cursor = 0
-            return
-
-        for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False):
-            if chk and alt.strip():
-                operations.set_label(target_tax, new_uri, self.lang, alt.strip(), LabelType.ALT)
-
-        self._rebuild()
-        self._save_file(uri=new_uri)
-        bcs.error = ""
+        else:
+            cmds = self._draft_create_commands(draft, target_path, new_uri, parent_handle)
+            result = self._service().execute(ChangeSet(target_path, tuple(cmds)))  # type: ignore[attr-defined]
+            if not result.ok:
+                bcs.error = result.error or "Create failed"
+            else:
+                self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+                self._rebuild()
+                bcs.error = ""
         bcs.step = "confirm"
         bcs.confirm_cursor = 0
 
@@ -4829,54 +4710,34 @@ class TaxonomyViewer:
             self._state = TreeState() if bcs.came_from_tree else DetailState()
 
     def _submit_batch_create(self, bcs: BatchCreateState) -> None:
-        """Create all confirmed concepts from the batch wizard."""
-        import re
+        """Create all confirmed concepts from the batch wizard as one atomic ChangeSet."""
+        from ..core.commands import ChangeSet
 
-        target_tax, _target_path = self._individual_taxonomy_for(bcs.parent_uri)
+        target_tax, target_path, base, parent_handle = self._concept_create_context(bcs.parent_uri)
 
-        if bcs.parent_uri and bcs.parent_uri in target_tax.schemes:
-            s = target_tax.schemes[bcs.parent_uri]
-            base = s.base_uri or target_tax.base_uri()
-        else:
-            base = target_tax.base_uri()
-
-        parent_handle = None
-        if bcs.parent_uri:
-            parent_handle = target_tax.uri_to_handle(bcs.parent_uri) or bcs.parent_uri
-
+        commands: list = []
+        seen: set[str] = set()
         last_uri: str | None = None
         for draft in bcs.drafts:
-            slug = re.sub(r"[^A-Za-z0-9_-]", "", draft.name.replace(" ", ""))
-            new_uri = base + (slug or draft.name)
-            if new_uri in target_tax.concepts:
+            new_uri = self._draft_uri(base, draft.name)
+            if new_uri in target_tax.concepts or new_uri in seen:
                 bcs.error = f"'{draft.name}' already exists — skipped"
                 continue
-            pref_label = draft.pref_label.strip() or draft.name
-            definitions = (
-                {self.lang: draft.definition.strip()} if draft.definition.strip() else None
-            )
-            try:
-                operations.add_concept(
-                    target_tax,
-                    new_uri,
-                    {self.lang: pref_label},
-                    parent_handle=parent_handle,
-                    definitions=definitions,
-                )
-            except SkostaxError as exc:
-                bcs.error = str(exc)
-                continue
-            # Add selected alt labels
-            for alt, chk in zip(draft.alt_labels, draft.alt_checked, strict=False):
-                if chk and alt.strip():
-                    operations.set_label(target_tax, new_uri, self.lang, alt.strip(), LabelType.ALT)
+            seen.add(new_uri)
+            commands += self._draft_create_commands(draft, target_path, new_uri, parent_handle)
             last_uri = new_uri
 
-        self._rebuild()
-        self._save_file(uri=last_uri or bcs.parent_uri)
+        if commands:
+            result = self._service().execute(ChangeSet(target_path, tuple(commands)))  # type: ignore[attr-defined]
+            if not result.ok:
+                bcs.error = result.error or "Create failed"
+                last_uri = None
+            else:
+                self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+                self._rebuild()
 
         # Navigate to the last created concept (or back to tree/detail)
-        if last_uri and last_uri in target_tax.concepts:
+        if last_uri and last_uri in self.taxonomy.concepts:
             for i, line in enumerate(self._tree.flat):
                 if line.uri == last_uri:
                     self._tree.cursor = i
@@ -5142,46 +5003,56 @@ class TaxonomyViewer:
         elif key == 27:
             self._state = TreeState() if cs.came_from_tree else DetailState()
 
+    def _save_context_definition(self, parent_uri: str | None, edited_def: str) -> None:
+        """Persist the wizard's edited parent-concept definition via the service."""
+        if not parent_uri or not edited_def or parent_uri not in self.taxonomy.concepts:
+            return
+        from ..core.commands import SkosSetDefinition
+
+        path = self._owner_path(parent_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosSetDefinition(path, parent_uri, self.lang, edited_def)
+        )
+        if result.ok:
+            self._post_save_effects(path, self._workspace.taxonomies[path])
+            self._rebuild()
+
+    def _save_context_scheme_description(self, parent_uri: str | None, edited_def: str) -> None:
+        """Persist the wizard's edited scheme description via the service."""
+        if not edited_def:
+            return
+        if parent_uri and parent_uri in self.taxonomy.schemes:
+            scheme_uri: str | None = parent_uri
+        else:
+            ps = self.taxonomy.primary_scheme()
+            scheme_uri = ps.uri if ps else None
+        if scheme_uri is None:
+            return
+        from ..core.commands import SkosSetSchemeField
+
+        path = self._owner_path(scheme_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosSetSchemeField(path, scheme_uri, "desc", edited_def, self.lang)
+        )
+        if result.ok:
+            self._post_save_effects(path, self._workspace.taxonomies[path])
+            self._rebuild()
+
     def _on_create_context_review(self, key: int, cs: CreateState) -> None:
         """Handle keys on the context-review step (editable definition)."""
         if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             from .. import ai as _ai
-            from ..model import Definition
 
             taxonomy_name, taxonomy_desc, parent_label, _orig_def = self._build_ai_context(cs)
             # Use the (possibly edited) definition from the buffer
             edited_def = cs.context_def_buffer.strip()
             if parent_label:
                 # narrower: save edited definition back to the parent concept
-                target_tax, _ = self._individual_taxonomy_for(cs.parent_uri)
-                concept = target_tax.concepts.get(cs.parent_uri or "")
-                if concept:
-                    for d in concept.definitions:
-                        if d.lang == self.lang:
-                            d.value = edited_def
-                            break
-                    else:
-                        if edited_def:
-                            concept.definitions.append(Definition(lang=self.lang, value=edited_def))
-                    self._save_file(uri=cs.parent_uri)
+                self._save_context_definition(cs.parent_uri, edited_def)
                 parent_def = edited_def
             else:
                 # top-level: save edited description back to the scheme
-                target_tax, _ = self._individual_taxonomy_for(cs.parent_uri)
-                scheme = (
-                    target_tax.schemes.get(cs.parent_uri or "")
-                    if cs.parent_uri
-                    else target_tax.primary_scheme()
-                )
-                if scheme:
-                    for d in scheme.descriptions:
-                        if d.lang == self.lang:
-                            d.value = edited_def
-                            break
-                    else:
-                        if edited_def:
-                            scheme.descriptions.append(Definition(lang=self.lang, value=edited_def))
-                    self._save_file(uri=cs.parent_uri or (scheme.uri if scheme else None))
+                self._save_context_scheme_description(cs.parent_uri, edited_def)
                 taxonomy_desc = edited_def
                 parent_def = edited_def
             preview = _ai.render_suggest_concept_names_prompt(
@@ -5466,16 +5337,12 @@ class TaxonomyViewer:
         elif key == 27:  # Esc — cancel
             self._state = TreeState() if cs.came_from_tree else DetailState()
 
-    def _submit_create(self) -> None:
-        import re
-
-        if not isinstance(self._state, CreateState):
-            return
-        cs = self._state
+    @staticmethod
+    def _read_create_form(cs: CreateState) -> tuple[str, dict[str, str], dict[str, str]]:
+        """Pull (name, pref_labels, definitions) out of the create form fields."""
         name = ""
         pref_labels: dict[str, str] = {}
         definitions: dict[str, str] = {}
-
         for f in cs.fields:
             fld = f.meta.get("field")
             if fld == "name":
@@ -5484,6 +5351,15 @@ class TaxonomyViewer:
                 pref_labels[f.meta["lang"]] = f.value.strip()
             elif fld == "def" and f.value.strip():
                 definitions[f.meta["lang"]] = f.value.strip()
+        return name, pref_labels, definitions
+
+    def _submit_create(self) -> None:
+        import re
+
+        if not isinstance(self._state, CreateState):
+            return
+        cs = self._state
+        name, pref_labels, definitions = self._read_create_form(cs)
 
         if not name:
             cs.error = "Concept name is required"
@@ -5510,20 +5386,23 @@ class TaxonomyViewer:
         if cs.parent_uri:
             parent_handle = target_tax.uri_to_handle(cs.parent_uri) or cs.parent_uri
 
-        try:
-            operations.add_concept(
-                target_tax,
+        from ..core.commands import SkosAddConcept
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            SkosAddConcept(
+                target_path,
                 new_uri,
                 pref_labels,
                 parent_handle=parent_handle,
-                definitions=definitions if definitions else None,
+                definitions=definitions or None,
             )
-        except SkostaxError as exc:
-            cs.error = str(exc)
+        )
+        if not result.ok:
+            cs.error = result.error or "Create failed"
             return
 
+        self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
         self._rebuild()
-        self._save_file(uri=new_uri)
 
         # Navigate to the new concept detail
         for i, line in enumerate(self._tree.flat):
@@ -5912,6 +5791,45 @@ class TaxonomyViewer:
             dim=True,
         )
 
+    def _submit_ontology_setup(
+        self, st: OntologySetupState, *, is_edit: bool, uri_active_idx: int, sep_base_idx: int
+    ) -> None:
+        """Validate the setup form and either open the rename confirm (edit) or initialize."""
+        # If cursor is on a separator row, select it first, then submit
+        if st.active == sep_base_idx:
+            st.sep_cursor = 0
+        elif st.active == sep_base_idx + 1:
+            st.sep_cursor = 1
+
+        uri = st.uri_buf.strip().rstrip("#/")
+        sep = self._SEP_OPTIONS[st.sep_cursor][1]
+
+        if not uri:
+            st.error = "URI is required."
+            st.active = uri_active_idx
+            return
+        if " " in uri:
+            st.error = "URI must not contain spaces."
+            st.active = uri_active_idx
+            return
+
+        if is_edit:
+            from ..operations import count_ontology_rename_changes
+
+            old_base, new_base, count = count_ontology_rename_changes(self.taxonomy, uri, sep)
+            self._state = OntologyRenameConfirmState(
+                old_base=old_base, new_base=new_base, entity_count=count
+            )
+            return
+
+        name = st.name_buf.strip()
+        if not name:
+            st.error = "Name is required."
+            st.active = 0
+            return
+        self._initialize_ontology(uri, sep, name)
+        self._state = TreeState()
+
     def _on_ontology_setup(self, key: int) -> None:
         if not isinstance(self._state, OntologySetupState):
             return
@@ -5931,44 +5849,9 @@ class TaxonomyViewer:
             st.error = ""
 
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            # If cursor is on a separator row, select it first, then submit
-            if st.active == sep_base_idx:
-                st.sep_cursor = 0
-            elif st.active == sep_base_idx + 1:
-                st.sep_cursor = 1
-
-            uri = st.uri_buf.strip().rstrip("#/")
-            sep = self._SEP_OPTIONS[st.sep_cursor][1]
-
-            if not uri:
-                st.error = "URI is required."
-                st.active = uri_active_idx
-                return
-            if " " in uri:
-                st.error = "URI must not contain spaces."
-                st.active = uri_active_idx
-                return
-
-            if is_edit:
-                from ..operations import count_ontology_rename_changes
-
-                old_base, new_base, count = count_ontology_rename_changes(self.taxonomy, uri, sep)
-                self._state = OntologyRenameConfirmState(
-                    old_base=old_base,
-                    new_base=new_base,
-                    entity_count=count,
-                )
-            else:
-                name = st.name_buf.strip()
-                if not name:
-                    st.error = "Name is required."
-                    st.active = 0
-                    return
-                self.taxonomy.ontology_uri = uri + sep
-                self.taxonomy.ontology_label = name
-                self._save_file()
-                self._rebuild()
-                self._state = TreeState()
+            self._submit_ontology_setup(
+                st, is_edit=is_edit, uri_active_idx=uri_active_idx, sep_base_idx=sep_base_idx
+            )
 
         elif key == 27:  # Esc
             self._state = TreeState() if not is_edit else DetailState()
@@ -6147,8 +6030,6 @@ class TaxonomyViewer:
         from ..operations import (
             count_domain_rename_changes,
             count_prefix_uses,
-            ontology_prefix,
-            rename_prefix,
             validate_domain,
             validate_prefix,
         )
@@ -6169,15 +6050,15 @@ class TaxonomyViewer:
         if err:
             st.error = err
             return
-        old = ontology_prefix(self.taxonomy)
-        if old is None:
-            base = self.taxonomy.base_uri()
-            if base:
-                self.taxonomy.namespace_bindings[value] = base
-            count = count_prefix_uses(self.taxonomy, value)
-        else:
-            count = rename_prefix(self.taxonomy, old, value)
-        self._save_file()
+        from ..core.commands import OntoSetPrefix
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OntoSetPrefix(self.file_path, value)
+        )
+        if result.ok:
+            self._post_save_effects(self.file_path, self._workspace.taxonomies[self.file_path])
+            self._rebuild()
+        count = count_prefix_uses(self.taxonomy, value)
         self._detail_fields = self._bgf()
         self._field_cursor = 0
         self._status = f"Prefix → {value} ({count} terms)"
@@ -6579,13 +6460,47 @@ class TaxonomyViewer:
 
         _draw_bar(stdscr, rows - 1, x0, width, " y/Enter: confirm   Esc: back ", dim=True)
 
-    def _perform_class_delete(self, ds: DeleteClassChoiceState) -> None:
-        """Delete the chosen OWL class via the service and return to the tree."""
+    def _individuals_typed_in(self, class_uris: set[str]) -> list[str]:
+        """URIs of individuals typed as any class in *class_uris*."""
+        return [
+            ind_uri
+            for ind_uri, ind in self.taxonomy.owl_individuals.items()
+            if any(t in class_uris for t in ind.types)
+        ]
+
+    def _on_delete_class_action(self) -> None:
+        """Delete the focused OWL class: show the choice dialog if it has subclasses or
+        typed individuals, otherwise delete it directly (keep_all) via the service."""
+        if not (self._detail_uri and self._detail_uri in self.taxonomy.owl_classes):
+            return
+        from ..operations import _owl_subclass_tree
+
+        cls_uri = self._detail_uri
+        rdf_cls = self.taxonomy.owl_classes[cls_uri]
+        all_tree = _owl_subclass_tree(self.taxonomy, cls_uri)
+        subclass_uris = [u for u in all_tree if u != cls_uri]
+        individual_uris = self._individuals_typed_in(all_tree)
+        parent_uris = [p for p in rdf_cls.sub_class_of if p in self.taxonomy.owl_classes]
+        if subclass_uris or individual_uris:
+            self._state = DeleteClassChoiceState(
+                class_uri=cls_uri,
+                subclass_uris=subclass_uris,
+                parent_uris=parent_uris,
+                individual_uris=individual_uris,
+                cursor=0,
+                confirming=False,
+            )
+        else:
+            self._perform_class_delete(cls_uri, "keep_all")
+
+    def _perform_class_delete(self, class_uri: str, mode: str) -> None:
+        """Delete an OWL class via the service (mode = keep_all / cascade_subclasses /
+        delete_all) and return to the tree."""
         from ..core.commands import OwlDeleteClass
 
-        target_path = self._owner_path(ds.class_uri)
+        target_path = self._owner_path(class_uri)
         result = self._service().execute(  # type: ignore[attr-defined]
-            OwlDeleteClass(target_path, ds.class_uri, self._DELETE_CLASS_MODES[ds.cursor])
+            OwlDeleteClass(target_path, class_uri, mode)
         )
         if not result.ok:
             self._status = result.error or "Delete failed"
@@ -6606,7 +6521,7 @@ class TaxonomyViewer:
 
         if ds.confirming:
             if key in (ord("y"), curses.KEY_ENTER, ord("\n"), ord("\r")):
-                self._perform_class_delete(ds)
+                self._perform_class_delete(ds.class_uri, self._DELETE_CLASS_MODES[ds.cursor])
             elif key == 27:  # Esc → back to choice
                 ds.confirming = False
         else:
@@ -6631,51 +6546,23 @@ class TaxonomyViewer:
         *reattach_to*: if given, re-type affected individuals to these classes
         instead of deleting them.
         """
-        rdf_class = self.taxonomy.owl_classes.get(uri)
-        if not rdf_class:
+        if uri not in self.taxonomy.owl_classes:
             self._state = DetailState()
             return
+        from ..core.commands import OwlConvertClassToIndividual
 
-        # Collect individuals currently typed as this class before we mutate
-        affected = [
-            ind_uri for ind_uri, ind in self.taxonomy.owl_individuals.items() if uri in ind.types
-        ]
-
-        individual = OWLIndividual(
-            uri=uri,
-            labels=list(rdf_class.labels),
-            comments=list(rdf_class.comments),
-            types=[p for p in rdf_class.sub_class_of if not is_builtin_uri(p)],
+        path = self._owner_path(uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlConvertClassToIndividual(
+                path, uri, tuple(reattach_to) if reattach_to is not None else None
+            )
         )
-        del self.taxonomy.owl_classes[uri]
-        self.taxonomy.owl_individuals[uri] = individual
-
-        # Scrub class-only references
-        for cls in self.taxonomy.owl_classes.values():
-            for lst in (cls.sub_class_of, cls.equivalent_class, cls.disjoint_with):
-                if uri in lst:
-                    lst.remove(uri)
-        for prop in self.taxonomy.owl_properties.values():
-            for lst in (prop.domains, prop.ranges):
-                if uri in lst:
-                    lst.remove(uri)
-
-        for ind_uri in affected:
-            ind = self.taxonomy.owl_individuals.get(ind_uri)
-            if not ind:
-                continue
-            if uri in ind.types:
-                ind.types.remove(uri)
-            if reattach_to is not None:
-                for parent in reattach_to:
-                    if parent not in ind.types:
-                        ind.types.append(parent)
-            else:
-                # Delete the individual entirely
-                del self.taxonomy.owl_individuals[ind_uri]
-
+        if not result.ok:
+            self._status = result.error or "Conversion failed"
+            self._state = DetailState()
+            return
+        self._post_save_effects(path, self._workspace.taxonomies[path])
         self._rebuild()
-        self._save_file()
         self._detail_uri = uri
         self._detail_fields = self._bidf(uri)
         self._field_cursor = 0
@@ -6979,27 +6866,21 @@ class TaxonomyViewer:
     # ──────────────── INDIVIDUAL → CLASS confirmation ────────────────────────
 
     def _do_individual_to_class(self, uri: str) -> None:
-        from ..model import RDFClass
-
-        individual = self.taxonomy.owl_individuals.get(uri)
-        if not individual:
+        if uri not in self.taxonomy.owl_individuals:
             self._state = DetailState()
             return
+        from ..core.commands import OwlConvertIndividualToClass
 
-        rdf_class = RDFClass(
-            uri=uri,
-            labels=list(individual.labels),
-            comments=list(individual.comments),
-            sub_class_of=[t for t in individual.types if not is_builtin_uri(t)],
+        path = self._owner_path(uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlConvertIndividualToClass(path, uri)
         )
-        del self.taxonomy.owl_individuals[uri]
-        self.taxonomy.owl_classes[uri] = rdf_class
-
-        for ind in self.taxonomy.owl_individuals.values():
-            ind.property_values = [(p, v) for p, v in ind.property_values if v != uri]
-
+        if not result.ok:
+            self._status = result.error or "Conversion failed"
+            self._state = DetailState()
+            return
+        self._post_save_effects(path, self._workspace.taxonomies[path])
         self._rebuild()
-        self._save_file()
         self._detail_uri = uri
         self._detail_fields = self._bcdf(uri)
         self._field_cursor = 0
@@ -7646,33 +7527,22 @@ class TaxonomyViewer:
             ms.scroll = 0
 
     def _apply_ext_superclass(self, source_uri: str, ext_class_uri: str) -> None:
-        """Write rdfs:subClassOf *ext_class_uri* onto *source_uri* and save."""
-        from ..model import RDFClass
-        from ..ontology_imports import (
-            add_namespace_to_taxonomy,
-            namespace_url_from_uri,
-            suggest_prefix,
-        )
+        """Add external rdfs:subClassOf *ext_class_uri* onto *source_uri* via the service."""
+        from ..core.commands import OwlAddExternalSuperclass
+        from ..ontology_imports import namespace_url_from_uri, suggest_prefix
 
-        rdf_class = self.taxonomy.owl_classes.get(source_uri)
-        if not rdf_class:
+        if source_uri not in self.taxonomy.owl_classes:
             self._state = DetailState()
             return
-        if ext_class_uri not in rdf_class.sub_class_of:
-            rdf_class.sub_class_of.append(ext_class_uri)
-
-        # Register the external class as a stub so it appears in the tree
-        if ext_class_uri not in self.taxonomy.owl_classes:
-            self.taxonomy.owl_classes[ext_class_uri] = RDFClass(uri=ext_class_uri)
-
-        # Ensure the namespace prefix is recorded
         ns = namespace_url_from_uri(ext_class_uri)
-        if ns not in self.taxonomy.namespace_bindings.values():
-            prefix = suggest_prefix(ns)
-            add_namespace_to_taxonomy(ns, prefix, self.taxonomy)
-
-        self._rebuild()
-        self._save_file()
+        prefix = suggest_prefix(ns) if ns not in self.taxonomy.namespace_bindings.values() else ""
+        path = self._owner_path(source_uri)
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlAddExternalSuperclass(path, source_uri, ext_class_uri, ns, prefix)
+        )
+        if result.ok:
+            self._post_save_effects(path, self._workspace.taxonomies[path])
+            self._rebuild()
         self._detail_uri = source_uri
         self._detail_fields = self._bcdf(source_uri)
         self._field_cursor = 0
@@ -7813,23 +7683,7 @@ class TaxonomyViewer:
             if 0 <= ms.cursor < n:
                 val_uri, _ = filtered[ms.cursor]
                 if not val_uri.startswith("__HDR__:"):
-                    individual = self.taxonomy.owl_individuals.get(ind_uri)
-                    if individual:
-                        new_pair = (prop_uri, val_uri)
-                        if ms.replace_val_uri:
-                            old_pair = (prop_uri, ms.replace_val_uri)
-                            if old_pair in individual.property_values:
-                                idx = individual.property_values.index(old_pair)
-                                individual.property_values[idx] = new_pair
-                            elif new_pair not in individual.property_values:
-                                individual.property_values.append(new_pair)
-                        elif new_pair not in individual.property_values:
-                            individual.property_values.append(new_pair)
-                        self._save_file()
-                    self._detail_uri = ind_uri
-                    self._detail_fields = self._bidf(ind_uri)
-                    self._field_cursor = 0
-                    self._state = DetailState()
+                    self._set_individual_value(ind_uri, prop_uri, val_uri, ms.replace_val_uri or "")
         elif key == 27:  # Esc — go back to property selection (step 1)
             individual = self.taxonomy.owl_individuals.get(ind_uri)
             ind_types = individual.types if individual else []
@@ -8036,23 +7890,7 @@ class TaxonomyViewer:
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if 0 <= ms.cursor < n:
                 val_uri, _ = filtered[ms.cursor]
-                individual = self.taxonomy.owl_individuals.get(ind_uri)
-                if individual:
-                    new_pair = (prop_uri, val_uri)
-                    if ms.replace_val_uri:
-                        old_pair = (prop_uri, ms.replace_val_uri)
-                        if old_pair in individual.property_values:
-                            idx = individual.property_values.index(old_pair)
-                            individual.property_values[idx] = new_pair
-                        elif new_pair not in individual.property_values:
-                            individual.property_values.append(new_pair)
-                    elif new_pair not in individual.property_values:
-                        individual.property_values.append(new_pair)
-                    self._save_file()
-                self._detail_uri = ind_uri
-                self._detail_fields = self._bidf(ind_uri)
-                self._field_cursor = 0
-                self._state = DetailState()
+                self._set_individual_value(ind_uri, prop_uri, val_uri, ms.replace_val_uri or "")
         elif key == 27:  # Esc — go back to step 2 (or step 1 if step 2 was skipped)
             prop = self.taxonomy.owl_properties.get(prop_uri)
             back = self._make_class_or_individual_state(ind_uri, prop_uri, prop)
@@ -8095,15 +7933,7 @@ class TaxonomyViewer:
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if 0 <= ms.cursor < n:
                 cls_uri, _ = filtered[ms.cursor]
-                individual = self.taxonomy.owl_individuals.get(ind_uri)
-                if individual and cls_uri not in individual.types:
-                    individual.types.append(cls_uri)
-                    self._save_file()
-                    self._rebuild()
-                self._detail_uri = ind_uri
-                self._detail_fields = self._bidf(ind_uri)
-                self._field_cursor = 0
-                self._state = DetailState()
+                self._add_individual_type(ind_uri, cls_uri)
         elif key == 27:  # Esc
             self._detail_uri = ind_uri
             self._detail_fields = self._bidf(ind_uri)
@@ -8118,6 +7948,126 @@ class TaxonomyViewer:
             ms.filter_text += chr(key)
             ms.cursor = 0
             ms.scroll = 0
+
+    def _add_property_class(self, prop_uri: str, slot: str, class_uri: str) -> None:
+        """Add a picked class to a property's domain/range via the service, then show it."""
+        from ..core.commands import OwlAddPropertyClass
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlAddPropertyClass(self._owner_path(prop_uri), prop_uri, slot, class_uri)
+        )
+        self._detail_uri = prop_uri
+        self._finish_field_edit(result, prop_uri, self._owner_path(prop_uri))
+        self._field_cursor = 0
+        self._state = DetailState()
+
+    def _remove_property_class(self, slot: str, class_uri: str) -> None:
+        """Remove a class from the current property's domain/range via the service."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_properties or not class_uri:
+            return
+        from ..core.commands import OwlRemovePropertyClass
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlRemovePropertyClass(self._owner_path(uri), uri, slot, class_uri)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _remove_superclass(self, parent_uri: str) -> None:
+        """Detach one rdfs:subClassOf parent from the current class via the service."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_classes or not parent_uri:
+            return
+        from ..core.commands import OwlRemoveSuperclass
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlRemoveSuperclass(self._owner_path(uri), uri, parent_uri)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _remove_individual_value(self, prop_uri: str, val_uri: str) -> None:
+        """Remove an object-property value pair from the current individual via the service."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_individuals:
+            return
+        from ..core.commands import OwlRemoveIndividualValue
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlRemoveIndividualValue(self._owner_path(uri), uri, prop_uri, val_uri)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _remove_individual_literal(self, prop_uri: str, val_str: str, lang_or_dt: str) -> None:
+        """Remove a literal value triple from the current individual via the service."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_individuals:
+            return
+        from ..core.commands import OwlRemoveIndividualLiteral
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlRemoveIndividualLiteral(self._owner_path(uri), uri, prop_uri, val_str, lang_or_dt)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _remove_individual_type(self, type_uri: str) -> None:
+        """Remove an rdf:type from the current individual via the service."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_individuals:
+            return
+        from ..core.commands import OwlRemoveIndividualType
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlRemoveIndividualType(self._owner_path(uri), uri, type_uri)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _add_individual_type(self, ind_uri: str, type_uri: str) -> None:
+        """Add a picked class as an rdf:type of an individual via the service, then show it."""
+        from ..core.commands import OwlAddIndividualType
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlAddIndividualType(self._owner_path(ind_uri), ind_uri, type_uri)
+        )
+        self._detail_uri = ind_uri
+        self._finish_field_edit(result, ind_uri, self._owner_path(ind_uri))
+        self._field_cursor = 0
+        self._state = DetailState()
+
+    def _set_individual_value(
+        self, ind_uri: str, prop_uri: str, new_val_uri: str, old_val_uri: str = ""
+    ) -> None:
+        """Add/replace an object-property value pair on an individual via the service."""
+        from ..core.commands import OwlSetIndividualValue
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            OwlSetIndividualValue(
+                self._owner_path(ind_uri), ind_uri, prop_uri, new_val_uri, old_val_uri
+            )
+        )
+        self._detail_uri = ind_uri
+        self._finish_field_edit(result, ind_uri, self._owner_path(ind_uri))
+        self._field_cursor = 0
+        self._state = DetailState()
+
+    def _on_delete_individual_action(self) -> None:
+        """Delete the current individual via the service, then return to the tree."""
+        uri = self._detail_uri
+        if not uri or uri not in self.taxonomy.owl_individuals:
+            return
+        target_path = self._owner_path(uri)
+        from ..core.commands import OwlDeleteIndividual
+
+        result = self._service().execute(OwlDeleteIndividual(target_path, uri))  # type: ignore[attr-defined]
+        if not result.ok:
+            self._status = result.error or "Delete failed"
+            return
+        self._post_save_effects(target_path, self._workspace.taxonomies[target_path])
+        self._rebuild()
+        self._tree.cursor = min(self._tree.cursor, max(0, len(self._tree.flat) - 1))
+        self._detail_uri = _GLOBAL_URI
+        self._detail_fields = self._bgf()
+        self._field_cursor = 0
+        self._state = TreeState()
 
     def _on_prop_class_pick(self, key: int, rows: int, slot: str) -> None:
         """Handle keypresses in the add-domain / add-range class pickers."""
@@ -8139,17 +8089,7 @@ class TaxonomyViewer:
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if 0 <= ms.cursor < n:
                 cls_uri, _ = filtered[ms.cursor]
-                prop = self.taxonomy.owl_properties.get(ms.source_uri or "")
-                if prop:
-                    if slot == "domain" and cls_uri not in prop.domains:
-                        prop.domains.append(cls_uri)
-                    elif slot == "range" and cls_uri not in prop.ranges:
-                        prop.ranges.append(cls_uri)
-                    self._save_file()
-                self._detail_uri = ms.source_uri
-                self._detail_fields = self._bpropf(ms.source_uri or "")
-                self._field_cursor = 0
-                self._state = DetailState()
+                self._add_property_class(ms.source_uri or "", slot, cls_uri)
         elif key == 27:  # Esc
             self._detail_uri = ms.source_uri
             self._detail_fields = self._bpropf(ms.source_uri or "")
@@ -8226,54 +8166,39 @@ class TaxonomyViewer:
 
     # ─── schema media helpers ─────────────────────────────────────────────────
 
-    def _schema_entity(self) -> object | None:
-        """Return the concept/class/individual currently shown in the detail panel."""
-        if not self._detail_uri:
-            return None
-        uri = self._detail_uri
-        return (
-            self.taxonomy.concepts.get(uri)
-            or self.taxonomy.owl_classes.get(uri)
-            or self.taxonomy.owl_individuals.get(uri)
-        )
-
-    def _refresh_detail(self) -> None:
-        """Rebuild the detail field list for the current detail_uri."""
-        if not self._detail_uri:
-            return
-        uri = self._detail_uri
-        if uri in self.taxonomy.concepts:
-            self._detail_fields = self._bdf(uri)
-        elif uri in self.taxonomy.owl_classes:
-            self._detail_fields = self._bcdf(uri)
-        elif uri in self.taxonomy.owl_individuals:
-            self._detail_fields = self._bidf(uri)
-        self._field_cursor = min(self._field_cursor, max(0, len(self._detail_fields) - 1))
+    # schema-media input field type → media kind (image/video/url).
+    _SCHEMA_INPUT_TO_KIND = {
+        "schema_image_input": "image",
+        "schema_video_input": "video",
+        "schema_url_input": "url",
+    }
 
     def _commit_schema_media(self, f: DetailField, new_value: str) -> None:
-        """Append a schema:image / schema:video / schema:url URL to the current entity."""
+        """Append a schema:image / schema:video / schema:url URL via the service."""
         if not new_value or not self._detail_uri:
             return
-        ftype = f.meta.get("type", "")
-        entity = self._schema_entity()
-        if entity is None:
+        kind = self._SCHEMA_INPUT_TO_KIND.get(f.meta.get("type", ""))
+        if kind is None:
             return
-        if ftype == "schema_image_input":
-            lst: list[str] = entity.schema_images  # type: ignore[attr-defined]
-            if new_value not in lst:
-                lst.append(new_value)
-        elif ftype == "schema_video_input":
-            lst = entity.schema_videos  # type: ignore[attr-defined]
-            if new_value not in lst:
-                lst.append(new_value)
-        elif ftype == "schema_url_input":
-            lst = entity.schema_urls  # type: ignore[attr-defined]
-            if new_value not in lst:
-                lst.append(new_value)
-        else:
+        uri = self._detail_uri
+        from ..core.commands import AddSchemaMedia
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            AddSchemaMedia(self._owner_path(uri), uri, kind, new_value)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
+
+    def _remove_schema_media(self, kind: str, url: str) -> None:
+        """Remove a schema:image/video/url URL from the current entity via the service."""
+        if not url or not self._detail_uri:
             return
-        self._refresh_detail()
-        self._save_file()
+        uri = self._detail_uri
+        from ..core.commands import RemoveSchemaMedia
+
+        result = self._service().execute(  # type: ignore[attr-defined]
+            RemoveSchemaMedia(self._owner_path(uri), uri, kind, url)
+        )
+        self._finish_field_edit(result, uri, self._owner_path(uri))
 
     def _confirm_related(self, target_uri: str) -> None:
         """Add a skos:related link via the shared TaxonomyService."""
@@ -8618,37 +8543,28 @@ class TaxonomyViewer:
             mcp.scroll = 0
 
     def _confirm_mapping(self, target_uri: str) -> None:
-        from ..workspace_ops import add_mapping
+        from ..workspace_ops import _ATTR
 
         if not isinstance(self._state, MapConceptPickState):
             return
         src = self._state.source_uri
         map_type = self._state.map_type
-        try:
-            src_file, tgt_file = add_mapping(
-                self._workspace,
-                src,
-                target_uri,
-                map_type,  # type: ignore[arg-type]
-            )
-        except Exception as exc:
-            self._status = str(exc)
+        attr = _ATTR.get(map_type, "")
+        if not attr or self._workspace.concept_for(target_uri) is None:
+            self._status = f"Target concept not found: {target_uri}"
             self._detail_uri = src
             self._detail_fields = self._bdf(src)
             self._state = DetailState()
             return
-        # Save both affected files and stage them in git
-        self._workspace.save_file(src_file)
-        self._workspace.save_file(tgt_file)
-        if self._git_manager:
-            self._git_manager.stage_path(src_file)  # type: ignore[attr-defined]
-            if tgt_file != src_file:
-                self._git_manager.stage_path(tgt_file)  # type: ignore[attr-defined]
+        if not self._apply_mapping_links(src, attr, target_uri, add=True, with_inverse=True):
+            self._detail_uri = src
+            self._detail_fields = self._bdf(src)
+            self._state = DetailState()
+            return
         self._status = (
             f"Added {map_type}: {self.taxonomy.uri_to_handle(src) or src}"
             f" → {self.taxonomy.uri_to_handle(target_uri) or target_uri}"
         )
-        self._rebuild()
         for i, line in enumerate(self._tree.flat):
             if line.uri == src:
                 self._tree.cursor = i

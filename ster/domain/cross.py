@@ -99,3 +99,39 @@ def rename_entity_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
         rename_owl_uri(taxonomy, old_uri, new_uri)
 
     assign_handles(taxonomy)
+
+
+# ──────────────────────── schema.org media (image/video/url) ──────────────────
+# A cross-layer concern: concepts, OWL classes, and individuals all carry
+# schema_images / schema_videos / schema_urls lists.
+
+_SCHEMA_MEDIA_KINDS = {"image", "video", "url"}
+
+
+def _schema_media_entity(taxonomy: Taxonomy, uri: str) -> object | None:
+    """The concept/class/individual identified by *uri* (schema media lives on these)."""
+    return (
+        taxonomy.concepts.get(uri)
+        or taxonomy.owl_classes.get(uri)
+        or taxonomy.owl_individuals.get(uri)
+    )
+
+
+def add_schema_media(taxonomy: Taxonomy, uri: str, kind: str, url: str) -> None:
+    """Append a schema:image/video/url *url* to *uri* (dedup; no-op on bad uri/kind)."""
+    entity = _schema_media_entity(taxonomy, uri)
+    if entity is None or kind not in _SCHEMA_MEDIA_KINDS:
+        return
+    lst: list[str] = getattr(entity, f"schema_{kind}s")
+    if url not in lst:
+        lst.append(url)
+
+
+def remove_schema_media(taxonomy: Taxonomy, uri: str, kind: str, url: str) -> None:
+    """Remove a schema:image/video/url *url* from *uri* (no-op on bad uri/kind/url)."""
+    entity = _schema_media_entity(taxonomy, uri)
+    if entity is None or kind not in _SCHEMA_MEDIA_KINDS:
+        return
+    lst: list[str] = getattr(entity, f"schema_{kind}s")
+    if url in lst:
+        lst.remove(url)
