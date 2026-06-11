@@ -1,0 +1,21 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix :     <https://example.org/zoo/> .
+
+: a owl:Ontology ; rdfs:label "Zoo Ontology" .
+
+:Animal a owl:Class ; rdfs:label "Animal"@en ; rdfs:comment "Any living, breathing creature."@en .
+:Mammal a owl:Class ; rdfs:subClassOf :Animal ; rdfs:label "Mammal"@en ; rdfs:comment "Warm-blooded vertebrate."@en .
+:Bird   a owl:Class ; rdfs:subClassOf :Animal ; rdfs:label "Bird"@en .
+:Dog    a owl:Class ; rdfs:subClassOf :Mammal ; rdfs:label "Dog"@en ; rdfs:comment "Loyal domestic companion."@en .
+:Cat    a owl:Class ; rdfs:subClassOf :Mammal ; rdfs:label "Cat"@en .
+:Eagle  a owl:Class ; rdfs:subClassOf :Bird   ; rdfs:label "Eagle"@en .
+:Person a owl:Class ; rdfs:label "Person"@en .
+
+:hasOwner a owl:ObjectProperty ; rdfs:label "has owner"@en ; rdfs:domain :Animal ; rdfs:range :Person .
+:hasAge   a owl:DatatypeProperty ; rdfs:label "has age"@en ; rdfs:domain :Animal .
+
+:Rex   a owl:NamedIndividual, :Dog    ; rdfs:label "Rex"@en ;   :hasOwner :Alice .
+:Felix a owl:NamedIndividual, :Cat    ; rdfs:label "Felix"@en .
+:Alice a owl:NamedIndividual, :Person ; rdfs:label "Alice"@en .
