@@ -1,12 +1,21 @@
 """Tests for the Textual ontology-browser spike (``ster.tui``).
 
-The pure ``data`` adapters are always tested. The Textual ``app`` test is gated
-behind ``importorskip`` so it runs only when the optional ``tui`` extra is
-installed (CI's default env doesn't pull Textual)."""
+Three layers, mirroring Textual's own testing toolkit:
+
+1. **Pure adapters** — plain functions over ``Taxonomy`` (no Textual). Always run.
+2. **Pilot interaction tests** — ``App.run_test()`` returns a ``Pilot`` we drive
+   with ``await pilot.press(...)`` / ``pilot.click(...)`` exactly like a user,
+   then assert on app state. Gated behind the optional ``tui`` extra.
+3. **Snapshot test** — ``pytest-textual-snapshot`` renders the app to SVG and
+   compares against a committed baseline (visual regression). Gated behind the
+   plugin; refresh baselines with ``pytest --snapshot-update``.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -17,13 +26,23 @@ from ster.tui import data
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 ZOO = "https://example.org/zoo/"
 
+# Per-test gates so the pure-data tests still run without the optional `tui` extra.
+needs_textual = pytest.mark.skipif(
+    importlib.util.find_spec("textual") is None,
+    reason="optional 'tui' extra (textual) not installed",
+)
+needs_snapshot = pytest.mark.skipif(
+    importlib.util.find_spec("pytest_textual_snapshot") is None,
+    reason="pytest-textual-snapshot not installed",
+)
+
 
 @pytest.fixture
 def tax():
     return store.load(DEMO)
 
 
-# ── pure data adapters (no Textual) ─────────────────────────────────────────────
+# ── 1 · pure data adapters (no Textual) ─────────────────────────────────────────
 
 
 def test_class_hierarchy(tax):
@@ -38,11 +57,9 @@ def test_individuals_nest_under_their_class(tax):
 
 
 def test_search_rows_cover_every_entity(tax):
-    rows = data.search_rows(tax)
-    labels = {label for label, _uri, _kind in rows}
+    labels = {label for label, _uri, _kind in data.search_rows(tax)}
     assert {"Dog", "Eagle", "Rex", "has owner"} <= labels
-    # classes + individuals + properties = 7 + 3 + 2
-    assert len(rows) == 12
+    assert len(data.search_rows(tax)) == 12  # 7 classes + 3 individuals + 2 properties
 
 
 def test_label_and_kind(tax):
@@ -54,32 +71,100 @@ def test_label_and_kind(tax):
 
 def test_detail_progressive_disclosure(tax):
     dog = data.detail_markup(tax, ZOO + "Dog")
-    assert "Dog" in dog and "Mammal" in dog and "Rex" in dog  # parent + individual surfaced
-    assert "Loyal domestic companion." in dog  # comment shown
-    rex = data.detail_markup(tax, ZOO + "Rex")
-    assert "Alice" in rex  # the hasOwner relation value is surfaced
+    assert "Mammal" in dog and "Rex" in dog and "Loyal domestic companion." in dog
+    assert "Alice" in data.detail_markup(tax, ZOO + "Rex")  # the hasOwner value
     prop = data.detail_markup(tax, ZOO + "hasOwner")
     assert "Animal" in prop and "Person" in prop  # domain + range
 
 
-# ── Textual app (optional; skipped without the `tui` extra) ─────────────────────
+# ── 2 · Pilot interaction tests (drive the real UI) ─────────────────────────────
 
 
-def test_app_builds_tree_and_search_jumps():
-    pytest.importorskip("textual")
-    from ster.tui.app import EntitySearch, OntologyApp
+def _run(scenario: Callable[..., Awaitable[None]]) -> None:
+    """Run an async Pilot scenario in a fresh loop (no pytest-asyncio needed)."""
+    asyncio.run(scenario())
 
+
+def _app():
+    from ster.tui.app import OntologyApp
+
+    return OntologyApp(store.load(DEMO), source="demo.ttl")
+
+
+@needs_textual
+def test_tree_populates_and_mounts() -> None:
     async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl")
+        app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            assert len(app._uri_nodes) >= 12  # tree populated
-            app.jump_to(ZOO + "Rex")  # search/jump lands on a nested individual
-            await pilot.pause()
-            assert "Alice" in app._detail_text  # detail panel followed
-            provider = EntitySearch(app.screen)
-            await provider.startup()
-            hits = [hit async for hit in provider.search("eag")]
-            assert any("Eagle" in hit.text for hit in hits)  # fuzzy search works
+            assert len(app._uri_nodes) == 12  # every class/individual/property indexed
+            from textual.widgets import Tree
 
-    asyncio.run(scenario())
+            assert isinstance(app.focused, Tree)  # tree gets focus on mount
+
+    _run(scenario)
+
+
+@needs_textual
+def test_arrow_keys_drive_the_detail_panel() -> None:
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("down", "down")  # Classes → Animal → Person
+            await pilot.pause()
+            assert "Person" in app._detail_text  # detail panel followed the cursor
+
+    _run(scenario)
+
+
+@needs_textual
+def test_command_palette_search_jumps_end_to_end() -> None:
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("slash")  # open the fuzzy search palette
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "CommandPalette"
+            await pilot.press(*"rex")  # type a query
+            for _ in range(3):
+                await pilot.pause()  # let the async provider search settle
+            await pilot.press("enter")  # pick the top hit
+            for _ in range(3):
+                await pilot.pause()
+            assert app.screen.__class__.__name__ == "Screen"  # palette closed
+            assert "Rex" in app._detail_text and "Alice" in app._detail_text  # jumped + detail
+
+    _run(scenario)
+
+
+@needs_textual
+def test_expand_and_collapse_keys() -> None:
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")  # expand all
+            await pilot.pause()
+            dog = app._uri_nodes[ZOO + "Dog"]
+            assert dog.line >= 0  # a deep node is now visible after expand-all
+            await pilot.press("c")  # collapse
+            await pilot.pause()
+
+    _run(scenario)
+
+
+# ── 3 · snapshot test (visual regression; optional plugin) ──────────────────────
+
+@needs_textual
+@needs_snapshot
+def test_browser_snapshot(snap_compare) -> None:
+    """Render the app (after jumping to Rex) and diff against the committed SVG."""
+
+    async def jump(pilot) -> None:  # run_before hook
+        await pilot.pause()
+        pilot.app.jump_to(ZOO + "Rex")
+        await pilot.pause()
+
+    assert snap_compare(_app(), terminal_size=(120, 40), run_before=jump)

@@ -75,6 +75,7 @@ all = [
     "ster[dev]",
 ]
 tui = [
+    "pytest-textual-snapshot>=1.0",
     "textual>=0.80",
 ]
 
