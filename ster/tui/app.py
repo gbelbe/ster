@@ -1,11 +1,11 @@
-"""Textual spike — ontology tree browser.
+"""The Textual ontology browser app.
 
 Left: a `Tree` of Classes (with their individuals nested) / Properties / SKOS
 schemes. Right: a progressive-disclosure detail panel. `/` (or ctrl+p) opens a
 fuzzy command-palette search that jumps to any class / individual / property.
 
-Browse-only spike — no editing. Reuses ``ster.store`` + the taxonomy model;
-a real version would call ``TaxonomyService`` for mutations.
+Browse-only for now — editing will route through ``TaxonomyService`` (the
+command/service layer the curses viewer already uses).
 """
 
 from __future__ import annotations
@@ -182,10 +182,13 @@ class OntologyApp(App):
         while parent is not None:
             parent.expand()
             parent = parent.parent
-        if node.line >= 0:
-            tree.cursor_line = node.line
-            tree.scroll_to_node(node)
-        self._show(uri)
+        self._show(uri)  # detail is independent of tree layout — show it now
+        # expand() only takes effect on the next refresh, so move the cursor after it:
+        self.call_after_refresh(self._focus_tree_node, tree, node)
+
+    def _focus_tree_node(self, tree: Tree, node: TreeNode) -> None:
+        tree.move_cursor(node)
+        tree.scroll_to_node(node)
         tree.focus()
 
     def action_expand_all(self) -> None:

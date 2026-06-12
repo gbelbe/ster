@@ -1,4 +1,4 @@
-"""Entry point: ``python -m ster.tui [ontology.ttl]`` (defaults to the demo)."""
+"""``python -m ster.tui [ontology.ttl]`` — launch the browser (defaults to the demo)."""
 
 from __future__ import annotations
 
@@ -7,14 +7,13 @@ from pathlib import Path
 
 from ster import store
 
-from .app import OntologyApp
+from . import launch
 
 
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     path = Path(args[0]) if args else Path(__file__).with_name("demo.ttl")
-    taxonomy = store.load(path)
-    OntologyApp(taxonomy, source=path.name).run()
+    launch(store.load(path), source=path.name)
 
 
 if __name__ == "__main__":

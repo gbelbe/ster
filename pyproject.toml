@@ -25,6 +25,7 @@ dependencies = [
     "rdflib>=7.0",
     "typer>=0.12",
     "rich>=13.0",
+    "textual>=0.80",              # modern TUI (New-TUI tree browser; future primary UI)
     "semanticlint>=0.2",
     "idna>=3.15",
     "fastapi[standard]>=0.110",   # includes uvicorn[standard]
@@ -70,13 +71,11 @@ dev = [
     # Templates / YAML
     "pyyaml>=6.0",
     "types-PyYAML>=6.0",
+    # TUI snapshot testing (textual itself is a core dependency)
+    "pytest-textual-snapshot>=1.0",
 ]
 all = [
     "ster[dev]",
-]
-tui = [
-    "pytest-textual-snapshot>=1.0",
-    "textual>=0.80",
 ]
 
 # ── Entry points ──────────────────────────────────────────────────────────────

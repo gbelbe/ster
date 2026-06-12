@@ -1,6 +1,18 @@
-"""Textual spike — a modern TUI tree-view browser for ontologies.
+"""``ster.tui`` — the Textual ontology browser (the "New-TUI").
 
-Isolated from the curses app: this is an exploratory second front-end (a new
-"driving adapter") that reuses the existing ``ster.store`` loader and model.
-Run it with ``python -m ster.tui [ontology.ttl]``.
+A modern, mouse- and keyboard-driven tree browser for taxonomies, reached via
+``ster new-tui`` or the home-screen menu. It reuses ``ster.store`` + the model
+and renders through Textual; pure view-model adapters live in :mod:`ster.tui.data`
+(no Textual import) so they stay terminal-free and easily testable.
 """
+
+from __future__ import annotations
+
+from ster.model import Taxonomy
+
+
+def launch(taxonomy: Taxonomy, source: str = "ontology", lang: str = "en") -> None:
+    """Open the Textual ontology browser for *taxonomy* (blocks until quit)."""
+    from .app import OntologyApp
+
+    OntologyApp(taxonomy, source=source, lang=lang).run()

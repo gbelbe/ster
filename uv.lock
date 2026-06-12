@@ -2332,6 +2332,7 @@ dependencies = [
     { name = "rdflib" },
     { name = "rich" },
     { name = "semanticlint" },
+    { name = "textual" },
     { name = "typer" },
     { name = "watchfiles" },
 ]
@@ -2349,6 +2350,7 @@ all = [
     { name = "pytest-asyncio" },
     { name = "pytest-bdd" },
     { name = "pytest-cov" },
+    { name = "pytest-textual-snapshot" },
     { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
@@ -2366,14 +2368,11 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-bdd" },
     { name = "pytest-cov" },
+    { name = "pytest-textual-snapshot" },
     { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
     { name = "types-pyyaml" },
-]
-tui = [
-    { name = "pytest-textual-snapshot" },
-    { name = "textual" },
 ]
 
 [package.metadata]
@@ -2393,7 +2392,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-bdd", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "pytest-textual-snapshot", marker = "extra == 'tui'", specifier = ">=1.0" },
+    { name = "pytest-textual-snapshot", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "rdflib", specifier = ">=7.0" },
@@ -2401,12 +2400,12 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "semanticlint", specifier = ">=0.2" },
     { name = "ster", extras = ["dev"], marker = "extra == 'all'" },
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.80" },
+    { name = "textual", specifier = ">=0.80" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
-provides-extras = ["dev", "all", "tui"]
+provides-extras = ["dev", "all"]
 
 [[package]]
 name = "stevedore"
