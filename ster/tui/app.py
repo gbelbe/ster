@@ -21,7 +21,7 @@ from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
 
-from . import data
+from . import data, detail
 
 
 class EntitySearch(Provider):
@@ -161,7 +161,7 @@ class OntologyApp(App):
 
     def _show(self, uri: str | None) -> None:
         markup = (
-            data.detail_markup(self.tax, uri, self.lang)
+            detail.render_detail(self.tax, uri, self.lang)
             if uri
             else "[dim]Select a class, individual or property…[/dim]"
         )

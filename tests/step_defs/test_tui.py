@@ -188,11 +188,6 @@ def then_detail_comment(ctx, comment):
     assert comment in ctx["detail"]
 
 
-@then(parsers.parse('the detail panel shows the individual "{ind}"'))
-def then_detail_individual(ctx, ind):
-    assert ind in ctx["detail"]
-
-
 @then(parsers.parse('the class "{name}" is visible in the tree'))
 def then_class_visible(ctx, name):
     assert ctx["visible"][ZOO + name]

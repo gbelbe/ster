@@ -26,7 +26,7 @@ Feature: New-TUI — the Textual ontology browser
     When I select the class "Dog"
     Then the detail panel shows the parent "Mammal"
     And the detail panel shows the comment "Loyal domestic companion."
-    And the detail panel shows the individual "Rex"
+    And the detail panel shows "instances: 1"
 
   Scenario: Expanding the whole tree reveals deep nodes
     When I expand the whole tree

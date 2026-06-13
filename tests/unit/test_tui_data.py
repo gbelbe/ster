@@ -50,9 +50,4 @@ def test_label_and_kind(tax):
     assert data.label_of(tax, ZOO + "Unknown") == "Unknown"  # fallback to local name
 
 
-def test_detail_progressive_disclosure(tax):
-    dog = data.detail_markup(tax, ZOO + "Dog")
-    assert "Mammal" in dog and "Rex" in dog and "Loyal domestic companion." in dog
-    assert "Alice" in data.detail_markup(tax, ZOO + "Rex")  # the hasOwner value
-    prop = data.detail_markup(tax, ZOO + "hasOwner")
-    assert "Animal" in prop and "Person" in prop  # domain + range
+# Detail rendering moved to ster.tui.detail.render_detail — see test_tui_detail.py.

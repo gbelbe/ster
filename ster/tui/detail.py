@@ -9,13 +9,35 @@ every entity view (class, individual, concept, scheme, …).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 
-from ster.nav.logic import DetailField
+from rich.markup import escape as _esc
+
+from ster.model import Taxonomy
+from ster.nav.logic import (
+    DetailField,
+    build_concept_detail,
+    build_individual_detail,
+    build_property_detail,
+    build_rdf_class_detail,
+    build_scheme_detail,
+)
+
+from . import data
 
 # Field meta["type"] values that start a new section rather than render a row.
 _SEPARATORS = frozenset({"separator", "separator_danger"})
+
+# entity kind (data.kind_of) → its DetailField builder. All share (tax, uri, lang).
+_BUILDERS: dict[str, Callable[[Taxonomy, str, str], list[DetailField]]] = {
+    "class": build_rdf_class_detail,
+    "individual": build_individual_detail,
+    "property": build_property_detail,
+    "concept": build_concept_detail,
+    "scheme": build_scheme_detail,
+}
 
 
 @dataclass
@@ -47,3 +69,37 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
                 sections.append(current)
             current.fields.append(f)
     return sections
+
+
+def build_sections(tax: Taxonomy, uri: str, lang: str = "en") -> list[DetailSection]:
+    """Return the grouped detail sections for *uri*, dispatched by entity kind.
+
+    Returns ``[]`` for a uri with no detail builder (e.g. a tree section node).
+    """
+    builder = _BUILDERS.get(data.kind_of(tax, uri))
+    if builder is None:
+        return []
+    return group_sections(builder(tax, uri, lang))
+
+
+def _render_row(f: DetailField) -> str:
+    """One detail row as Rich markup: 'label: value', or a dim affordance line."""
+    if f.value:
+        return f"  {_esc(f.display)}: {_esc(f.value)}"
+    return f"  [dim]{_esc(f.display)}[/dim]"
+
+
+def render_detail(tax: Taxonomy, uri: str, lang: str = "en") -> str:
+    """Rich-markup detail for *uri*, grouped into titled sections (read-only).
+
+    Replaces the spike's flat ``data.detail_markup`` — this renders the full
+    ``build_*_detail`` field model so the Textual detail view shows the same
+    labels / hierarchy / properties / actions as the curses panel.
+    """
+    lines: list[str] = []
+    for sec in build_sections(tax, uri, lang):
+        if sec.title:
+            style = "bold red" if sec.danger else "bold"
+            lines.append(f"[{style}]{_esc(sec.title)}[/]")
+        lines.extend(_render_row(f) for f in sec.fields)
+    return "\n".join(lines)

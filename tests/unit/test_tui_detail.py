@@ -13,9 +13,10 @@ from pathlib import Path
 
 from ster import store
 from ster.nav.logic import DetailField, build_rdf_class_detail
-from ster.tui.detail import DetailSection, group_sections
+from ster.tui.detail import DetailSection, group_sections, render_detail
 
 _DEMO = Path(__file__).parents[2] / "ster" / "tui" / "demo.ttl"
+_ZOO = "https://example.org/zoo/"
 
 
 def _f(type_: str, display: str = "x") -> DetailField:
@@ -65,3 +66,29 @@ def test_group_sections_class_detail_titles_in_order() -> None:
     assert "Labels" in titles and "Hierarchy" in titles
     assert titles[-1] == "Danger Zone"
     assert isinstance(sections[0], DetailSection)
+
+
+# ── render_detail (Rich markup) ─────────────────────────────────────────────────
+
+
+def test_render_detail_class_has_section_titles() -> None:
+    tax = store.load(_DEMO)
+    out = render_detail(tax, _ZOO + "Cat", "en")
+    assert "Identity" in out and "Labels" in out and "Danger Zone" in out
+
+
+def test_render_detail_danger_section_is_styled() -> None:
+    tax = store.load(_DEMO)
+    out = render_detail(tax, _ZOO + "Cat", "en")
+    assert "[bold red]Danger Zone[/]" in out
+
+
+def test_render_detail_individual_shows_property_value() -> None:
+    tax = store.load(_DEMO)
+    # Rex hasOwner Alice — the value must surface in the rendered detail.
+    assert "Alice" in render_detail(tax, _ZOO + "Rex", "en")
+
+
+def test_render_detail_unknown_uri_is_empty() -> None:
+    tax = store.load(_DEMO)
+    assert render_detail(tax, _ZOO + "DoesNotExist", "en") == ""
