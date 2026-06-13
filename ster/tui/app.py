@@ -23,6 +23,7 @@ from textual.widgets.tree import TreeNode
 from ster.model import Taxonomy
 
 from . import data, detail, edits
+from .choice_modal import ChoiceModal
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
 
@@ -248,6 +249,9 @@ class OntologyApp(App):
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
+        if action in edits.DELETE_CHOICES:
+            self._confirm_delete(action, uri, path)
+            return
         if action not in edits.INPUT_ACTIONS:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
@@ -264,6 +268,23 @@ class OntologyApp(App):
             self._apply_command(command)
 
         self.push_screen(EditModal(prompt, prefill), _on_submit)
+
+    def _confirm_delete(self, action: str, uri: str, path: Path) -> None:
+        """Ask for the delete mode, then run the destructive command + navigate away."""
+        label = data.label_of(self.tax, uri, self.lang)
+        prompt = f"Delete «{label}» — what should happen to what's below it?"
+
+        def _on_choice(mode: str | None) -> None:
+            if mode is None:
+                return
+            command = edits.delete_command(action, uri, path, mode)
+            if command is None:
+                self.notify("Unsupported delete.", severity="warning")
+                return
+            self._apply_command(command)
+            self._show(None)  # the entity is gone — clear the detail pane
+
+        self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

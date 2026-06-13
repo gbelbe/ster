@@ -7,11 +7,12 @@ from pathlib import Path
 from ster.core.commands import (
     OwlCreateIndividual,
     OwlCreateSubclass,
+    OwlDeleteClass,
     OwlSetComment,
     OwlSetLabel,
 )
 from ster.nav.logic import DetailField
-from ster.tui.edits import action_command, edit_command
+from ster.tui.edits import action_command, delete_command, edit_command
 
 
 def _field(type_: str, **meta) -> DetailField:
@@ -64,3 +65,16 @@ def test_add_individual_maps_to_create_individual_typed_by_class() -> None:
 
 def test_unsupported_action_returns_none() -> None:
     assert action_command("class_to_individual", "http://ex/C", _P, "x") is None
+
+
+# ── delete_command (destructive, mode-driven) ───────────────────────────────────
+
+
+def test_delete_class_maps_to_owl_delete_class_with_mode() -> None:
+    cmd = delete_command("delete_class", "http://ex/C", _P, "delete_all")
+    assert isinstance(cmd, OwlDeleteClass)
+    assert (cmd.class_uri, cmd.mode) == ("http://ex/C", "delete_all")
+
+
+def test_unsupported_delete_returns_none() -> None:
+    assert delete_command("delete_individual", "http://ex/C", _P, "keep_all") is None

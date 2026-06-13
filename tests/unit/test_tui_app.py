@@ -124,6 +124,36 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     _run(scenario)
 
 
+def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
+    """Destructive path: Enter on delete row → mode choice → OwlDeleteClass → save."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Cat")
+            await pilot.pause()
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("action") == "delete_class"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # → mode-choice modal
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "ChoiceModal"
+            await pilot.click("#opt-delete_all")  # pick a mode
+            for _ in range(3):
+                await pilot.pause()
+            assert ZOO + "Cat" not in app.tax.owl_classes  # gone in memory
+            assert ZOO + "Cat" not in store.load(src).owl_classes  # gone on disk
+
+    _run(scenario)
+
+
 def test_command_palette_search_jumps_end_to_end() -> None:
     async def scenario() -> None:
         app = _app()

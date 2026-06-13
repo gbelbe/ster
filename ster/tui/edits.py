@@ -14,6 +14,7 @@ from pathlib import Path
 from ster.core.commands import (
     OwlCreateIndividual,
     OwlCreateSubclass,
+    OwlDeleteClass,
     OwlSetComment,
     OwlSetLabel,
 )
@@ -55,4 +56,22 @@ def action_command(
         return OwlCreateSubclass(path, value, uri)
     if action == "add_individual":
         return OwlCreateIndividual(path, value, uri)
+    return None
+
+
+# Destructive action rows whose handler asks the user to pick a mode first.
+# Maps action → (prompt-template, [(option label, mode value)]).
+DELETE_CHOICES: dict[str, list[tuple[str, str]]] = {
+    "delete_class": [
+        ("Keep subclasses & instances (re-link to parents)", "keep_all"),
+        ("Delete subclasses too", "cascade_subclasses"),
+        ("Delete the class and everything below it", "delete_all"),
+    ],
+}
+
+
+def delete_command(action: str, uri: str, path: Path, mode: str) -> object | None:
+    """Return the destructive Command for *action* with the chosen *mode*."""
+    if action == "delete_class":
+        return OwlDeleteClass(path, uri, mode)
     return None
