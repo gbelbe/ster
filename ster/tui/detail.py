@@ -82,11 +82,17 @@ def build_sections(tax: Taxonomy, uri: str, lang: str = "en") -> list[DetailSect
     return group_sections(builder(tax, uri, lang))
 
 
-def _render_row(f: DetailField) -> str:
-    """One detail row as Rich markup: 'label: value', or a dim affordance line."""
+def field_markup(f: DetailField) -> str:
+    """One detail field as Rich markup (no indent): 'label: value', or a dim
+    affordance line for action/empty rows. Shared by the flat render and the
+    composed DetailView row widgets."""
     if f.value:
-        return f"  {_esc(f.display)}: {_esc(f.value)}"
-    return f"  [dim]{_esc(f.display)}[/dim]"
+        return f"{_esc(f.display)}: {_esc(f.value)}"
+    return f"[dim]{_esc(f.display)}[/dim]"
+
+
+def _render_row(f: DetailField) -> str:
+    return f"  {field_markup(f)}"
 
 
 def render_detail(tax: Taxonomy, uri: str, lang: str = "en") -> str:

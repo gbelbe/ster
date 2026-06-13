@@ -15,13 +15,14 @@ from functools import partial
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Footer, Header, Static, Tree
+from textual.containers import Horizontal
+from textual.widgets import Footer, Header, Tree
 from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
 
 from . import data, detail
+from .detail_view import PLACEHOLDER, DetailView
 
 
 class EntitySearch(Provider):
@@ -55,8 +56,10 @@ class OntologyApp(App):
         padding: 0 1;
         background: $panel;
     }
-    #detail-pane { width: 1fr; }
-    #detail { padding: 1 2; }
+    #detail { width: 1fr; padding: 1 2; }
+    .section-header { margin-top: 1; }
+    .detail-row { padding: 0 1; }
+    .detail-row:focus { background: $accent 30%; }
     Tree > .tree--guides { color: $primary-darken-2; }
     Tree > .tree--guides-selected { color: $accent; }
     """
@@ -83,8 +86,7 @@ class OntologyApp(App):
         yield Header()
         with Horizontal(id="body"):
             yield Tree("ontology", id="tree")
-            with VerticalScroll(id="detail-pane"):
-                yield Static("[dim]Select a class, individual or property…[/dim]", id="detail")
+            yield DetailView(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -160,13 +162,10 @@ class OntologyApp(App):
     # ── interaction ─────────────────────────────────────────────────────────--
 
     def _show(self, uri: str | None) -> None:
-        markup = (
-            detail.render_detail(self.tax, uri, self.lang)
-            if uri
-            else "[dim]Select a class, individual or property…[/dim]"
-        )
-        self._detail_text = markup
-        self.query_one("#detail", Static).update(markup)
+        # _detail_text mirrors the rendered markup (used by tests + as a quick
+        # text view); the DetailView builds the composed, focusable widgets.
+        self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
+        self.query_one("#detail", DetailView).update_entity(self.tax, uri, self.lang)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

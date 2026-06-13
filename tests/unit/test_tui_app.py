@@ -91,6 +91,24 @@ def test_expand_collapse_keys_and_jump_to_deep_node() -> None:
     _run(scenario)
 
 
+def test_detail_view_composes_focusable_rows() -> None:
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow, SectionHeader
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.jump_to(ZOO + "Dog")
+            await pilot.pause()
+            rows = list(app.query(DetailRow))
+            headers = list(app.query(SectionHeader))
+            assert rows, "detail view should compose one focusable row per field"
+            assert all(r.can_focus for r in rows)
+            assert any(h.title_text == "Identity" for h in headers)
+
+    _run(scenario)
+
+
 def test_search_provider_fuzzy_matches() -> None:
     async def scenario() -> None:
         app = _app()
