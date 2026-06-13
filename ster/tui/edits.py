@@ -15,6 +15,7 @@ from ster.core.commands import (
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
+    OwlMoveClass,
     OwlSetComment,
     OwlSetLabel,
 )
@@ -74,4 +75,17 @@ def delete_command(action: str, uri: str, path: Path, mode: str) -> object | Non
     """Return the destructive Command for *action* with the chosen *mode*."""
     if action == "delete_class":
         return OwlDeleteClass(path, uri, mode)
+    return None
+
+
+# Action rows that pick an existing entity (via PickerModal). action → prompt.
+PICKER_ACTIONS: dict[str, str] = {
+    "link_superclass": "Add a superclass — pick a class",
+}
+
+
+def relation_command(action: str, source_uri: str, path: Path, target_uri: str) -> object | None:
+    """Return the Command linking *source_uri* to the picked *target_uri*."""
+    if action == "link_superclass":
+        return OwlMoveClass(path, source_uri, target_uri, replace=False)  # additive (polyhierarchy)
     return None

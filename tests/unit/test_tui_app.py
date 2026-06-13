@@ -154,6 +154,41 @@ def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
     _run(scenario)
 
 
+def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
+    """Relation path: Enter on "Add superclass" → picker → OwlMoveClass → save."""
+
+    async def scenario() -> None:
+        from textual.widgets import OptionList
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Cat")
+            await pilot.pause()
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("action") == "link_superclass"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # → picker
+            await pilot.pause()
+            modal = app.screen
+            assert modal.__class__.__name__ == "PickerModal"
+            idx = next(i for i, (_, uri) in enumerate(modal._options) if uri == ZOO + "Person")
+            modal.query_one(OptionList).highlighted = idx
+            await pilot.press("enter")  # select Person as an additional superclass
+            for _ in range(3):
+                await pilot.pause()
+            assert ZOO + "Person" in app.tax.owl_classes[ZOO + "Cat"].sub_class_of  # in memory
+            assert ZOO + "Person" in store.load(src).owl_classes[ZOO + "Cat"].sub_class_of  # disk
+
+    _run(scenario)
+
+
 def test_command_palette_search_jumps_end_to_end() -> None:
     async def scenario() -> None:
         app = _app()

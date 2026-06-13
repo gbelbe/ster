@@ -8,11 +8,12 @@ from ster.core.commands import (
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
+    OwlMoveClass,
     OwlSetComment,
     OwlSetLabel,
 )
 from ster.nav.logic import DetailField
-from ster.tui.edits import action_command, delete_command, edit_command
+from ster.tui.edits import action_command, delete_command, edit_command, relation_command
 
 
 def _field(type_: str, **meta) -> DetailField:
@@ -78,3 +79,20 @@ def test_delete_class_maps_to_owl_delete_class_with_mode() -> None:
 
 def test_unsupported_delete_returns_none() -> None:
     assert delete_command("delete_individual", "http://ex/C", _P, "keep_all") is None
+
+
+# ── relation_command (picker-driven) ────────────────────────────────────────────
+
+
+def test_link_superclass_maps_to_additive_move_class() -> None:
+    cmd = relation_command("link_superclass", "http://ex/C", _P, "http://ex/Parent")
+    assert isinstance(cmd, OwlMoveClass)
+    assert (cmd.source_uri, cmd.new_parent_uri, cmd.replace) == (
+        "http://ex/C",
+        "http://ex/Parent",
+        False,
+    )
+
+
+def test_unsupported_relation_returns_none() -> None:
+    assert relation_command("relate", "http://ex/C", _P, "http://ex/D") is None

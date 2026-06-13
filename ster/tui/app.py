@@ -26,6 +26,7 @@ from . import data, detail, edits
 from .choice_modal import ChoiceModal
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
+from .picker_modal import PickerModal
 
 
 class _StorePersistence:
@@ -252,6 +253,9 @@ class OntologyApp(App):
         if action in edits.DELETE_CHOICES:
             self._confirm_delete(action, uri, path)
             return
+        if action in edits.PICKER_ACTIONS:
+            self._pick_relation(action, uri, path)
+            return
         if action not in edits.INPUT_ACTIONS:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
@@ -285,6 +289,31 @@ class OntologyApp(App):
             self._show(None)  # the entity is gone — clear the detail pane
 
         self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
+
+    def _pick_relation(self, action: str, uri: str, path: Path) -> None:
+        """Pick a target class for a relation action (e.g. add superclass) → command."""
+        candidates = sorted(
+            (
+                (data.label_of(self.tax, u, self.lang), u)
+                for u in self.tax.owl_classes
+                if u != uri
+            ),
+            key=lambda t: t[0].lower(),
+        )
+        if not candidates:
+            self.notify("No other classes to link to.", severity="warning")
+            return
+
+        def _on_pick(target: str | None) -> None:
+            if target is None:
+                return
+            command = edits.relation_command(action, uri, path, target)
+            if command is None:
+                self.notify("Unsupported relation.", severity="warning")
+                return
+            self._apply_command(command)
+
+        self.push_screen(PickerModal(edits.PICKER_ACTIONS[action], candidates), _on_pick)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)
