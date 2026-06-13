@@ -38,10 +38,17 @@ class DetailRow(Static):
     """A focusable detail field row; carries its ``DetailField`` for later actions."""
 
     can_focus = True
-    BINDINGS = [Binding("enter", "edit_field", "Edit")]
+    BINDINGS = [Binding("enter", "activate", "Edit / run")]
 
     class EditRequested(Message):
-        """Posted when the user activates an editable row (Enter)."""
+        """Posted when the user activates an editable value row (Enter)."""
+
+        def __init__(self, field: DetailField) -> None:
+            super().__init__()
+            self.field = field
+
+    class ActionRequested(Message):
+        """Posted when the user activates an action row (Enter)."""
 
         def __init__(self, field: DetailField) -> None:
             super().__init__()
@@ -52,9 +59,11 @@ class DetailRow(Static):
         self.field = field
         self.add_class("detail-row")
 
-    def action_edit_field(self) -> None:
+    def action_activate(self) -> None:
         if self.field.editable:
             self.post_message(self.EditRequested(self.field))
+        elif self.field.meta.get("action"):
+            self.post_message(self.ActionRequested(self.field))
 
 
 class DetailView(VerticalScroll):

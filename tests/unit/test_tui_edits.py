@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster.core.commands import OwlSetLabel
+from ster.core.commands import (
+    OwlCreateIndividual,
+    OwlCreateSubclass,
+    OwlSetComment,
+    OwlSetLabel,
+)
 from ster.nav.logic import DetailField
-from ster.tui.edits import edit_command
+from ster.tui.edits import action_command, edit_command
 
 
 def _field(type_: str, **meta) -> DetailField:
@@ -32,3 +37,30 @@ def test_rdf_label_defaults_lang_to_en() -> None:
 
 def test_unsupported_field_returns_none() -> None:
     assert edit_command(_field("stat"), "http://ex/C", Path("/t/o.ttl"), "x") is None
+
+
+# ── action_command (constructive action rows) ──────────────────────────────────
+
+_P = Path("/t/o.ttl")
+
+
+def test_add_rdf_comment_maps_to_owl_set_comment() -> None:
+    cmd = action_command("add_rdf_comment", "http://ex/C", _P, "A dog.", lang="en")
+    assert isinstance(cmd, OwlSetComment)
+    assert (cmd.uri, cmd.lang, cmd.value) == ("http://ex/C", "en", "A dog.")
+
+
+def test_new_subclass_maps_to_create_subclass_under_parent() -> None:
+    cmd = action_command("new_subclass", "http://ex/Parent", _P, "http://ex/Child")
+    assert isinstance(cmd, OwlCreateSubclass)
+    assert (cmd.class_uri, cmd.parent_uri) == ("http://ex/Child", "http://ex/Parent")
+
+
+def test_add_individual_maps_to_create_individual_typed_by_class() -> None:
+    cmd = action_command("add_individual", "http://ex/Class", _P, "http://ex/Inst")
+    assert isinstance(cmd, OwlCreateIndividual)
+    assert (cmd.uri, cmd.class_uri) == ("http://ex/Inst", "http://ex/Class")
+
+
+def test_unsupported_action_returns_none() -> None:
+    assert action_command("class_to_individual", "http://ex/C", _P, "x") is None

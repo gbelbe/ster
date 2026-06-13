@@ -91,6 +91,39 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
     _run(scenario)
 
 
+def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
+    """An action row (Enter) → modal → constructive command → reload + save."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("action") == "new_subclass"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # action row → modal
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "EditModal"
+            app.screen.query_one("#edit-input", Input).value = ZOO + "Worker"
+            await pilot.press("enter")  # submit
+            for _ in range(3):
+                await pilot.pause()
+            assert ZOO + "Worker" in app.tax.owl_classes  # created in memory
+            assert "Worker" in src.read_text(encoding="utf-8")  # persisted
+
+    _run(scenario)
+
+
 def test_command_palette_search_jumps_end_to_end() -> None:
     async def scenario() -> None:
         app = _app()

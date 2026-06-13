@@ -22,10 +22,9 @@ from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
 
-from . import data, detail
+from . import data, detail, edits
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
-from .edits import edit_command
 
 
 class _StorePersistence:
@@ -234,13 +233,37 @@ class OntologyApp(App):
         def _on_submit(value: str | None) -> None:
             if value is None:
                 return
-            command = edit_command(field, uri, path, value)
+            command = edits.edit_command(field, uri, path, value)
             if command is None:
                 self.notify("This field isn't editable yet.", severity="warning")
                 return
             self._apply_command(command)
 
         self.push_screen(EditModal(field.display, field.value), _on_submit)
+
+    def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
+        """An action row was activated → collect input (if needed) → run its command."""
+        action = message.field.meta.get("action", "")
+        uri, path = self._detail_uri, self._path
+        if self._service is None or uri is None or path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        if action not in edits.INPUT_ACTIONS:
+            self.notify("This action isn't wired up yet.", severity="warning")
+            return
+        prompt, prefill_kind = edits.INPUT_ACTIONS[action]
+        prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
+
+        def _on_submit(value: str | None) -> None:
+            if not value:
+                return
+            command = edits.action_command(action, uri, path, value, self.lang)
+            if command is None:
+                self.notify("Unsupported action.", severity="warning")
+                return
+            self._apply_command(command)
+
+        self.push_screen(EditModal(prompt, prefill), _on_submit)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

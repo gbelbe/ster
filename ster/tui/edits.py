@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster.core.commands import OwlSetLabel
+from ster.core.commands import (
+    OwlCreateIndividual,
+    OwlCreateSubclass,
+    OwlSetComment,
+    OwlSetLabel,
+)
 from ster.nav.logic import DetailField
 
 
@@ -23,4 +28,31 @@ def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object
     ftype = field.meta.get("type")
     if ftype == "rdf_label":
         return OwlSetLabel(path, uri, field.meta.get("lang", "en"), value)
+    return None
+
+
+# Action rows whose handler collects a single text/URI value via the edit modal.
+# Maps action → (prompt, prefill-kind) where prefill-kind is "base_uri" or "".
+INPUT_ACTIONS: dict[str, tuple[str, str]] = {
+    "add_rdf_comment": ("rdfs:comment", ""),
+    "new_subclass": ("New subclass URI", "base_uri"),
+    "add_individual": ("New individual URI", "base_uri"),
+}
+
+
+def action_command(
+    action: str, uri: str, path: Path, value: str, lang: str = "en"
+) -> object | None:
+    """Return the Command for a constructive action row given the typed *value*.
+
+    *uri* is the entity the action was triggered from (the parent class for
+    new_subclass / add_individual, or the comment target). Returns None for
+    actions not yet wired (pickers, conversions, deletes — handled elsewhere).
+    """
+    if action == "add_rdf_comment":
+        return OwlSetComment(path, uri, lang, value)
+    if action == "new_subclass":
+        return OwlCreateSubclass(path, value, uri)
+    if action == "add_individual":
+        return OwlCreateIndividual(path, value, uri)
     return None
