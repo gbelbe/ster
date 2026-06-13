@@ -11,7 +11,9 @@ See docs/architecture/textual-tui-refactor.md.
 
 from __future__ import annotations
 
+from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.message import Message
 from textual.widgets import Static
 
 from ster.model import Taxonomy
@@ -36,11 +38,23 @@ class DetailRow(Static):
     """A focusable detail field row; carries its ``DetailField`` for later actions."""
 
     can_focus = True
+    BINDINGS = [Binding("enter", "edit_field", "Edit")]
+
+    class EditRequested(Message):
+        """Posted when the user activates an editable row (Enter)."""
+
+        def __init__(self, field: DetailField) -> None:
+            super().__init__()
+            self.field = field
 
     def __init__(self, field: DetailField) -> None:
         super().__init__(field_markup(field))
         self.field = field
         self.add_class("detail-row")
+
+    def action_edit_field(self) -> None:
+        if self.field.editable:
+            self.post_message(self.EditRequested(self.field))
 
 
 class DetailView(VerticalScroll):

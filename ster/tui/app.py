@@ -11,6 +11,7 @@ command/service layer the curses viewer already uses).
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -22,7 +23,18 @@ from textual.widgets.tree import TreeNode
 from ster.model import Taxonomy
 
 from . import data, detail
-from .detail_view import PLACEHOLDER, DetailView
+from .detail_view import PLACEHOLDER, DetailRow, DetailView
+from .edit_modal import EditModal
+from .edits import edit_command
+
+
+class _StorePersistence:
+    """Persistence port backed by ster.store (writes the .ttl on commit)."""
+
+    def save(self, taxonomy: Taxonomy, path: Path) -> None:
+        from ster import store
+
+        store.save(taxonomy, path)
 
 
 class EntitySearch(Provider):
@@ -73,14 +85,34 @@ class OntologyApp(App):
     ]
     COMMANDS = App.COMMANDS | {EntitySearch}
 
-    def __init__(self, taxonomy: Taxonomy, source: str = "ontology", lang: str = "en") -> None:
+    def __init__(
+        self,
+        taxonomy: Taxonomy,
+        source: str = "ontology",
+        lang: str = "en",
+        path: Path | None = None,
+    ) -> None:
         super().__init__()
         self.tax = taxonomy
         self.lang = lang
         self.source = source
+        self._path = path
+        self._service = self._make_service(taxonomy, path)
         self.search_rows = data.search_rows(taxonomy, lang)
         self._uri_nodes: dict[str, TreeNode] = {}
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
+        self._detail_uri: str | None = None  # entity currently shown in the detail pane
+
+    def _make_service(self, taxonomy: Taxonomy, path: Path | None):  # type: ignore[no-untyped-def]
+        """Build the TaxonomyService when editing a real file (None = read-only)."""
+        if path is None:
+            return None
+        from ster.core.service import TaxonomyService
+        from ster.core.validation import SkosValidatorAdapter
+        from ster.workspace import TaxonomyWorkspace
+
+        self._workspace = TaxonomyWorkspace.from_taxonomy(taxonomy, path)
+        return TaxonomyService(self._workspace, _StorePersistence(), SkosValidatorAdapter())
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -164,8 +196,51 @@ class OntologyApp(App):
     def _show(self, uri: str | None) -> None:
         # _detail_text mirrors the rendered markup (used by tests + as a quick
         # text view); the DetailView builds the composed, focusable widgets.
+        self._detail_uri = uri
         self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
         self.query_one("#detail", DetailView).update_entity(self.tax, uri, self.lang)
+
+    # ── mutation pipeline ───────────────────────────────────────────────────────
+
+    def _rebuild_tree(self) -> None:
+        tree = self.query_one("#tree", Tree)
+        self._uri_nodes = {}
+        tree.root.remove_children()
+        self._build(tree)
+
+    def _apply_command(self, command: object) -> None:
+        """Execute *command* via TaxonomyService, then refresh tax + tree + detail."""
+        if self._service is None or self._path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        result = self._service.execute(command)  # type: ignore[arg-type]
+        if not result.ok:
+            self.notify(result.error or "Command failed.", severity="error")
+            return
+        # The service swapped a fresh authority taxonomy into the workspace.
+        self.tax = self._workspace.taxonomies[self._path]
+        self.search_rows = data.search_rows(self.tax, self.lang)
+        self._rebuild_tree()
+        self._show(self._detail_uri)
+
+    def on_detail_row_edit_requested(self, message: DetailRow.EditRequested) -> None:
+        """A focusable detail row asked to be edited → open the modal → command."""
+        field = message.field
+        uri, path = self._detail_uri, self._path
+        if self._service is None or uri is None or path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+
+        def _on_submit(value: str | None) -> None:
+            if value is None:
+                return
+            command = edit_command(field, uri, path, value)
+            if command is None:
+                self.notify("This field isn't editable yet.", severity="warning")
+                return
+            self._apply_command(command)
+
+        self.push_screen(EditModal(field.display, field.value), _on_submit)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

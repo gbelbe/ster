@@ -986,7 +986,7 @@ def _launch_new_tui(found: list[Path]) -> None:
         return
     from .tui import launch
 
-    launch(taxonomy, source=primary.name)
+    launch(taxonomy, source=primary.name, path=primary)
 
 
 def _launch_query(found: list[Path]) -> None:
@@ -1169,7 +1169,7 @@ def cmd_new_tui(
 
     taxonomy_file = _resolve_file(file)
     taxonomy = _load(taxonomy_file)
-    launch(taxonomy, source=taxonomy_file.name, lang=lang)
+    launch(taxonomy, source=taxonomy_file.name, lang=lang, path=taxonomy_file)
 
 
 # ──────────────────────────── add ────────────────────────────────────────────

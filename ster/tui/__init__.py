@@ -8,11 +8,22 @@ and renders through Textual; pure view-model adapters live in :mod:`ster.tui.dat
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ster.model import Taxonomy
 
 
-def launch(taxonomy: Taxonomy, source: str = "ontology", lang: str = "en") -> None:
-    """Open the Textual ontology browser for *taxonomy* (blocks until quit)."""
+def launch(
+    taxonomy: Taxonomy,
+    source: str = "ontology",
+    lang: str = "en",
+    path: Path | None = None,
+) -> None:
+    """Open the Textual ontology browser for *taxonomy* (blocks until quit).
+
+    When *path* is given, edits commit there via ``TaxonomyService``; without it
+    the browser is read-only.
+    """
     from .app import OntologyApp
 
-    OntologyApp(taxonomy, source=source, lang=lang).run()
+    OntologyApp(taxonomy, source=source, lang=lang, path=path).run()

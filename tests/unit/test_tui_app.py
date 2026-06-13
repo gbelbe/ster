@@ -29,6 +29,43 @@ def _app() -> OntologyApp:
     return OntologyApp(store.load(DEMO), source="demo.ttl")
 
 
+def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
+    """End-to-end mutation pipeline: focus a label row → modal → command → save."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")  # populate the detail pane (no tree-focus race)
+            await pilot.pause()
+            label_row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("type") == "rdf_label"
+            )
+            label_row.focus()
+            await pilot.pause()
+            assert app.focused is label_row
+            await pilot.press("enter")  # row binding → open the edit modal
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "EditModal"
+            app.screen.query_one("#edit-input", Input).value = "Human"
+            await pilot.press("enter")  # submit the modal
+            for _ in range(3):
+                await pilot.pause()
+            # committed in memory …
+            labels = {lbl.lang: lbl.value for lbl in app.tax.owl_classes[ZOO + "Person"].labels}
+            assert labels.get("en") == "Human"
+            # … and persisted to disk
+            assert "Human" in src.read_text(encoding="utf-8")
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree
