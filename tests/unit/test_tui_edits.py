@@ -5,15 +5,26 @@ from __future__ import annotations
 from pathlib import Path
 
 from ster.core.commands import (
+    OwlAddIndividualType,
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
+    OwlDeleteIndividual,
     OwlMoveClass,
+    OwlRemoveIndividualType,
+    OwlRemoveSuperclass,
     OwlSetComment,
     OwlSetLabel,
+    RenameEntity,
 )
 from ster.nav.logic import DetailField
-from ster.tui.edits import action_command, delete_command, edit_command, relation_command
+from ster.tui.edits import (
+    action_command,
+    delete_command,
+    direct_command,
+    edit_command,
+    relation_command,
+)
 
 
 def _field(type_: str, **meta) -> DetailField:
@@ -78,7 +89,7 @@ def test_delete_class_maps_to_owl_delete_class_with_mode() -> None:
 
 
 def test_unsupported_delete_returns_none() -> None:
-    assert delete_command("delete_individual", "http://ex/C", _P, "keep_all") is None
+    assert delete_command("delete_property", "http://ex/C", _P, "keep_all") is None
 
 
 # ── relation_command (picker-driven) ────────────────────────────────────────────
@@ -96,3 +107,51 @@ def test_link_superclass_maps_to_additive_move_class() -> None:
 
 def test_unsupported_relation_returns_none() -> None:
     assert relation_command("relate", "http://ex/C", _P, "http://ex/D") is None
+
+
+# ── Phase 1/2: rename, individuals, meta-driven removes ─────────────────────────
+
+
+def test_uri_row_maps_to_rename_entity() -> None:
+    cmd = edit_command(_field("uri"), "http://ex/C", _P, "http://ex/D")
+    assert isinstance(cmd, RenameEntity)
+    assert (cmd.old_uri, cmd.new_uri) == ("http://ex/C", "http://ex/D")
+
+
+def test_ind_label_maps_to_owl_set_label() -> None:
+    cmd = edit_command(_field("ind_label", lang="fr"), "http://ex/i", _P, "Médor")
+    assert isinstance(cmd, OwlSetLabel) and (cmd.lang, cmd.value) == ("fr", "Médor")
+
+
+def test_add_ind_comment_maps_to_owl_set_comment() -> None:
+    cmd = action_command("add_ind_comment", "http://ex/i", _P, "A good dog.")
+    assert isinstance(cmd, OwlSetComment)
+
+
+def test_add_ind_type_maps_to_add_individual_type() -> None:
+    cmd = relation_command("add_ind_type", "http://ex/i", _P, "http://ex/Dog")
+    assert isinstance(cmd, OwlAddIndividualType)
+    assert (cmd.ind_uri, cmd.type_uri) == ("http://ex/i", "http://ex/Dog")
+
+
+def test_delete_individual_maps_to_owl_delete_individual() -> None:
+    cmd = delete_command("delete_individual", "http://ex/i", _P, "delete")
+    assert isinstance(cmd, OwlDeleteIndividual) and cmd.uri == "http://ex/i"
+
+
+def test_direct_remove_superclass() -> None:
+    f = _field("action_del", action="remove_superclass", parent_uri="http://ex/P")
+    cmd = direct_command(f, "http://ex/C", _P)
+    assert isinstance(cmd, OwlRemoveSuperclass)
+    assert (cmd.child_uri, cmd.parent_uri) == ("http://ex/C", "http://ex/P")
+
+
+def test_direct_remove_ind_type() -> None:
+    f = _field("action_del", action="remove_ind_type", type_uri="http://ex/Dog")
+    cmd = direct_command(f, "http://ex/i", _P)
+    assert isinstance(cmd, OwlRemoveIndividualType)
+    assert (cmd.ind_uri, cmd.type_uri) == ("http://ex/i", "http://ex/Dog")
+
+
+def test_direct_command_none_for_non_direct_row() -> None:
+    assert direct_command(_field("rdf_label"), "http://ex/C", _P) is None

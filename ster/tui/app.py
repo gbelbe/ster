@@ -250,6 +250,10 @@ class OntologyApp(App):
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
+        direct = edits.direct_command(message.field, uri, path)
+        if direct is not None:  # meta-driven removal — run immediately
+            self._apply_command(direct)
+            return
         if action in edits.DELETE_CHOICES:
             self._confirm_delete(action, uri, path)
             return
@@ -276,7 +280,7 @@ class OntologyApp(App):
     def _confirm_delete(self, action: str, uri: str, path: Path) -> None:
         """Ask for the delete mode, then run the destructive command + navigate away."""
         label = data.label_of(self.tax, uri, self.lang)
-        prompt = f"Delete «{label}» — what should happen to what's below it?"
+        prompt = f"Delete «{label}»?"
 
         def _on_choice(mode: str | None) -> None:
             if mode is None:
