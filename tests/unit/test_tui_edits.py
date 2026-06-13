@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from ster.core.commands import (
+    OntoSetMetadata,
+    OntoSetPrefix,
     OwlAddIndividualType,
     OwlCreateIndividual,
     OwlCreateSubclass,
@@ -155,3 +157,27 @@ def test_direct_remove_ind_type() -> None:
 
 def test_direct_command_none_for_non_direct_row() -> None:
     assert direct_command(_field("rdf_label"), "http://ex/C", _P) is None
+
+
+# ── Phase 3: ontology overview metadata + prefix ────────────────────────────────
+
+
+def test_ont_title_maps_to_set_metadata() -> None:
+    cmd = edit_command(_field("ont_title"), "__ster:overview__", _P, "Zoo Ontology")
+    assert isinstance(cmd, OntoSetMetadata)
+    assert (cmd.field_name, cmd.value) == ("title", "Zoo Ontology")
+
+
+def test_ont_description_maps_to_set_metadata() -> None:
+    cmd = edit_command(_field("ont_description"), "__ster:overview__", _P, "About animals")
+    assert isinstance(cmd, OntoSetMetadata) and cmd.field_name == "description"
+
+
+def test_ont_label_maps_to_set_metadata() -> None:
+    cmd = edit_command(_field("ont_label"), "__ster:overview__", _P, "Zoo")
+    assert isinstance(cmd, OntoSetMetadata) and cmd.field_name == "label"
+
+
+def test_edit_ontology_prefix_maps_to_set_prefix() -> None:
+    cmd = action_command("edit_ontology_prefix", "__ster:overview__", _P, "zoo")
+    assert isinstance(cmd, OntoSetPrefix) and cmd.new_prefix == "zoo"

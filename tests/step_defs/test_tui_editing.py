@@ -16,6 +16,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from ster import store
+from ster.tui import detail
 from ster.tui.app import OntologyApp
 
 scenarios("../features/tui/editing.feature")
@@ -46,6 +47,7 @@ def _edit(ctx: dict, do: EditCoro) -> None:
                 await pilot.pause()
             ctx["tax"] = app.tax
             ctx["saved"] = store.load(ctx["src"])
+            ctx["overview"] = detail.render_detail(app.tax, detail.OVERVIEW_URI, "en")
 
     asyncio.run(scenario())
 
@@ -213,7 +215,42 @@ def when_delete_individual(ctx: dict, ind: str) -> None:
     _edit(ctx, do)
 
 
+# ── when (ontology overview) ────────────────────────────────────────────────--
+
+
+@when(parsers.parse('I set the ontology title to "{title}"'))
+def when_set_ont_title(ctx: dict, title: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, lambda f: f.meta.get("type") == "ont_title")
+        await _submit_text(app, pilot, title)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I set the ontology prefix to "{prefix}"'))
+def when_set_ont_prefix(ctx: dict, prefix: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("edit_ontology_prefix"))
+        await _submit_text(app, pilot, prefix)
+
+    _edit(ctx, do)
+
+
 # ── then ────────────────────────────────────────────────────────────────────--
+
+
+@then(parsers.parse('the ontology overview shows "{text}"'))
+def then_overview_shows(ctx: dict, text: str) -> None:
+    assert text in ctx["overview"]
+
+
+@then(parsers.parse('the saved file declares the prefix "{prefix}"'))
+def then_file_has_prefix(ctx: dict, prefix: str) -> None:
+    assert f"@prefix {prefix}:" in ctx["src"].read_text(encoding="utf-8")
 
 
 @then(parsers.parse('the class "{name}" exists'))

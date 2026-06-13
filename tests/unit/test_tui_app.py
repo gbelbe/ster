@@ -84,7 +84,7 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await pilot.press("down", "down")  # Classes → Animal → Person
+            await pilot.press("down", "down", "down")  # Ontology → Classes → Animal → Person
             await pilot.pause()
             assert "Person" in app._detail_text  # detail panel followed the cursor
 

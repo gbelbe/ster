@@ -57,3 +57,15 @@ Feature: Editing the ontology in the New-TUI
     Given the zoo ontology is open for editing
     When I delete the individual "Rex"
     Then the individual "Rex" no longer exists
+
+  # Phase 3 — ontology overview (the global window)
+
+  Scenario: Set the ontology title from the overview
+    Given the zoo ontology is open for editing
+    When I set the ontology title to "Zoo Ontology"
+    Then the ontology overview shows "Zoo Ontology"
+
+  Scenario: Set the ontology prefix from the overview
+    Given the zoo ontology is open for editing
+    When I set the ontology prefix to "zoo"
+    Then the saved file declares the prefix "zoo"

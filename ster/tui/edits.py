@@ -18,6 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from ster.core.commands import (
+    OntoSetMetadata,
+    OntoSetPrefix,
     OwlAddIndividualType,
     OwlCreateIndividual,
     OwlCreateSubclass,
@@ -33,6 +35,8 @@ from ster.core.commands import (
 from ster.nav.logic import DetailField
 
 _LABEL_TYPES = frozenset({"rdf_label", "ind_label", "prop_label"})
+# Ontology-overview metadata rows → OntoSetMetadata field_name.
+_ONTO_META = {"ont_title": "title", "ont_label": "label", "ont_description": "description"}
 
 
 def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object | None:
@@ -42,6 +46,8 @@ def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object
         return OwlSetLabel(path, uri, field.meta.get("lang", "en"), value)
     if ftype == "uri":
         return RenameEntity(path, uri, value)  # cascades across every layer + validated
+    if ftype in _ONTO_META:
+        return OntoSetMetadata(path, _ONTO_META[ftype], value)  # ontology-wide (uri ignored)
     return None
 
 
@@ -52,6 +58,7 @@ INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "add_ind_comment": ("rdfs:comment", ""),
     "new_subclass": ("New subclass URI", "base_uri"),
     "add_individual": ("New individual URI", "base_uri"),
+    "edit_ontology_prefix": ("Ontology prefix", ""),
 }
 
 
@@ -63,6 +70,8 @@ def action_command(action: str, uri: str, path: Path, value: str, lang: str = "e
         return OwlCreateSubclass(path, value, uri)
     if action == "add_individual":
         return OwlCreateIndividual(path, value, uri)
+    if action == "edit_ontology_prefix":
+        return OntoSetPrefix(path, value)
     return None
 
 

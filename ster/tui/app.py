@@ -163,6 +163,9 @@ class OntologyApp(App):
     def _build(self, tree: Tree) -> None:
         tax, root = self.tax, tree.root
 
+        # The ontology overview (metadata, prefixes, stats) — the global window.
+        root.add_leaf(f"{data.ICON['section']} Ontology", data=detail.OVERVIEW_URI)
+
         if tax.owl_classes:
             sec = root.add(f"{data.ICON['section']} Classes", data=None)
             for uri in data.class_roots(tax, self.lang):
