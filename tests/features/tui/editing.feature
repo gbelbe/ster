@@ -123,6 +123,26 @@ Feature: Editing the ontology in the New-TUI
     Then the individual "Eagle" exists
     And the class "Eagle" no longer exists
 
+  # Phase 9 — create entities from the overview
+
+  Scenario: Create a top-level OWL class from the overview
+    Given the zoo ontology is open for editing
+    When I create the OWL class "Reptile" from the overview
+    Then the class "Reptile" exists
+
+  Scenario: Create a bare OWL property from the overview
+    Given the zoo ontology is open for editing
+    When I create the OWL property "likes" from the overview
+    Then the property "likes" exists
+
+  # Phase 10 — editing existing individual values
+
+  Scenario: Change an object-property value on an individual
+    Given the zoo ontology is open for editing
+    When I change the value of property "hasOwner" on "Rex" from "Alice" to "Felix"
+    Then the individual "Rex" has the value "Felix" for property "hasOwner"
+    And the individual "Rex" no longer has the value "Alice" for property "hasOwner"
+
   # Phase 4 — SKOS concepts
 
   Scenario: Set a concept prefLabel

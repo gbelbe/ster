@@ -457,6 +457,32 @@ def when_remove_value(ctx: dict, val: str, prop: str, ind: str) -> None:
 # ── then (rich content, notes, individual values) ───────────────────────────--
 
 
+@when(parsers.parse('I change the value of property "{prop}" on "{ind}" from "{old}" to "{new}"'))
+def when_change_value(ctx: dict, prop: str, ind: str, old: str, new: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + ind)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                f.meta.get("action") == "edit_prop_value"
+                and f.meta.get("prop_uri") == ZOO + prop
+                and f.meta.get("val_uri") == ZOO + old
+            ),
+        )
+        await _pick(app, pilot, ZOO + new)
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the individual "{ind}" has the value "{val}" for property "{prop}"'))
+def then_individual_has_value(ctx: dict, ind: str, val: str, prop: str) -> None:
+    pairs = ctx["tax"].owl_individuals[ZOO + ind].property_values
+    assert (ZOO + prop, ZOO + val) in pairs
+    assert (ZOO + prop, ZOO + val) in ctx["saved"].owl_individuals[ZOO + ind].property_values
+
+
 @then(parsers.parse('the individual "{ind}" has the image "{url}"'))
 def then_individual_has_image(ctx: dict, ind: str, url: str) -> None:
     assert url in ctx["tax"].owl_individuals[ZOO + ind].schema_images
@@ -500,6 +526,37 @@ def when_convert_class_to_ind(ctx: dict, cls: str, choice: str) -> None:
         await pilot.click(f"#opt-{choice}")
 
     _edit(ctx, do)
+
+
+# ── when (create from overview) ─────────────────────────────────────────────--
+
+
+@when(parsers.parse('I create the OWL class "{name}" from the overview'))
+def when_create_class(ctx: dict, name: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("create_owl_class"))
+        await _submit_text(app, pilot, ZOO + name)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I create the OWL property "{name}" from the overview'))
+def when_create_property(ctx: dict, name: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("create_owl_property"))
+        await _submit_text(app, pilot, ZOO + name)
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the property "{prop}" exists'))
+def then_property_exists(ctx: dict, prop: str) -> None:
+    assert ZOO + prop in ctx["tax"].owl_properties
+    assert ZOO + prop in ctx["saved"].owl_properties
 
 
 # ── when (SKOS concepts) ────────────────────────────────────────────────────--

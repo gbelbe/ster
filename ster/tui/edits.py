@@ -26,6 +26,7 @@ from ster.core.commands import (
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
+    OwlAddProperty,
     OwlAddPropertyClass,
     OwlConvertClassToIndividual,
     OwlConvertIndividualToClass,
@@ -41,6 +42,8 @@ from ster.core.commands import (
     OwlRemovePropertyClass,
     OwlRemoveSuperclass,
     OwlSetComment,
+    OwlSetIndividualLiteral,
+    OwlSetIndividualValue,
     OwlSetLabel,
     OwlSetNote,
     RemoveSchemaMedia,
@@ -121,6 +124,8 @@ INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "new_subclass": ("New subclass URI", "base_uri"),
     "add_individual": ("New individual URI", "base_uri"),
     "edit_ontology_prefix": ("Ontology prefix", ""),
+    "create_owl_class": ("New OWL class URI", "base_uri"),
+    "create_owl_property": ("New OWL property URI", "base_uri"),
     "add_alt_label": ("New altLabel", ""),
     "add_scope_note": ("skos:scopeNote", ""),
     "add_narrower": ("New narrower concept URI", "base_uri"),
@@ -143,6 +148,9 @@ _ACTION_REGISTRY: dict[str, _ActionFactory] = {
     "new_subclass": lambda u, p, v, lang: OwlCreateSubclass(p, v, u),
     "add_individual": lambda u, p, v, lang: OwlCreateIndividual(p, v, u),
     "edit_ontology_prefix": lambda u, p, v, lang: OntoSetPrefix(p, v),
+    # create from the overview: u is the overview sentinel (ignored), v is the new URI.
+    "create_owl_class": lambda u, p, v, lang: OwlCreateSubclass(p, v, None),  # top-level class
+    "create_owl_property": lambda u, p, v, lang: OwlAddProperty(p, v, "ObjectProperty", "", lang),
     "add_alt_label": lambda u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="alt"),
     "add_scope_note": lambda u, p, v, lang: SkosSetScopeNote(p, u, lang, v),
     # uri = parent concept / scheme handle; the new concept starts label-less.
@@ -265,6 +273,49 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
     """
     factory = _DIRECT_REGISTRY.get(field.meta.get("action", ""))
     return factory(field, uri, path) if factory else None
+
+
+# ── meta-aware edits — change one existing individual value (row carries meta) ──
+
+# These rows name the specific value to change via their meta (which predicate,
+# which old value). A modal collects the new value; the command reads the meta.
+# action → (prompt, meta-key holding the current value to prefill).
+META_INPUT_ACTIONS: dict[str, tuple[str, str]] = {
+    "edit_literal_value": ("New literal value", "val_str"),
+}
+
+
+def meta_input_command(
+    field: DetailField, uri: str, path: Path, value: str, lang: str = "en"
+) -> object | None:
+    """Return the Command for a meta-aware text edit (e.g. change a literal value)."""
+    if field.meta.get("action") == "edit_literal_value":
+        return OwlSetIndividualLiteral(
+            path,
+            uri,
+            field.meta["prop_uri"],
+            field.meta["val_str"],
+            value,
+            field.meta["lang_or_dt"],
+        )
+    return None
+
+
+# action → (prompt, candidate-kind) — picks an entity, command reads the meta.
+META_PICKER_ACTIONS: dict[str, tuple[str, str]] = {
+    "edit_prop_value": ("Change the value — pick an individual", "individual"),
+}
+
+
+def meta_relation_command(
+    field: DetailField, uri: str, path: Path, target_uri: str
+) -> object | None:
+    """Return the Command for a meta-aware picker edit (e.g. change an object value)."""
+    if field.meta.get("action") == "edit_prop_value":
+        return OwlSetIndividualValue(
+            path, uri, field.meta["prop_uri"], target_uri, field.meta["val_uri"]
+        )
+    return None
 
 
 # ── convert_command — class ↔ individual punning (choice + live parent list) ────

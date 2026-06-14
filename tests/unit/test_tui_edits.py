@@ -9,6 +9,7 @@ from ster.core.commands import (
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
+    OwlAddProperty,
     OwlAddPropertyClass,
     OwlConvertClassToIndividual,
     OwlConvertIndividualToClass,
@@ -23,6 +24,8 @@ from ster.core.commands import (
     OwlRemovePropertyClass,
     OwlRemoveSuperclass,
     OwlSetComment,
+    OwlSetIndividualLiteral,
+    OwlSetIndividualValue,
     OwlSetLabel,
     OwlSetNote,
     RemoveSchemaMedia,
@@ -43,6 +46,8 @@ from ster.tui.edits import (
     delete_command,
     direct_command,
     edit_command,
+    meta_input_command,
+    meta_relation_command,
     relation_command,
 )
 
@@ -75,6 +80,7 @@ def test_unsupported_field_returns_none() -> None:
 # ── action_command (constructive action rows) ──────────────────────────────────
 
 _P = Path("/t/o.ttl")
+OVERVIEW = "__ster:overview__"
 
 
 def test_add_rdf_comment_maps_to_owl_set_comment() -> None:
@@ -373,3 +379,52 @@ def test_class_to_individual_reattach_passes_parents_else_none() -> None:
 
 def test_unsupported_conversion_returns_none() -> None:
     assert convert_command("concept_to_class", "http://ex/c", _P, "go", ()) is None
+
+
+# ── Phase 9: create OWL class / property from the overview ──────────────────────
+
+
+def test_create_owl_class_makes_a_top_level_class() -> None:
+    cmd = action_command("create_owl_class", OVERVIEW, _P, "http://ex/New")
+    assert isinstance(cmd, OwlCreateSubclass)
+    assert (cmd.class_uri, cmd.parent_uri) == ("http://ex/New", None)
+
+
+def test_create_owl_property_makes_a_bare_object_property() -> None:
+    cmd = action_command("create_owl_property", OVERVIEW, _P, "http://ex/rel", lang="en")
+    assert isinstance(cmd, OwlAddProperty)
+    assert (cmd.uri, cmd.prop_type, cmd.domain_uri, cmd.range_uri) == (
+        "http://ex/rel",
+        "ObjectProperty",
+        None,
+        None,
+    )
+
+
+# ── Phase 10: editing existing individual values (meta-aware) ───────────────────
+
+
+def test_edit_literal_value_replaces_in_place_using_meta() -> None:
+    f = _field(
+        "action", action="edit_literal_value", prop_uri="http://ex/age", val_str="7", lang_or_dt=""
+    )
+    cmd = meta_input_command(f, "http://ex/i", _P, "8")
+    assert isinstance(cmd, OwlSetIndividualLiteral)
+    assert (cmd.prop_uri, cmd.old_value, cmd.new_value) == ("http://ex/age", "7", "8")
+
+
+def test_edit_prop_value_replaces_object_using_meta() -> None:
+    f = _field("action", action="edit_prop_value", prop_uri="http://ex/owns", val_uri="http://ex/a")
+    cmd = meta_relation_command(f, "http://ex/i", _P, "http://ex/b")
+    assert isinstance(cmd, OwlSetIndividualValue)
+    assert (cmd.prop_uri, cmd.new_val_uri, cmd.old_val_uri) == (
+        "http://ex/owns",
+        "http://ex/b",
+        "http://ex/a",
+    )
+
+
+def test_meta_commands_none_for_unknown_action() -> None:
+    f = _field("action", action="something_else")
+    assert meta_input_command(f, "http://ex/i", _P, "x") is None
+    assert meta_relation_command(f, "http://ex/i", _P, "http://ex/b") is None

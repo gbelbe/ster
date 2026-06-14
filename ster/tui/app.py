@@ -21,6 +21,7 @@ from textual.widgets import Footer, Header, Tree
 from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
+from ster.nav.logic import DetailField
 
 from . import data, detail, edits
 from .choice_modal import ChoiceModal
@@ -261,7 +262,7 @@ class OntologyApp(App):
         if opener is None:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
-        opener(action, uri, path)
+        opener(message.field, uri, path)
 
     def _route_action(self, action: str):  # type: ignore[no-untyped-def]
         """Pick the flow opener for *action* (choice / picker / convert / text-input)."""
@@ -269,87 +270,118 @@ class OntologyApp(App):
             return self._confirm_delete
         if action in edits.PICKER_ACTIONS:
             return self._pick_relation
+        if action in edits.META_PICKER_ACTIONS:
+            return self._pick_meta_relation
         if action in edits.CONVERT_ACTIONS:
             return self._confirm_convert
+        if action in edits.META_INPUT_ACTIONS:
+            return self._open_meta_input
         if action in edits.INPUT_ACTIONS:
             return self._open_input
         return None
 
-    def _open_input(self, action: str, uri: str, path: Path) -> None:
-        """Collect a single text/URI value in a modal, then run its action command."""
-        prompt, prefill_kind = edits.INPUT_ACTIONS[action]
-        prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
+    def _pool_for(self, kind: str) -> dict:  # type: ignore[type-arg]
+        """The candidate entity dict for a picker *kind*."""
+        if kind == "concept":
+            return self.tax.concepts
+        if kind == "individual":
+            return self.tax.owl_individuals
+        return self.tax.owl_classes
 
-        def _on_submit(value: str | None) -> None:
-            if not value:
-                return
-            command = edits.action_command(action, uri, path, value, self.lang)
-            if command is None:
-                self.notify("Unsupported action.", severity="warning")
-                return
-            self._apply_command(command)
-
-        self.push_screen(EditModal(prompt, prefill), _on_submit)
-
-    def _confirm_delete(self, action: str, uri: str, path: Path) -> None:
-        """Ask for the delete mode, then run the destructive command + navigate away."""
-        label = data.label_of(self.tax, uri, self.lang)
-        prompt = f"Delete «{label}»?"
-
-        def _on_choice(mode: str | None) -> None:
-            if mode is None:
-                return
-            command = edits.delete_command(action, uri, path, mode)
-            if command is None:
-                self.notify("Unsupported delete.", severity="warning")
-                return
-            self._apply_command(command)
-            self._show(None)  # the entity is gone — clear the detail pane
-
-        self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
-
-    def _confirm_convert(self, action: str, uri: str, path: Path) -> None:
-        """Confirm a class↔individual punning conversion, then run it (URI is kept)."""
-        cls = self.tax.owl_classes.get(uri)
-        parents = tuple(sorted(cls.sub_class_of)) if cls else ()
-        label = data.label_of(self.tax, uri, self.lang)
-        target = "class" if action == "individual_to_class" else "individual"
-        prompt = f"Convert «{label}» to an OWL {target}?"
-
-        def _on_choice(choice: str | None) -> None:
-            if choice is None:
-                return
-            command = edits.convert_command(action, uri, path, choice, parents)
-            if command is None:
-                self.notify("Unsupported conversion.", severity="warning")
-                return
-            self._apply_command(command)
-            self._show(uri)  # same URI, now a different kind of entity
-
-        self.push_screen(ChoiceModal(prompt, edits.convert_choices(action, parents)), _on_choice)
-
-    def _pick_relation(self, action: str, uri: str, path: Path) -> None:
-        """Pick a target entity for a relation action (add superclass/type/broader/related)."""
-        prompt, kind = edits.PICKER_ACTIONS[action]
-        pool = self.tax.concepts if kind == "concept" else self.tax.owl_classes
+    def _open_picker(self, prompt: str, kind: str, exclude: str, on_pick) -> None:  # type: ignore[no-untyped-def]
+        """Show a picker of all *kind* entities (excluding *exclude*) → callback with the URI."""
         candidates = sorted(
-            ((data.label_of(self.tax, u, self.lang), u) for u in pool if u != uri),
+            (
+                (data.label_of(self.tax, u, self.lang), u)
+                for u in self._pool_for(kind)
+                if u != exclude
+            ),
             key=lambda t: t[0].lower(),
         )
         if not candidates:
             self.notify(f"No other {kind}s to link to.", severity="warning")
             return
+        self.push_screen(PickerModal(prompt, candidates), on_pick)
+
+    def _run_or_warn(self, command: object | None) -> None:
+        """Apply *command*, or warn if the dispatch produced nothing."""
+        if command is None:
+            self.notify("This action isn't wired up yet.", severity="warning")
+            return
+        self._apply_command(command)
+
+    def _open_input(self, field: DetailField, uri: str, path: Path) -> None:
+        """Collect a single text/URI value in a modal, then run its action command."""
+        action = field.meta.get("action", "")
+        prompt, prefill_kind = edits.INPUT_ACTIONS[action]
+        prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
+
+        def _on_submit(value: str | None) -> None:
+            if value:
+                self._run_or_warn(edits.action_command(action, uri, path, value, self.lang))
+
+        self.push_screen(EditModal(prompt, prefill), _on_submit)
+
+    def _open_meta_input(self, field: DetailField, uri: str, path: Path) -> None:
+        """Edit one existing value (the row's meta names which) via a prefilled modal."""
+        prompt, prefill_key = edits.META_INPUT_ACTIONS[field.meta.get("action", "")]
+        prefill = field.meta.get(prefill_key, "")
+
+        def _on_submit(value: str | None) -> None:
+            if value:
+                self._run_or_warn(edits.meta_input_command(field, uri, path, value, self.lang))
+
+        self.push_screen(EditModal(prompt, prefill), _on_submit)
+
+    def _confirm_delete(self, field: DetailField, uri: str, path: Path) -> None:
+        """Ask for the delete mode, then run the destructive command + navigate away."""
+        action = field.meta.get("action", "")
+        prompt = f"Delete «{data.label_of(self.tax, uri, self.lang)}»?"
+
+        def _on_choice(mode: str | None) -> None:
+            if mode is None:
+                return
+            self._run_or_warn(edits.delete_command(action, uri, path, mode))
+            self._show(None)  # the entity is gone — clear the detail pane
+
+        self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
+
+    def _confirm_convert(self, field: DetailField, uri: str, path: Path) -> None:
+        """Confirm a class↔individual punning conversion, then run it (URI is kept)."""
+        action = field.meta.get("action", "")
+        cls = self.tax.owl_classes.get(uri)
+        parents = tuple(sorted(cls.sub_class_of)) if cls else ()
+        target = "class" if action == "individual_to_class" else "individual"
+        prompt = f"Convert «{data.label_of(self.tax, uri, self.lang)}» to an OWL {target}?"
+
+        def _on_choice(choice: str | None) -> None:
+            if choice is None:
+                return
+            self._run_or_warn(edits.convert_command(action, uri, path, choice, parents))
+            self._show(uri)  # same URI, now a different kind of entity
+
+        self.push_screen(ChoiceModal(prompt, edits.convert_choices(action, parents)), _on_choice)
+
+    def _pick_relation(self, field: DetailField, uri: str, path: Path) -> None:
+        """Pick a target entity for a relation action (add superclass/type/broader/related)."""
+        action = field.meta.get("action", "")
+        prompt, kind = edits.PICKER_ACTIONS[action]
 
         def _on_pick(target: str | None) -> None:
-            if target is None:
-                return
-            command = edits.relation_command(action, uri, path, target)
-            if command is None:
-                self.notify("Unsupported relation.", severity="warning")
-                return
-            self._apply_command(command)
+            if target is not None:
+                self._run_or_warn(edits.relation_command(action, uri, path, target))
 
-        self.push_screen(PickerModal(prompt, candidates), _on_pick)
+        self._open_picker(prompt, kind, uri, _on_pick)
+
+    def _pick_meta_relation(self, field: DetailField, uri: str, path: Path) -> None:
+        """Pick a replacement entity for a meta-aware value edit (e.g. change object value)."""
+        prompt, kind = edits.META_PICKER_ACTIONS[field.meta.get("action", "")]
+
+        def _on_pick(target: str | None) -> None:
+            if target is not None:
+                self._run_or_warn(edits.meta_relation_command(field, uri, path, target))
+
+        self._open_picker(prompt, kind, uri, _on_pick)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)
