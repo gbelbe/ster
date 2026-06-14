@@ -428,3 +428,16 @@ def test_meta_commands_none_for_unknown_action() -> None:
     f = _field("action", action="something_else")
     assert meta_input_command(f, "http://ex/i", _P, "x") is None
     assert meta_relation_command(f, "http://ex/i", _P, "http://ex/b") is None
+
+
+# ── Phase 11: concept prefLabel / definition in a new language ──────────────────
+
+
+def test_add_pref_label_maps_to_skos_set_label_pref() -> None:
+    cmd = action_command("add_pref_label", "http://ex/c", _P, "Sommet", lang="fr")
+    assert isinstance(cmd, SkosSetLabel) and (cmd.kind, cmd.lang) == ("pref", "fr")
+
+
+def test_add_def_maps_to_skos_set_definition() -> None:
+    cmd = action_command("add_def", "http://ex/c", _P, "Une définition.", lang="fr")
+    assert isinstance(cmd, SkosSetDefinition) and (cmd.lang, cmd.value) == ("fr", "Une définition.")

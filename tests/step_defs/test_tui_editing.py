@@ -584,6 +584,17 @@ def when_set_def(ctx: dict, name: str, value: str) -> None:
     _edit(ctx, do)
 
 
+@when(parsers.parse('I add a definition "{value}" to the concept "{name}"'))
+def when_add_def(ctx: dict, value: str, name: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_def"))
+        await _submit_text(app, pilot, value)
+
+    _edit(ctx, do)
+
+
 @when(parsers.parse('I add a narrower concept "{child}" under the concept "{name}"'))
 def when_add_narrower(ctx: dict, child: str, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001

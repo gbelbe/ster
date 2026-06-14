@@ -155,6 +155,11 @@ Feature: Editing the ontology in the New-TUI
     When I set the definition of the concept "Top" to "The root concept."
     Then the concept "Top" has definition "The root concept."
 
+  Scenario: Add a definition to a concept
+    Given a SKOS taxonomy is open for editing
+    When I add a definition "A peer concept." to the concept "Sibling"
+    Then the concept "Sibling" has definition "A peer concept."
+
   Scenario: Add a narrower concept
     Given a SKOS taxonomy is open for editing
     When I add a narrower concept "Leaf" under the concept "Top"

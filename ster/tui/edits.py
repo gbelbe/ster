@@ -126,7 +126,9 @@ INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "edit_ontology_prefix": ("Ontology prefix", ""),
     "create_owl_class": ("New OWL class URI", "base_uri"),
     "create_owl_property": ("New OWL property URI", "base_uri"),
+    "add_pref_label": ("New prefLabel", ""),
     "add_alt_label": ("New altLabel", ""),
+    "add_def": ("skos:definition", ""),
     "add_scope_note": ("skos:scopeNote", ""),
     "add_narrower": ("New narrower concept URI", "base_uri"),
     "add_top_concept": ("New top-concept URI", "base_uri"),
@@ -151,7 +153,9 @@ _ACTION_REGISTRY: dict[str, _ActionFactory] = {
     # create from the overview: u is the overview sentinel (ignored), v is the new URI.
     "create_owl_class": lambda u, p, v, lang: OwlCreateSubclass(p, v, None),  # top-level class
     "create_owl_property": lambda u, p, v, lang: OwlAddProperty(p, v, "ObjectProperty", "", lang),
+    "add_pref_label": lambda u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="pref"),
     "add_alt_label": lambda u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="alt"),
+    "add_def": lambda u, p, v, lang: SkosSetDefinition(p, u, lang, v),
     "add_scope_note": lambda u, p, v, lang: SkosSetScopeNote(p, u, lang, v),
     # uri = parent concept / scheme handle; the new concept starts label-less.
     "add_narrower": lambda u, p, v, lang: SkosAddConcept(p, v, {}, parent_handle=u),
