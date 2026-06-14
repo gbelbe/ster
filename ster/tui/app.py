@@ -265,22 +265,18 @@ class OntologyApp(App):
         opener(message.field, uri, path)
 
     def _route_action(self, action: str):  # type: ignore[no-untyped-def]
-        """Pick the flow opener for *action* (choice / picker / convert / text-input)."""
-        if action in edits.DELETE_CHOICES:
-            return self._confirm_delete
-        if action in edits.PICKER_ACTIONS:
-            return self._pick_relation
-        if action in edits.META_PICKER_ACTIONS:
-            return self._pick_meta_relation
-        if action in edits.CONVERT_ACTIONS:
-            return self._confirm_convert
-        if action in edits.CHAINED_ACTIONS:
-            return self._add_property_value
-        if action in edits.META_INPUT_ACTIONS:
-            return self._open_meta_input
-        if action in edits.INPUT_ACTIONS:
-            return self._open_input
-        return None
+        """Pick the flow opener for *action* — first table whose set contains it."""
+        routes = (
+            (edits.DELETE_CHOICES, self._confirm_delete),
+            (edits.PICKER_ACTIONS, self._pick_relation),
+            (edits.META_PICKER_ACTIONS, self._pick_meta_relation),
+            (edits.CONVERT_ACTIONS, self._confirm_convert),
+            (edits.CHAINED_ACTIONS, self._add_property_value),
+            (edits.SCHEME_ACTIONS, self._create_scheme),
+            (edits.META_INPUT_ACTIONS, self._open_meta_input),
+            (edits.INPUT_ACTIONS, self._open_input),
+        )
+        return next((opener for collection, opener in routes if action in collection), None)
 
     def _pool_for(self, kind: str) -> dict:  # type: ignore[type-arg]
         """The candidate entity dict for a picker *kind*."""
@@ -420,6 +416,23 @@ class OntologyApp(App):
                 self._apply_command(edits.add_literal_value_command(uri, path, prop_uri, value))
 
         self.push_screen(EditModal("Literal value", ""), _on_literal)
+
+    def _create_scheme(self, field: DetailField, uri: str, path: Path) -> None:
+        """Two-step: collect the scheme title, then its URI, and create it."""
+
+        def _on_title(title: str | None) -> None:
+            if not title:
+                return
+
+            def _on_uri(scheme_uri: str | None) -> None:
+                if scheme_uri:
+                    self._apply_command(
+                        edits.create_scheme_command(path, scheme_uri, title, self.lang)
+                    )
+
+            self.push_screen(EditModal("Scheme URI", self.tax.base_uri()), _on_uri)
+
+        self.push_screen(EditModal(f"Scheme title [{self.lang}]", ""), _on_title)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

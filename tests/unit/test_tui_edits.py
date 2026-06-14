@@ -32,6 +32,7 @@ from ster.core.commands import (
     RenameEntity,
     SkosAddConcept,
     SkosAddRelated,
+    SkosCreateScheme,
     SkosMoveConcept,
     SkosSetDefinition,
     SkosSetLabel,
@@ -45,6 +46,7 @@ from ster.tui.edits import (
     add_object_value_command,
     convert_choices,
     convert_command,
+    create_scheme_command,
     delete_command,
     direct_command,
     edit_command,
@@ -477,3 +479,22 @@ def test_add_literal_value_command_has_no_old_value() -> None:
     cmd = add_literal_value_command("http://ex/i", _P, "http://ex/age", "9")
     assert isinstance(cmd, OwlSetIndividualLiteral)
     assert (cmd.prop_uri, cmd.old_value, cmd.new_value) == ("http://ex/age", "", "9")
+
+
+# ── Phase 13: create a SKOS concept scheme ──────────────────────────────────────
+
+
+def test_create_scheme_command_titles_in_lang_and_derives_base_uri() -> None:
+    cmd = create_scheme_command(_P, "https://ex.org/sk/Cat", "Catalogue", "en")
+    assert isinstance(cmd, SkosCreateScheme)
+    assert (cmd.uri, cmd.labels, cmd.languages) == (
+        "https://ex.org/sk/Cat",
+        {"en": "Catalogue"},
+        ("en",),
+    )
+    assert cmd.base_uri == "https://ex.org/sk/"
+
+
+def test_create_scheme_base_uri_falls_back_to_hash_namespace() -> None:
+    cmd = create_scheme_command(_P, "https://ex.org/onto#Themes", "Themes", "fr")
+    assert cmd.base_uri == "https://ex.org/onto#"

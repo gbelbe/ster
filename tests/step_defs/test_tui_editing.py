@@ -587,10 +587,29 @@ def when_create_property(ctx: dict, name: str) -> None:
     _edit(ctx, do)
 
 
+@when(parsers.parse('I create the scheme "{name}" titled "{title}" from the overview'))
+def when_create_scheme(ctx: dict, name: str, title: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_scheme"))
+        await _submit_text(app, pilot, title)  # step 1: title
+        await pilot.pause()
+        await _submit_text(app, pilot, ZOO + name)  # step 2: URI
+
+    _edit(ctx, do)
+
+
 @then(parsers.parse('the property "{prop}" exists'))
 def then_property_exists(ctx: dict, prop: str) -> None:
     assert ZOO + prop in ctx["tax"].owl_properties
     assert ZOO + prop in ctx["saved"].owl_properties
+
+
+@then(parsers.parse('the scheme "{name}" exists'))
+def then_scheme_exists(ctx: dict, name: str) -> None:
+    assert ZOO + name in ctx["tax"].schemes
+    assert ZOO + name in ctx["saved"].schemes
 
 
 # ── when (SKOS concepts) ────────────────────────────────────────────────────--

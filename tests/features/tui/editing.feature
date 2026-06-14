@@ -148,6 +148,11 @@ Feature: Editing the ontology in the New-TUI
     When I create the OWL property "likes" from the overview
     Then the property "likes" exists
 
+  Scenario: Create a SKOS concept scheme from the overview
+    Given the zoo ontology is open for editing
+    When I create the scheme "Habitats" titled "Habitats" from the overview
+    Then the scheme "Habitats" exists
+
   # Phase 10 — editing existing individual values
 
   Scenario: Change an object-property value on an individual

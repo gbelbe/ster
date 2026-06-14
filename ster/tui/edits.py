@@ -50,6 +50,7 @@ from ster.core.commands import (
     RenameEntity,
     SkosAddConcept,
     SkosAddRelated,
+    SkosCreateScheme,
     SkosMoveConcept,
     SkosRemoveConcept,
     SkosSetDefinition,
@@ -328,8 +329,9 @@ META_PICKER_ACTIONS: dict[str, tuple[str, str]] = {
 
 
 # Chained flows — collected over more than one modal (the app orchestrates the
-# steps; these builders produce the final command once both inputs are known).
-CHAINED_ACTIONS = frozenset({"add_prop_value"})
+# steps; these builders produce the final command once every input is known).
+CHAINED_ACTIONS = frozenset({"add_prop_value"})  # → app._add_property_value
+SCHEME_ACTIONS = frozenset({"add_scheme"})  # → app._create_scheme
 
 
 def add_object_value_command(uri: str, path: Path, prop_uri: str, target_uri: str) -> object:
@@ -340,6 +342,19 @@ def add_object_value_command(uri: str, path: Path, prop_uri: str, target_uri: st
 def add_literal_value_command(uri: str, path: Path, prop_uri: str, value: str) -> object:
     """A new literal-property value (no datatype/lang tag)."""
     return OwlSetIndividualLiteral(path, uri, prop_uri, "", value, "")
+
+
+def _namespace_of(uri: str) -> str:
+    """The base URI a scheme mints children under — its URI up to the last # or /."""
+    for sep in ("#", "/"):
+        if sep in uri:
+            return uri.rsplit(sep, 1)[0] + sep
+    return uri
+
+
+def create_scheme_command(path: Path, uri: str, title: str, lang: str) -> object:
+    """Create a new ``skos:ConceptScheme`` titled *title* in *lang*."""
+    return SkosCreateScheme(path, uri, {lang: title}, _namespace_of(uri), (lang,))
 
 
 def meta_relation_command(

@@ -2657,6 +2657,7 @@ def build_ontology_overview_fields(
     fields.append(
         _add_action_field("action:create_owl_property", "+ New OWL property", "create_owl_property")
     )
+    fields.append(_add_action_field("action:add_scheme", "➕ Add concept scheme", "add_scheme"))
 
     # ── Class hierarchy ───────────────────────────────────────────────────────
     if taxonomy.owl_classes:
