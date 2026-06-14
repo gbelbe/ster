@@ -122,4 +122,3 @@ def search_rows(tax: Taxonomy, lang: str = "en") -> list[tuple[str, str, str]]:
     for uri in tax.concepts:
         rows.append((label_of(tax, uri, lang), uri, "concept"))
     return sorted(rows, key=lambda r: r[0].lower())
-

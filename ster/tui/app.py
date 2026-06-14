@@ -247,25 +247,36 @@ class OntologyApp(App):
         self.push_screen(EditModal(field.display, field.value), _on_submit)
 
     def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
-        """An action row was activated → collect input (if needed) → run its command."""
+        """An action row was activated → route to its flow opener (table-driven)."""
         action = message.field.meta.get("action", "")
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
         direct = edits.direct_command(message.field, uri, path)
-        if direct is not None:  # meta-driven removal — run immediately
+        if direct is not None:  # meta-driven removal — run immediately, no modal
             self._apply_command(direct)
             return
-        if action in edits.DELETE_CHOICES:
-            self._confirm_delete(action, uri, path)
-            return
-        if action in edits.PICKER_ACTIONS:
-            self._pick_relation(action, uri, path)
-            return
-        if action not in edits.INPUT_ACTIONS:
+        opener = self._route_action(action)
+        if opener is None:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
+        opener(action, uri, path)
+
+    def _route_action(self, action: str):  # type: ignore[no-untyped-def]
+        """Pick the flow opener for *action* (choice / picker / convert / text-input)."""
+        if action in edits.DELETE_CHOICES:
+            return self._confirm_delete
+        if action in edits.PICKER_ACTIONS:
+            return self._pick_relation
+        if action in edits.CONVERT_ACTIONS:
+            return self._confirm_convert
+        if action in edits.INPUT_ACTIONS:
+            return self._open_input
+        return None
+
+    def _open_input(self, action: str, uri: str, path: Path) -> None:
+        """Collect a single text/URI value in a modal, then run its action command."""
         prompt, prefill_kind = edits.INPUT_ACTIONS[action]
         prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
 
@@ -296,6 +307,26 @@ class OntologyApp(App):
             self._show(None)  # the entity is gone — clear the detail pane
 
         self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
+
+    def _confirm_convert(self, action: str, uri: str, path: Path) -> None:
+        """Confirm a class↔individual punning conversion, then run it (URI is kept)."""
+        cls = self.tax.owl_classes.get(uri)
+        parents = tuple(sorted(cls.sub_class_of)) if cls else ()
+        label = data.label_of(self.tax, uri, self.lang)
+        target = "class" if action == "individual_to_class" else "individual"
+        prompt = f"Convert «{label}» to an OWL {target}?"
+
+        def _on_choice(choice: str | None) -> None:
+            if choice is None:
+                return
+            command = edits.convert_command(action, uri, path, choice, parents)
+            if command is None:
+                self.notify("Unsupported conversion.", severity="warning")
+                return
+            self._apply_command(command)
+            self._show(uri)  # same URI, now a different kind of entity
+
+        self.push_screen(ChoiceModal(prompt, edits.convert_choices(action, parents)), _on_choice)
 
     def _pick_relation(self, action: str, uri: str, path: Path) -> None:
         """Pick a target entity for a relation action (add superclass/type/broader/related)."""

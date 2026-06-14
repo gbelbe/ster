@@ -70,6 +70,59 @@ Feature: Editing the ontology in the New-TUI
     When I set the ontology prefix to "zoo"
     Then the saved file declares the prefix "zoo"
 
+  # Phase 6 — OWL properties
+
+  Scenario: Add a domain class to a property
+    Given the zoo ontology is open for editing
+    When I add the domain class "Person" to the property "hasAge"
+    Then the property "hasAge" has domain "Person"
+
+  Scenario: Remove a domain class from a property
+    Given the zoo ontology is open for editing
+    When I remove the domain class "Animal" from the property "hasOwner"
+    Then the property "hasOwner" does not have domain "Animal"
+
+  Scenario: Add a range class to a property
+    Given the zoo ontology is open for editing
+    When I add the range class "Person" to the property "hasAge"
+    Then the property "hasAge" has range "Person"
+
+  Scenario: Delete a property and strip its values
+    Given the zoo ontology is open for editing
+    When I delete the property "hasOwner" choosing "strip"
+    Then the property "hasOwner" no longer exists
+
+  # Phase 7 — rich content, notes, individual values
+
+  Scenario: Add a schema:image to an individual
+    Given the zoo ontology is open for editing
+    When I add the image "https://example.org/felix.jpg" to the individual "Felix"
+    Then the individual "Felix" has the image "https://example.org/felix.jpg"
+
+  Scenario: Set a markdown note on a class
+    Given the zoo ontology is open for editing
+    When I set the note of the class "Cat" to "Independent and curious."
+    Then the class "Cat" has the note "Independent and curious."
+
+  Scenario: Remove an object-property value from an individual
+    Given the zoo ontology is open for editing
+    When I remove the value "Alice" of property "hasOwner" from the individual "Rex"
+    Then the individual "Rex" no longer has the value "Alice" for property "hasOwner"
+
+  # Phase 8 — class ↔ individual punning
+
+  Scenario: Convert an individual into a class
+    Given the zoo ontology is open for editing
+    When I convert the individual "Alice" to a class choosing "go"
+    Then the class "Alice" exists
+    And the individual "Alice" no longer exists
+
+  Scenario: Convert a class into an individual deleting its instances
+    Given the zoo ontology is open for editing
+    When I convert the class "Eagle" to an individual choosing "delete"
+    Then the individual "Eagle" exists
+    And the class "Eagle" no longer exists
+
   # Phase 4 — SKOS concepts
 
   Scenario: Set a concept prefLabel

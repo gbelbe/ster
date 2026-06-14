@@ -166,8 +166,10 @@ def when_remove_superclass(ctx: dict, parent: str, name: str) -> None:
         await _activate(
             app,
             pilot,
-            lambda f: f.meta.get("action") == "remove_superclass"
-            and f.meta.get("parent_uri") == ZOO + parent,
+            lambda f: (
+                f.meta.get("action") == "remove_superclass"
+                and f.meta.get("parent_uri") == ZOO + parent
+            ),
         )
 
     _edit(ctx, do)
@@ -217,8 +219,9 @@ def when_remove_type(ctx: dict, cls: str, ind: str) -> None:
         await _activate(
             app,
             pilot,
-            lambda f: f.meta.get("action") == "remove_ind_type"
-            and f.meta.get("type_uri") == ZOO + cls,
+            lambda f: (
+                f.meta.get("action") == "remove_ind_type" and f.meta.get("type_uri") == ZOO + cls
+            ),
         )
 
     _edit(ctx, do)
@@ -326,6 +329,177 @@ def then_individual_has_type(ctx: dict, ind: str, cls: str) -> None:
 def then_individual_no_type(ctx: dict, ind: str, cls: str) -> None:
     assert ZOO + cls not in ctx["tax"].owl_individuals[ZOO + ind].types
     assert ZOO + cls not in ctx["saved"].owl_individuals[ZOO + ind].types
+
+
+# ── when (OWL properties) ───────────────────────────────────────────────────--
+
+
+@when(parsers.parse('I add the domain class "{cls}" to the property "{prop}"'))
+def when_add_prop_domain(ctx: dict, cls: str, prop: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + prop)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_prop_domain"))
+        await _pick(app, pilot, ZOO + cls)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I add the range class "{cls}" to the property "{prop}"'))
+def when_add_prop_range(ctx: dict, cls: str, prop: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + prop)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_prop_range"))
+        await _pick(app, pilot, ZOO + cls)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I remove the domain class "{cls}" from the property "{prop}"'))
+def when_remove_prop_domain(ctx: dict, cls: str, prop: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + prop)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                f.meta.get("action") == "remove_prop_domain"
+                and f.meta.get("domain_uri") == ZOO + cls
+            ),
+        )
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I delete the property "{prop}" choosing "{choice}"'))
+def when_delete_property(ctx: dict, prop: str, choice: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + prop)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("delete_property"))
+        await pilot.click(f"#opt-{choice}")
+
+    _edit(ctx, do)
+
+
+# ── then (OWL properties) ───────────────────────────────────────────────────--
+
+
+@then(parsers.parse('the property "{prop}" has domain "{cls}"'))
+def then_prop_has_domain(ctx: dict, prop: str, cls: str) -> None:
+    assert ZOO + cls in ctx["tax"].owl_properties[ZOO + prop].domains
+    assert ZOO + cls in ctx["saved"].owl_properties[ZOO + prop].domains
+
+
+@then(parsers.parse('the property "{prop}" does not have domain "{cls}"'))
+def then_prop_no_domain(ctx: dict, prop: str, cls: str) -> None:
+    assert ZOO + cls not in ctx["tax"].owl_properties[ZOO + prop].domains
+    assert ZOO + cls not in ctx["saved"].owl_properties[ZOO + prop].domains
+
+
+@then(parsers.parse('the property "{prop}" has range "{cls}"'))
+def then_prop_has_range(ctx: dict, prop: str, cls: str) -> None:
+    assert ZOO + cls in ctx["tax"].owl_properties[ZOO + prop].ranges
+    assert ZOO + cls in ctx["saved"].owl_properties[ZOO + prop].ranges
+
+
+@then(parsers.parse('the property "{prop}" no longer exists'))
+def then_prop_gone(ctx: dict, prop: str) -> None:
+    assert ZOO + prop not in ctx["tax"].owl_properties
+    assert ZOO + prop not in ctx["saved"].owl_properties
+
+
+# ── when (rich content, notes, individual values) ───────────────────────────--
+
+
+@when(parsers.parse('I add the image "{url}" to the individual "{ind}"'))
+def when_add_image(ctx: dict, url: str, ind: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + ind)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_schema_image"))
+        await _submit_text(app, pilot, url)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I set the note of the class "{name}" to "{note}"'))
+def when_set_note(ctx: dict, name: str, note: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + name)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("edit_note"))
+        await _submit_text(app, pilot, note)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I remove the value "{val}" of property "{prop}" from the individual "{ind}"'))
+def when_remove_value(ctx: dict, val: str, prop: str, ind: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + ind)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                f.meta.get("action") == "remove_prop_value"
+                and f.meta.get("prop_uri") == ZOO + prop
+                and f.meta.get("val_uri") == ZOO + val
+            ),
+        )
+
+    _edit(ctx, do)
+
+
+# ── then (rich content, notes, individual values) ───────────────────────────--
+
+
+@then(parsers.parse('the individual "{ind}" has the image "{url}"'))
+def then_individual_has_image(ctx: dict, ind: str, url: str) -> None:
+    assert url in ctx["tax"].owl_individuals[ZOO + ind].schema_images
+    assert url in ctx["saved"].owl_individuals[ZOO + ind].schema_images
+
+
+@then(parsers.parse('the class "{name}" has the note "{note}"'))
+def then_class_has_note(ctx: dict, name: str, note: str) -> None:
+    assert note in ctx["tax"].owl_classes[ZOO + name].note
+    assert note in ctx["saved"].owl_classes[ZOO + name].note
+
+
+@then(parsers.parse('the individual "{ind}" no longer has the value "{val}" for property "{prop}"'))
+def then_individual_no_value(ctx: dict, ind: str, val: str, prop: str) -> None:
+    pairs = ctx["tax"].owl_individuals[ZOO + ind].property_values
+    assert (ZOO + prop, ZOO + val) not in pairs
+    saved_pairs = ctx["saved"].owl_individuals[ZOO + ind].property_values
+    assert (ZOO + prop, ZOO + val) not in saved_pairs
+
+
+# ── when (punning conversions) ──────────────────────────────────────────────--
+
+
+@when(parsers.parse('I convert the individual "{ind}" to a class choosing "{choice}"'))
+def when_convert_ind_to_class(ctx: dict, ind: str, choice: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + ind)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("individual_to_class"))
+        await pilot.click(f"#opt-{choice}")
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I convert the class "{cls}" to an individual choosing "{choice}"'))
+def when_convert_class_to_ind(ctx: dict, cls: str, choice: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + cls)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("class_to_individual"))
+        await pilot.click(f"#opt-{choice}")
+
+    _edit(ctx, do)
 
 
 # ── when (SKOS concepts) ────────────────────────────────────────────────────--

@@ -5,18 +5,27 @@ from __future__ import annotations
 from pathlib import Path
 
 from ster.core.commands import (
+    AddSchemaMedia,
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
+    OwlAddPropertyClass,
+    OwlConvertClassToIndividual,
+    OwlConvertIndividualToClass,
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
     OwlDeleteIndividual,
     OwlMoveClass,
+    OwlRemoveIndividualLiteral,
     OwlRemoveIndividualType,
+    OwlRemoveIndividualValue,
+    OwlRemovePropertyClass,
     OwlRemoveSuperclass,
     OwlSetComment,
     OwlSetLabel,
+    OwlSetNote,
+    RemoveSchemaMedia,
     RenameEntity,
     SkosAddConcept,
     SkosAddRelated,
@@ -29,6 +38,8 @@ from ster.core.commands import (
 from ster.nav.logic import DetailField
 from ster.tui.edits import (
     action_command,
+    convert_choices,
+    convert_command,
     delete_command,
     direct_command,
     edit_command,
@@ -98,7 +109,7 @@ def test_delete_class_maps_to_owl_delete_class_with_mode() -> None:
 
 
 def test_unsupported_delete_returns_none() -> None:
-    assert delete_command("delete_property", "http://ex/C", _P, "keep_all") is None
+    assert delete_command("delete_scheme", "http://ex/C", _P, "keep_all") is None
 
 
 # ── relation_command (picker-driven) ────────────────────────────────────────────
@@ -247,3 +258,118 @@ def test_add_related_maps_to_skos_add_related() -> None:
 def test_delete_concept_cascade_and_keep() -> None:
     assert delete_command("delete", "http://ex/c", _P, "cascade").cascade is True
     assert delete_command("delete", "http://ex/c", _P, "keep").cascade is False
+
+
+# ── Phase 6: OWL properties (domain / range / labels / comments / delete) ───────
+
+
+def test_add_prop_domain_maps_to_add_property_class_domain() -> None:
+    cmd = relation_command("add_prop_domain", "http://ex/p", _P, "http://ex/C")
+    assert isinstance(cmd, OwlAddPropertyClass)
+    assert (cmd.prop_uri, cmd.slot, cmd.class_uri) == ("http://ex/p", "domain", "http://ex/C")
+
+
+def test_add_prop_range_maps_to_add_property_class_range() -> None:
+    cmd = relation_command("add_prop_range", "http://ex/p", _P, "http://ex/C")
+    assert isinstance(cmd, OwlAddPropertyClass) and cmd.slot == "range"
+
+
+def test_remove_prop_domain_maps_to_remove_property_class() -> None:
+    f = _field("action", action="remove_prop_domain", domain_uri="http://ex/C")
+    cmd = direct_command(f, "http://ex/p", _P)
+    assert isinstance(cmd, OwlRemovePropertyClass)
+    assert (cmd.slot, cmd.class_uri) == ("domain", "http://ex/C")
+
+
+def test_remove_prop_range_maps_to_remove_property_class() -> None:
+    f = _field("action", action="remove_prop_range", range_uri="http://ex/C")
+    cmd = direct_command(f, "http://ex/p", _P)
+    assert isinstance(cmd, OwlRemovePropertyClass) and cmd.slot == "range"
+
+
+def test_add_prop_label_maps_to_owl_set_label() -> None:
+    cmd = action_command("add_prop_label", "http://ex/p", _P, "owns", lang="fr")
+    assert isinstance(cmd, OwlSetLabel) and (cmd.lang, cmd.value) == ("fr", "owns")
+
+
+def test_add_prop_comment_maps_to_owl_set_comment() -> None:
+    cmd = action_command("add_prop_comment", "http://ex/p", _P, "links a pet to its owner")
+    assert isinstance(cmd, OwlSetComment)
+
+
+def test_delete_property_declaration_only_vs_strip_values() -> None:
+    assert delete_command("delete_property", "http://ex/p", _P, "decl").clear_values is False
+    assert delete_command("delete_property", "http://ex/p", _P, "strip").clear_values is True
+
+
+# ── Phase 7: schema media, notes, individual-value removal ──────────────────────
+
+
+def test_add_schema_media_maps_by_kind() -> None:
+    img = action_command("add_schema_image", "http://ex/i", _P, "http://img")
+    assert isinstance(img, AddSchemaMedia) and (img.kind, img.url) == ("image", "http://img")
+    assert action_command("add_schema_video", "http://ex/i", _P, "http://v").kind == "video"
+    assert action_command("add_schema_url", "http://ex/i", _P, "http://u").kind == "url"
+
+
+def test_remove_schema_media_maps_by_kind() -> None:
+    f = _field("action", action="remove_schema_image", url="http://img")
+    cmd = direct_command(f, "http://ex/i", _P)
+    assert isinstance(cmd, RemoveSchemaMedia) and (cmd.kind, cmd.url) == ("image", "http://img")
+
+
+def test_edit_note_sets_note_and_delete_note_clears_it() -> None:
+    cmd = action_command("edit_note", "http://ex/i", _P, "# Heading")
+    assert isinstance(cmd, OwlSetNote) and cmd.note == "# Heading"
+    f = _field("action", action="delete_note")
+    clear = direct_command(f, "http://ex/i", _P)
+    assert isinstance(clear, OwlSetNote) and clear.note == ""
+
+
+def test_remove_prop_value_maps_to_remove_individual_value() -> None:
+    f = _field("action", action="remove_prop_value", prop_uri="http://ex/p", val_uri="http://ex/o")
+    cmd = direct_command(f, "http://ex/i", _P)
+    assert isinstance(cmd, OwlRemoveIndividualValue)
+    assert (cmd.prop_uri, cmd.val_uri) == ("http://ex/p", "http://ex/o")
+
+
+def test_remove_literal_value_maps_to_remove_individual_literal() -> None:
+    f = _field(
+        "action",
+        action="remove_literal_value",
+        prop_uri="http://ex/p",
+        val_str="7",
+        lang_or_dt="^^xsd:integer",
+    )
+    cmd = direct_command(f, "http://ex/i", _P)
+    assert isinstance(cmd, OwlRemoveIndividualLiteral)
+    assert (cmd.val_str, cmd.lang_or_dt) == ("7", "^^xsd:integer")
+
+
+# ── Phase 8: class ↔ individual punning conversions ─────────────────────────────
+
+
+def test_individual_to_class_is_a_single_confirm() -> None:
+    assert convert_choices("individual_to_class", ()) == [("Convert to an OWL class", "go")]
+    cmd = convert_command("individual_to_class", "http://ex/i", _P, "go", ())
+    assert isinstance(cmd, OwlConvertIndividualToClass) and cmd.uri == "http://ex/i"
+
+
+def test_class_to_individual_offers_reattach_only_when_it_has_parents() -> None:
+    assert convert_choices("class_to_individual", ()) == [
+        ("Delete instances typed by this class", "delete")
+    ]
+    with_parents = convert_choices("class_to_individual", ("http://ex/P",))
+    assert ("Re-type instances to its parent class(es)", "reattach") in with_parents
+
+
+def test_class_to_individual_reattach_passes_parents_else_none() -> None:
+    parents = ("http://ex/P",)
+    keep = convert_command("class_to_individual", "http://ex/C", _P, "reattach", parents)
+    assert isinstance(keep, OwlConvertClassToIndividual) and keep.reattach_to == parents
+    drop = convert_command("class_to_individual", "http://ex/C", _P, "delete", parents)
+    assert drop.reattach_to is None
+
+
+def test_unsupported_conversion_returns_none() -> None:
+    assert convert_command("concept_to_class", "http://ex/c", _P, "go", ()) is None

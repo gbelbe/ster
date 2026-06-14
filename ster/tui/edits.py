@@ -2,34 +2,48 @@
 
 The Textual detail rows carry their ``DetailField``; when the user activates one,
 this pure dispatch turns it into the right self-applying ``Command`` (executed by
-``TaxonomyService``). Kept free of Textual so it is trivially unit-testable; it
-grows one mapping per field/action as the per-entity phases land.
+``TaxonomyService``). Kept free of Textual so it is trivially unit-testable.
 
-Five flavours, by how the value is collected:
-- ``edit_command``     — editable value rows → text modal.
-- ``action_command``   — constructive ``INPUT_ACTIONS`` → text modal.
-- ``relation_command`` — ``PICKER_ACTIONS`` → entity picker (class or concept).
-- ``delete_command``   — ``DELETE_CHOICES`` → choice modal.
-- ``direct_command``   — meta-driven rows (remove X) → run immediately.
+Each of the five flavours is a **registry table** keyed by field-type or action,
+mapping to a small factory. Adding a new operation is one table row — no growing
+``if/elif`` chain, so every dispatcher stays at complexity ~2 regardless of how
+many entities/operations land:
+
+- ``edit_command``     — editable value rows → text modal.        (keyed by meta ``type``)
+- ``action_command``   — constructive ``INPUT_ACTIONS`` → text modal.   (keyed by ``action``)
+- ``relation_command`` — ``PICKER_ACTIONS`` → entity picker (class or concept). (by ``action``)
+- ``delete_command``   — ``DELETE_CHOICES`` → choice modal.        (keyed by ``action``)
+- ``direct_command``   — meta-driven rows (remove X) → run immediately. (keyed by ``action``)
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from ster.core.commands import (
+    AddSchemaMedia,
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
+    OwlAddPropertyClass,
+    OwlConvertClassToIndividual,
+    OwlConvertIndividualToClass,
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
     OwlDeleteIndividual,
+    OwlDeleteProperty,
     OwlMoveClass,
+    OwlRemoveIndividualLiteral,
     OwlRemoveIndividualType,
+    OwlRemoveIndividualValue,
+    OwlRemovePropertyClass,
     OwlRemoveSuperclass,
     OwlSetComment,
     OwlSetLabel,
+    OwlSetNote,
+    RemoveSchemaMedia,
     RenameEntity,
     SkosAddConcept,
     SkosAddRelated,
@@ -42,7 +56,6 @@ from ster.core.commands import (
 )
 from ster.nav.logic import DetailField
 
-_OWL_LABEL_TYPES = frozenset({"rdf_label", "ind_label", "prop_label"})
 # Ontology-overview metadata rows → OntoSetMetadata field_name.
 _ONTO_META = {"ont_title": "title", "ont_label": "label", "ont_description": "description"}
 # Scheme metadata rows → SkosSetSchemeField field_name.
@@ -54,33 +67,57 @@ _SCHEME_FIELDS = {
     "scheme_languages": "languages",
 }
 
+# ── edit_command — editable value rows (keyed by meta "type") ───────────────────
+
+_EditFactory = Callable[[DetailField, str, Path, str, str], object]
+
+
+def _onto_meta_factory(field_name: str) -> _EditFactory:
+    """Closure over the OntoSetMetadata field_name (ontology-wide; uri ignored)."""
+    return lambda f, u, p, v, lang: OntoSetMetadata(p, field_name, v)
+
+
+def _scheme_field_factory(field_name: str) -> _EditFactory:
+    """Closure over the SkosSetSchemeField field_name."""
+    return lambda f, u, p, v, lang: SkosSetSchemeField(p, u, field_name, v, f.meta.get("lang", ""))
+
+
+def _build_edit_registry() -> dict[str, _EditFactory]:
+    reg: dict[str, _EditFactory] = {
+        "rdf_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
+        "ind_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
+        "prop_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
+        "uri": lambda f, u, p, v, lang: RenameEntity(p, u, v),  # cascades across every layer
+        "pref": lambda f, u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="pref"),
+        "alt": lambda f, u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="alt"),
+        "def": lambda f, u, p, v, lang: SkosSetDefinition(p, u, lang, v),
+        "scope_note": lambda f, u, p, v, lang: SkosSetScopeNote(p, u, lang, v),
+    }
+    reg.update({ftype: _onto_meta_factory(name) for ftype, name in _ONTO_META.items()})
+    reg.update({ftype: _scheme_field_factory(name) for ftype, name in _SCHEME_FIELDS.items()})
+    return reg
+
+
+_EDIT_REGISTRY = _build_edit_registry()
+
 
 def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object | None:
     """Return the Command for editing an editable value row, or None if unsupported."""
-    ftype = field.meta.get("type")
-    lang = field.meta.get("lang", "en")
-    if ftype in _OWL_LABEL_TYPES:
-        return OwlSetLabel(path, uri, lang, value)
-    if ftype == "uri":
-        return RenameEntity(path, uri, value)  # cascades across every layer + validated
-    if ftype in _ONTO_META:
-        return OntoSetMetadata(path, _ONTO_META[ftype], value)  # ontology-wide (uri ignored)
-    if ftype in ("pref", "alt"):
-        return SkosSetLabel(path, uri, lang, value, kind=ftype)
-    if ftype == "def":
-        return SkosSetDefinition(path, uri, lang, value)
-    if ftype == "scope_note":
-        return SkosSetScopeNote(path, uri, lang, value)
-    if ftype in _SCHEME_FIELDS:
-        return SkosSetSchemeField(path, uri, _SCHEME_FIELDS[ftype], value, field.meta.get("lang", ""))
-    return None
+    factory = _EDIT_REGISTRY.get(field.meta.get("type", ""))
+    return factory(field, uri, path, value, field.meta.get("lang", "en")) if factory else None
 
+
+# ── action_command — constructive text-input rows (keyed by "action") ───────────
 
 # Action rows whose handler collects a single text/URI value via the edit modal.
 # Maps action → (prompt, prefill-kind) where prefill-kind is "base_uri" or "".
 INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "add_rdf_comment": ("rdfs:comment", ""),
     "add_ind_comment": ("rdfs:comment", ""),
+    "add_prop_comment": ("rdfs:comment", ""),
+    "add_rdf_label": ("New rdfs:label", ""),
+    "add_ind_label": ("New rdfs:label", ""),
+    "add_prop_label": ("New rdfs:label", ""),
     "new_subclass": ("New subclass URI", "base_uri"),
     "add_individual": ("New individual URI", "base_uri"),
     "edit_ontology_prefix": ("Ontology prefix", ""),
@@ -88,54 +125,78 @@ INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "add_scope_note": ("skos:scopeNote", ""),
     "add_narrower": ("New narrower concept URI", "base_uri"),
     "add_top_concept": ("New top-concept URI", "base_uri"),
+    "add_schema_image": ("schema:image URL", ""),
+    "add_schema_video": ("schema:video URL", ""),
+    "add_schema_url": ("schema:url (external link)", ""),
+    "edit_note": ("Note (markdown)", ""),
+}
+
+_ActionFactory = Callable[[str, Path, str, str], object]
+
+_ACTION_REGISTRY: dict[str, _ActionFactory] = {
+    "add_rdf_comment": lambda u, p, v, lang: OwlSetComment(p, u, lang, v),
+    "add_ind_comment": lambda u, p, v, lang: OwlSetComment(p, u, lang, v),
+    "add_prop_comment": lambda u, p, v, lang: OwlSetComment(p, u, lang, v),
+    "add_rdf_label": lambda u, p, v, lang: OwlSetLabel(p, u, lang, v),
+    "add_ind_label": lambda u, p, v, lang: OwlSetLabel(p, u, lang, v),
+    "add_prop_label": lambda u, p, v, lang: OwlSetLabel(p, u, lang, v),
+    "new_subclass": lambda u, p, v, lang: OwlCreateSubclass(p, v, u),
+    "add_individual": lambda u, p, v, lang: OwlCreateIndividual(p, v, u),
+    "edit_ontology_prefix": lambda u, p, v, lang: OntoSetPrefix(p, v),
+    "add_alt_label": lambda u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="alt"),
+    "add_scope_note": lambda u, p, v, lang: SkosSetScopeNote(p, u, lang, v),
+    # uri = parent concept / scheme handle; the new concept starts label-less.
+    "add_narrower": lambda u, p, v, lang: SkosAddConcept(p, v, {}, parent_handle=u),
+    "add_top_concept": lambda u, p, v, lang: SkosAddConcept(p, v, {}, parent_handle=u),
+    "add_schema_image": lambda u, p, v, lang: AddSchemaMedia(p, u, "image", v),
+    "add_schema_video": lambda u, p, v, lang: AddSchemaMedia(p, u, "video", v),
+    "add_schema_url": lambda u, p, v, lang: AddSchemaMedia(p, u, "url", v),
+    "edit_note": lambda u, p, v, lang: OwlSetNote(p, u, v),
 }
 
 
-def action_command(action: str, uri: str, path: Path, value: str, lang: str = "en") -> object | None:
+def action_command(
+    action: str, uri: str, path: Path, value: str, lang: str = "en"
+) -> object | None:
     """Return the Command for a constructive action row given the typed *value*."""
-    if action in ("add_rdf_comment", "add_ind_comment"):
-        return OwlSetComment(path, uri, lang, value)
-    if action == "new_subclass":
-        return OwlCreateSubclass(path, value, uri)
-    if action == "add_individual":
-        return OwlCreateIndividual(path, value, uri)
-    if action == "edit_ontology_prefix":
-        return OntoSetPrefix(path, value)
-    if action == "add_alt_label":
-        return SkosSetLabel(path, uri, lang, value, kind="alt")
-    if action == "add_scope_note":
-        return SkosSetScopeNote(path, uri, lang, value)
-    if action in ("add_narrower", "add_top_concept"):
-        # uri = parent concept / scheme handle; the new concept starts label-less.
-        return SkosAddConcept(path, value, {}, parent_handle=uri)
-    return None
+    factory = _ACTION_REGISTRY.get(action)
+    return factory(uri, path, value, lang) if factory else None
 
+
+# ── relation_command — picker-driven links (keyed by "action") ──────────────────
 
 # Action rows that pick an existing entity (via PickerModal).
 # Maps action → (prompt, candidate-kind "class" | "concept").
 PICKER_ACTIONS: dict[str, tuple[str, str]] = {
     "link_superclass": ("Add a superclass — pick a class", "class"),
     "add_ind_type": ("Add a class membership — pick a class", "class"),
+    "add_prop_domain": ("Add a domain class — pick a class", "class"),
+    "add_prop_range": ("Add a range class — pick a class", "class"),
     "link_broader": ("Link to a broader concept — pick a concept", "concept"),
     "move": ("Move under a different parent — pick a concept", "concept"),
     "add_related": ("Add a related concept — pick a concept", "concept"),
 }
 
+_RelationFactory = Callable[[str, Path, str], object]
+
+_RELATION_REGISTRY: dict[str, _RelationFactory] = {
+    "link_superclass": lambda s, p, t: OwlMoveClass(p, s, t, replace=False),  # additive
+    "add_ind_type": lambda s, p, t: OwlAddIndividualType(p, s, t),
+    "add_prop_domain": lambda s, p, t: OwlAddPropertyClass(p, s, "domain", t),
+    "add_prop_range": lambda s, p, t: OwlAddPropertyClass(p, s, "range", t),
+    "link_broader": lambda s, p, t: SkosMoveConcept(p, s, t, replace=False),  # extra parent
+    "move": lambda s, p, t: SkosMoveConcept(p, s, t, replace=True),  # re-parent
+    "add_related": lambda s, p, t: SkosAddRelated(p, s, t),
+}
+
 
 def relation_command(action: str, source_uri: str, path: Path, target_uri: str) -> object | None:
     """Return the Command linking *source_uri* to the picked *target_uri*."""
-    if action == "link_superclass":
-        return OwlMoveClass(path, source_uri, target_uri, replace=False)  # additive
-    if action == "add_ind_type":
-        return OwlAddIndividualType(path, source_uri, target_uri)
-    if action == "link_broader":
-        return SkosMoveConcept(path, source_uri, target_uri, replace=False)  # extra parent
-    if action == "move":
-        return SkosMoveConcept(path, source_uri, target_uri, replace=True)  # re-parent
-    if action == "add_related":
-        return SkosAddRelated(path, source_uri, target_uri)
-    return None
+    factory = _RELATION_REGISTRY.get(action)
+    return factory(source_uri, path, target_uri) if factory else None
 
+
+# ── delete_command — destructive choice-driven rows (keyed by "action") ─────────
 
 # Destructive action rows whose handler asks the user to pick an option first.
 # Maps action → [(option label, value)]; the value is the delete mode / cascade flag.
@@ -146,22 +207,54 @@ DELETE_CHOICES: dict[str, list[tuple[str, str]]] = {
         ("Delete the class and everything below it", "delete_all"),
     ],
     "delete_individual": [("Delete this individual", "delete")],
+    "delete_property": [
+        ("Delete declaration only", "decl"),
+        ("Delete and strip its values from every individual", "strip"),
+    ],
     "delete": [
         ("Keep narrower concepts (re-link to parents)", "keep"),
         ("Delete the concept and its descendants", "cascade"),
     ],
 }
 
+_DeleteFactory = Callable[[str, Path, str], object]
+
+_DELETE_REGISTRY: dict[str, _DeleteFactory] = {
+    "delete_class": lambda u, p, c: OwlDeleteClass(p, u, c),
+    "delete_individual": lambda u, p, c: OwlDeleteIndividual(p, u),
+    "delete_property": lambda u, p, c: OwlDeleteProperty(p, u, clear_values=(c == "strip")),
+    "delete": lambda u, p, c: SkosRemoveConcept(p, u, cascade=(c == "cascade")),
+}
+
 
 def delete_command(action: str, uri: str, path: Path, choice: str) -> object | None:
     """Return the destructive Command for *action* with the chosen option."""
-    if action == "delete_class":
-        return OwlDeleteClass(path, uri, choice)
-    if action == "delete_individual":
-        return OwlDeleteIndividual(path, uri)
-    if action == "delete":
-        return SkosRemoveConcept(path, uri, cascade=(choice == "cascade"))
-    return None
+    factory = _DELETE_REGISTRY.get(action)
+    return factory(uri, path, choice) if factory else None
+
+
+# ── direct_command — meta-driven removals that run immediately (keyed by action) ─
+
+_DirectFactory = Callable[[DetailField, str, Path], object]
+
+_DIRECT_REGISTRY: dict[str, _DirectFactory] = {
+    "remove_superclass": lambda f, u, p: OwlRemoveSuperclass(p, u, f.meta["parent_uri"]),
+    "remove_ind_type": lambda f, u, p: OwlRemoveIndividualType(p, u, f.meta["type_uri"]),
+    "remove_prop_domain": lambda f, u, p: OwlRemovePropertyClass(
+        p, u, "domain", f.meta["domain_uri"]
+    ),
+    "remove_prop_range": lambda f, u, p: OwlRemovePropertyClass(p, u, "range", f.meta["range_uri"]),
+    "remove_prop_value": lambda f, u, p: OwlRemoveIndividualValue(
+        p, u, f.meta["prop_uri"], f.meta["val_uri"]
+    ),
+    "remove_literal_value": lambda f, u, p: OwlRemoveIndividualLiteral(
+        p, u, f.meta["prop_uri"], f.meta["val_str"], f.meta["lang_or_dt"]
+    ),
+    "delete_note": lambda f, u, p: OwlSetNote(p, u, ""),  # clear the note
+    "remove_schema_image": lambda f, u, p: RemoveSchemaMedia(p, u, "image", f.meta["url"]),
+    "remove_schema_video": lambda f, u, p: RemoveSchemaMedia(p, u, "video", f.meta["url"]),
+    "remove_schema_url": lambda f, u, p: RemoveSchemaMedia(p, u, "url", f.meta["url"]),
+}
 
 
 def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
@@ -170,9 +263,35 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
     These are targeted removals — the row already names the specific target via
     its meta (e.g. "✗ Remove subClassOf Mammal").
     """
-    action = field.meta.get("action")
-    if action == "remove_superclass":
-        return OwlRemoveSuperclass(path, uri, field.meta["parent_uri"])
-    if action == "remove_ind_type":
-        return OwlRemoveIndividualType(path, uri, field.meta["type_uri"])
+    factory = _DIRECT_REGISTRY.get(field.meta.get("action", ""))
+    return factory(field, uri, path) if factory else None
+
+
+# ── convert_command — class ↔ individual punning (choice + live parent list) ────
+
+# Conversions need the entity's live parent classes to offer "re-type instances",
+# so the choice list is built dynamically and the command takes that parent tuple.
+CONVERT_ACTIONS = frozenset({"class_to_individual", "individual_to_class"})
+
+
+def convert_choices(action: str, parents: tuple[str, ...]) -> list[tuple[str, str]]:
+    """The confirmation options for a punning conversion (mirrors the curses viewer)."""
+    if action == "individual_to_class":
+        return [("Convert to an OWL class", "go")]
+    # class → individual: what becomes of individuals typed by this class?
+    options = [("Delete instances typed by this class", "delete")]
+    if parents:
+        options.append(("Re-type instances to its parent class(es)", "reattach"))
+    return options
+
+
+def convert_command(
+    action: str, uri: str, path: Path, choice: str, parents: tuple[str, ...]
+) -> object | None:
+    """Return the punning conversion Command for *action* with the chosen option."""
+    if action == "individual_to_class":
+        return OwlConvertIndividualToClass(path, uri)
+    if action == "class_to_individual":
+        reattach = parents if choice == "reattach" else None
+        return OwlConvertClassToIndividual(path, uri, reattach)
     return None
