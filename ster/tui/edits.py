@@ -6,9 +6,9 @@ this pure dispatch turns it into the right self-applying ``Command`` (executed b
 grows one mapping per field/action as the per-entity phases land.
 
 Five flavours, by how the value is collected:
-- ``edit_command``     — editable value rows (label, uri) → text modal.
+- ``edit_command``     — editable value rows → text modal.
 - ``action_command``   — constructive ``INPUT_ACTIONS`` → text modal.
-- ``relation_command`` — ``PICKER_ACTIONS`` → entity picker.
+- ``relation_command`` — ``PICKER_ACTIONS`` → entity picker (class or concept).
 - ``delete_command``   — ``DELETE_CHOICES`` → choice modal.
 - ``direct_command``   — meta-driven rows (remove X) → run immediately.
 """
@@ -31,23 +31,48 @@ from ster.core.commands import (
     OwlSetComment,
     OwlSetLabel,
     RenameEntity,
+    SkosAddConcept,
+    SkosAddRelated,
+    SkosMoveConcept,
+    SkosRemoveConcept,
+    SkosSetDefinition,
+    SkosSetLabel,
+    SkosSetSchemeField,
+    SkosSetScopeNote,
 )
 from ster.nav.logic import DetailField
 
-_LABEL_TYPES = frozenset({"rdf_label", "ind_label", "prop_label"})
+_OWL_LABEL_TYPES = frozenset({"rdf_label", "ind_label", "prop_label"})
 # Ontology-overview metadata rows → OntoSetMetadata field_name.
 _ONTO_META = {"ont_title": "title", "ont_label": "label", "ont_description": "description"}
+# Scheme metadata rows → SkosSetSchemeField field_name.
+_SCHEME_FIELDS = {
+    "scheme_title": "title",
+    "scheme_base_uri": "base_uri",
+    "scheme_creator": "creator",
+    "scheme_created": "created",
+    "scheme_languages": "languages",
+}
 
 
 def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object | None:
     """Return the Command for editing an editable value row, or None if unsupported."""
     ftype = field.meta.get("type")
-    if ftype in _LABEL_TYPES:
-        return OwlSetLabel(path, uri, field.meta.get("lang", "en"), value)
+    lang = field.meta.get("lang", "en")
+    if ftype in _OWL_LABEL_TYPES:
+        return OwlSetLabel(path, uri, lang, value)
     if ftype == "uri":
         return RenameEntity(path, uri, value)  # cascades across every layer + validated
     if ftype in _ONTO_META:
         return OntoSetMetadata(path, _ONTO_META[ftype], value)  # ontology-wide (uri ignored)
+    if ftype in ("pref", "alt"):
+        return SkosSetLabel(path, uri, lang, value, kind=ftype)
+    if ftype == "def":
+        return SkosSetDefinition(path, uri, lang, value)
+    if ftype == "scope_note":
+        return SkosSetScopeNote(path, uri, lang, value)
+    if ftype in _SCHEME_FIELDS:
+        return SkosSetSchemeField(path, uri, _SCHEME_FIELDS[ftype], value, field.meta.get("lang", ""))
     return None
 
 
@@ -59,6 +84,10 @@ INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "new_subclass": ("New subclass URI", "base_uri"),
     "add_individual": ("New individual URI", "base_uri"),
     "edit_ontology_prefix": ("Ontology prefix", ""),
+    "add_alt_label": ("New altLabel", ""),
+    "add_scope_note": ("skos:scopeNote", ""),
+    "add_narrower": ("New narrower concept URI", "base_uri"),
+    "add_top_concept": ("New top-concept URI", "base_uri"),
 }
 
 
@@ -72,27 +101,44 @@ def action_command(action: str, uri: str, path: Path, value: str, lang: str = "e
         return OwlCreateIndividual(path, value, uri)
     if action == "edit_ontology_prefix":
         return OntoSetPrefix(path, value)
+    if action == "add_alt_label":
+        return SkosSetLabel(path, uri, lang, value, kind="alt")
+    if action == "add_scope_note":
+        return SkosSetScopeNote(path, uri, lang, value)
+    if action in ("add_narrower", "add_top_concept"):
+        # uri = parent concept / scheme handle; the new concept starts label-less.
+        return SkosAddConcept(path, value, {}, parent_handle=uri)
     return None
 
 
-# Action rows that pick an existing entity (via PickerModal). action → prompt.
-PICKER_ACTIONS: dict[str, str] = {
-    "link_superclass": "Add a superclass — pick a class",
-    "add_ind_type": "Add a class membership — pick a class",
+# Action rows that pick an existing entity (via PickerModal).
+# Maps action → (prompt, candidate-kind "class" | "concept").
+PICKER_ACTIONS: dict[str, tuple[str, str]] = {
+    "link_superclass": ("Add a superclass — pick a class", "class"),
+    "add_ind_type": ("Add a class membership — pick a class", "class"),
+    "link_broader": ("Link to a broader concept — pick a concept", "concept"),
+    "move": ("Move under a different parent — pick a concept", "concept"),
+    "add_related": ("Add a related concept — pick a concept", "concept"),
 }
 
 
 def relation_command(action: str, source_uri: str, path: Path, target_uri: str) -> object | None:
     """Return the Command linking *source_uri* to the picked *target_uri*."""
     if action == "link_superclass":
-        return OwlMoveClass(path, source_uri, target_uri, replace=False)  # additive (polyhierarchy)
+        return OwlMoveClass(path, source_uri, target_uri, replace=False)  # additive
     if action == "add_ind_type":
         return OwlAddIndividualType(path, source_uri, target_uri)
+    if action == "link_broader":
+        return SkosMoveConcept(path, source_uri, target_uri, replace=False)  # extra parent
+    if action == "move":
+        return SkosMoveConcept(path, source_uri, target_uri, replace=True)  # re-parent
+    if action == "add_related":
+        return SkosAddRelated(path, source_uri, target_uri)
     return None
 
 
 # Destructive action rows whose handler asks the user to pick an option first.
-# Maps action → [(option label, value)]; for delete_class the value is the mode.
+# Maps action → [(option label, value)]; the value is the delete mode / cascade flag.
 DELETE_CHOICES: dict[str, list[tuple[str, str]]] = {
     "delete_class": [
         ("Keep subclasses & instances (re-link to parents)", "keep_all"),
@@ -100,6 +146,10 @@ DELETE_CHOICES: dict[str, list[tuple[str, str]]] = {
         ("Delete the class and everything below it", "delete_all"),
     ],
     "delete_individual": [("Delete this individual", "delete")],
+    "delete": [
+        ("Keep narrower concepts (re-link to parents)", "keep"),
+        ("Delete the concept and its descendants", "cascade"),
+    ],
 }
 
 
@@ -109,6 +159,8 @@ def delete_command(action: str, uri: str, path: Path, choice: str) -> object | N
         return OwlDeleteClass(path, uri, choice)
     if action == "delete_individual":
         return OwlDeleteIndividual(path, uri)
+    if action == "delete":
+        return SkosRemoveConcept(path, uri, cascade=(choice == "cascade"))
     return None
 
 

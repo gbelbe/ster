@@ -69,3 +69,42 @@ Feature: Editing the ontology in the New-TUI
     Given the zoo ontology is open for editing
     When I set the ontology prefix to "zoo"
     Then the saved file declares the prefix "zoo"
+
+  # Phase 4 — SKOS concepts
+
+  Scenario: Set a concept prefLabel
+    Given a SKOS taxonomy is open for editing
+    When I set the prefLabel of the concept "Top" to "Apex"
+    Then the concept "Top" has prefLabel "Apex"
+
+  Scenario: Set a concept definition
+    Given a SKOS taxonomy is open for editing
+    When I set the definition of the concept "Top" to "The root concept."
+    Then the concept "Top" has definition "The root concept."
+
+  Scenario: Add a narrower concept
+    Given a SKOS taxonomy is open for editing
+    When I add a narrower concept "Leaf" under the concept "Top"
+    Then the concept "Leaf" exists
+
+  Scenario: Relate two concepts
+    Given a SKOS taxonomy is open for editing
+    When I relate the concept "Top" to the concept "Sibling"
+    Then the concept "Top" is related to "Sibling"
+
+  Scenario: Delete a concept
+    Given a SKOS taxonomy is open for editing
+    When I delete the concept "Child" choosing "keep"
+    Then the concept "Child" no longer exists
+
+  # Phase 5 — SKOS concept schemes
+
+  Scenario: Set the scheme title
+    Given a SKOS taxonomy is open for editing
+    When I set the title of the scheme to "Catalogue"
+    Then the scheme has title "Catalogue"
+
+  Scenario: Add a top concept to the scheme
+    Given a SKOS taxonomy is open for editing
+    When I add a top concept "Brand" to the scheme
+    Then the concept "Brand" exists

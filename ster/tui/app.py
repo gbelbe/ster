@@ -298,17 +298,15 @@ class OntologyApp(App):
         self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
 
     def _pick_relation(self, action: str, uri: str, path: Path) -> None:
-        """Pick a target class for a relation action (e.g. add superclass) → command."""
+        """Pick a target entity for a relation action (add superclass/type/broader/related)."""
+        prompt, kind = edits.PICKER_ACTIONS[action]
+        pool = self.tax.concepts if kind == "concept" else self.tax.owl_classes
         candidates = sorted(
-            (
-                (data.label_of(self.tax, u, self.lang), u)
-                for u in self.tax.owl_classes
-                if u != uri
-            ),
+            ((data.label_of(self.tax, u, self.lang), u) for u in pool if u != uri),
             key=lambda t: t[0].lower(),
         )
         if not candidates:
-            self.notify("No other classes to link to.", severity="warning")
+            self.notify(f"No other {kind}s to link to.", severity="warning")
             return
 
         def _on_pick(target: str | None) -> None:
@@ -320,7 +318,7 @@ class OntologyApp(App):
                 return
             self._apply_command(command)
 
-        self.push_screen(PickerModal(edits.PICKER_ACTIONS[action], candidates), _on_pick)
+        self.push_screen(PickerModal(prompt, candidates), _on_pick)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)

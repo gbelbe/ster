@@ -18,6 +18,13 @@ from ster.core.commands import (
     OwlSetComment,
     OwlSetLabel,
     RenameEntity,
+    SkosAddConcept,
+    SkosAddRelated,
+    SkosMoveConcept,
+    SkosSetDefinition,
+    SkosSetLabel,
+    SkosSetSchemeField,
+    SkosSetScopeNote,
 )
 from ster.nav.logic import DetailField
 from ster.tui.edits import (
@@ -181,3 +188,62 @@ def test_ont_label_maps_to_set_metadata() -> None:
 def test_edit_ontology_prefix_maps_to_set_prefix() -> None:
     cmd = action_command("edit_ontology_prefix", "__ster:overview__", _P, "zoo")
     assert isinstance(cmd, OntoSetPrefix) and cmd.new_prefix == "zoo"
+
+
+# ── Phase 4/5: SKOS concepts + schemes ──────────────────────────────────────────
+
+
+def test_pref_maps_to_skos_set_label() -> None:
+    cmd = edit_command(_field("pref", lang="en"), "http://ex/c", _P, "Apex")
+    assert isinstance(cmd, SkosSetLabel) and (cmd.kind, cmd.value) == ("pref", "Apex")
+
+
+def test_def_maps_to_skos_set_definition() -> None:
+    cmd = edit_command(_field("def", lang="en"), "http://ex/c", _P, "Root.")
+    assert isinstance(cmd, SkosSetDefinition) and cmd.value == "Root."
+
+
+def test_scope_note_maps_to_skos_set_scope_note() -> None:
+    cmd = edit_command(_field("scope_note", lang="en"), "http://ex/c", _P, "scope")
+    assert isinstance(cmd, SkosSetScopeNote)
+
+
+def test_scheme_title_maps_to_set_scheme_field() -> None:
+    cmd = edit_command(_field("scheme_title", lang="en"), "http://ex/s", _P, "Cat")
+    assert isinstance(cmd, SkosSetSchemeField) and cmd.field_name == "title"
+
+
+def test_add_narrower_maps_to_add_concept_under_parent() -> None:
+    cmd = action_command("add_narrower", "http://ex/p", _P, "http://ex/c")
+    assert isinstance(cmd, SkosAddConcept)
+    assert (cmd.uri, cmd.parent_handle) == ("http://ex/c", "http://ex/p")
+
+
+def test_add_top_concept_maps_to_add_concept_under_scheme() -> None:
+    cmd = action_command("add_top_concept", "http://ex/s", _P, "http://ex/c")
+    assert isinstance(cmd, SkosAddConcept) and cmd.parent_handle == "http://ex/s"
+
+
+def test_add_alt_label_action_maps_to_skos_set_label_alt() -> None:
+    cmd = action_command("add_alt_label", "http://ex/c", _P, "Apex")
+    assert isinstance(cmd, SkosSetLabel) and cmd.kind == "alt"
+
+
+def test_link_broader_maps_to_additive_move_concept() -> None:
+    cmd = relation_command("link_broader", "http://ex/c", _P, "http://ex/p")
+    assert isinstance(cmd, SkosMoveConcept) and cmd.replace is False
+
+
+def test_move_concept_maps_to_replacing_move() -> None:
+    cmd = relation_command("move", "http://ex/c", _P, "http://ex/p")
+    assert isinstance(cmd, SkosMoveConcept) and cmd.replace is True
+
+
+def test_add_related_maps_to_skos_add_related() -> None:
+    cmd = relation_command("add_related", "http://ex/c", _P, "http://ex/o")
+    assert isinstance(cmd, SkosAddRelated)
+
+
+def test_delete_concept_cascade_and_keep() -> None:
+    assert delete_command("delete", "http://ex/c", _P, "cascade").cascade is True
+    assert delete_command("delete", "http://ex/c", _P, "keep").cascade is False

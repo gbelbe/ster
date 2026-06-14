@@ -23,6 +23,21 @@ scenarios("../features/tui/editing.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"
 ZOO = "https://example.org/zoo/"
+SK = "https://example.org/sk/"
+
+SKOS_TTL = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix sk: <https://example.org/sk/> .
+
+sk:Scheme a skos:ConceptScheme ; dcterms:title "Things"@en ; skos:hasTopConcept sk:Top .
+sk:Top a skos:Concept ; skos:inScheme sk:Scheme ; skos:topConceptOf sk:Scheme ;
+    skos:prefLabel "Top"@en ; skos:definition "Root."@en ; skos:narrower sk:Child .
+sk:Child a skos:Concept ; skos:inScheme sk:Scheme ; skos:prefLabel "Child"@en ;
+    skos:broader sk:Top .
+sk:Sibling a skos:Concept ; skos:inScheme sk:Scheme ; skos:topConceptOf sk:Scheme ;
+    skos:prefLabel "Sibling"@en .
+"""
 
 
 @pytest.fixture
@@ -89,6 +104,11 @@ def _by_action(action: str):  # noqa: ANN201
 @given("the zoo ontology is open for editing")
 def given_open(ctx: dict) -> None:
     pass  # the writable copy is prepared by the ctx fixture; the app opens per-edit
+
+
+@given("a SKOS taxonomy is open for editing")
+def given_skos(ctx: dict) -> None:
+    ctx["src"].write_text(SKOS_TTL, encoding="utf-8")  # swap the writable copy to SKOS
 
 
 # ── when (classes) ────────────────────────────────────────────────────────────
@@ -306,3 +326,125 @@ def then_individual_has_type(ctx: dict, ind: str, cls: str) -> None:
 def then_individual_no_type(ctx: dict, ind: str, cls: str) -> None:
     assert ZOO + cls not in ctx["tax"].owl_individuals[ZOO + ind].types
     assert ZOO + cls not in ctx["saved"].owl_individuals[ZOO + ind].types
+
+
+# ── when (SKOS concepts) ────────────────────────────────────────────────────--
+
+
+@when(parsers.parse('I set the prefLabel of the concept "{name}" to "{value}"'))
+def when_set_pref(ctx: dict, name: str, value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, lambda f: f.meta.get("type") == "pref")
+        await _submit_text(app, pilot, value)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I set the definition of the concept "{name}" to "{value}"'))
+def when_set_def(ctx: dict, name: str, value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, lambda f: f.meta.get("type") == "def")
+        await _submit_text(app, pilot, value)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I add a narrower concept "{child}" under the concept "{name}"'))
+def when_add_narrower(ctx: dict, child: str, name: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_narrower"))
+        await _submit_text(app, pilot, SK + child)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I relate the concept "{name}" to the concept "{other}"'))
+def when_relate(ctx: dict, name: str, other: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_related"))
+        await _pick(app, pilot, SK + other)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I delete the concept "{name}" choosing "{choice}"'))
+def when_delete_concept(ctx: dict, name: str, choice: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + name)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("delete"))
+        await pilot.click(f"#opt-{choice}")
+
+    _edit(ctx, do)
+
+
+# ── when (SKOS schemes) ─────────────────────────────────────────────────────--
+
+
+@when(parsers.parse('I set the title of the scheme to "{value}"'))
+def when_set_scheme_title(ctx: dict, value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + "Scheme")
+        await pilot.pause()
+        await _activate(app, pilot, lambda f: f.meta.get("type") == "scheme_title")
+        await _submit_text(app, pilot, value)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I add a top concept "{name}" to the scheme'))
+def when_add_top_concept(ctx: dict, name: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(SK + "Scheme")
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_top_concept"))
+        await _submit_text(app, pilot, SK + name)
+
+    _edit(ctx, do)
+
+
+# ── then (SKOS) ─────────────────────────────────────────────────────────────--
+
+
+@then(parsers.parse('the concept "{name}" has prefLabel "{value}"'))
+def then_concept_pref(ctx: dict, name: str, value: str) -> None:
+    assert value in {label.value for label in ctx["tax"].concepts[SK + name].labels}
+    assert value in {label.value for label in ctx["saved"].concepts[SK + name].labels}
+
+
+@then(parsers.parse('the concept "{name}" has definition "{value}"'))
+def then_concept_def(ctx: dict, name: str, value: str) -> None:
+    assert value in {d.value for d in ctx["tax"].concepts[SK + name].definitions}
+    assert value in {d.value for d in ctx["saved"].concepts[SK + name].definitions}
+
+
+@then(parsers.parse('the concept "{name}" exists'))
+def then_concept_exists(ctx: dict, name: str) -> None:
+    assert SK + name in ctx["tax"].concepts
+    assert SK + name in ctx["saved"].concepts
+
+
+@then(parsers.parse('the concept "{name}" no longer exists'))
+def then_concept_gone(ctx: dict, name: str) -> None:
+    assert SK + name not in ctx["tax"].concepts
+    assert SK + name not in ctx["saved"].concepts
+
+
+@then(parsers.parse('the concept "{name}" is related to "{other}"'))
+def then_concept_related(ctx: dict, name: str, other: str) -> None:
+    assert SK + other in ctx["tax"].concepts[SK + name].related
+    assert SK + other in ctx["saved"].concepts[SK + name].related
+
+
+@then(parsers.parse('the scheme has title "{value}"'))
+def then_scheme_title(ctx: dict, value: str) -> None:
+    assert ctx["tax"].schemes[SK + "Scheme"].title("en") == value
+    assert ctx["saved"].schemes[SK + "Scheme"].title("en") == value
