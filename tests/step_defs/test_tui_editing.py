@@ -411,6 +411,40 @@ def then_prop_gone(ctx: dict, prop: str) -> None:
     assert ZOO + prop not in ctx["saved"].owl_properties
 
 
+# ── when (add class property, add individual value) ─────────────────────────--
+
+
+@when(parsers.parse('I add an object property "{prop}" on the class "{cls}"'))
+def when_add_class_property(ctx: dict, prop: str, cls: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + cls)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                f.meta.get("action") == "add_class_property"
+                and f.meta.get("prop_type") == "ObjectProperty"
+            ),
+        )
+        await _submit_text(app, pilot, ZOO + prop)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I add the value "{val}" for property "{prop}" on the individual "{ind}"'))
+def when_add_prop_value(ctx: dict, val: str, prop: str, ind: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(ZOO + ind)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("add_prop_value"))
+        await _pick(app, pilot, ZOO + prop)  # step 1: pick the property
+        await pilot.pause()
+        await _pick(app, pilot, ZOO + val)  # step 2: pick the object individual
+
+    _edit(ctx, do)
+
+
 # ── when (rich content, notes, individual values) ───────────────────────────--
 
 

@@ -41,6 +41,8 @@ from ster.core.commands import (
 from ster.nav.logic import DetailField
 from ster.tui.edits import (
     action_command,
+    add_literal_value_command,
+    add_object_value_command,
     convert_choices,
     convert_command,
     delete_command,
@@ -441,3 +443,37 @@ def test_add_pref_label_maps_to_skos_set_label_pref() -> None:
 def test_add_def_maps_to_skos_set_definition() -> None:
     cmd = action_command("add_def", "http://ex/c", _P, "Une définition.", lang="fr")
     assert isinstance(cmd, SkosSetDefinition) and (cmd.lang, cmd.value) == ("fr", "Une définition.")
+
+
+# ── Phase 12: add a class property / add a new individual value ─────────────────
+
+
+def test_add_class_property_creates_property_with_class_as_domain() -> None:
+    f = _field(
+        "action_add",
+        action="add_class_property",
+        class_uri="http://ex/Animal",
+        prop_type="DatatypeProperty",
+        range_uri="http://www.w3.org/2001/XMLSchema#integer",
+    )
+    cmd = meta_input_command(f, "http://ex/Animal", _P, "http://ex/weight", lang="en")
+    assert isinstance(cmd, OwlAddProperty)
+    assert (cmd.uri, cmd.prop_type, cmd.domain_uri, cmd.range_uri, cmd.label) == (
+        "http://ex/weight",
+        "DatatypeProperty",
+        "http://ex/Animal",
+        "http://www.w3.org/2001/XMLSchema#integer",
+        "weight",
+    )
+
+
+def test_add_object_value_command_has_no_old_value() -> None:
+    cmd = add_object_value_command("http://ex/i", _P, "http://ex/owns", "http://ex/o")
+    assert isinstance(cmd, OwlSetIndividualValue)
+    assert (cmd.prop_uri, cmd.new_val_uri, cmd.old_val_uri) == ("http://ex/owns", "http://ex/o", "")
+
+
+def test_add_literal_value_command_has_no_old_value() -> None:
+    cmd = add_literal_value_command("http://ex/i", _P, "http://ex/age", "9")
+    assert isinstance(cmd, OwlSetIndividualLiteral)
+    assert (cmd.prop_uri, cmd.old_value, cmd.new_value) == ("http://ex/age", "", "9")

@@ -92,6 +92,19 @@ Feature: Editing the ontology in the New-TUI
     When I delete the property "hasOwner" choosing "strip"
     Then the property "hasOwner" no longer exists
 
+  # Phase 12 — add a class property, add a new individual value
+
+  Scenario: Define a new relationship property on a class
+    Given the zoo ontology is open for editing
+    When I add an object property "caresFor" on the class "Animal"
+    Then the property "caresFor" exists
+    And the property "caresFor" has domain "Animal"
+
+  Scenario: Add a new object-property value to an individual
+    Given the zoo ontology is open for editing
+    When I add the value "Alice" for property "hasOwner" on the individual "Felix"
+    Then the individual "Felix" has the value "Alice" for property "hasOwner"
+
   # Phase 7 — rich content, notes, individual values
 
   Scenario: Add a schema:image to an individual

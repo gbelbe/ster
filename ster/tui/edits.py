@@ -281,19 +281,22 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
 
 # ── meta-aware edits — change one existing individual value (row carries meta) ──
 
-# These rows name the specific value to change via their meta (which predicate,
-# which old value). A modal collects the new value; the command reads the meta.
-# action → (prompt, meta-key holding the current value to prefill).
+# These rows name the operation's fixed parameters via their meta (which
+# predicate / value / prop-type / range). A modal collects the new text value;
+# the command reads the meta. action → (prompt, prefill-source): the prefill
+# source is a meta-key holding the current value, or the sentinel "base_uri".
 META_INPUT_ACTIONS: dict[str, tuple[str, str]] = {
     "edit_literal_value": ("New literal value", "val_str"),
+    "add_class_property": ("New property URI", "base_uri"),
 }
 
 
 def meta_input_command(
     field: DetailField, uri: str, path: Path, value: str, lang: str = "en"
 ) -> object | None:
-    """Return the Command for a meta-aware text edit (e.g. change a literal value)."""
-    if field.meta.get("action") == "edit_literal_value":
+    """Return the Command for a meta-aware text edit (change a literal / add a class property)."""
+    action = field.meta.get("action")
+    if action == "edit_literal_value":
         return OwlSetIndividualLiteral(
             path,
             uri,
@@ -302,6 +305,19 @@ def meta_input_command(
             value,
             field.meta["lang_or_dt"],
         )
+    if action == "add_class_property":
+        # The row fixes prop_type + datatype range; value is the new property URI,
+        # domain is the class. Label defaults to the URI's local name (curses parity).
+        label = value.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        return OwlAddProperty(
+            path,
+            value,
+            field.meta.get("prop_type", "ObjectProperty"),
+            label,
+            lang,
+            field.meta.get("class_uri") or uri,
+            field.meta.get("range_uri"),
+        )
     return None
 
 
@@ -309,6 +325,21 @@ def meta_input_command(
 META_PICKER_ACTIONS: dict[str, tuple[str, str]] = {
     "edit_prop_value": ("Change the value — pick an individual", "individual"),
 }
+
+
+# Chained flows — collected over more than one modal (the app orchestrates the
+# steps; these builders produce the final command once both inputs are known).
+CHAINED_ACTIONS = frozenset({"add_prop_value"})
+
+
+def add_object_value_command(uri: str, path: Path, prop_uri: str, target_uri: str) -> object:
+    """A new object-property value (no old value to replace)."""
+    return OwlSetIndividualValue(path, uri, prop_uri, target_uri, "")
+
+
+def add_literal_value_command(uri: str, path: Path, prop_uri: str, value: str) -> object:
+    """A new literal-property value (no datatype/lang tag)."""
+    return OwlSetIndividualLiteral(path, uri, prop_uri, "", value, "")
 
 
 def meta_relation_command(

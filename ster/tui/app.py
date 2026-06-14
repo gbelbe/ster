@@ -274,6 +274,8 @@ class OntologyApp(App):
             return self._pick_meta_relation
         if action in edits.CONVERT_ACTIONS:
             return self._confirm_convert
+        if action in edits.CHAINED_ACTIONS:
+            return self._add_property_value
         if action in edits.META_INPUT_ACTIONS:
             return self._open_meta_input
         if action in edits.INPUT_ACTIONS:
@@ -325,7 +327,9 @@ class OntologyApp(App):
     def _open_meta_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Edit one existing value (the row's meta names which) via a prefilled modal."""
         prompt, prefill_key = edits.META_INPUT_ACTIONS[field.meta.get("action", "")]
-        prefill = field.meta.get(prefill_key, "")
+        prefill = (
+            self.tax.base_uri() if prefill_key == "base_uri" else field.meta.get(prefill_key, "")
+        )
 
         def _on_submit(value: str | None) -> None:
             if value:
@@ -382,6 +386,40 @@ class OntologyApp(App):
                 self._run_or_warn(edits.meta_relation_command(field, uri, path, target))
 
         self._open_picker(prompt, kind, uri, _on_pick)
+
+    def _add_property_value(self, field: DetailField, uri: str, path: Path) -> None:
+        """Two-step: pick a property, then pick an individual (object) or type a literal."""
+        props = sorted(
+            ((data.label_of(self.tax, p, self.lang), p) for p in self.tax.owl_properties),
+            key=lambda t: t[0].lower(),
+        )
+        if not props:
+            self.notify("No properties defined — create one first.", severity="warning")
+            return
+
+        def _on_prop(prop_uri: str | None) -> None:
+            if prop_uri is not None:
+                self._collect_value_for(uri, path, prop_uri)
+
+        self.push_screen(PickerModal("Add a value — pick a property", props), _on_prop)
+
+    def _collect_value_for(self, uri: str, path: Path, prop_uri: str) -> None:
+        """Step 2 of add-value: object properties pick an individual, others type a literal."""
+        prop = self.tax.owl_properties.get(prop_uri)
+        if prop is not None and prop.prop_type == "ObjectProperty":
+
+            def _on_target(target: str | None) -> None:
+                if target is not None:
+                    self._apply_command(edits.add_object_value_command(uri, path, prop_uri, target))
+
+            self._open_picker("Pick the value — an individual", "individual", uri, _on_target)
+            return
+
+        def _on_literal(value: str | None) -> None:
+            if value:
+                self._apply_command(edits.add_literal_value_command(uri, path, prop_uri, value))
+
+        self.push_screen(EditModal("Literal value", ""), _on_literal)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._show(event.node.data)
