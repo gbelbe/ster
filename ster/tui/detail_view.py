@@ -35,10 +35,32 @@ class SectionHeader(Static):
 
 
 class DetailRow(Static):
-    """A focusable detail field row; carries its ``DetailField`` for later actions."""
+    """A focusable detail field row; carries its ``DetailField`` for later actions.
+
+    Arrow keys move between rows (``up``/``down``) and back to the tree (``left``),
+    so the whole UI is navigable without reaching for Tab.
+    """
 
     can_focus = True
-    BINDINGS = [Binding("enter", "activate", "Edit / run")]
+    BINDINGS = [
+        Binding("enter", "activate", "Edit / run"),
+        Binding("down", "focus_row(1)", "Next", show=False),
+        Binding("up", "focus_row(-1)", "Prev", show=False),
+        Binding("left", "focus_tree", "Tree", show=False),
+    ]
+
+    def action_focus_row(self, delta: int) -> None:
+        """Move focus to the previous/next sibling row (clamped at the ends)."""
+        rows = list(self.app.query("#detail DetailRow"))
+        i = rows.index(self) + delta
+        if 0 <= i < len(rows):
+            rows[i].focus()
+
+    def action_focus_tree(self) -> None:
+        """Jump focus back to the tree (the left pane)."""
+        trees = list(self.app.query("#tree"))
+        if trees:
+            trees[0].focus()
 
     class EditRequested(Message):
         """Posted when the user activates an editable value row (Enter)."""

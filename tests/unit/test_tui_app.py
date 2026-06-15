@@ -66,6 +66,47 @@ def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
     _run(scenario)
 
 
+def test_arrow_keys_navigate_panes_and_rows() -> None:
+    """Right enters the detail pane, up/down move between rows, left returns to the tree."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")  # populate the detail pane
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.focus()
+            await pilot.pause()
+
+            await pilot.press("right")  # tree → first detail row
+            await pilot.pause()
+            assert isinstance(app.focused, DetailRow)
+            first = app.focused
+
+            await pilot.press("up")  # already at the top → clamp (stays put)
+            await pilot.pause()
+            assert app.focused is first
+
+            await pilot.press("down")  # → next row
+            await pilot.pause()
+            assert isinstance(app.focused, DetailRow) and app.focused is not first
+
+            await pilot.press("up")  # → back to the first row
+            await pilot.pause()
+            assert app.focused is first
+
+            await pilot.press("left")  # detail → tree
+            await pilot.pause()
+            assert app.focused is tree
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

@@ -30,6 +30,17 @@ from .edit_modal import EditModal
 from .picker_modal import PickerModal
 
 
+class OntologyTree(Tree):
+    """The left-pane tree. `right` jumps into the detail pane (left/up/down are native)."""
+
+    BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
+
+    def action_focus_detail(self) -> None:
+        rows = list(self.app.query("#detail DetailRow"))
+        if rows:
+            rows[0].focus()
+
+
 class _StorePersistence:
     """Persistence port backed by ster.store (writes the .ttl on commit)."""
 
@@ -119,7 +130,7 @@ class OntologyApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="body"):
-            yield Tree("ontology", id="tree")
+            yield OntologyTree("ontology", id="tree")
             yield DetailView(id="detail")
         yield Footer()
 

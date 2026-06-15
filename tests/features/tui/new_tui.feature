@@ -28,6 +28,11 @@ Feature: New-TUI — the Textual ontology browser
     And the detail panel shows the comment "Loyal domestic companion."
     And the detail panel shows "instances: 1"
 
+  Scenario: Arrow keys move between the tree and the detail rows (no Tab needed)
+    When I step right into the detail panel, down a row, then left back to the tree
+    Then a detail row was focused along the way
+    And the tree is focused at the end
+
   Scenario: Expanding the whole tree reveals deep nodes
     When I expand the whole tree
     Then the class "Dog" is visible in the tree

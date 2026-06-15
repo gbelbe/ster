@@ -129,6 +129,29 @@ def when_expand_all(ctx):
     _session(ctx, act)
 
 
+@when("I step right into the detail panel, down a row, then left back to the tree")
+def when_arrow_navigate(ctx):
+    from textual.widgets import Tree
+
+    from ster.tui.detail_view import DetailRow
+
+    async def act(app, pilot):
+        app.jump_to(ZOO + "Person")  # populate the detail pane
+        await pilot.pause()
+        app.query_one("#tree", Tree).focus()
+        await pilot.pause()
+        await pilot.press("right")  # tree → detail
+        await pilot.pause()
+        await pilot.press("down")  # next row
+        await pilot.pause()
+        ctx["row_focused"] = isinstance(app.focused, DetailRow)
+        await pilot.press("left")  # detail → tree
+        await pilot.pause()
+        ctx["tree_focused"] = app.focused is app.query_one("#tree", Tree)
+
+    _session(ctx, act)
+
+
 @when(parsers.parse('I run "ster new-tui" on the zoo ontology'))
 def when_run_cli(ctx):
     from typer.testing import CliRunner
@@ -151,6 +174,16 @@ def when_choose_menu(ctx):
 
 
 # ── Then ──────────────────────────────────────────────────────────────────────
+
+
+@then("a detail row was focused along the way")
+def then_row_focused(ctx):
+    assert ctx["row_focused"]
+
+
+@then("the tree is focused at the end")
+def then_tree_focused(ctx):
+    assert ctx["tree_focused"]
 
 
 @then(parsers.parse('the tree contains the class "{name}"'))
