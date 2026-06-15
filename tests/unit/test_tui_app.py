@@ -337,6 +337,39 @@ def test_picker_filters_as_you_type(tmp_path) -> None:
     _run(scenario)
 
 
+def test_focus_restored_after_modal_edit(tmp_path) -> None:
+    """Regression: after a modal mutation the keyboard stays alive (focus lands on a row).
+
+    The edit rebuilds the detail rows, destroying the row that had focus; without
+    restoration, focus becomes None and the UI feels frozen to keyboard input.
+    """
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "rdf_label")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open the edit modal
+            await pilot.pause()
+            app.screen.query_one("#edit-input", Input).value = "Human"
+            await pilot.press("enter")  # submit → mutation rebuilds the detail rows
+            for _ in range(4):
+                await pilot.pause()
+            assert isinstance(app.focused, DetailRow)  # keyboard still works
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

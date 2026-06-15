@@ -125,7 +125,10 @@ class OntologyApp(App):
 
     Tree > .tree--guides { color: $panel; }
     Tree > .tree--guides-selected { color: $secondary; }
-    Tree > .tree--cursor { text-style: bold; background: $secondary-muted; color: auto; }
+    /* Selected node stays readable even when the tree loses focus: a tint of
+       $secondary with the theme's normal text colour (not `auto`, which could
+       resolve to white on a light accent). Focused = full-strength accent. */
+    Tree > .tree--cursor { text-style: bold; background: $secondary 40%; color: $foreground; }
     Tree:focus > .tree--cursor { background: $secondary; color: auto; }
 
     /* Footer key hints read as actionable (and are clickable). */
@@ -314,6 +317,14 @@ class OntologyApp(App):
         self.search_rows = data.search_rows(self.tax, self.lang)
         self._rebuild_tree()
         self._show(self._detail_uri)
+        # The mutation rebuilt the detail rows, destroying the row that had focus —
+        # restore it (next refresh) so the keyboard keeps working after a modal.
+        self.call_after_refresh(self._restore_focus)
+
+    def _restore_focus(self) -> None:
+        """Land focus on a usable widget after a mutation rebuilt the panes."""
+        rows = list(self.query("#detail DetailRow"))
+        (rows[0] if rows else self.query_one("#tree", Tree)).focus()
 
     def on_detail_row_edit_requested(self, message: DetailRow.EditRequested) -> None:
         """A focusable detail row asked to be edited → open the modal → command."""
