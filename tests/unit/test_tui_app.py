@@ -286,6 +286,26 @@ def test_modal_chrome_titles_and_danger_accent() -> None:
     _run(scenario)
 
 
+def test_help_overlay_opens_and_closes() -> None:
+    """`?` opens the titled help overlay; Esc closes it."""
+
+    async def scenario() -> None:
+        from ster.tui.help_screen import HelpScreen
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            assert app.screen.query_one("#help-box").border_title.startswith("ster")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

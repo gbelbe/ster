@@ -28,6 +28,7 @@ from . import data, detail, edits
 from .choice_modal import ChoiceModal
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
+from .help_screen import HelpScreen
 from .picker_modal import PickerModal
 from .theme import STER_THEME, THEME_CYCLE
 
@@ -126,6 +127,15 @@ class OntologyApp(App):
     Tree > .tree--guides-selected { color: $secondary; }
     Tree > .tree--cursor { text-style: bold; background: $secondary-muted; color: auto; }
     Tree:focus > .tree--cursor { background: $secondary; color: auto; }
+
+    /* Footer key hints read as actionable (and are clickable). */
+    FooterKey > .footer-key--key { color: $secondary; text-style: bold; }
+    FooterKey > .footer-key--description { color: $primary; }
+
+    /* Notifications: a left accent bar, colour-coded by severity. */
+    Toast { border-left: wide $primary; }
+    Toast.-warning { border-left: wide $secondary; }
+    Toast.-error { border-left: wide $error; }
     """
 
     BINDINGS = [
@@ -133,6 +143,7 @@ class OntologyApp(App):
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
         Binding("d", "cycle_theme", "Theme"),
+        Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
     COMMANDS = App.COMMANDS | {EntitySearch}
@@ -564,6 +575,10 @@ class OntologyApp(App):
         tree.move_cursor(node)
         tree.scroll_to_node(node)
         tree.focus()
+
+    def action_help(self) -> None:
+        """Open the keys-and-actions help overlay."""
+        self.push_screen(HelpScreen())
 
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""
