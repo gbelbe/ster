@@ -1,11 +1,12 @@
-"""The Textual ontology browser app.
+"""The Textual ontology browser & editor app.
 
 Left: a `Tree` of Classes (with their individuals nested) / Properties / SKOS
 schemes. Right: a progressive-disclosure detail panel. `/` (or ctrl+p) opens a
 fuzzy command-palette search that jumps to any class / individual / property.
 
-Browse-only for now — editing will route through ``TaxonomyService`` (the
-command/service layer the curses viewer already uses).
+Editing routes through ``TaxonomyService`` (the command/service layer the curses
+viewer also uses): activate a detail row (Enter) to edit a value or run an
+action; every mutation is validated and written back to the file.
 """
 
 from __future__ import annotations

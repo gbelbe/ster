@@ -1160,10 +1160,13 @@ def cmd_new_tui(
     ),
     lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
 ) -> None:
-    """Open the New-TUI — the modern Textual ontology browser.
+    """Open the New-TUI — the modern Textual ontology browser & editor.
 
     A mouse- and keyboard-driven tree of classes / individuals / properties with a
-    fuzzy search palette (press ``/``) and a live detail panel. Browse-only for now.
+    fuzzy search palette (press ``/``) and a live detail panel. Fully editable:
+    create / rename / re-link / delete classes, individuals, properties, concepts
+    and schemes — every change is validated and saved to the file. Arrow keys move
+    between the tree and the detail rows; Enter edits (or runs) the focused row.
     """
     from .tui import launch
 
