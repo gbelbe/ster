@@ -29,6 +29,7 @@ from .choice_modal import ChoiceModal
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
 from .picker_modal import PickerModal
+from .theme import STER_THEME, THEME_CYCLE
 
 
 class OntologyTree(Tree):
@@ -87,35 +88,51 @@ class OntologyApp(App):
     """A modern, themeable ontology browser."""
 
     CSS = """
-    Screen { background: $surface; }
+    /* Themed scrollbars (track muted, thumb highlights on hover/drag). */
+    * {
+        scrollbar-background: $panel;
+        scrollbar-background-hover: $panel;
+        scrollbar-background-active: $panel;
+        scrollbar-color: $panel-lighten-2;
+        scrollbar-color-hover: $primary;
+        scrollbar-color-active: $secondary;
+    }
+    Screen { background: $background; }
     #body { height: 1fr; }
-    #nav {
-        width: 40%;
-        min-width: 30;
-        border-right: tall $primary-darken-1;
-        background: $panel;
+    #nav { width: 40%; min-width: 34; }
+
+    /* Each pane is a rounded, titled box whose border lights up when focused —
+       so you always see which pane you're in and what it holds. */
+    #tree, #prop-tree, #detail {
+        border: round $panel;
+        border-title-color: $panel;
+        background: $surface;
     }
     #tree { height: 1fr; padding: 0 1; }
     /* Properties keep their own pane (1/4 height) so they stay visible even when
        the class hierarchy is fully expanded. */
-    #prop-tree {
-        height: 25%;
-        padding: 0 1;
-        border-top: tall $primary-darken-1;
-    }
+    #prop-tree { height: 25%; padding: 0 1; }
     #detail { width: 1fr; padding: 1 2; }
+    #tree:focus-within, #prop-tree:focus-within, #detail:focus-within {
+        border: round $primary;
+        border-title-color: $primary;
+    }
+
     .section-header { margin-top: 1; }
     .detail-row { padding: 0 1; }
-    .detail-row:focus { background: $accent 30%; }
-    Tree > .tree--guides { color: $primary-darken-2; }
-    Tree > .tree--guides-selected { color: $accent; }
+    .detail-row:focus { background: $primary 20%; }
+
+    Tree > .tree--guides { color: $panel; }
+    Tree > .tree--guides-selected { color: $secondary; }
+    Tree > .tree--cursor { text-style: bold; background: $secondary-muted; color: auto; }
+    Tree:focus > .tree--cursor { background: $secondary; color: auto; }
     """
 
     BINDINGS = [
         Binding("slash", "command_palette", "Search"),
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
-        Binding("d", "toggle_dark", "Theme"),
+        Binding("d", "cycle_theme", "Theme"),
         Binding("q", "quit", "Quit"),
     ]
     COMMANDS = App.COMMANDS | {EntitySearch}
@@ -128,6 +145,8 @@ class OntologyApp(App):
         path: Path | None = None,
     ) -> None:
         super().__init__()
+        self.register_theme(STER_THEME)  # available alongside every built-in theme
+        self.theme = "solarized-light"  # default; `d` or the palette switch (incl. "ster")
         self.tax = taxonomy
         self.lang = lang
         self.source = source
@@ -166,6 +185,9 @@ class OntologyApp(App):
             tree.guide_depth = 3
         self._build_main_tree(self.query_one("#tree", Tree))
         self._build_prop_tree(self.query_one("#prop-tree", Tree))
+        self.query_one("#tree", Tree).border_title = "Ontology"
+        self.query_one("#prop-tree", Tree).border_title = "Properties"
+        self.query_one("#detail", DetailView).border_title = "Details"
         self.query_one("#tree", Tree).focus()
 
     # ── tree building ─────────────────────────────────────────────────────────
@@ -244,7 +266,17 @@ class OntologyApp(App):
         # text view); the DetailView builds the composed, focusable widgets.
         self._detail_uri = uri
         self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
-        self.query_one("#detail", DetailView).update_entity(self.tax, uri, self.lang)
+        view = self.query_one("#detail", DetailView)
+        view.update_entity(self.tax, uri, self.lang)
+        view.border_title = self._detail_title(uri)
+
+    def _detail_title(self, uri: str | None) -> str:
+        """The detail pane's border title — the current entity, or a generic label."""
+        if uri is None:
+            return "Details"
+        if uri == detail.OVERVIEW_URI:
+            return "Ontology overview"
+        return data.label_of(self.tax, uri, self.lang) or "Details"
 
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
@@ -532,6 +564,18 @@ class OntologyApp(App):
         tree.move_cursor(node)
         tree.scroll_to_node(node)
         tree.focus()
+
+    def action_cycle_theme(self) -> None:
+        """Step through the curated theme shortlist (the full list is in the palette)."""
+        cycle = [name for name in THEME_CYCLE if name in self.available_themes]
+        if not cycle:
+            return
+        try:
+            i = cycle.index(self.theme)
+        except ValueError:
+            i = -1
+        self.theme = cycle[(i + 1) % len(cycle)]
+        self.notify(f"Theme: {self.theme}", timeout=2)
 
     def action_expand_all(self) -> None:
         self.query_one("#tree", Tree).root.expand_all()

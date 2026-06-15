@@ -217,6 +217,43 @@ def test_properties_live_in_their_own_pane() -> None:
     _run(scenario)
 
 
+def test_themes_registered_default_solarized_and_cycles() -> None:
+    """Default is solarized-light; the branded `ster` theme is available; `d` cycles."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.theme == "solarized-light"
+            assert "ster" in app.available_themes  # branded theme registered
+            assert "solarized-light" in app.available_themes  # built-ins kept
+            await pilot.press("d")  # cycle to the next shortlist theme
+            await pilot.pause()
+            assert app.theme != "solarized-light"
+
+    _run(scenario)
+
+
+def test_panels_have_border_titles() -> None:
+    """Each pane is titled; the detail pane's title tracks the shown entity."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.detail_view import DetailView
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.query_one("#tree", Tree).border_title == "Ontology"
+            assert app.query_one("#prop-tree", Tree).border_title == "Properties"
+            app._show(ZOO + "Cat")
+            await pilot.pause()
+            assert app.query_one("#detail", DetailView).border_title == "Cat"
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree
