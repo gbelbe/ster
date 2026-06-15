@@ -32,7 +32,9 @@ from .picker_modal import PickerModal
 
 
 class OntologyTree(Tree):
-    """The left-pane tree. `right` jumps into the detail pane (left/up/down are native)."""
+    """The left-pane tree. `right` jumps into the detail pane; up/down wrap around."""
+
+    _LAST_LINE = 2_000_000_000  # any out-of-range line clamps to the last visible one
 
     BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
 
@@ -40,6 +42,18 @@ class OntologyTree(Tree):
         rows = list(self.app.query("#detail DetailRow"))
         if rows:
             rows[0].focus()
+
+    def action_cursor_down(self) -> None:
+        before = self.cursor_line
+        super().action_cursor_down()
+        if self.cursor_line == before:  # already at the bottom → wrap to the top
+            self.cursor_line = 0
+
+    def action_cursor_up(self) -> None:
+        before = self.cursor_line
+        super().action_cursor_up()
+        if self.cursor_line == before:  # already at the top → wrap to the bottom
+            self.cursor_line = self._LAST_LINE  # clamped to the last visible line
 
 
 class _StorePersistence:

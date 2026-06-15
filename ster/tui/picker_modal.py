@@ -16,6 +16,22 @@ from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
 
+class WrappingOptionList(OptionList):
+    """An ``OptionList`` whose up/down wrap around the ends (fast access to the far end)."""
+
+    def action_cursor_down(self) -> None:
+        if self.option_count and self.highlighted == self.option_count - 1:
+            self.highlighted = 0  # past the last → wrap to the first
+        else:
+            super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        if self.option_count and self.highlighted == 0:
+            self.highlighted = self.option_count - 1  # before the first → wrap to the last
+        else:
+            super().action_cursor_up()
+
+
 class PickerModal(ModalScreen[str | None]):
     """Modal single-select list of (label, value) candidates."""
 
@@ -43,7 +59,7 @@ class PickerModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
             yield Label(self._prompt)
-            yield OptionList(*[Option(label) for label, _ in self._options])
+            yield WrappingOptionList(*[Option(label) for label, _ in self._options])
 
     def on_mount(self) -> None:
         self.query_one(OptionList).focus()

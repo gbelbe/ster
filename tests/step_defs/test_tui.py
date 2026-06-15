@@ -176,6 +176,28 @@ def when_choose_menu(ctx):
 # ── Then ──────────────────────────────────────────────────────────────────────
 
 
+@when("I press up from the top of the tree")
+def when_wrap_up(ctx):
+    from textual.widgets import Tree
+
+    async def act(app, pilot):
+        tree = app.query_one("#tree", Tree)
+        tree.focus()
+        tree.cursor_line = 0
+        await pilot.pause()
+        await pilot.press("up")  # at the top → wraps to the last node
+        await pilot.pause()
+        ctx["wrapped_line"] = tree.cursor_line
+        ctx["last_line"] = len(tree._tree_lines) - 1
+
+    _session(ctx, act)
+
+
+@then("the tree cursor lands on the last node")
+def then_cursor_on_last(ctx):
+    assert ctx["wrapped_line"] == ctx["last_line"] > 0
+
+
 @then("a detail row was focused along the way")
 def then_row_focused(ctx):
     assert ctx["row_focused"]

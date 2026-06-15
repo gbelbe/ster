@@ -33,6 +33,10 @@ Feature: New-TUI — the Textual ontology browser
     Then a detail row was focused along the way
     And the tree is focused at the end
 
+  Scenario: Arrow keys wrap around the tree (reach the last node from the top)
+    When I press up from the top of the tree
+    Then the tree cursor lands on the last node
+
   Scenario: Expanding the whole tree reveals deep nodes
     When I expand the whole tree
     Then the class "Dog" is visible in the tree

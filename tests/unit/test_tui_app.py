@@ -88,10 +88,6 @@ def test_arrow_keys_navigate_panes_and_rows() -> None:
             assert isinstance(app.focused, DetailRow)
             first = app.focused
 
-            await pilot.press("up")  # already at the top → clamp (stays put)
-            await pilot.pause()
-            assert app.focused is first
-
             await pilot.press("down")  # → next row
             await pilot.pause()
             assert isinstance(app.focused, DetailRow) and app.focused is not first
@@ -103,6 +99,86 @@ def test_arrow_keys_navigate_panes_and_rows() -> None:
             await pilot.press("left")  # detail → tree
             await pilot.pause()
             assert app.focused is tree
+
+    _run(scenario)
+
+
+def test_detail_rows_wrap_around() -> None:
+    """Up from the first row jumps to the last; down from the last back to the first."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            rows = list(app.query("#detail DetailRow"))
+            rows[0].focus()
+            await pilot.pause()
+            await pilot.press("up")  # wrap to the last row
+            await pilot.pause()
+            assert app.focused is rows[-1]
+            await pilot.press("down")  # wrap back to the first row
+            await pilot.pause()
+            assert app.focused is rows[0]
+
+    _run(scenario)
+
+
+def test_tree_cursor_wraps_around() -> None:
+    """Up at the top of the tree jumps to the last node; down there wraps to the top."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.focus()
+            tree.cursor_line = 0
+            await pilot.pause()
+            await pilot.press("up")  # wrap to the last visible line
+            await pilot.pause()
+            assert tree.cursor_line == len(tree._tree_lines) - 1 > 0
+            await pilot.press("down")  # wrap back to the top
+            await pilot.pause()
+            assert tree.cursor_line == 0
+
+    _run(scenario)
+
+
+def test_picker_list_wraps_around(tmp_path) -> None:
+    """The entity picker's up/down wrap around the ends of a long candidate list."""
+
+    async def scenario() -> None:
+        from textual.widgets import OptionList
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Cat")
+            await pilot.pause()
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("action") == "link_superclass"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # opens the picker modal
+            await pilot.pause()
+            options = app.screen.query_one(OptionList)
+            options.highlighted = 0
+            await pilot.pause()
+            await pilot.press("up")  # wrap to the last candidate
+            await pilot.pause()
+            assert options.highlighted == options.option_count - 1
+            await pilot.press("down")  # wrap back to the first
+            await pilot.pause()
+            assert options.highlighted == 0
 
     _run(scenario)
 

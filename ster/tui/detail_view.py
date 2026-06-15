@@ -50,11 +50,10 @@ class DetailRow(Static):
     ]
 
     def action_focus_row(self, delta: int) -> None:
-        """Move focus to the previous/next sibling row (clamped at the ends)."""
+        """Move focus to the previous/next sibling row, wrapping around the ends."""
         rows = list(self.app.query("#detail DetailRow"))
-        i = rows.index(self) + delta
-        if 0 <= i < len(rows):
-            rows[i].focus()
+        if rows:  # wrap: up from the first row → last, down from the last → first
+            rows[(rows.index(self) + delta) % len(rows)].focus()
 
     def action_focus_tree(self) -> None:
         """Jump focus back to the tree (the left pane)."""
