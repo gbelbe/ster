@@ -176,6 +176,41 @@ def when_choose_menu(ctx):
 # ── Then ──────────────────────────────────────────────────────────────────────
 
 
+@when("I inspect the navigation panes")
+def when_inspect_panes(ctx):
+    from textual.widgets import Tree
+
+    def uris(tree):
+        out = set()
+
+        def walk(node):
+            if node.data:
+                out.add(node.data)
+            for child in node.children:
+                walk(child)
+
+        walk(tree.root)
+        return out
+
+    async def act(app, pilot):
+        ctx["main_uris"] = uris(app.query_one("#tree", Tree))
+        ctx["prop_uris"] = uris(app.query_one("#prop-tree", Tree))
+
+    _session(ctx, act)
+
+
+@then(parsers.parse('the property "{label}" is in the properties pane'))
+def then_property_in_pane(ctx, label):  # noqa: ARG001
+    assert ZOO + "hasOwner" in ctx["prop_uris"]
+    assert ZOO + "hasOwner" not in ctx["main_uris"]
+
+
+@then(parsers.parse('the class "{name}" stays in the main tree, not the properties pane'))
+def then_class_in_main_only(ctx, name):
+    assert ZOO + name in ctx["main_uris"]
+    assert ZOO + name not in ctx["prop_uris"]
+
+
 @when("I press up from the top of the tree")
 def when_wrap_up(ctx):
     from textual.widgets import Tree

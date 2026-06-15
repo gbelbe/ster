@@ -13,6 +13,11 @@ Feature: New-TUI — the Textual ontology browser
     And the individual "Rex" is nested under the class "Dog"
     And the tree contains the property "has owner"
 
+  Scenario: Properties have their own pane, separate from the class hierarchy
+    When I inspect the navigation panes
+    Then the property "has owner" is in the properties pane
+    And the class "Animal" stays in the main tree, not the properties pane
+
   Scenario: Moving the cursor updates the detail panel
     When I move the cursor down to the class "Person"
     Then the detail panel shows "Person"

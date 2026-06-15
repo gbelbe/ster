@@ -183,6 +183,40 @@ def test_picker_list_wraps_around(tmp_path) -> None:
     _run(scenario)
 
 
+def _tree_uris(tree) -> set:  # noqa: ANN001
+    """Every node URI (``.data``) in a tree, recursively."""
+    out: set = set()
+
+    def walk(node) -> None:  # noqa: ANN001
+        if node.data:
+            out.add(node.data)
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root)
+    return out
+
+
+def test_properties_live_in_their_own_pane() -> None:
+    """Properties sit in #prop-tree; classes/individuals stay in the main #tree."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            main = _tree_uris(app.query_one("#tree", Tree))
+            props = _tree_uris(app.query_one("#prop-tree", Tree))
+            # properties only in the dedicated pane
+            assert {ZOO + "hasOwner", ZOO + "hasAge"} <= props
+            assert ZOO + "hasOwner" not in main
+            # the class hierarchy only in the main tree
+            assert ZOO + "Animal" in main and ZOO + "Animal" not in props
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

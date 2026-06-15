@@ -17,7 +17,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Tree
 from textual.widgets.tree import TreeNode
 
@@ -89,12 +89,19 @@ class OntologyApp(App):
     CSS = """
     Screen { background: $surface; }
     #body { height: 1fr; }
-    #tree {
+    #nav {
         width: 40%;
         min-width: 30;
         border-right: tall $primary-darken-1;
-        padding: 0 1;
         background: $panel;
+    }
+    #tree { height: 1fr; padding: 0 1; }
+    /* Properties keep their own pane (1/4 height) so they stay visible even when
+       the class hierarchy is fully expanded. */
+    #prop-tree {
+        height: 25%;
+        padding: 0 1;
+        border-top: tall $primary-darken-1;
     }
     #detail { width: 1fr; padding: 1 2; }
     .section-header { margin-top: 1; }
@@ -145,18 +152,21 @@ class OntologyApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="body"):
-            yield OntologyTree("ontology", id="tree")
+            with Vertical(id="nav"):
+                yield OntologyTree("ontology", id="tree")
+                yield OntologyTree("properties", id="prop-tree")
             yield DetailView(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "ster · ontology browser"
         self.sub_title = self.source
-        tree = self.query_one("#tree", Tree)
-        tree.show_root = False
-        tree.guide_depth = 3
-        self._build(tree)
-        tree.focus()
+        for tree in self.query(Tree):
+            tree.show_root = False
+            tree.guide_depth = 3
+        self._build_main_tree(self.query_one("#tree", Tree))
+        self._build_prop_tree(self.query_one("#prop-tree", Tree))
+        self.query_one("#tree", Tree).focus()
 
     # ── tree building ─────────────────────────────────────────────────────────
 
@@ -187,7 +197,8 @@ class OntologyApp(App):
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)
 
-    def _build(self, tree: Tree) -> None:
+    def _build_main_tree(self, tree: Tree) -> None:
+        """Top pane: ontology overview, the class hierarchy, loose individuals, schemes."""
         tax, root = self.tax, tree.root
 
         # The ontology overview (metadata, prefixes, stats) — the global window.
@@ -205,14 +216,6 @@ class OntologyApp(App):
             for uri in loose:
                 self._leaf(sec, uri, "individual")
 
-        if tax.owl_properties:
-            sec = root.add(f"{data.ICON['section']} Properties", data=None)
-            for uri in data.properties(tax, self.lang):
-                ptype = tax.owl_properties[uri].prop_type
-                tag = f"  [dim]({ptype[:3]})[/dim]" if ptype else ""
-                self._leaf(sec, uri, "property", suffix=tag)
-            sec.expand()
-
         for s_uri in data.scheme_roots(tax, self.lang):
             sec = root.add(
                 f"{data.ICON['scheme']} {data.label_of(tax, s_uri, self.lang)}", data=s_uri
@@ -221,6 +224,18 @@ class OntologyApp(App):
             for c_uri in data.concept_children(tax, s_uri, self.lang):
                 self._add_concept(sec, c_uri)
             sec.expand()
+
+    def _build_prop_tree(self, tree: Tree) -> None:
+        """Bottom pane: every property, in its own always-visible 1/4-height list."""
+        tax = self.tax
+        if not tax.owl_properties:
+            return
+        sec = tree.root.add(f"{data.ICON['section']} Properties", data=None)
+        for uri in data.properties(tax, self.lang):
+            ptype = tax.owl_properties[uri].prop_type
+            tag = f"  [dim]({ptype[:3]})[/dim]" if ptype else ""
+            self._leaf(sec, uri, "property", suffix=tag)
+        sec.expand()
 
     # ── interaction ─────────────────────────────────────────────────────────--
 
@@ -234,10 +249,13 @@ class OntologyApp(App):
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
     def _rebuild_tree(self) -> None:
-        tree = self.query_one("#tree", Tree)
         self._uri_nodes = {}
-        tree.root.remove_children()
-        self._build(tree)
+        main = self.query_one("#tree", Tree)
+        main.root.remove_children()
+        self._build_main_tree(main)
+        props = self.query_one("#prop-tree", Tree)
+        props.root.remove_children()
+        self._build_prop_tree(props)
 
     def _apply_command(self, command: object) -> None:
         """Execute *command* via TaxonomyService, then refresh tax + tree + detail."""
@@ -495,11 +513,13 @@ class OntologyApp(App):
 
     def jump_to(self, uri: str) -> None:
         """Expand ancestors, move the cursor to *uri*, and show its detail."""
-        tree = self.query_one("#tree", Tree)
         node = self._uri_nodes.get(uri)
         if node is None:
             self.notify(f"Not in tree: {uri}", severity="warning")
             return
+        # Properties live in their own pane; everything else in the main tree.
+        tree_id = "#prop-tree" if uri in self.tax.owl_properties else "#tree"
+        tree = self.query_one(tree_id, Tree)
         parent = node.parent
         while parent is not None:
             parent.expand()
