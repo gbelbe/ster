@@ -421,7 +421,7 @@ class OntologyApp(App):
             self._run_or_warn(edits.delete_command(action, uri, path, mode))
             self._show(None)  # the entity is gone — clear the detail pane
 
-        self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action]), _on_choice)
+        self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action], danger=True), _on_choice)
 
     def _confirm_convert(self, field: DetailField, uri: str, path: Path) -> None:
         """Confirm a class↔individual punning conversion, then run it (URI is kept)."""

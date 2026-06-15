@@ -254,6 +254,38 @@ def test_panels_have_border_titles() -> None:
     _run(scenario)
 
 
+def test_modal_chrome_titles_and_danger_accent() -> None:
+    """Modals carry the prompt as a border title; delete confirms get the danger class."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.edit_modal import EditModal
+        from ster.tui.picker_modal import PickerModal
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.push_screen(EditModal("New subclass URI", "x"))
+            await pilot.pause()
+            assert app.screen.query_one("#edit-box").border_title == "New subclass URI"
+            app.pop_screen()
+            await pilot.pause()
+
+            app.push_screen(PickerModal("Pick a class", [("Animal", "a")]))
+            await pilot.pause()
+            assert app.screen.query_one("#picker-box").border_title == "Pick a class"
+            app.pop_screen()
+            await pilot.pause()
+
+            app.push_screen(ChoiceModal("Delete «Cat»?", [("Keep", "keep")], danger=True))
+            await pilot.pause()
+            box = app.screen.query_one("#choice-box")
+            assert box.border_title == "Delete «Cat»?"
+            assert box.has_class("-danger")
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

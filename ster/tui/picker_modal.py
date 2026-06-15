@@ -12,7 +12,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Label, OptionList
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 
@@ -44,9 +44,10 @@ class PickerModal(ModalScreen[str | None]):
         max-height: 80%;
         padding: 1 2;
         background: $surface;
-        border: thick $primary;
+        border: round $primary;
+        border-title-color: $primary;
     }
-    #picker-box Label { margin-bottom: 1; }
+    #picker-box .modal-footer { color: $text-muted; margin-top: 1; }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -58,10 +59,11 @@ class PickerModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
-            yield Label(self._prompt)
             yield WrappingOptionList(*[Option(label) for label, _ in self._options])
+            yield Static("↑↓ move    enter  select     esc  cancel", classes="modal-footer")
 
     def on_mount(self) -> None:
+        self.query_one("#picker-box").border_title = self._prompt
         self.query_one(OptionList).focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
