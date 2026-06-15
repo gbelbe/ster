@@ -387,7 +387,7 @@ class OntologyApp(App):
         if not candidates:
             self.notify(f"No other {kind}s to link to.", severity="warning")
             return
-        self.push_screen(PickerModal(prompt, candidates), on_pick)
+        self.push_screen(PickerModal(prompt, candidates, kind_label=kind), on_pick)
 
     def _run_or_warn(self, command: object | None) -> None:
         """Apply *command*, or warn if the dispatch produced nothing."""
@@ -485,7 +485,9 @@ class OntologyApp(App):
             if prop_uri is not None:
                 self._collect_value_for(uri, path, prop_uri)
 
-        self.push_screen(PickerModal("Add a value — pick a property", props), _on_prop)
+        self.push_screen(
+            PickerModal("Add a value — pick a property", props, kind_label="property"), _on_prop
+        )
 
     def _collect_value_for(self, uri: str, path: Path, prop_uri: str) -> None:
         """Step 2 of add-value: object properties pick an individual, others type a literal."""
