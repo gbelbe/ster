@@ -562,6 +562,43 @@ def when_convert_class_to_ind(ctx: dict, cls: str, choice: str) -> None:
     _edit(ctx, do)
 
 
+# ── when / then (ontology base-URI / domain rename) ─────────────────────────--
+
+
+@when(parsers.parse('I change the ontology base URI to "{base}"'))
+def when_change_base_uri(ctx: dict, base: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("edit_ontology_uri"))
+        await _submit_text(app, pilot, base)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I change the ontology domain to "{domain}"'))
+def when_change_domain(ctx: dict, domain: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, _by_action("edit_ontology_domain"))
+        await _submit_text(app, pilot, domain)
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('a class exists at "{full_uri}"'))
+def then_class_exists_at(ctx: dict, full_uri: str) -> None:
+    assert full_uri in ctx["tax"].owl_classes
+    assert full_uri in ctx["saved"].owl_classes
+
+
+@then(parsers.parse('no class exists at "{full_uri}"'))
+def then_no_class_at(ctx: dict, full_uri: str) -> None:
+    assert full_uri not in ctx["tax"].owl_classes
+    assert full_uri not in ctx["saved"].owl_classes
+
+
 # ── when (create from overview) ─────────────────────────────────────────────--
 
 

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ster.core.commands import (
     AddSchemaMedia,
+    OntoRenameUri,
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
@@ -332,6 +333,16 @@ META_PICKER_ACTIONS: dict[str, tuple[str, str]] = {
 # steps; these builders produce the final command once every input is known).
 CHAINED_ACTIONS = frozenset({"add_prop_value"})  # → app._add_property_value
 SCHEME_ACTIONS = frozenset({"add_scheme"})  # → app._create_scheme
+# Ontology base-URI / domain edits: both rename the base URI (cascading across
+# every local entity). The app resolves the typed value to a base URI + sep
+# string (the domain path needs the taxonomy); this builder is the pure tail.
+ONTOLOGY_RENAME_ACTIONS = frozenset({"edit_ontology_uri", "edit_ontology_domain"})
+
+
+def ontology_rename_command(path: Path, base_with_sep: str) -> object:
+    """Rename the ontology base URI; *base_with_sep* may carry a trailing # or /."""
+    new_sep = base_with_sep[-1] if base_with_sep[-1:] in ("#", "/") else "#"
+    return OntoRenameUri(path, base_with_sep.rstrip("#/"), new_sep)
 
 
 def add_object_value_command(uri: str, path: Path, prop_uri: str, target_uri: str) -> object:

@@ -2571,35 +2571,13 @@ def _ontology_identity_action_fields(taxonomy: Taxonomy) -> list[DetailField]:
     return actions
 
 
-def build_ontology_overview_fields(
-    taxonomy: Taxonomy,
-    lang: str,
-    folded: set[str] | None = None,
-) -> list[DetailField]:
-    """Detail panel for the ontology root node.
-
-    Shows ontology metadata, a class hierarchy with fold/unfold, all
-    properties, and creation actions.
-    """
-    if folded is None:
-        folded = set()
-
-    fields: list[DetailField] = []
-
-    # ── Setup ────────────────────────────────────────────────────────────────
-    fields.append(_sep("Setup"))
-    fields.append(_display_lang_field(lang))
-
-    # ── Ontology metadata ────────────────────────────────────────────────────
-    fields.append(_sep("Ontology"))
+def _overview_metadata_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
+    """Setup + ontology-metadata rows (URI, identity actions, version, title…)."""
+    fields = [_sep("Setup"), _display_lang_field(lang), _sep("Ontology")]
     if taxonomy.ontology_uri:
         fields.append(
             DetailField(
-                "ont:uri",
-                "URI",
-                taxonomy.ontology_uri,
-                editable=False,
-                meta={"type": "uri"},
+                "ont:uri", "URI", taxonomy.ontology_uri, editable=False, meta={"type": "uri"}
             )
         )
         fields.extend(_ontology_identity_action_fields(taxonomy))
@@ -2641,156 +2619,181 @@ def build_ontology_overview_fields(
             meta={"type": "ont_description"},
         )
     )
+    return fields
 
-    # ── Actions ─────────────────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-    fields.append(
+
+def _overview_action_fields() -> list[DetailField]:
+    """Creation / view actions shown on the ontology overview."""
+    return [
+        _sep("Actions"),
         _add_action_field(
-            "action:view_ontology_graph",
-            "⊙ View graph in browser",
-            "view_ontology_graph",
-        )
-    )
-    fields.append(
-        _add_action_field("action:create_owl_class", "+ New OWL class", "create_owl_class")
-    )
-    fields.append(
-        _add_action_field("action:create_owl_property", "+ New OWL property", "create_owl_property")
-    )
-    fields.append(_add_action_field("action:add_scheme", "➕ Add concept scheme", "add_scheme"))
+            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
+        ),
+        _add_action_field("action:create_owl_class", "+ New OWL class", "create_owl_class"),
+        _add_action_field(
+            "action:create_owl_property", "+ New OWL property", "create_owl_property"
+        ),
+        _add_action_field("action:add_scheme", "➕ Add concept scheme", "add_scheme"),
+    ]
 
-    # ── Class hierarchy ───────────────────────────────────────────────────────
-    if taxonomy.owl_classes:
-        # Build children_map from sub_class_of links within owl_classes
-        children_map: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
-        for cls_uri, cls in taxonomy.owl_classes.items():
-            for parent_uri in cls.sub_class_of:
-                if parent_uri in taxonomy.owl_classes:
-                    children_map[parent_uri].append(cls_uri)
 
-        # Root classes: those with no parent inside taxonomy.owl_classes
-        root_classes = [
-            uri
-            for uri, cls in taxonomy.owl_classes.items()
-            if not any(p in taxonomy.owl_classes for p in cls.sub_class_of)
+def _overview_domain_prop_rows(
+    taxonomy: Taxonomy, lang: str, cls_uri: str, props_by_domain: dict[str, list[str]], depth: int
+) -> list[DetailField]:
+    """The ``→ property (ranges)`` rows for properties whose domain is *cls_uri*."""
+    prop_indent = "  " * (depth + 1)
+    rows: list[DetailField] = []
+    for p_uri in sorted(props_by_domain.get(cls_uri, [])):
+        prop = taxonomy.owl_properties[p_uri]
+        ranges = [
+            taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
+            for r in prop.ranges
         ]
-        root_classes.sort()
-
-        # Map class URI → properties that have it as rdfs:domain
-        props_by_domain: dict[str, list[str]] = {}
-        for p_uri, prop in taxonomy.owl_properties.items():
-            for domain_uri in prop.domains:
-                props_by_domain.setdefault(domain_uri, []).append(p_uri)
-
-        def _add_class_rows(cls_uri: str, depth: int) -> None:
-            cls = taxonomy.owl_classes[cls_uri]
-            children = sorted(children_map.get(cls_uri, []))
-            indent = "  " * depth
-            cls_label = cls.label(lang)
-            if children:
-                is_folded_cls = cls_uri in folded
-                fold_icon = "▶" if is_folded_cls else "▼"
-                fields.append(
-                    DetailField(
-                        f"ovw:cls:{cls_uri}",
-                        f"{indent}{fold_icon} {cls_label}",
-                        "",
-                        editable=False,
-                        meta={
-                            "type": "action",
-                            "action": "toggle_class_fold",
-                            "uri": cls_uri,
-                        },
-                    )
-                )
-                if not is_folded_cls:
-                    # Show domain properties at this level (indented one extra)
-                    prop_indent = "  " * (depth + 1)
-                    for p_uri in sorted(props_by_domain.get(cls_uri, [])):
-                        prop = taxonomy.owl_properties[p_uri]
-                        ranges = [
-                            taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
-                            for r in prop.ranges
-                        ]
-                        range_str = f"  ({', '.join(ranges)})" if ranges else ""
-                        fields.append(
-                            DetailField(
-                                f"ovw:prop:{cls_uri}:{p_uri}",
-                                f"{prop_indent}→ {prop.label(lang)}{range_str}",
-                                "",
-                                editable=False,
-                                meta={"type": "prop_nav", "uri": p_uri, "nav": True},
-                            )
-                        )
-                    for child_uri in children:
-                        _add_class_rows(child_uri, depth + 1)
-            else:
-                fields.append(
-                    DetailField(
-                        f"ovw:cls:{cls_uri}",
-                        f"{indent}◈ {cls_label}",
-                        "",
-                        editable=False,
-                        meta={"type": "rdf_relation", "uri": cls_uri, "nav": True},
-                    )
-                )
-                # Show domain properties at this level (indented one extra)
-                prop_indent = "  " * (depth + 1)
-                for p_uri in sorted(props_by_domain.get(cls_uri, [])):
-                    prop = taxonomy.owl_properties[p_uri]
-                    ranges = [
-                        taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
-                        for r in prop.ranges
-                    ]
-                    range_str = f"  ({', '.join(ranges)})" if ranges else ""
-                    fields.append(
-                        DetailField(
-                            f"ovw:prop:{cls_uri}:{p_uri}",
-                            f"{prop_indent}→ {prop.label(lang)}{range_str}",
-                            "",
-                            editable=False,
-                            meta={"type": "prop_nav", "uri": p_uri, "nav": True},
-                        )
-                    )
-
-        fields.append(_sep("Classes & Properties"))
-        for root_uri in root_classes:
-            _add_class_rows(root_uri, 0)
-
-    # ── All properties ────────────────────────────────────────────────────────
-    if taxonomy.owl_properties:
-        fields.append(_sep("Properties"))
-        for p_uri in sorted(
-            taxonomy.owl_properties, key=lambda u: taxonomy.owl_properties[u].label(lang)
-        ):
-            prop = taxonomy.owl_properties[p_uri]
-            prop_type = f"owl:{prop.prop_type}"
-            domains = [
-                taxonomy.owl_classes[d].label(lang) if d in taxonomy.owl_classes else d
-                for d in prop.domains
-            ]
-            ranges = [
-                taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
-                for r in prop.ranges
-            ]
-            domain_str = ", ".join(domains) if domains else "—"
-            range_str = ", ".join(ranges) if ranges else "—"
-            summary = f"{prop_type}  {domain_str} → {range_str}"
-            fields.append(
-                DetailField(
-                    f"ovw:allprop:{p_uri}",
-                    prop.label(lang) or p_uri,
-                    summary,
-                    editable=False,
-                    meta={"type": "prop_nav", "uri": p_uri, "nav": True},
-                )
+        range_str = f"  ({', '.join(ranges)})" if ranges else ""
+        rows.append(
+            DetailField(
+                f"ovw:prop:{cls_uri}:{p_uri}",
+                f"{prop_indent}→ {prop.label(lang)}{range_str}",
+                "",
+                editable=False,
+                meta={"type": "prop_nav", "uri": p_uri, "nav": True},
             )
+        )
+    return rows
 
-    # ── Quality stats ─────────────────────────────────────────────────────────
+
+def _overview_class_rows(
+    taxonomy: Taxonomy,
+    lang: str,
+    cls_uri: str,
+    depth: int,
+    children_map: dict[str, list[str]],
+    props_by_domain: dict[str, list[str]],
+    folded: set[str],
+) -> list[DetailField]:
+    """A class row + its domain-property rows, recursing into (unfolded) children."""
+    cls = taxonomy.owl_classes[cls_uri]
+    children = sorted(children_map.get(cls_uri, []))
+    indent = "  " * depth
+    if not children:  # leaf class — a plain navigable row
+        rows = [
+            DetailField(
+                f"ovw:cls:{cls_uri}",
+                f"{indent}◈ {cls.label(lang)}",
+                "",
+                editable=False,
+                meta={"type": "rdf_relation", "uri": cls_uri, "nav": True},
+            )
+        ]
+        rows.extend(_overview_domain_prop_rows(taxonomy, lang, cls_uri, props_by_domain, depth))
+        return rows
+    is_folded_cls = cls_uri in folded
+    rows = [
+        DetailField(
+            f"ovw:cls:{cls_uri}",
+            f"{indent}{'▶' if is_folded_cls else '▼'} {cls.label(lang)}",
+            "",
+            editable=False,
+            meta={"type": "action", "action": "toggle_class_fold", "uri": cls_uri},
+        )
+    ]
+    if is_folded_cls:
+        return rows
+    rows.extend(_overview_domain_prop_rows(taxonomy, lang, cls_uri, props_by_domain, depth))
+    for child_uri in children:
+        rows.extend(
+            _overview_class_rows(
+                taxonomy, lang, child_uri, depth + 1, children_map, props_by_domain, folded
+            )
+        )
+    return rows
+
+
+def _overview_class_maps(
+    taxonomy: Taxonomy,
+) -> tuple[dict[str, list[str]], list[str], dict[str, list[str]]]:
+    """(children_map, sorted root classes, props-by-domain) for the overview tree."""
+    children_map: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
+    for cls_uri, cls in taxonomy.owl_classes.items():
+        for parent_uri in cls.sub_class_of:
+            if parent_uri in taxonomy.owl_classes:
+                children_map[parent_uri].append(cls_uri)
+    root_classes = sorted(
+        uri
+        for uri, cls in taxonomy.owl_classes.items()
+        if not any(p in taxonomy.owl_classes for p in cls.sub_class_of)
+    )
+    props_by_domain: dict[str, list[str]] = {}
+    for p_uri, prop in taxonomy.owl_properties.items():
+        for domain_uri in prop.domains:
+            props_by_domain.setdefault(domain_uri, []).append(p_uri)
+    return children_map, root_classes, props_by_domain
+
+
+def _overview_class_hierarchy_fields(
+    taxonomy: Taxonomy, lang: str, folded: set[str]
+) -> list[DetailField]:
+    """The folding class tree with each class's domain properties nested under it."""
+    if not taxonomy.owl_classes:
+        return []
+    children_map, root_classes, props_by_domain = _overview_class_maps(taxonomy)
+    fields = [_sep("Classes & Properties")]
+    for root_uri in root_classes:
+        fields.extend(
+            _overview_class_rows(taxonomy, lang, root_uri, 0, children_map, props_by_domain, folded)
+        )
+    return fields
+
+
+def _overview_all_property_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
+    """A flat list of every property with its domain → range summary."""
+    if not taxonomy.owl_properties:
+        return []
+    fields = [_sep("Properties")]
+    for p_uri in sorted(
+        taxonomy.owl_properties, key=lambda u: taxonomy.owl_properties[u].label(lang)
+    ):
+        prop = taxonomy.owl_properties[p_uri]
+        domains = [
+            taxonomy.owl_classes[d].label(lang) if d in taxonomy.owl_classes else d
+            for d in prop.domains
+        ]
+        ranges = [
+            taxonomy.owl_classes[r].label(lang) if r in taxonomy.owl_classes else r
+            for r in prop.ranges
+        ]
+        domain_str = ", ".join(domains) if domains else "—"
+        range_str = ", ".join(ranges) if ranges else "—"
+        fields.append(
+            DetailField(
+                f"ovw:allprop:{p_uri}",
+                prop.label(lang) or p_uri,
+                f"owl:{prop.prop_type}  {domain_str} → {range_str}",
+                editable=False,
+                meta={"type": "prop_nav", "uri": p_uri, "nav": True},
+            )
+        )
+    return fields
+
+
+def build_ontology_overview_fields(
+    taxonomy: Taxonomy,
+    lang: str,
+    folded: set[str] | None = None,
+) -> list[DetailField]:
+    """Detail panel for the ontology root node — assembled from section helpers.
+
+    Shows ontology metadata, creation actions, a class hierarchy with
+    fold/unfold, all properties, and subtree quality stats.
+    """
+    folded = folded if folded is not None else set()
+    fields = _overview_metadata_fields(taxonomy, lang)
+    fields.extend(_overview_action_fields())
+    fields.extend(_overview_class_hierarchy_fields(taxonomy, lang, folded))
+    fields.extend(_overview_all_property_fields(taxonomy, lang))
     if taxonomy.owl_classes or taxonomy.owl_individuals or taxonomy.owl_properties:
         analysis = compute_ontology_analysis(taxonomy)
         fields.extend(_ontology_quality_fields(taxonomy, analysis, lang))
-
     return fields
 
 

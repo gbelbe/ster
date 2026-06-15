@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ster.core.commands import (
     AddSchemaMedia,
+    OntoRenameUri,
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
@@ -52,6 +53,7 @@ from ster.tui.edits import (
     edit_command,
     meta_input_command,
     meta_relation_command,
+    ontology_rename_command,
     relation_command,
 )
 
@@ -498,3 +500,22 @@ def test_create_scheme_command_titles_in_lang_and_derives_base_uri() -> None:
 def test_create_scheme_base_uri_falls_back_to_hash_namespace() -> None:
     cmd = create_scheme_command(_P, "https://ex.org/onto#Themes", "Themes", "fr")
     assert cmd.base_uri == "https://ex.org/onto#"
+
+
+# ── Phase 14: ontology base-URI / domain rename ─────────────────────────────────
+
+
+def test_ontology_rename_command_parses_slash_separator() -> None:
+    cmd = ontology_rename_command(_P, "https://ex.org/zoo/")
+    assert isinstance(cmd, OntoRenameUri)
+    assert (cmd.new_uri, cmd.new_sep) == ("https://ex.org/zoo", "/")
+
+
+def test_ontology_rename_command_parses_hash_separator() -> None:
+    cmd = ontology_rename_command(_P, "https://ex.org/zoo#")
+    assert (cmd.new_uri, cmd.new_sep) == ("https://ex.org/zoo", "#")
+
+
+def test_ontology_rename_command_defaults_to_hash_when_no_separator() -> None:
+    cmd = ontology_rename_command(_P, "https://ex.org/zoo")
+    assert (cmd.new_uri, cmd.new_sep) == ("https://ex.org/zoo", "#")

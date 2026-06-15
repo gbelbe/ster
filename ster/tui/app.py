@@ -273,6 +273,7 @@ class OntologyApp(App):
             (edits.CONVERT_ACTIONS, self._confirm_convert),
             (edits.CHAINED_ACTIONS, self._add_property_value),
             (edits.SCHEME_ACTIONS, self._create_scheme),
+            (edits.ONTOLOGY_RENAME_ACTIONS, self._edit_ontology_identity),
             (edits.META_INPUT_ACTIONS, self._open_meta_input),
             (edits.INPUT_ACTIONS, self._open_input),
         )
@@ -416,6 +417,35 @@ class OntologyApp(App):
                 self._apply_command(edits.add_literal_value_command(uri, path, prop_uri, value))
 
         self.push_screen(EditModal("Literal value", ""), _on_literal)
+
+    def _edit_ontology_identity(self, field: DetailField, uri: str, path: Path) -> None:
+        """Edit the ontology base URI (or its domain), cascading across every entity."""
+        from ster.operations import ontology_domain
+
+        is_domain = field.meta.get("action") == "edit_ontology_domain"
+        prompt = "Ontology domain (host)" if is_domain else "Ontology base URI"
+        prefill = ontology_domain(self.tax) if is_domain else self.tax.base_uri()
+
+        def _on_submit(value: str | None) -> None:
+            if not value:
+                return
+            base = self._resolve_ontology_base(is_domain, value)
+            if base is not None:
+                self._apply_command(edits.ontology_rename_command(path, base))
+
+        self.push_screen(EditModal(prompt, prefill), _on_submit)
+
+    def _resolve_ontology_base(self, is_domain: bool, value: str) -> str | None:
+        """The new base URI (with separator): typed directly, or host-swapped for a domain."""
+        if not is_domain:
+            return value
+        from ster.operations import count_domain_rename_changes, validate_domain
+
+        err = validate_domain(value)
+        if err:
+            self.notify(err, severity="error")
+            return None
+        return count_domain_rename_changes(self.tax, value)[1]  # new_base, sep included
 
     def _create_scheme(self, field: DetailField, uri: str, path: Path) -> None:
         """Two-step: collect the scheme title, then its URI, and create it."""

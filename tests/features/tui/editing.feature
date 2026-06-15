@@ -105,6 +105,19 @@ Feature: Editing the ontology in the New-TUI
     When I add the value "Alice" for property "hasOwner" on the individual "Felix"
     Then the individual "Felix" has the value "Alice" for property "hasOwner"
 
+  # Phase 14 — ontology base-URI / domain rename (cascades across entities)
+
+  Scenario: Change the ontology base URI
+    Given the zoo ontology is open for editing
+    When I change the ontology base URI to "https://example.org/garden/"
+    Then a class exists at "https://example.org/garden/Animal"
+    And no class exists at "https://example.org/zoo/Animal"
+
+  Scenario: Change the ontology domain
+    Given the zoo ontology is open for editing
+    When I change the ontology domain to "garden.example.org"
+    Then a class exists at "https://garden.example.org/zoo/Animal"
+
   # Phase 7 — rich content, notes, individual values
 
   Scenario: Add a schema:image to an individual
