@@ -63,12 +63,15 @@ class OntologyTree(Tree):
         """Right-click a node → open its context menu (left-click is Tree's default)."""
         if event.button != 3:  # 3 = right button
             return
-        line = self.hover_line
+        style = getattr(event, "style", None)
+        line = style.meta.get("line") if style is not None else None  # the clicked tree line
+        if line is None:
+            line = self.hover_line
         node = self.get_node_at_line(line) if line is not None and line >= 0 else None
         uri = node.data if node else None
         if uri:
             self.cursor_line = line  # select the right-clicked node visually
-            self.app.open_context_menu(uri)  # type: ignore[attr-defined]
+            self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
 
 
 class _StorePersistence:
@@ -111,7 +114,7 @@ class OntologyApp(App):
         scrollbar-color-hover: $primary;
         scrollbar-color-active: $secondary;
     }
-    Screen { background: $background; }
+    Screen { background: $background; layers: base overlay; }
     #body { height: 1fr; }
     #nav { width: 40%; min-width: 34; }
 
@@ -220,6 +223,7 @@ class OntologyApp(App):
                 yield OntologyTree("properties", id="prop-tree")
             yield DetailView(id="detail")
         yield Footer()
+        yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
         self.title = "ster · ontology browser"
@@ -399,27 +403,31 @@ class OntologyApp(App):
             return
         opener(field, uri, path)
 
-    def open_context_menu(self, uri: str) -> None:
-        """Right-click handler: select the node and offer kind-appropriate quick actions."""
+    def open_context_menu(self, uri: str, anchor: tuple[int, int] | None = None) -> None:
+        """Right-click handler: select the node and offer kind-appropriate quick actions.
+
+        *anchor* is the click position; the menu pops up there (not centred).
+        """
         items = edits.context_actions(data.kind_of(self.tax, uri))
         if not items:
             return
         self._show(uri)  # select it, so the actions target this entity
         label = data.label_of(self.tax, uri, self.lang)
+        self.query_one("#ctx-menu", ContextMenu).show(label, items, anchor)
 
-        def _on_choice(action: str | None) -> None:
-            if action is None:
-                return
-            if action == "rename":
-                self._rename_entity(uri)
-            else:  # synthesise the row this action would come from, then run it
-                self._run_field_action(
-                    DetailField(
-                        "ctx", "", "", editable=False, meta={"type": "action", "action": action}
-                    )
+    def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
+        """A context-menu action was picked → run it against the selected entity."""
+        uri = self._detail_uri
+        if uri is None:
+            return
+        if message.action == "rename":
+            self._rename_entity(uri)
+        else:  # synthesise the row this action would come from, then run it
+            self._run_field_action(
+                DetailField(
+                    "ctx", "", "", editable=False, meta={"type": "action", "action": message.action}
                 )
-
-        self.push_screen(ContextMenu(label, items), _on_choice)
+            )
 
     def _rename_entity(self, uri: str) -> None:
         """Open a modal to rename *uri* (cascades across every reference)."""

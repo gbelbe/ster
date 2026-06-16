@@ -1,59 +1,96 @@
-"""A right-click context menu for tree nodes.
+"""A right-click context menu — an overlay widget anchored at the click.
 
-``push_screen(ContextMenu(title, items), callback)`` shows a compact list of
-quick actions for the right-clicked entity and returns the chosen *action*
-string (or ``None`` on cancel). The app maps that action to a flow (the same
-ones the detail-pane rows use); see ``OntologyApp.open_context_menu``.
+Modelled on harlequin: this is **not** a modal screen (those hide the TUI behind
+an opaque layer). It's an ``OptionList`` mounted on the screen's *overlay* layer,
+so the tree stays fully visible behind it. It pops up at the click, flips up when
+there's no room below, and is dismissed by selecting an item, Esc, or clicking
+away (focus loss). Selecting posts :class:`ContextMenu.Chosen`; the app maps the
+action to a flow.
 """
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
-from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
+from textual.message import Message
+from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
+_MENU_WIDTH = 44
 
-class ContextMenu(ModalScreen[str | None]):
-    """Modal list of (label, action) quick actions; dismisses with the action."""
+
+class ContextMenu(OptionList):
+    """Cursor-anchored overlay menu of (label, action) quick actions."""
 
     DEFAULT_CSS = """
-    ContextMenu { align: center middle; }
-    #ctx-box {
-        width: auto;
-        min-width: 36;
-        max-width: 70;
+    ContextMenu {
+        layer: overlay;
+        display: none;
+        width: 44;
         height: auto;
-        max-height: 80%;
-        padding: 1 2;
+        max-height: 18;
+        padding: 0 1;
         background: $surface;
         border: round $primary;
         border-title-color: $primary;
     }
-    #ctx-list { height: auto; max-height: 16; background: $surface; }
-    #ctx-box .modal-footer { color: $text-muted; margin-top: 1; }
+    ContextMenu.open { display: block; }
+    ContextMenu > .option-list--option-highlighted {
+        background: $secondary;
+        color: auto;
+        text-style: bold;
+    }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "close", "Close")]
 
-    def __init__(self, title: str, items: list[tuple[str, str]]) -> None:
-        super().__init__()
-        self._title = title
-        self._items = items
+    class Chosen(Message):
+        """Posted when the user picks an action from the menu."""
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="ctx-box"):
-            yield OptionList(*(Option(label) for label, _ in self._items), id="ctx-list")
-            yield Static("↑↓ move    enter run    esc cancel", classes="modal-footer")
+        def __init__(self, action: str) -> None:
+            self.action = action
+            super().__init__()
 
-    def on_mount(self) -> None:
-        self.query_one("#ctx-box").border_title = f"Actions — {self._title}"
-        self.query_one(OptionList).focus()
+    def __init__(self, id: str | None = None) -> None:  # noqa: A002
+        super().__init__(id=id)
+        self._items: list[tuple[str, str]] = []
+
+    def show(
+        self, title: str, items: list[tuple[str, str]], anchor: tuple[int, int] | None
+    ) -> None:
+        """Populate, position at *anchor*, reveal, and focus the menu."""
+        self.clear_options()
+        self._items = list(items)
+        self.border_title = title
+        self.add_options([Option(label) for label, _ in items])
+        self.styles.offset = self._position(anchor, len(items))
+        self.add_class("open")
+        self.highlighted = 0
+        self.focus()
+
+    def _position(self, anchor: tuple[int, int] | None, count: int) -> tuple[int, int]:
+        """Anchor at the click, flipping up / clamping so it stays on-screen."""
+        width, height = _MENU_WIDTH, count + 4  # + border/padding
+        size = self.screen.size
+        if anchor is None:  # keyboard / fallback → centre
+            return max(0, (size.width - width) // 2), max(0, (size.height - height) // 2)
+        x, y = anchor
+        y = y + 1 if y + 1 + height <= size.height else max(0, y - height)
+        return min(x, max(0, size.width - width)), max(0, y)
+
+    def close(self) -> None:
+        self.remove_class("open")
+
+    def action_close(self) -> None:
+        self.close()
+        trees = list(self.app.query("#tree"))
+        if trees:
+            trees[0].focus()  # Esc → return focus to the tree
+
+    def on_blur(self) -> None:
+        self.close()  # click / focus away dismisses the menu
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(self._items[event.option_index][1])
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+        event.stop()
+        action = self._items[event.option_index][1]
+        self.close()
+        self.post_message(self.Chosen(action))

@@ -489,14 +489,16 @@ def test_right_click_opens_context_menu_left_click_does_not() -> None:
             for _ in range(3):
                 await pilot.pause()
             tree = app.query_one("#tree", Tree)
+            menu = app.query_one("#ctx-menu", ContextMenu)
             tree.hover_line = tree.cursor_line  # cursor is on Cat after jump_to
             tree.on_click(types.SimpleNamespace(button=1))  # left → no menu
             await pilot.pause()
-            assert not isinstance(app.screen, ContextMenu)
-            tree.on_click(types.SimpleNamespace(button=3))  # right → menu
+            assert not menu.has_class("open")
+            # right → menu opens as an overlay (the TUI stays visible — not a screen swap)
+            tree.on_click(types.SimpleNamespace(button=3, screen_x=5, screen_y=3))
             await pilot.pause()
-            assert isinstance(app.screen, ContextMenu)
-            actions = [app.screen._items[i][1] for i in range(len(app.screen._items))]
+            assert menu.has_class("open")
+            actions = [a for _, a in menu._items]
             assert {"move_class", "class_to_individual", "rename", "delete_class"} <= set(actions)
 
     _run(scenario)
@@ -517,8 +519,9 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
             await pilot.pause()
             app.open_context_menu(ZOO + "Cat")
             await pilot.pause()
-            assert isinstance(app.screen, ContextMenu)
-            app.screen.dismiss("rename")  # → opens the rename modal
+            assert app.query_one("#ctx-menu", ContextMenu).has_class("open")
+
+            app.on_context_menu_chosen(ContextMenu.Chosen("rename"))  # → rename modal
             await pilot.pause()
             assert isinstance(app.screen, EditModal)
             app.screen.dismiss(None)
@@ -526,7 +529,7 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
 
             app.open_context_menu(ZOO + "Cat")
             await pilot.pause()
-            app.screen.dismiss("delete_class")  # → opens the (danger) delete choice
+            app.on_context_menu_chosen(ContextMenu.Chosen("delete_class"))  # → danger choice
             await pilot.pause()
             assert isinstance(app.screen, ChoiceModal)
             assert app.screen.query_one("#choice-box").has_class("-danger")
