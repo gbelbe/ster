@@ -146,6 +146,16 @@ class OntologyApp(App):
     Toast { border-left: wide $primary; }
     Toast.-warning { border-left: wide $secondary; }
     Toast.-error { border-left: wide $error; }
+
+    /* Hover tooltips: a clear bordered popover. $background contrasts with the
+       $surface panes it floats over, and the $primary border delimits it. */
+    Tooltip {
+        background: $background;
+        color: $foreground;
+        border: round $primary;
+        padding: 0 1;
+        max-width: 60%;
+    }
     """
 
     BINDINGS = [
