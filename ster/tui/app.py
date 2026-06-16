@@ -123,7 +123,9 @@ class OntologyApp(App):
     .section-header { margin-top: 1; }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
-    .detail-row:hover { background: $boost; }  /* mouse-over affordance */
+    /* $boost is a translucent overlay → invisible on light themes; use a solid
+       accent tint so the mouse-over highlight shows in every theme. */
+    .detail-row:hover { background: $secondary 20%; }
 
     /* Hierarchy guide lines: a dim foreground tint so the tree structure stays
        visible in every theme (selected/hover branches pick up the accents). */
