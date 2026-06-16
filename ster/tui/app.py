@@ -89,12 +89,12 @@ class OntologyApp(App):
     """A modern, themeable ontology browser."""
 
     CSS = """
-    /* Themed scrollbars (track muted, thumb highlights on hover/drag). */
+    /* Muted UI colours use a dim $foreground tint, NOT $panel: some themes
+       (e.g. solarized-light) make $panel ≈ the surface, which hides borders,
+       guides and titles. A foreground alpha is visible against any background. */
     * {
-        scrollbar-background: $panel;
-        scrollbar-background-hover: $panel;
-        scrollbar-background-active: $panel;
-        scrollbar-color: $panel-lighten-2;
+        scrollbar-background: $surface;
+        scrollbar-color: $foreground 30%;
         scrollbar-color-hover: $primary;
         scrollbar-color-active: $secondary;
     }
@@ -105,9 +105,10 @@ class OntologyApp(App):
     /* Each pane is a rounded, titled box whose border lights up when focused —
        so you always see which pane you're in and what it holds. */
     #tree, #prop-tree, #detail {
-        border: round $panel;
-        border-title-color: $panel;
+        border: round $foreground 40%;
+        border-title-color: $foreground 70%;
         background: $surface;
+        color: $foreground;
     }
     #tree { height: 1fr; padding: 0 1; }
     /* Properties keep their own pane (1/4 height) so they stay visible even when
@@ -122,9 +123,13 @@ class OntologyApp(App):
     .section-header { margin-top: 1; }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
+    .detail-row:hover { background: $boost; }  /* mouse-over affordance */
 
-    Tree > .tree--guides { color: $panel; }
+    /* Hierarchy guide lines: a dim foreground tint so the tree structure stays
+       visible in every theme (selected/hover branches pick up the accents). */
+    Tree > .tree--guides { color: $foreground 45%; }
     Tree > .tree--guides-selected { color: $secondary; }
+    Tree > .tree--guides-hover { color: $primary; }
     /* Selected node stays readable even when the tree loses focus: a tint of
        $secondary with the theme's normal text colour (not `auto`, which could
        resolve to white on a light accent). Focused = full-strength accent. */

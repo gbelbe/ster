@@ -23,6 +23,56 @@ from .detail import build_sections, field_markup
 
 PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
 
+# Hover help for action rows (mouse + keyboard discoverability). Anything not
+# listed falls back to a generic hint; editable rows say "Enter to edit".
+_ACTION_HELP = {
+    "new_subclass": "Create a child class under this one",
+    "add_individual": "Create an instance (individual) of this class",
+    "link_superclass": "Add another parent class (polyhierarchy)",
+    "remove_superclass": "Detach this parent class",
+    "add_class_property": "Define a new property with this class as its domain",
+    "class_to_individual": "Convert this class into an individual (punning)",
+    "delete_class": "Delete this class — you'll choose what happens to its subclasses & instances",
+    "add_ind_type": "Add a class membership (rdf:type) to this individual",
+    "remove_ind_type": "Remove this class membership",
+    "add_prop_value": "Add a property value — pick a property, then a value",
+    "edit_prop_value": "Change this value to another individual",
+    "remove_prop_value": "Remove this value",
+    "edit_literal_value": "Edit this literal value",
+    "remove_literal_value": "Remove this literal value",
+    "individual_to_class": "Convert this individual into a class (punning)",
+    "delete_individual": "Delete this individual",
+    "add_prop_domain": "Add a class to this property's domain",
+    "add_prop_range": "Add a class to this property's range",
+    "remove_prop_domain": "Remove this domain class",
+    "remove_prop_range": "Remove this range class",
+    "delete_property": "Delete this property",
+    "add_narrower": "Add a child (narrower) concept",
+    "link_broader": "Link to a broader concept",
+    "add_related": "Add a related concept",
+    "move": "Move this concept under a different parent",
+    "delete": "Delete this concept — you'll choose whether to keep its descendants",
+    "add_top_concept": "Add a top concept to this scheme",
+    "add_scheme": "Create a new SKOS concept scheme",
+    "create_owl_class": "Create a new top-level OWL class",
+    "create_owl_property": "Create a new OWL property",
+    "edit_ontology_prefix": "Edit the ontology's namespace prefix",
+    "edit_ontology_uri": "Rename the ontology base URI (cascades to every entity)",
+    "edit_ontology_domain": "Change the ontology domain/host (cascades to every entity)",
+    "edit_note": "Edit the markdown note",
+    "delete_note": "Clear the note",
+}
+
+
+def _row_tooltip(field: DetailField) -> str | None:
+    """Hover help for a row: edit hint, a per-action description, or a run hint."""
+    if field.editable:
+        return "Enter to edit"
+    action = field.meta.get("action")
+    if not action:
+        return None
+    return _ACTION_HELP.get(action, "Enter to run")
+
 
 class SectionHeader(Static):
     """A non-focusable section title (e.g. 'Identity', 'Danger Zone')."""
@@ -79,6 +129,9 @@ class DetailRow(Static):
         super().__init__(field_markup(field))
         self.field = field
         self.add_class("detail-row")
+        tip = _row_tooltip(field)
+        if tip:
+            self.tooltip = tip
 
     def action_activate(self) -> None:
         if self.field.editable:
@@ -92,6 +145,13 @@ class DetailView(VerticalScroll):
 
     def compose(self):  # type: ignore[no-untyped-def]
         yield Static(PLACEHOLDER)
+
+    def on_click(self) -> None:
+        """Clicking empty pane space focuses the first row (a row click self-focuses)."""
+        if not isinstance(self.app.focused, DetailRow):
+            rows = list(self.query(DetailRow))
+            if rows:
+                rows[0].focus()
 
     def update_entity(self, tax: Taxonomy, uri: str | None, lang: str = "en") -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None)."""

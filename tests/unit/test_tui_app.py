@@ -370,6 +370,46 @@ def test_focus_restored_after_modal_edit(tmp_path) -> None:
     _run(scenario)
 
 
+def test_detail_row_tooltips() -> None:
+    """Editable rows hint 'Enter to edit'; action rows describe the action; stats none."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import DetailRow
+
+    editable = DetailRow(DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"}))
+    assert editable.tooltip == "Enter to edit"
+    action = DetailRow(
+        DetailField(
+            "k", "⊘ Delete", "", editable=False, meta={"type": "action", "action": "delete_class"}
+        )
+    )
+    assert action.tooltip and "Delete" in action.tooltip
+    stat = DetailRow(DetailField("k", "x", "y", editable=False, meta={"type": "stat"}))
+    assert stat.tooltip is None
+
+
+def test_clicking_empty_detail_focuses_first_row() -> None:
+    """Clicking the detail pane (not on a row) focuses its first row."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.detail_view import DetailRow, DetailView
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            app.query_one("#tree", Tree).focus()
+            await pilot.pause()
+            assert not isinstance(app.focused, DetailRow)
+            app.query_one("#detail", DetailView).on_click()
+            await pilot.pause()
+            assert isinstance(app.focused, DetailRow)
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree
