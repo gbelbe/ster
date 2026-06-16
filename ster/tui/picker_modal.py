@@ -18,9 +18,10 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
+
+from .modal import ModalBase
 
 _FUZZY_CAP = 20  # stop adding fuzzy matches once we already have this many hits
 
@@ -56,29 +57,13 @@ def rank_options(options: list[tuple[str, str]], query: str) -> list[tuple[str, 
     return ranked
 
 
-class PickerModal(ModalScreen[str | None]):
+class PickerModal(ModalBase[str | None]):
     """Filterable single-select list of (label, value) candidates."""
 
     DEFAULT_CSS = """
-    PickerModal { align: center middle; }
-    #picker-box {
-        width: 70%;
-        max-width: 90;
-        height: auto;
-        max-height: 80%;
-        padding: 1 2;
-        background: $surface;
-        border: round $primary;
-        border-title-color: $primary;
-    }
-    #picker-filter {
-        border: none;
-        padding: 0;
-        margin-bottom: 1;
-        background: $surface;
-    }
+    #picker-box { width: 70%; max-height: 80%; }   /* box chrome from ModalBase */
+    #picker-filter { border: none; padding: 0; margin-bottom: 1; background: $surface; }
     #picker-list { height: auto; max-height: 16; background: $surface; }
-    #picker-box .modal-footer { color: $text-muted; margin-top: 1; }
     """
 
     BINDINGS = [
@@ -95,7 +80,7 @@ class PickerModal(ModalScreen[str | None]):
         self._visible: list[tuple[str, str]] = list(options)
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="picker-box"):
+        with Vertical(id="picker-box", classes="modal-box"):
             yield Input(placeholder="type to filter…", id="picker-filter")
             yield OptionList(id="picker-list")
             yield Static(

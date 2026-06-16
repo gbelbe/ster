@@ -9,8 +9,9 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
-from textual.screen import ModalScreen
 from textual.widgets import Static
+
+from .modal import ModalBase
 
 _HELP = """\
 [bold]Navigation[/bold]
@@ -37,23 +38,12 @@ _HELP = """\
 """
 
 
-class HelpScreen(ModalScreen[None]):
+class HelpScreen(ModalBase[None]):
     """Modal cheat-sheet of keys and actions."""
 
-    DEFAULT_CSS = """
-    HelpScreen { align: center middle; }
-    #help-box {
-        width: 70%;
-        max-width: 80;
-        height: auto;
-        max-height: 90%;
-        padding: 1 2;
-        background: $surface;
-        border: round $primary;
-        border-title-color: $primary;
-    }
-    #help-box .modal-footer { color: $text-muted; margin-top: 1; }
-    """
+    DEFAULT_CSS = (
+        "#help-box { width: 70%; max-width: 80; max-height: 90%; }"  # chrome from ModalBase
+    )
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
@@ -62,7 +52,7 @@ class HelpScreen(ModalScreen[None]):
     ]
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="help-box"):
+        with VerticalScroll(id="help-box", classes="modal-box"):
             yield Static(_HELP)
             yield Static("↑↓ scroll     esc / q / ?  close", classes="modal-footer")
 

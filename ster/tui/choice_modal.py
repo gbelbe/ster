@@ -12,36 +12,15 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from .modal import ModalBase
 
-class ChoiceModal(ModalScreen[str | None]):
+
+class ChoiceModal(ModalBase[str | None]):
     """Modal list of options; dismisses with the chosen value or None on cancel."""
 
-    DEFAULT_CSS = """
-    ChoiceModal { align: center middle; }
-    #choice-box {
-        width: 70%;
-        max-width: 90;
-        height: auto;
-        padding: 1 2;
-        background: $surface;
-        border: round $primary;
-        border-title-color: $primary;
-    }
-    #choice-box.-danger { border: round $error; border-title-color: $error; }
-    #choice-box Button {
-        width: 100%;
-        margin-bottom: 1;
-        border: none;
-        background: $primary;
-        color: $background;
-    }
-    #choice-box Button:hover { background: $secondary; }
-    #choice-box Button:focus { text-style: reverse; }
-    #choice-box .modal-footer { color: $text-muted; }
-    """
+    DEFAULT_CSS = "#choice-box { width: 70%; }"  # chrome (incl. -danger, buttons) from ModalBase
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
@@ -52,7 +31,8 @@ class ChoiceModal(ModalScreen[str | None]):
         self._danger = danger
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="choice-box", classes="-danger" if self._danger else None):
+        classes = "modal-box -danger" if self._danger else "modal-box"
+        with Vertical(id="choice-box", classes=classes):
             for label, value in self._options:
                 yield Button(label, id=f"opt-{value}")
             yield Static("↑↓ move    enter  choose     esc  cancel", classes="modal-footer")

@@ -114,7 +114,10 @@ class OntologyApp(App):
         scrollbar-color-hover: $primary;
         scrollbar-color-active: $secondary;
     }
-    Screen { background: $background; layers: base overlay; }
+    /* No `background` here: an app-level `Screen` rule overrides each modal's
+       translucent dim and makes it opaque (hiding the TUI). Modals own their
+       background via ModalBase; the panes below cover the main screen anyway. */
+    Screen { layers: base overlay; }
     #body { height: 1fr; }
     #nav { width: 40%; min-width: 34; }
 
