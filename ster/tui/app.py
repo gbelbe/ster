@@ -14,6 +14,7 @@ from __future__ import annotations
 from functools import partial
 from pathlib import Path
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
@@ -26,6 +27,7 @@ from ster.nav.logic import DetailField
 
 from . import data, detail, edits
 from .choice_modal import ChoiceModal
+from .context_menu import ContextMenu
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
 from .help_screen import HelpScreen
@@ -56,6 +58,17 @@ class OntologyTree(Tree):
         super().action_cursor_up()
         if self.cursor_line == before:  # already at the top → wrap to the bottom
             self.cursor_line = self._LAST_LINE  # clamped to the last visible line
+
+    def on_click(self, event: events.Click) -> None:
+        """Right-click a node → open its context menu (left-click is Tree's default)."""
+        if event.button != 3:  # 3 = right button
+            return
+        line = self.hover_line
+        node = self.get_node_at_line(line) if line is not None and line >= 0 else None
+        uri = node.data if node else None
+        if uri:
+            self.cursor_line = line  # select the right-clicked node visually
+            self.app.open_context_menu(uri)  # type: ignore[attr-defined]
 
 
 class _StorePersistence:
@@ -363,16 +376,20 @@ class OntologyApp(App):
         self.push_screen(EditModal(field.display, field.value), _on_submit)
 
     def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
-        """An action row was activated → route to its flow opener (table-driven)."""
-        action = message.field.meta.get("action", "")
+        """An action row was activated → run it (shared with the right-click menu)."""
+        self._run_field_action(message.field)
+
+    def _run_field_action(self, field: DetailField) -> None:
+        """Dispatch an action *field*: graph view, meta-driven removal, or a flow."""
+        action = field.meta.get("action", "")
         if action in ("view_ontology_graph", "view_focused_graph"):
-            self._open_graph(action, message.field)  # a view, not a mutation — no service needed
+            self._open_graph(action, field)  # a view, not a mutation — no service needed
             return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
-        direct = edits.direct_command(message.field, uri, path)
+        direct = edits.direct_command(field, uri, path)
         if direct is not None:  # meta-driven removal — run immediately, no modal
             self._apply_command(direct)
             return
@@ -380,7 +397,45 @@ class OntologyApp(App):
         if opener is None:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
-        opener(message.field, uri, path)
+        opener(field, uri, path)
+
+    def open_context_menu(self, uri: str) -> None:
+        """Right-click handler: select the node and offer kind-appropriate quick actions."""
+        items = edits.context_actions(data.kind_of(self.tax, uri))
+        if not items:
+            return
+        self._show(uri)  # select it, so the actions target this entity
+        label = data.label_of(self.tax, uri, self.lang)
+
+        def _on_choice(action: str | None) -> None:
+            if action is None:
+                return
+            if action == "rename":
+                self._rename_entity(uri)
+            else:  # synthesise the row this action would come from, then run it
+                self._run_field_action(
+                    DetailField(
+                        "ctx", "", "", editable=False, meta={"type": "action", "action": action}
+                    )
+                )
+
+        self.push_screen(ContextMenu(label, items), _on_choice)
+
+    def _rename_entity(self, uri: str) -> None:
+        """Open a modal to rename *uri* (cascades across every reference)."""
+        if self._service is None or self._path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        path = self._path
+        field = DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"})
+
+        def _on_submit(value: str | None) -> None:
+            if value and value != uri:
+                command = edits.edit_command(field, uri, path, value)
+                if command is not None:
+                    self._apply_command(command)
+
+        self.push_screen(EditModal("Rename URI", uri), _on_submit)
 
     def _route_action(self, action: str):  # type: ignore[no-untyped-def]
         """Pick the flow opener for *action* — first table whose set contains it."""

@@ -472,6 +472,68 @@ def test_view_graph_action_opens_browser(monkeypatch) -> None:
     _run(scenario)
 
 
+def test_right_click_opens_context_menu_left_click_does_not() -> None:
+    """Right-click a node opens its context menu; left-click is left to the tree."""
+
+    async def scenario() -> None:
+        import types
+
+        from textual.widgets import Tree
+
+        from ster.tui.context_menu import ContextMenu
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.jump_to(ZOO + "Cat")
+            for _ in range(3):
+                await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.hover_line = tree.cursor_line  # cursor is on Cat after jump_to
+            tree.on_click(types.SimpleNamespace(button=1))  # left → no menu
+            await pilot.pause()
+            assert not isinstance(app.screen, ContextMenu)
+            tree.on_click(types.SimpleNamespace(button=3))  # right → menu
+            await pilot.pause()
+            assert isinstance(app.screen, ContextMenu)
+            actions = [app.screen._items[i][1] for i in range(len(app.screen._items))]
+            assert {"move_class", "class_to_individual", "rename", "delete_class"} <= set(actions)
+
+    _run(scenario)
+
+
+def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
+    """Choosing a context-menu action runs the matching flow (rename → edit; delete → choice)."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.edit_modal import EditModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_context_menu(ZOO + "Cat")
+            await pilot.pause()
+            assert isinstance(app.screen, ContextMenu)
+            app.screen.dismiss("rename")  # → opens the rename modal
+            await pilot.pause()
+            assert isinstance(app.screen, EditModal)
+            app.screen.dismiss(None)
+            await pilot.pause()
+
+            app.open_context_menu(ZOO + "Cat")
+            await pilot.pause()
+            app.screen.dismiss("delete_class")  # → opens the (danger) delete choice
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)
+            assert app.screen.query_one("#choice-box").has_class("-danger")
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

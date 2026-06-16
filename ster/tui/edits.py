@@ -183,6 +183,7 @@ def action_command(
 # Maps action → (prompt, candidate-kind "class" | "concept").
 PICKER_ACTIONS: dict[str, tuple[str, str]] = {
     "link_superclass": ("Add a superclass — pick a class", "class"),
+    "move_class": ("Move under a different superclass — pick a class", "class"),
     "add_ind_type": ("Add a class membership — pick a class", "class"),
     "add_prop_domain": ("Add a domain class — pick a class", "class"),
     "add_prop_range": ("Add a range class — pick a class", "class"),
@@ -195,6 +196,7 @@ _RelationFactory = Callable[[str, Path, str], object]
 
 _RELATION_REGISTRY: dict[str, _RelationFactory] = {
     "link_superclass": lambda s, p, t: OwlMoveClass(p, s, t, replace=False),  # additive
+    "move_class": lambda s, p, t: OwlMoveClass(p, s, t, replace=True),  # re-parent (sole super)
     "add_ind_type": lambda s, p, t: OwlAddIndividualType(p, s, t),
     "add_prop_domain": lambda s, p, t: OwlAddPropertyClass(p, s, "domain", t),
     "add_prop_range": lambda s, p, t: OwlAddPropertyClass(p, s, "range", t),
@@ -279,6 +281,52 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
     """
     factory = _DIRECT_REGISTRY.get(field.meta.get("action", ""))
     return factory(field, uri, path) if factory else None
+
+
+# ── right-click context menu — quick actions per node kind ──────────────────────
+# Each (label, action): "rename" is handled by the app (an edit flow); every other
+# action is dispatched exactly like its detail-pane row (via _run_field_action).
+_CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
+    "class": [
+        ("↓ Add subclass", "new_subclass"),
+        ("+ Add individual", "add_individual"),
+        ("↑ Add superclass…", "link_superclass"),
+        ("↷ Move under a different superclass…", "move_class"),
+        ("⇢ Change to individual", "class_to_individual"),
+        ("⊙ Open graph", "view_focused_graph"),
+        ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete_class"),
+    ],
+    "individual": [
+        ("+ Add class membership…", "add_ind_type"),
+        ("+ Add property value…", "add_prop_value"),
+        ("⇢ Change to class", "individual_to_class"),
+        ("✎ Rename URI…", "rename"),
+        ("⊘ Delete", "delete_individual"),
+    ],
+    "property": [
+        ("→ Add domain class…", "add_prop_domain"),
+        ("→ Add range class…", "add_prop_range"),
+        ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete_property"),
+    ],
+    "concept": [
+        ("+ Add narrower", "add_narrower"),
+        ("~ Add related…", "add_related"),
+        ("↷ Move under a different parent…", "move"),
+        ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete"),
+    ],
+    "scheme": [
+        ("➕ Add top concept", "add_top_concept"),
+        ("✎ Rename URI…", "rename"),
+    ],
+}
+
+
+def context_actions(kind: str) -> list[tuple[str, str]]:
+    """The (label, action) entries for a right-click menu on a *kind* of node."""
+    return _CONTEXT_ACTIONS.get(kind, [])
 
 
 # ── meta-aware edits — change one existing individual value (row carries meta) ──

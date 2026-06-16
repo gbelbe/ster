@@ -45,6 +45,7 @@ from ster.tui.edits import (
     action_command,
     add_literal_value_command,
     add_object_value_command,
+    context_actions,
     convert_choices,
     convert_command,
     create_scheme_command,
@@ -135,6 +136,21 @@ def test_link_superclass_maps_to_additive_move_class() -> None:
         "http://ex/Parent",
         False,
     )
+
+
+def test_move_class_maps_to_replacing_move() -> None:
+    cmd = relation_command("move_class", "http://ex/C", _P, "http://ex/Parent")
+    assert isinstance(cmd, OwlMoveClass) and cmd.replace is True
+
+
+def test_context_actions_per_kind() -> None:
+    class_actions = [a for _, a in context_actions("class")]
+    assert {"new_subclass", "move_class", "class_to_individual", "rename", "delete_class"} <= set(
+        class_actions
+    )
+    assert [a for _, a in context_actions("scheme")] == ["add_top_concept", "rename"]
+    assert "delete" in [a for _, a in context_actions("concept")]
+    assert context_actions("nonexistent") == []
 
 
 def test_unsupported_relation_returns_none() -> None:
