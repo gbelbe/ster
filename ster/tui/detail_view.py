@@ -143,15 +143,18 @@ class DetailRow(Static):
 class DetailView(VerticalScroll):
     """Compose an entity's detail into section headers + focusable field rows."""
 
+    can_focus = True  # so clicking the (empty) pane can still select it
+
     def compose(self):  # type: ignore[no-untyped-def]
         yield Static(PLACEHOLDER)
 
     def on_click(self) -> None:
-        """Clicking empty pane space focuses the first row (a row click self-focuses)."""
-        if not isinstance(self.app.focused, DetailRow):
-            rows = list(self.query(DetailRow))
-            if rows:
-                rows[0].focus()
+        """Click blank pane space to select this window: focus a row, else the pane."""
+        rows = list(self.query(DetailRow))
+        if not rows:
+            self.focus()  # empty pane (placeholder) — select the pane itself
+        elif not isinstance(self.app.focused, DetailRow):
+            rows[0].focus()  # a row click self-focuses; blank space → first row
 
     def update_entity(self, tax: Taxonomy, uri: str | None, lang: str = "en") -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None)."""

@@ -387,8 +387,8 @@ def test_detail_row_tooltips() -> None:
     assert stat.tooltip is None
 
 
-def test_clicking_empty_detail_focuses_first_row() -> None:
-    """Clicking the detail pane (not on a row) focuses its first row."""
+def test_clicking_blank_pane_space_selects_the_window() -> None:
+    """Clicking blank space in a pane selects it: detail → a row; tree → the tree."""
 
     async def scenario() -> None:
         from textual.widgets import Tree
@@ -400,12 +400,41 @@ def test_clicking_empty_detail_focuses_first_row() -> None:
             await pilot.pause()
             app._show(ZOO + "Person")
             await pilot.pause()
-            app.query_one("#tree", Tree).focus()
+            tree = app.query_one("#tree", Tree)
+            tree.focus()
             await pilot.pause()
-            assert not isinstance(app.focused, DetailRow)
-            app.query_one("#detail", DetailView).on_click()
+            # real click on blank space at the bottom of the detail pane → focuses a row
+            view = app.query_one("#detail", DetailView)
+            await pilot.click("#detail", offset=(4, view.region.height - 2))
             await pilot.pause()
             assert isinstance(app.focused, DetailRow)
+            # real click on blank space at the bottom of the tree pane → focuses the tree
+            await pilot.click("#tree", offset=(2, tree.region.height - 2))
+            await pilot.pause()
+            assert app.focused is tree
+
+    _run(scenario)
+
+
+def test_clicking_empty_detail_pane_selects_it() -> None:
+    """With no entity shown (placeholder), clicking the detail pane focuses the pane."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.detail_view import DetailView
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(None)  # placeholder, no rows
+            await pilot.pause()
+            app.query_one("#tree", Tree).focus()
+            await pilot.pause()
+            view = app.query_one("#detail", DetailView)
+            await pilot.click("#detail", offset=(4, view.region.height - 2))
+            await pilot.pause()
+            assert app.focused is view
 
     _run(scenario)
 
