@@ -410,6 +410,39 @@ def test_clicking_empty_detail_focuses_first_row() -> None:
     _run(scenario)
 
 
+def test_view_graph_action_opens_browser(monkeypatch) -> None:
+    """Activating the overview's graph action calls viz_vowl.open_in_browser (read-only OK)."""
+
+    async def scenario() -> None:
+        from ster import viz_vowl
+        from ster.tui import detail
+        from ster.tui.detail_view import DetailRow
+
+        calls: list = []
+        monkeypatch.setattr(
+            viz_vowl,
+            "open_in_browser",
+            lambda tax, path=None, on_change_fn=None: calls.append(tax) or "http://x",
+        )
+        app = _app()  # no path → read-only; the graph view still works
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            row = next(
+                r
+                for r in app.query(DetailRow)
+                if r.field.meta.get("action") == "view_ontology_graph"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert calls  # open_in_browser was invoked
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree

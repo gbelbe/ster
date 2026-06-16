@@ -353,6 +353,9 @@ class OntologyApp(App):
     def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
         """An action row was activated → route to its flow opener (table-driven)."""
         action = message.field.meta.get("action", "")
+        if action in ("view_ontology_graph", "view_focused_graph"):
+            self._open_graph(action, message.field)  # a view, not a mutation — no service needed
+            return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
@@ -597,6 +600,27 @@ class OntologyApp(App):
     def action_help(self) -> None:
         """Open the keys-and-actions help overlay."""
         self.push_screen(HelpScreen())
+
+    def _open_graph(self, action: str, field: DetailField) -> None:
+        """Open the VOWL graph in the browser (whole ontology, or focused on an entity).
+
+        A view, not a mutation: works read-only, opens a daemon-served page +
+        browser tab (non-blocking) and reports the URL.
+        """
+        from ster import viz_vowl
+
+        try:
+            if action == "view_focused_graph":
+                target = field.meta.get("uri") or self._detail_uri
+                if not target:
+                    self.notify("No entity to focus the graph on.", severity="warning")
+                    return
+                url = viz_vowl.open_focused_in_browser(self.tax, target, self._path)
+            else:
+                url = viz_vowl.open_in_browser(self.tax, self._path)
+            self.notify(f"Graph opened in your browser — {url}")
+        except Exception as exc:  # surfacing beats crashing the UI for a view action
+            self.notify(f"Couldn't open the graph: {exc}", severity="error")
 
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""
