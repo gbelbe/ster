@@ -25,13 +25,14 @@ class ModalBase(ModalScreen[_R]):
     DEFAULT_CSS = """
     ModalBase {
         align: center middle;
-        background: $background 30%;   /* dim, not opaque — TUI stays visible behind */
+        background: $background 60%;   /* harlequin's dim: TUI shows through, no border bleed */
     }
     ModalBase .modal-box {
         height: auto;
-        max-width: 90;
+        max-width: 88;
+        margin: 2 4;
         padding: 1 2;
-        background: $surface;
+        background: $background;
         border: round $primary;
         border-title-color: $primary;
     }

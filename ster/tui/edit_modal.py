@@ -19,7 +19,11 @@ from .modal import ModalBase
 class EditModal(ModalBase[str | None]):
     """Modal text input. Returns the entered value on submit, or None on cancel."""
 
-    DEFAULT_CSS = "#edit-box { width: 60%; }"  # chrome comes from ModalBase
+    DEFAULT_CSS = """
+    #edit-box { width: 60%; }   /* chrome comes from ModalBase */
+    /* Input's default border is `tall` (dashed in some fonts); id beats Input:focus. */
+    #edit-input { border: round $primary; }
+    """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 

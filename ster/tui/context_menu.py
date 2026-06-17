@@ -29,10 +29,13 @@ class ContextMenu(OptionList):
         height: auto;
         max-height: 18;
         padding: 0 1;
-        background: $surface;
+        background: $background;
         border: round $primary;
         border-title-color: $primary;
     }
+    /* OptionList's default :focus border is `tall` (renders dashed in some fonts)
+       and out-specifies a plain type rule — restate `round` for the focused state. */
+    ContextMenu:focus { border: round $primary; border-title-color: $primary; }
     ContextMenu.open { display: block; }
     ContextMenu > .option-list--option-highlighted {
         background: $secondary;

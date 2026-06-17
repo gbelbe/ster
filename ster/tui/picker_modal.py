@@ -63,7 +63,8 @@ class PickerModal(ModalBase[str | None]):
     DEFAULT_CSS = """
     #picker-box { width: 70%; max-height: 80%; }   /* box chrome from ModalBase */
     #picker-filter { border: none; padding: 0; margin-bottom: 1; background: $surface; }
-    #picker-list { height: auto; max-height: 16; background: $surface; }
+    /* no border on the list (the box frames it); avoids OptionList's dashed `tall` border */
+    #picker-list { height: auto; max-height: 16; background: $surface; border: none; }
     """
 
     BINDINGS = [
