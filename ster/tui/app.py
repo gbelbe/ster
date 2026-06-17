@@ -119,7 +119,7 @@ class OntologyApp(App):
        background via ModalBase; the panes below cover the main screen anyway. */
     Screen { layers: base overlay; }
     #body { height: 1fr; }
-    #nav { width: 40%; min-width: 34; }
+    #nav { width: 25%; min-width: 24; }
 
     /* Each pane is a rounded, titled box whose border lights up when focused —
        so you always see which pane you're in and what it holds. */
