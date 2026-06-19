@@ -39,3 +39,18 @@ Feature: dcterms:title and dcterms:description on owl:Ontology
     Given a taxonomy with ontology URI "https://ex.org/onto", dcterms:title "My Ontology", and dcterms:description "A description"
     When I build the ontology overview fields
     Then the "ont_description" field comes after the "ont_title" field
+
+  Scenario: Full descriptive metadata survives a save and reload round-trip
+    Given a taxonomy with full descriptive ontology metadata
+    When I save and reload the taxonomy
+    Then every descriptive metadata field is preserved
+
+  Scenario: An ontology with no extra metadata reloads with empty defaults
+    Given a taxonomy with only an ontology URI and no descriptive metadata
+    When I save and reload the taxonomy
+    Then the optional descriptive metadata fields are empty
+
+  Scenario: Multi-valued metadata round-trips every value
+    Given a taxonomy with multiple creators languages and imports
+    When I save and reload the taxonomy
+    Then all creators languages and imports are preserved

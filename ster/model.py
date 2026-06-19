@@ -193,6 +193,32 @@ class RDFClass:
 
 
 @dataclass
+class OntologyAnnotation:
+    """A single descriptive metadata triple on an ontology / scheme subject.
+
+    Generic — captures *any* predicate present in the file, known or not, so the
+    overview can display and edit every descriptive property. ``value`` is the
+    IRI (when ``is_iri``) or the literal lexical form; ``lang`` / ``datatype`` are
+    mutually exclusive and apply to literals only.
+    """
+
+    predicate: str  # full predicate URI
+    value: str  # IRI string (is_iri) or literal lexical form
+    is_iri: bool = False
+    lang: str = ""
+    datatype: str = ""  # datatype URI (e.g. xsd:date), literals only
+
+
+# Predicate URIs for the well-known ontology fields exposed as typed accessors.
+_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
+_DCT_TITLE = "http://purl.org/dc/terms/title"
+_DCT_DESCRIPTION = "http://purl.org/dc/terms/description"
+_OWL_VERSION_INFO = "http://www.w3.org/2002/07/owl#versionInfo"
+_OWL_VERSION_IRI = "http://www.w3.org/2002/07/owl#versionIRI"
+_OWL_PRIOR_VERSION = "http://www.w3.org/2002/07/owl#priorVersion"
+
+
+@dataclass
 class ConceptScheme:
     uri: str
     labels: list[Label] = field(default_factory=list)
@@ -202,6 +228,8 @@ class ConceptScheme:
     created: str = ""  # ISO date string e.g. "2026-03-25"
     languages: list[str] = field(default_factory=list)  # declared language codes
     base_uri: str = ""  # namespace prefix for auto-generating concept URIs
+    # Any *other* descriptive predicate on the scheme (skos:note, dct:subject, …)
+    annotations: list[OntologyAnnotation] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:
@@ -228,18 +256,82 @@ class Taxonomy:
     owl_individuals: dict[str, OWLIndividual] = field(default_factory=dict)  # uri → individual
     owl_properties: dict[str, OWLProperty] = field(default_factory=dict)  # uri → property
     ontology_uri: str | None = field(default=None)  # owl:Ontology URI if declared
-    ontology_label: str | None = field(default=None)  # rdfs:label of the ontology
-    ontology_title: str | None = field(default=None)  # dcterms:title of the ontology
-    ontology_description: str | None = field(default=None)  # dcterms:description of the ontology
-    version_info: str | None = field(default=None)  # owl:versionInfo
-    version_iri: str | None = field(default=None)  # owl:versionIRI
-    prior_version: str | None = field(default=None)  # owl:priorVersion
+    # Generic descriptive metadata on the owl:Ontology node — every predicate
+    # present in the file. The well-known few (label/title/description/version*)
+    # are exposed as typed properties below, backed by this single store.
+    ontology_annotations: list[OntologyAnnotation] = field(default_factory=list)
     # handle → uri (populated by handles.assign_handles)
     handle_index: dict[str, str] = field(default_factory=dict)
     # prefix → namespace URL (from source file; used for round-trip serialisation)
     namespace_bindings: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
+
+    # ── typed accessors over the generic annotation store ─────────────────────
+    # These keep the historical ``taxonomy.ontology_title`` etc. API working
+    # while the single source of truth is ``ontology_annotations``.
+    def _get_annotation(self, predicate: str) -> str | None:
+        for a in self.ontology_annotations:
+            if a.predicate == predicate:
+                return a.value
+        return None
+
+    def _set_annotation(self, predicate: str, value: str | None, *, is_iri: bool = False) -> None:
+        self.ontology_annotations = [
+            a for a in self.ontology_annotations if a.predicate != predicate
+        ]
+        if value is not None:
+            self.ontology_annotations.append(
+                OntologyAnnotation(predicate=predicate, value=value, is_iri=is_iri)
+            )
+
+    @property
+    def ontology_label(self) -> str | None:
+        return self._get_annotation(_RDFS_LABEL)
+
+    @ontology_label.setter
+    def ontology_label(self, value: str | None) -> None:
+        self._set_annotation(_RDFS_LABEL, value)
+
+    @property
+    def ontology_title(self) -> str | None:
+        return self._get_annotation(_DCT_TITLE)
+
+    @ontology_title.setter
+    def ontology_title(self, value: str | None) -> None:
+        self._set_annotation(_DCT_TITLE, value)
+
+    @property
+    def ontology_description(self) -> str | None:
+        return self._get_annotation(_DCT_DESCRIPTION)
+
+    @ontology_description.setter
+    def ontology_description(self, value: str | None) -> None:
+        self._set_annotation(_DCT_DESCRIPTION, value)
+
+    @property
+    def version_info(self) -> str | None:
+        return self._get_annotation(_OWL_VERSION_INFO)
+
+    @version_info.setter
+    def version_info(self, value: str | None) -> None:
+        self._set_annotation(_OWL_VERSION_INFO, value)
+
+    @property
+    def version_iri(self) -> str | None:
+        return self._get_annotation(_OWL_VERSION_IRI)
+
+    @version_iri.setter
+    def version_iri(self, value: str | None) -> None:
+        self._set_annotation(_OWL_VERSION_IRI, value, is_iri=True)
+
+    @property
+    def prior_version(self) -> str | None:
+        return self._get_annotation(_OWL_PRIOR_VERSION)
+
+    @prior_version.setter
+    def prior_version(self, value: str | None) -> None:
+        self._set_annotation(_OWL_PRIOR_VERSION, value, is_iri=True)
 
     def node_type(self, uri: str) -> str:
         """Return the RDF type: 'promoted', 'concept', 'class', 'individual', 'property', or 'unknown'."""
