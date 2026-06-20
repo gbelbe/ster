@@ -246,7 +246,17 @@ def when_set_ont_title(ctx: dict, title: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(app, pilot, lambda f: f.meta.get("type") == "ont_title")
+        # In the new-TUI overview, the title field is a generic ont_annotation row
+        # keyed by the dcterms:title predicate (may or may not exist yet).
+        # Try the annotation row first; fall back to the legacy ont_title type.
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                (f.meta.get("type") == "ont_annotation" and "title" in f.meta.get("predicate", ""))
+                or f.meta.get("type") == "ont_title"
+            ),
+        )
         await _submit_text(app, pilot, title)
 
     _edit(ctx, do)
@@ -780,3 +790,156 @@ def then_concept_related(ctx: dict, name: str, other: str) -> None:
 def then_scheme_title(ctx: dict, value: str) -> None:
     assert ctx["tax"].schemes[SK + "Scheme"].title("en") == value
     assert ctx["saved"].schemes[SK + "Scheme"].title("en") == value
+
+
+# ── Phase 15: generic ontology annotation overview ──────────────────────────--
+
+DCT = "http://purl.org/dc/terms/"
+
+ANNOTATED_TTL = """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix zoo: <https://example.org/zoo/> .
+
+<https://example.org/onto> a owl:Ontology ;
+    rdfs:label "Zoo Ontology" ;
+    dcterms:creator "Alice" ;
+    dcterms:creator "Charlie" ;
+    dcterms:license <https://creativecommons.org/licenses/by/4.0/> .
+
+zoo:Animal a owl:Class ; rdfs:label "Animal"@en .
+"""
+
+
+@pytest.fixture
+def ctx_annotated(tmp_path: Path) -> dict:
+    src = tmp_path / "annotated.ttl"
+    src.write_text(ANNOTATED_TTL, encoding="utf-8")
+    return {"src": src}
+
+
+@given("an annotated ontology is open for editing")
+def given_annotated(ctx_annotated: dict, ctx: dict) -> None:  # noqa: ARG001
+    ctx.update(ctx_annotated)
+
+
+@when("I open the ontology overview")
+def when_open_overview(ctx: dict) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the overview shows an annotation row for "{predicate_label}"'))
+def then_overview_shows_annotation_row(ctx: dict, predicate_label: str) -> None:
+    from ster import store
+    from ster.nav.logic import build_tui_ontology_overview_fields
+
+    tax = store.load(ctx["src"])
+    fields = build_tui_ontology_overview_fields(tax, "en")
+    assert any(predicate_label in f.display for f in fields), (
+        f"No annotation row for '{predicate_label}' in overview. "
+        f"Rows: {[f.display for f in fields]}"
+    )
+
+
+@then("no class rows appear in the overview")
+def then_no_class_rows(ctx: dict) -> None:
+    from ster import store
+    from ster.nav.logic import build_tui_ontology_overview_fields
+
+    tax = store.load(ctx["src"])
+    fields = build_tui_ontology_overview_fields(tax, "en")
+    class_uris = set(tax.owl_classes)
+    assert not any(f.value in class_uris for f in fields)
+
+
+@then("no property rows appear in the overview")
+def then_no_property_rows(ctx: dict) -> None:
+    from ster import store
+    from ster.nav.logic import build_tui_ontology_overview_fields
+
+    tax = store.load(ctx["src"])
+    fields = build_tui_ontology_overview_fields(tax, "en")
+    assert not any(f.meta.get("type") == "property_row" for f in fields)
+
+
+@when(parsers.parse('I edit the annotation "{predicate_label}" to "{new_value}"'))
+def when_edit_annotation(ctx: dict, predicate_label: str, new_value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: f.meta.get("type") == "ont_annotation" and predicate_label in f.display,
+        )
+        await _submit_text(app, pilot, new_value)
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the ontology annotation "{predicate_label}" has value "{value}"'))
+def then_annotation_has_value(ctx: dict, predicate_label: str, value: str) -> None:
+    local_name = predicate_label.split(":")[-1]
+    pred = next(a.predicate for a in ctx["tax"].ontology_annotations if local_name in a.predicate)
+    values_in_mem = {a.value for a in ctx["tax"].ontology_annotations if a.predicate == pred}
+    values_saved = {a.value for a in ctx["saved"].ontology_annotations if a.predicate == pred}
+    assert value in values_in_mem, f"Expected '{value}' in {values_in_mem}"
+    assert value in values_saved, f"Expected '{value}' in saved {values_saved}"
+
+
+@when(parsers.parse('I remove the annotation "{predicate_label}" with value "{value}"'))
+def when_remove_annotation(ctx: dict, predicate_label: str, value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(
+            app,
+            pilot,
+            lambda f: (
+                f.meta.get("action") == "remove_ont_annotation"
+                and predicate_label in f.display
+                and f.meta.get("value") == value
+            ),
+        )
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the ontology annotation "{predicate_label}" no longer has value "{value}"'))
+def then_annotation_no_value(ctx: dict, predicate_label: str, value: str) -> None:
+    local_name = predicate_label.split(":")[-1]
+    values = {a.value for a in ctx["tax"].ontology_annotations if local_name in a.predicate}
+    assert value not in values
+
+
+@then(parsers.parse('the ontology annotation "{predicate_label}" still has value "{value}"'))
+def then_annotation_still_has_value(ctx: dict, predicate_label: str, value: str) -> None:
+    local_name = predicate_label.split(":")[-1]
+    values = {a.value for a in ctx["tax"].ontology_annotations if local_name in a.predicate}
+    assert value in values
+
+
+@when(parsers.parse('I add the annotation "{predicate_label}" with value "{value}"'))
+def when_add_annotation(ctx: dict, predicate_label: str, value: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        from textual.widgets import OptionList
+
+        app._show(detail.OVERVIEW_URI)
+        await pilot.pause()
+        await _activate(app, pilot, lambda f: f.meta.get("action") == "add_ont_annotation")
+        # Step 1: picker — find the entry matching predicate_label
+        await pilot.pause()
+        modal = app.screen
+        idx = next(i for i, (label, _pred) in enumerate(modal._options) if predicate_label in label)
+        modal.query_one(OptionList).highlighted = idx
+        await pilot.press("enter")
+        await pilot.pause()
+        # Step 2: text input for the value
+        await _submit_text(app, pilot, value)
+
+    _edit(ctx, do)

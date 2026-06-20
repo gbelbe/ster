@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...domain.onto import add_ontology_annotation, remove_ontology_annotation
 from ...model import Taxonomy
 from ...operations import rename_ontology_uri, set_ontology_metadata, set_ontology_prefix
 
@@ -56,4 +57,39 @@ class OntoSetPrefix:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         set_ontology_prefix(taxonomy, self.new_prefix)
+        return ()
+
+
+@dataclass(frozen=True)
+class OntoSetAnnotation:
+    """Set (replace) one annotation value on the owl:Ontology node.
+
+    *predicate* is the full predicate URI. *old_value* identifies which value to
+    replace when the predicate is multi-valued; empty means "set the first/only
+    value". *new_value* is the replacement text.
+    """
+
+    target_path: Path
+    predicate: str
+    old_value: str
+    new_value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_ontology_annotation(taxonomy, self.predicate, self.new_value, old_value=self.old_value)
+        return ()
+
+
+@dataclass(frozen=True)
+class OntoRemoveAnnotation:
+    """Remove one annotation value from the owl:Ontology node.
+
+    When *predicate* is multi-valued, only the entry with *value* is removed.
+    """
+
+    target_path: Path
+    predicate: str
+    value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_ontology_annotation(taxonomy, self.predicate, self.value)
         return ()

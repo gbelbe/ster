@@ -535,3 +535,29 @@ def test_ontology_rename_command_parses_hash_separator() -> None:
 def test_ontology_rename_command_defaults_to_hash_when_no_separator() -> None:
     cmd = ontology_rename_command(_P, "https://ex.org/zoo")
     assert (cmd.new_uri, cmd.new_sep) == ("https://ex.org/zoo", "#")
+
+
+# ── Phase 15: generic annotation edit / remove ──────────────────────────────────
+
+DCT = "http://purl.org/dc/terms/"
+
+
+def test_ont_annotation_edit_maps_to_onto_set_annotation() -> None:
+    from ster.core.commands import OntoSetAnnotation
+
+    f = _field("ont_annotation", predicate=DCT + "creator", value_index=0)
+    cmd = edit_command(f, "__ster:overview__", _P, "Bob")
+    assert isinstance(cmd, OntoSetAnnotation)
+    assert (cmd.predicate, cmd.new_value) == (DCT + "creator", "Bob")
+
+
+def test_ont_annotation_remove_maps_to_onto_remove_annotation() -> None:
+    from ster.core.commands import OntoRemoveAnnotation
+    from ster.tui.edits import direct_command
+
+    f = _field(
+        "action_del", action="remove_ont_annotation", predicate=DCT + "creator", value="Alice"
+    )
+    cmd = direct_command(f, "__ster:overview__", _P)
+    assert isinstance(cmd, OntoRemoveAnnotation)
+    assert (cmd.predicate, cmd.value) == (DCT + "creator", "Alice")

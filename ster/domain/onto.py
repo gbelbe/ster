@@ -12,7 +12,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from ..model import Taxonomy
+from ..model import OntologyAnnotation, Taxonomy
 
 # ── shared helpers ────────────────────────────────────────────────────────────
 
@@ -251,3 +251,38 @@ def set_ontology_metadata(taxonomy: Taxonomy, field_name: str, value: str) -> No
     attr = _ONTOLOGY_METADATA_ATTRS.get(field_name)
     if attr is not None:
         setattr(taxonomy, attr, value or None)
+
+
+def add_ontology_annotation(
+    taxonomy: Taxonomy,
+    predicate: str,
+    new_value: str,
+    *,
+    old_value: str = "",
+    is_iri: bool = False,
+    lang: str = "",
+) -> None:
+    """Add or replace one annotation value on the owl:Ontology node.
+
+    When *old_value* is given, replaces the first matching entry (same predicate +
+    value) in place so the ordering of other annotations is preserved. When there
+    is no matching entry, appends a new one.
+    """
+    if old_value:
+        for i, a in enumerate(taxonomy.ontology_annotations):
+            if a.predicate == predicate and a.value == old_value:
+                taxonomy.ontology_annotations[i] = OntologyAnnotation(
+                    predicate=predicate, value=new_value, is_iri=is_iri, lang=lang
+                )
+                return
+    taxonomy.ontology_annotations.append(
+        OntologyAnnotation(predicate=predicate, value=new_value, is_iri=is_iri, lang=lang)
+    )
+
+
+def remove_ontology_annotation(taxonomy: Taxonomy, predicate: str, value: str) -> None:
+    """Remove the first annotation with matching *predicate* and *value*."""
+    for i, a in enumerate(taxonomy.ontology_annotations):
+        if a.predicate == predicate and a.value == value:
+            del taxonomy.ontology_annotations[i]
+            return

@@ -20,10 +20,10 @@ from ster.nav.logic import (
     DetailField,
     build_concept_detail,
     build_individual_detail,
-    build_ontology_overview_fields,
     build_property_detail,
     build_rdf_class_detail,
     build_scheme_detail,
+    build_tui_ontology_overview_fields,
 )
 
 from . import data
@@ -81,7 +81,7 @@ def build_sections(tax: Taxonomy, uri: str, lang: str = "en") -> list[DetailSect
     Returns ``[]`` for a uri with no detail builder (e.g. a tree section node).
     """
     if uri == OVERVIEW_URI:
-        return group_sections(build_ontology_overview_fields(tax, lang))
+        return group_sections(build_tui_ontology_overview_fields(tax, lang))
     builder = _BUILDERS.get(data.kind_of(tax, uri))
     if builder is None:
         return []

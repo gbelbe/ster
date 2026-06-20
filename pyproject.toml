@@ -32,6 +32,8 @@ dependencies = [
     "watchfiles>=0.21",           # file-change watcher for live push
     "pylode>=3.0",                # HTML export
     "llm>=0.19",                  # AI assist
+    "msgpack>=1.2.1",
+    "pydantic-settings>=2.14.2",
 ]
 
 # ── Optional dependency groups ────────────────────────────────────────────────

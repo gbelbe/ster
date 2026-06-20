@@ -217,3 +217,33 @@ Feature: Editing the ontology in the New-TUI
     Given a SKOS taxonomy is open for editing
     When I add a top concept "Brand" to the scheme
     Then the concept "Brand" exists
+
+  # Phase 15 — generic ontology annotation overview (New-TUI only)
+
+  Scenario: Ontology overview shows every annotation as a row
+    Given an annotated ontology is open for editing
+    When I open the ontology overview
+    Then the overview shows an annotation row for "dcterms:creator"
+    And the overview shows an annotation row for "dcterms:license"
+
+  Scenario: Edit an existing annotation value
+    Given an annotated ontology is open for editing
+    When I edit the annotation "dcterms:creator" to "Bob"
+    Then the ontology annotation "dcterms:creator" has value "Bob"
+
+  Scenario: Remove one value of a multi-valued annotation
+    Given an annotated ontology is open for editing
+    When I remove the annotation "dcterms:creator" with value "Alice"
+    Then the ontology annotation "dcterms:creator" no longer has value "Alice"
+    And the ontology annotation "dcterms:creator" still has value "Charlie"
+
+  Scenario: Add a new annotation via the catalog picker
+    Given an annotated ontology is open for editing
+    When I add the annotation "dcterms:publisher" with value "ACME"
+    Then the ontology annotation "dcterms:publisher" has value "ACME"
+
+  Scenario: Overview does not list OWL classes or properties
+    Given an annotated ontology is open for editing
+    When I open the ontology overview
+    Then no class rows appear in the overview
+    And no property rows appear in the overview

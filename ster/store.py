@@ -255,6 +255,25 @@ def _atomic_write_text(path: Path, data: str) -> None:
 # ──────────────────────────── conversion ─────────────────────────────────────
 
 
+def _load_ontology_node(g: Graph, taxonomy: Taxonomy) -> None:
+    """Load the owl:Ontology node into *taxonomy* (first non-BNode only)."""
+    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
+        if isinstance(ont_ref, BNode):
+            continue
+        taxonomy.ontology_uri = str(ont_ref)
+        for p, o in g.predicate_objects(ont_ref):
+            if p == RDF.type:
+                continue
+            anno = _annotation_from(str(p), o)
+            if anno is not None:
+                taxonomy.ontology_annotations.append(anno)
+        if taxonomy.ontology_title is None and taxonomy.ontology_label:
+            taxonomy.ontology_title = taxonomy.ontology_label
+        if taxonomy.ontology_description is None and taxonomy.ontology_label:
+            taxonomy.ontology_description = taxonomy.ontology_label
+        break
+
+
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
     taxonomy = Taxonomy()
 
@@ -404,24 +423,7 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         taxonomy.owl_classes[uri] = rdf_class
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
-    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
-        if isinstance(ont_ref, BNode):
-            continue
-        taxonomy.ontology_uri = str(ont_ref)
-        # Capture *every* descriptive predicate generically (known or not), so the
-        # overview can show and edit any of them. rdf:type is structural, skipped.
-        for p, o in g.predicate_objects(ont_ref):
-            if p == RDF.type:
-                continue
-            anno = _annotation_from(str(p), o)
-            if anno is not None:
-                taxonomy.ontology_annotations.append(anno)
-        # Pre-fill title and description from rdfs:label when absent
-        if taxonomy.ontology_title is None and taxonomy.ontology_label:
-            taxonomy.ontology_title = taxonomy.ontology_label
-        if taxonomy.ontology_description is None and taxonomy.ontology_label:
-            taxonomy.ontology_description = taxonomy.ontology_label
-        break  # only take the first owl:Ontology
+    _load_ontology_node(g, taxonomy)
 
     # ── OWL Properties ────────────────────────────────────────────────────────
     _PROP_TYPE_MAP = {

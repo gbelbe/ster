@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
-from ..model import LabelType, Taxonomy
+from ..model import LabelType, OntologyAnnotation, Taxonomy
 from ..owl_analysis import (
     ONTOLOGY_ISSUE_DISPLAY_NAMES,
     OntologyAnalysis,
@@ -2794,6 +2794,130 @@ def build_ontology_overview_fields(
     if taxonomy.owl_classes or taxonomy.owl_individuals or taxonomy.owl_properties:
         analysis = compute_ontology_analysis(taxonomy)
         fields.extend(_ontology_quality_fields(taxonomy, analysis, lang))
+    return fields
+
+
+# ── Annotation catalog for the "Add metadata" picker ─────────────────────────
+# Each entry: (full predicate URI, display label shown in the picker).
+# When building the picker, already-present predicates are filtered out.
+
+_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
+    ("http://purl.org/dc/terms/creator", "dcterms:creator  (author / creator)"),
+    ("http://purl.org/dc/terms/contributor", "dcterms:contributor"),
+    ("http://purl.org/dc/terms/publisher", "dcterms:publisher"),
+    ("http://purl.org/dc/terms/created", "dcterms:created  (xsd:date)"),
+    ("http://purl.org/dc/terms/modified", "dcterms:modified  (xsd:date)"),
+    ("http://purl.org/dc/terms/license", "dcterms:license  (IRI)"),
+    ("http://purl.org/dc/terms/language", "dcterms:language"),
+    ("http://www.w3.org/2002/07/owl#imports", "owl:imports  (IRI)"),
+    ("http://purl.org/vocab/vann/preferredNamespacePrefix", "vann:preferredNamespacePrefix"),
+    ("http://purl.org/vocab/vann/preferredNamespaceUri", "vann:preferredNamespaceUri  (IRI)"),
+    ("http://www.w3.org/2000/01/rdf-schema#seeAlso", "rdfs:seeAlso  (IRI)"),
+    ("http://xmlns.com/foaf/0.1/homepage", "foaf:homepage  (IRI)"),
+    ("http://www.w3.org/2002/07/owl#versionInfo", "owl:versionInfo"),
+    ("http://www.w3.org/2002/07/owl#versionIRI", "owl:versionIRI  (IRI)"),
+    ("http://www.w3.org/2002/07/owl#priorVersion", "owl:priorVersion  (IRI)"),
+    ("http://purl.org/dc/terms/title", "dcterms:title"),
+    ("http://purl.org/dc/terms/description", "dcterms:description"),
+    ("http://www.w3.org/2000/01/rdf-schema#label", "rdfs:label"),
+)
+
+# Predicates whose display label is used in the overview panel header.
+_PREDICATE_DISPLAY: dict[str, str] = dict(_ANNOTATION_CATALOG)
+
+
+def _annotation_display(predicate: str) -> str:
+    """Short display name for a predicate — prefixed if known, else local name."""
+    if predicate in _PREDICATE_DISPLAY:
+        label = _PREDICATE_DISPLAY[predicate]
+        return label.split("  ")[0]  # strip the parenthetical hint
+    # Fall back to local name heuristic
+    return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+
+
+def annotation_catalog_options(taxonomy: Taxonomy) -> list[tuple[str, str]]:
+    """Return ``(predicate_uri, display_label)`` pairs available for "Add metadata".
+
+    Filters out predicates already present in ``taxonomy.ontology_annotations``
+    so the picker only shows what can still be added.
+    """
+    present = {a.predicate for a in taxonomy.ontology_annotations}
+    return [(pred, label) for pred, label in _ANNOTATION_CATALOG if pred not in present]
+
+
+def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
+    """One editable value row + one remove-action row for a single annotation."""
+    display = _annotation_display(annotation.predicate)
+    value_row = DetailField(
+        key=f"ann:{annotation.predicate}:{annotation.value}",
+        display=display,
+        value=annotation.value,
+        editable=True,
+        meta={
+            "type": "ont_annotation",
+            "predicate": annotation.predicate,
+            "old_value": annotation.value,
+            "is_iri": annotation.is_iri,
+            "lang": annotation.lang,
+        },
+    )
+    remove_row = DetailField(
+        key=f"ann:remove:{annotation.predicate}:{annotation.value}",
+        display=f"  ✕ remove {display}",
+        value="",
+        editable=False,
+        meta={
+            "type": "action_del",
+            "action": "remove_ont_annotation",
+            "predicate": annotation.predicate,
+            "value": annotation.value,
+        },
+    )
+    return [value_row, remove_row]
+
+
+def build_tui_ontology_overview_fields(
+    taxonomy: Taxonomy,
+    lang: str,
+) -> list[DetailField]:
+    """Detail panel for the ontology overview node — New-TUI only.
+
+    Differences from the shared ``build_ontology_overview_fields``:
+    - Iterates ``taxonomy.ontology_annotations`` generically so every predicate
+      present in the file is shown and editable.
+    - Does NOT enumerate classes or properties (they live in the tree panes).
+    - Uses ``_annotation_rows`` which pairs each value with a remove action.
+    - Adds a ``+ Add metadata`` action row whose picker is built from
+      ``annotation_catalog_options``.
+    - The quality block is deferred (omitted for now, kept as a follow-up slice).
+    """
+    fields: list[DetailField] = []
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    fields.append(_sep("Identity"))
+    if taxonomy.ontology_uri:
+        fields.append(
+            DetailField(
+                "ont:uri", "URI", taxonomy.ontology_uri, editable=False, meta={"type": "uri"}
+            )
+        )
+        fields.extend(_ontology_identity_action_fields(taxonomy))
+
+    # ── Descriptive metadata ──────────────────────────────────────────────────
+    fields.append(_sep("Metadata"))
+    for annotation in taxonomy.ontology_annotations:
+        fields.extend(_annotation_rows(annotation))
+    fields.append(
+        _add_action_field(
+            "action:add_ont_annotation",
+            "＋ Add metadata",
+            "add_ont_annotation",
+        )
+    )
+
+    # ── Actions ───────────────────────────────────────────────────────────────
+    fields.extend(_overview_action_fields())
+
     return fields
 
 

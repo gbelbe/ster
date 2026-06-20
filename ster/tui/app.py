@@ -458,6 +458,7 @@ class OntologyApp(App):
             (edits.CHAINED_ACTIONS, self._add_property_value),
             (edits.SCHEME_ACTIONS, self._create_scheme),
             (edits.ONTOLOGY_RENAME_ACTIONS, self._edit_ontology_identity),
+            (edits.ANNOTATION_ADD_ACTIONS, self._add_ont_annotation),
             (edits.META_INPUT_ACTIONS, self._open_meta_input),
             (edits.INPUT_ACTIONS, self._open_input),
         )
@@ -632,6 +633,37 @@ class OntologyApp(App):
             self.notify(err, severity="error")
             return None
         return count_domain_rename_changes(self.tax, value)[1]  # new_base, sep included
+
+    def _add_ont_annotation(self, field: DetailField, uri: str, path: Path) -> None:
+        """Two-step: pick a predicate from the catalog, then enter the value."""
+        from ster.nav.logic import annotation_catalog_options
+
+        options = annotation_catalog_options(self.tax)
+        if not options:
+            self.notify("All known annotation predicates are already present.", severity="warning")
+            return
+
+        # PickerModal expects (label, value) — use the display label, value is the predicate URI.
+        picker_options = [(label, pred) for pred, label in options]
+
+        def _on_predicate(predicate: str | None) -> None:
+            if not predicate:
+                return
+
+            def _on_value(value: str | None) -> None:
+                if value:
+                    from ster.core.commands import OntoSetAnnotation
+
+                    self._apply_command(OntoSetAnnotation(path, predicate, "", value))
+
+            # Derive a short prompt from the label (strip the parenthetical hint).
+            label = next((lbl for pred, lbl in options if pred == predicate), predicate)
+            short = label.split("  ")[0]
+            self.push_screen(EditModal(f"Value for {short}", ""), _on_value)
+
+        self.push_screen(
+            PickerModal("Add metadata — pick a predicate", picker_options), _on_predicate
+        )
 
     def _create_scheme(self, field: DetailField, uri: str, path: Path) -> None:
         """Two-step: collect the scheme title, then its URI, and create it."""

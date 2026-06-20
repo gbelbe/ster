@@ -23,7 +23,9 @@ from pathlib import Path
 
 from ster.core.commands import (
     AddSchemaMedia,
+    OntoRemoveAnnotation,
     OntoRenameUri,
+    OntoSetAnnotation,
     OntoSetMetadata,
     OntoSetPrefix,
     OwlAddIndividualType,
@@ -100,6 +102,10 @@ def _build_edit_registry() -> dict[str, _EditFactory]:
     }
     reg.update({ftype: _onto_meta_factory(name) for ftype, name in _ONTO_META.items()})
     reg.update({ftype: _scheme_field_factory(name) for ftype, name in _SCHEME_FIELDS.items()})
+    # Generic annotation row (New-TUI overview): replace old_value with new value.
+    reg["ont_annotation"] = lambda f, u, p, v, lang: OntoSetAnnotation(
+        p, f.meta["predicate"], f.meta.get("old_value", ""), v
+    )
     return reg
 
 
@@ -270,6 +276,10 @@ _DIRECT_REGISTRY: dict[str, _DirectFactory] = {
     "remove_schema_image": lambda f, u, p: RemoveSchemaMedia(p, u, "image", f.meta["url"]),
     "remove_schema_video": lambda f, u, p: RemoveSchemaMedia(p, u, "video", f.meta["url"]),
     "remove_schema_url": lambda f, u, p: RemoveSchemaMedia(p, u, "url", f.meta["url"]),
+    # Generic annotation removal (New-TUI overview).
+    "remove_ont_annotation": lambda f, u, p: OntoRemoveAnnotation(
+        p, f.meta["predicate"], f.meta["value"]
+    ),
 }
 
 
@@ -385,6 +395,10 @@ SCHEME_ACTIONS = frozenset({"add_scheme"})  # → app._create_scheme
 # every local entity). The app resolves the typed value to a base URI + sep
 # string (the domain path needs the taxonomy); this builder is the pure tail.
 ONTOLOGY_RENAME_ACTIONS = frozenset({"edit_ontology_uri", "edit_ontology_domain"})
+
+# "Add metadata" action on the ontology overview: opens the catalog picker then
+# a text-input modal for the value. The app handles the two-step flow.
+ANNOTATION_ADD_ACTIONS = frozenset({"add_ont_annotation"})
 
 
 def ontology_rename_command(path: Path, base_with_sep: str) -> object:
