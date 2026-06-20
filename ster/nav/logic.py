@@ -2882,16 +2882,20 @@ def build_tui_ontology_overview_fields(
 ) -> list[DetailField]:
     """Detail panel for the ontology overview node — New-TUI only.
 
-    Differences from the shared ``build_ontology_overview_fields``:
-    - Iterates ``taxonomy.ontology_annotations`` generically so every predicate
-      present in the file is shown and editable.
-    - Does NOT enumerate classes or properties (they live in the tree panes).
-    - Uses ``_annotation_rows`` which pairs each value with a remove action.
-    - Adds a ``+ Add metadata`` action row whose picker is built from
-      ``annotation_catalog_options``.
-    - The quality block is deferred (omitted for now, kept as a follow-up slice).
+    Shows: view-graph shortcut, identity (URI + edit actions), and every
+    annotation as an editable row with a remove sibling. No class/property
+    enumeration (they live in the tree) and no creation actions (they live in
+    the tree's action nodes).
     """
     fields: list[DetailField] = []
+
+    # ── Quick actions (top) ───────────────────────────────────────────────────
+    fields.append(_sep("Actions"))
+    fields.append(
+        _add_action_field(
+            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
+        )
+    )
 
     # ── Identity ──────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
@@ -2914,9 +2918,6 @@ def build_tui_ontology_overview_fields(
             "add_ont_annotation",
         )
     )
-
-    # ── Actions ───────────────────────────────────────────────────────────────
-    fields.extend(_overview_action_fields())
 
     return fields
 

@@ -34,6 +34,25 @@ from .help_screen import HelpScreen
 from .picker_modal import PickerModal
 from .theme import STER_THEME, THEME_CYCLE
 
+# Sentinel URI prefix for tree action nodes (create class/scheme/concept).
+# Format:  "__action:<action>[:<extra>]__"
+# The <extra> field carries context (e.g. the scheme URI for add_top_concept).
+_ACTION_PREFIX = "__action:"
+_ACTION_SUFFIX = "__"
+
+
+def _action_uri(action: str, extra: str = "") -> str:
+    return f"{_ACTION_PREFIX}{action}:{extra}{_ACTION_SUFFIX}"
+
+
+def _parse_action_uri(uri: str) -> tuple[str, str] | None:
+    """Return (action, extra) if *uri* is an action sentinel, else None."""
+    if uri.startswith(_ACTION_PREFIX) and uri.endswith(_ACTION_SUFFIX):
+        inner = uri[len(_ACTION_PREFIX) : -len(_ACTION_SUFFIX)]
+        action, _, extra = inner.partition(":")
+        return action, extra
+    return None
+
 
 class OntologyTree(Tree):
     """The left-pane tree. `right` jumps into the detail pane; up/down wrap around."""
@@ -271,32 +290,39 @@ class OntologyApp(App):
             self._add_concept(node, child)
 
     def _build_main_tree(self, tree: Tree) -> None:
-        """Top pane: ontology overview, the class hierarchy, loose individuals, schemes."""
+        """Top pane: Overview leaf, Ontology section (classes), Taxonomy section (schemes)."""
         tax, root = self.tax, tree.root
 
-        # The ontology overview (metadata, prefixes, stats) — the global window.
-        root.add_leaf(f"{data.ICON['section']} Ontology", data=detail.OVERVIEW_URI)
+        # ── Overview leaf ─────────────────────────────────────────────────────
+        root.add_leaf(f"{data.ICON['section']} Overview", data=detail.OVERVIEW_URI)
 
-        if tax.owl_classes:
-            sec = root.add(f"{data.ICON['section']} Classes", data=None)
-            for uri in data.class_roots(tax, self.lang):
-                self._add_class(sec, uri)
-            sec.expand()
+        # ── Ontology section (OWL classes) ────────────────────────────────────
+        ont_sec = root.add(f"{data.ICON['section']} Ontology", data=None)
+        ont_sec.add_leaf("＋ Add class", data=_action_uri("create_owl_class"))
+        for uri in data.class_roots(tax, self.lang):
+            self._add_class(ont_sec, uri)
+        ont_sec.expand()
 
+        # Loose individuals (no class) are nested under the Ontology section.
         loose = data.untyped_individuals(tax, self.lang)
         if loose:
-            sec = root.add(f"{data.ICON['section']} Individuals", data=None)
+            ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
             for uri in loose:
-                self._leaf(sec, uri, "individual")
+                self._leaf(ind_sec, uri, "individual")
 
+        # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
+        tax_sec = root.add(f"{data.ICON['section']} Taxonomy", data=None)
+        tax_sec.add_leaf("＋ Add concept scheme", data=_action_uri("add_scheme"))
         for s_uri in data.scheme_roots(tax, self.lang):
-            sec = root.add(
+            sec = tax_sec.add(
                 f"{data.ICON['scheme']} {data.label_of(tax, s_uri, self.lang)}", data=s_uri
             )
             self._index(s_uri, sec)
+            sec.add_leaf("＋ Add concept", data=_action_uri("add_top_concept", s_uri))
             for c_uri in data.concept_children(tax, s_uri, self.lang):
                 self._add_concept(sec, c_uri)
             sec.expand()
+        tax_sec.expand()
 
     def _build_prop_tree(self, tree: Tree) -> None:
         """Bottom pane: every property, in its own always-visible 1/4-height list."""
@@ -683,7 +709,48 @@ class OntologyApp(App):
         self.push_screen(EditModal(f"Scheme title [{self.lang}]", ""), _on_title)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        self._show(event.node.data)
+        uri = event.node.data
+        # Action sentinel nodes (＋ Add class / scheme / concept) have no detail
+        # panel — clear the pane so the user sees the placeholder until they press Enter.
+        if uri and _parse_action_uri(uri) is not None:
+            self._show(None)
+            return
+        self._show(uri)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Enter / click: fire the tree action for sentinel nodes."""
+        uri = event.node.data
+        if not uri:
+            return
+        parsed = _parse_action_uri(uri)
+        if parsed is None:
+            return  # real entity — NodeHighlighted already showed its detail
+        action, extra = parsed
+        self._dispatch_tree_action(action, extra)
+
+    def _dispatch_tree_action(self, action: str, extra: str) -> None:
+        """Run the creation flow for a tree action node."""
+        path = self._path
+        if path is None:
+            self.notify("No file path — save the taxonomy first.", severity="warning")
+            return
+        # Reuse the exact same field/uri pair as the overview action rows did,
+        # so the existing _route_action / _open_input / _create_scheme machinery
+        # handles everything without new code.
+        synthetic_field = DetailField(
+            key=f"tree_action:{action}",
+            display=action,
+            value="",
+            editable=False,
+            meta={"action": action},
+        )
+        # For add_top_concept the extra is the scheme URI (the parent).
+        uri = extra if extra else detail.OVERVIEW_URI
+        opener = self._route_action(action)
+        if opener is not None:
+            opener(synthetic_field, uri, path)
+        else:
+            self.notify(f"Action not wired: {action}", severity="warning")
 
     def jump_to(self, uri: str) -> None:
         """Expand ancestors, move the cursor to *uri*, and show its detail."""

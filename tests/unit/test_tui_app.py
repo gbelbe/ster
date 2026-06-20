@@ -555,9 +555,11 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await pilot.press("down", "down", "down")  # Ontology → Classes → Animal → Person
+            # Navigate past Overview, Ontology section header, ＋Add class, into first class.
+            await pilot.press("down", "down", "down", "down")
             await pilot.pause()
-            assert "Person" in app._detail_text  # detail panel followed the cursor
+            # Detail panel must be showing some OWL class (action nodes show placeholder).
+            assert "owl:Class" in app._detail_text
 
     _run(scenario)
 

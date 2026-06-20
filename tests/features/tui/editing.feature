@@ -149,21 +149,16 @@ Feature: Editing the ontology in the New-TUI
     Then the individual "Eagle" exists
     And the class "Eagle" no longer exists
 
-  # Phase 9 — create entities from the overview
+  # Phase 9 — create entities from the tree action nodes
 
-  Scenario: Create a top-level OWL class from the overview
+  Scenario: Create a top-level OWL class from the tree
     Given the zoo ontology is open for editing
-    When I create the OWL class "Reptile" from the overview
+    When I create the OWL class "Reptile" from the tree
     Then the class "Reptile" exists
 
-  Scenario: Create a bare OWL property from the overview
+  Scenario: Create a SKOS concept scheme from the tree
     Given the zoo ontology is open for editing
-    When I create the OWL property "likes" from the overview
-    Then the property "likes" exists
-
-  Scenario: Create a SKOS concept scheme from the overview
-    Given the zoo ontology is open for editing
-    When I create the scheme "Habitats" titled "Habitats" from the overview
+    When I create the scheme "Habitats" titled "Habitats" from the tree
     Then the scheme "Habitats" exists
 
   # Phase 10 — editing existing individual values

@@ -609,37 +609,51 @@ def then_no_class_at(ctx: dict, full_uri: str) -> None:
     assert full_uri not in ctx["saved"].owl_classes
 
 
-# ── when (create from overview) ─────────────────────────────────────────────--
+# ── when (create from tree action nodes) ────────────────────────────────────--
 
 
-@when(parsers.parse('I create the OWL class "{name}" from the overview'))
+async def _select_tree_action(app, pilot, action: str) -> None:  # noqa: ANN001
+    """Select the tree action node, firing NodeSelected to trigger its flow."""
+    from textual.widgets.tree import TreeNode
+
+    from ster.tui.app import _action_uri
+
+    target_data = _action_uri(action)
+    tree = app.query_one("#tree")
+
+    def _find(node: TreeNode) -> TreeNode | None:  # type: ignore[type-arg]
+        if node.data == target_data:
+            return node
+        for child in node.children:
+            found = _find(child)
+            if found is not None:
+                return found
+        return None
+
+    # Expand the full tree so all action nodes are reachable.
+    tree.root.expand_all()
+    await pilot.pause()
+    node = _find(tree.root)
+    assert node is not None, f"Tree action node not found: {action}"
+    # select_node moves cursor AND fires NodeSelected → triggers _dispatch_tree_action.
+    tree.select_node(node)
+    await pilot.pause()
+    await pilot.pause()  # extra pause so the modal has time to appear
+
+
+@when(parsers.parse('I create the OWL class "{name}" from the tree'))
 def when_create_class(ctx: dict, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
-        app._show(detail.OVERVIEW_URI)
-        await pilot.pause()
-        await _activate(app, pilot, _by_action("create_owl_class"))
+        await _select_tree_action(app, pilot, "create_owl_class")
         await _submit_text(app, pilot, ZOO + name)
 
     _edit(ctx, do)
 
 
-@when(parsers.parse('I create the OWL property "{name}" from the overview'))
-def when_create_property(ctx: dict, name: str) -> None:
-    async def do(app, pilot):  # noqa: ANN001
-        app._show(detail.OVERVIEW_URI)
-        await pilot.pause()
-        await _activate(app, pilot, _by_action("create_owl_property"))
-        await _submit_text(app, pilot, ZOO + name)
-
-    _edit(ctx, do)
-
-
-@when(parsers.parse('I create the scheme "{name}" titled "{title}" from the overview'))
+@when(parsers.parse('I create the scheme "{name}" titled "{title}" from the tree'))
 def when_create_scheme(ctx: dict, name: str, title: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
-        app._show(detail.OVERVIEW_URI)
-        await pilot.pause()
-        await _activate(app, pilot, _by_action("add_scheme"))
+        await _select_tree_action(app, pilot, "add_scheme")
         await _submit_text(app, pilot, title)  # step 1: title
         await pilot.pause()
         await _submit_text(app, pilot, ZOO + name)  # step 2: URI
