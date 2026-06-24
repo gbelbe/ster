@@ -7,7 +7,10 @@ the annotation catalog helpers — no Textual app needed, just plain Python.
 from __future__ import annotations
 
 from ster.model import OntologyAnnotation, RDFClass, Taxonomy
-from ster.nav.logic import build_tui_ontology_overview_fields
+from ster.nav.logic import (
+    build_tui_ontology_overview_fields,
+    build_tui_taxonomy_overview_fields,
+)
 
 ONT = "https://example.org/onto"
 DCT = "http://purl.org/dc/terms/"
@@ -36,6 +39,22 @@ def _types(tax: Taxonomy) -> set[str]:
 
 def _actions(tax: Taxonomy) -> set[str]:
     return {f.meta.get("action", "") for f in _fields(tax)}
+
+
+def test_identity_is_one_line_with_full_uri_separator_and_prefix() -> None:
+    """Identity is a single row: the full base URI (with separator) + the prefix."""
+    tax = _tax()  # ONT has no trailing separator → default "#"
+    fields = _fields(tax)
+    uri_rows = [f for f in fields if f.meta.get("type") == "uri"]
+    assert len(uri_rows) == 1
+    value = uri_rows[0].value
+    assert value.startswith(ONT + "#")  # separator appended to the URI
+    assert "prefix:" in value  # prefix shown on the same line
+    assert uri_rows[0].meta.get("action") == "edit_ontology_uri"
+    # No separate Prefix / Domain rows or ✎ links anymore.
+    assert not any(f.meta.get("type") == "ont_prefix" for f in fields)
+    assert not any(f.display.startswith("✎") for f in fields)
+    assert "edit_ontology_domain" not in _actions(tax)
 
 
 # ── annotation rows ────────────────────────────────────────────────────────────
@@ -203,3 +222,50 @@ def test_edit_base_uri_action_present() -> None:
 
 def test_view_graph_action_present() -> None:
     assert "view_ontology_graph" in _actions(_tax())
+
+
+# ── taxonomy (SKOS) overview ──────────────────────────────────────────────────
+
+
+def _skos_tax() -> Taxonomy:
+    """A SKOS taxonomy: a scheme + concept, with a 'wv' prefix on its namespace."""
+    from ster.model import Concept, ConceptScheme, Label
+
+    NS = "https://example.org/wind/"
+    t = Taxonomy()
+    t.namespace_bindings["wv"] = NS
+    t.schemes[NS + "scheme"] = ConceptScheme(
+        uri=NS + "scheme",
+        labels=[Label("fr", "Sports wind")],
+        creator="Gaetan",
+        created="2026-03-25",
+        languages=["fr"],
+        base_uri=NS,
+    )
+    t.concepts[NS + "Cat"] = Concept(uri=NS + "Cat", labels=[Label("fr", "Cat")])
+    return t
+
+
+def test_taxonomy_overview_has_no_identity_section() -> None:
+    """The taxonomy overview shows only Metadata — no Identity / namespace / prefix rows."""
+    fields = build_tui_taxonomy_overview_fields(_skos_tax(), "fr")
+    assert not any(f.display == "Identity" for f in fields)
+    assert not any(f.key in {"tax:namespace", "tax:prefix", "tax:scheme_uri"} for f in fields)
+
+
+def test_taxonomy_overview_shows_editable_skos_metadata_not_ontology() -> None:
+    fields = build_tui_taxonomy_overview_fields(_skos_tax(), "fr")
+    by_display = {f.display: f for f in fields}
+    assert by_display["title"].value == "Sports wind"
+    assert by_display["creator"].value == "Gaetan"
+    assert by_display["languages"].value == "fr"
+    # Metadata rows are editable and target the scheme via meta["target_uri"].
+    for label in ("title", "creator", "languages"):
+        assert by_display[label].editable
+        assert by_display[label].meta["target_uri"] == "https://example.org/wind/scheme"
+    # No ontology-annotation rows here — this is the SKOS overview.
+    assert not any(f.meta.get("type") == "ont_annotation" for f in fields)
+
+
+def test_taxonomy_overview_handles_no_scheme() -> None:
+    assert build_tui_taxonomy_overview_fields(Taxonomy(), "en")[0].value.startswith("No concept")

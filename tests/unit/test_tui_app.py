@@ -20,6 +20,20 @@ from ster.tui.app import EntitySearch, OntologyApp
 from .test_tui_data import DEMO, ZOO
 
 
+@pytest.fixture(autouse=True)
+def _isolate_prefs(tmp_path, monkeypatch):
+    """Keep the app independent of the developer's real prefs (theme, language) so
+    snapshots and theme-default assertions are deterministic."""
+    from ster import api_server
+    from ster.nav import prefs
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(prefs, "_lang_prefs_path", lambda: tmp_path / "lang.json")
+    monkeypatch.setattr(prefs, "_configured_langs_path", lambda: tmp_path / "clangs.json")
+    monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", tmp_path / "server_config.json")
+    monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
+
+
 def _run(scenario: Callable[..., Awaitable[None]]) -> None:
     """Run an async Pilot scenario in a fresh loop (no pytest-asyncio needed)."""
     asyncio.run(scenario())
@@ -550,13 +564,159 @@ def test_tree_populates_and_focuses() -> None:
     _run(scenario)
 
 
+def test_initial_detail_shows_overview() -> None:
+    """On open, the detail pane shows the ontology overview (no Overview leaf).
+
+    Regression: both trees emit a spurious initial NodeHighlighted on mount; the
+    prop-tree's data-less header used to clobber the detail back to the placeholder.
+    """
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            assert app._detail_uri == detail.OVERVIEW_URI
+
+    _run(scenario)
+
+
+def test_editable_deletable_row_opens_edit_delete_submenu() -> None:
+    """A row that is both editable and deletable (an annotation) opens an
+    Edit/Delete submenu on Enter; its standalone "✕ remove" row is folded in."""
+
+    async def scenario() -> None:
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview is shown
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("type") == "ont_annotation"
+            )
+            assert row.delete_field is not None  # paired with its remove sibling
+            # The standalone "✕ remove" action row is no longer rendered.
+            assert not any(
+                r.field.meta.get("action") == "remove_ont_annotation" for r in app.query(DetailRow)
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert [label for label, _ in menu._items] == ["✎ Edit", "⊘ Delete"]
+
+    _run(scenario)
+
+
+def test_identity_modal_decomposes_the_uri_into_fields(tmp_path) -> None:
+    """Activating an Identity row opens the modal with the URI split into
+    domain / path / separator fields (demo URI: https://example.org/zoo/)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input, RadioSet
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "uri")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # opens the identity modal (no delete → no submenu)
+            await pilot.pause()
+            modal = app.screen
+            assert modal.query_one("#oi-domain", Input).value == "example.org"
+            assert modal.query_one("#oi-path", Input).value == "zoo"
+            assert modal.query_one(RadioSet).pressed_index == 1  # "/" detected
+
+    _run(scenario)
+
+
+def test_identity_modal_saves_domain_and_prefix_together(tmp_path) -> None:
+    """Changing the domain and the prefix in one save persists both to the file."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "uri")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open identity modal
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#oi-domain", Input).value = "garden.org"
+            modal.query_one("#oi-prefix", Input).value = "zoo"
+            modal._submit()
+            await pilot.pause()
+            await pilot.press("enter")  # confirm the rename cascade
+            await pilot.pause()
+            await pilot.pause()
+            saved = src.read_text(encoding="utf-8")
+            assert "garden.org" in saved  # domain rename cascaded + saved
+            assert "@prefix zoo:" in saved  # prefix saved too
+
+    _run(scenario)
+
+
+def test_cancel_edit_keeps_focus_in_detail_pane(tmp_path) -> None:
+    """Regression: Esc-ing the edit modal kept focus in the detail pane, not the tree.
+
+    The submenu grabbed focus before the modal, so Textual restored focus to the
+    hidden menu on cancel → it fell back to the tree. We now refocus the row.
+    """
+
+    async def scenario() -> None:
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("type") == "ont_annotation"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open Edit/Delete submenu
+            await pilot.pause()
+            app.query_one("#ctx-menu", ContextMenu).highlighted = 0  # Edit
+            await pilot.press("enter")  # open edit modal
+            await pilot.pause()
+            await pilot.press("escape")  # cancel
+            await pilot.pause()
+            assert isinstance(app.focused, DetailRow)  # stayed in the detail pane
+
+    _run(scenario)
+
+
 def test_arrow_keys_drive_the_detail_panel() -> None:
     async def scenario() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            # Navigate past Overview, Ontology section header, ＋Add class, into first class.
-            await pilot.press("down", "down", "down", "down")
+            # Navigate past the Ontology section header and ＋Add class into the first class.
+            await pilot.press("down", "down", "down")
             await pilot.pause()
             # Detail panel must be showing some OWL class (action nodes show placeholder).
             assert "owl:Class" in app._detail_text

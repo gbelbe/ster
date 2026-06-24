@@ -74,6 +74,23 @@ def _row_tooltip(field: DetailField) -> str | None:
     return _ACTION_HELP.get(action, "Enter to run")
 
 
+def _rows_for(fields: list[DetailField]) -> list[DetailRow]:
+    """Build a section's rows, folding each editable value's following "✕ remove"
+    sibling into that row's Edit/Delete submenu (so it isn't a separate row)."""
+    rows: list[DetailRow] = []
+    i = 0
+    while i < len(fields):
+        f = fields[i]
+        nxt = fields[i + 1] if i + 1 < len(fields) else None
+        if f.editable and nxt is not None and nxt.meta.get("type") == "action_del":
+            rows.append(DetailRow(f, delete_field=nxt))
+            i += 2
+        else:
+            rows.append(DetailRow(f))
+            i += 1
+    return rows
+
+
 class SectionHeader(Static):
     """A non-focusable section title (e.g. 'Identity', 'Danger Zone')."""
 
@@ -112,7 +129,7 @@ class DetailRow(Static):
             trees[0].focus()
 
     class EditRequested(Message):
-        """Posted when the user activates an editable value row (Enter)."""
+        """Posted when the user activates an edit-only value row (Enter)."""
 
         def __init__(self, field: DetailField) -> None:
             super().__init__()
@@ -125,19 +142,42 @@ class DetailRow(Static):
             super().__init__()
             self.field = field
 
-    def __init__(self, field: DetailField) -> None:
+    class MenuRequested(Message):
+        """Posted when a value row that can be both edited and deleted is activated.
+
+        The app shows an Edit / Delete submenu anchored at the row.
+        """
+
+        def __init__(
+            self, field: DetailField, delete_field: DetailField, anchor: tuple[int, int]
+        ) -> None:
+            super().__init__()
+            self.field = field
+            self.delete_field = delete_field
+            self.anchor = anchor
+
+    def __init__(self, field: DetailField, delete_field: DetailField | None = None) -> None:
         super().__init__(field_markup(field))
         self.field = field
+        self.delete_field = delete_field  # the paired "✕ remove" row, if any
         self.add_class("detail-row")
         tip = _row_tooltip(field)
         if tip:
             self.tooltip = tip
 
+    def _anchor(self) -> tuple[int, int]:
+        return (self.region.x, self.region.y)
+
     def action_activate(self) -> None:
-        if self.field.editable:
+        if self.field.editable and self.delete_field is not None:
+            self.post_message(self.MenuRequested(self.field, self.delete_field, self._anchor()))
+        elif self.field.editable:
             self.post_message(self.EditRequested(self.field))
         elif self.field.meta.get("action"):
             self.post_message(self.ActionRequested(self.field))
+
+    def on_click(self) -> None:
+        self.action_activate()
 
 
 class DetailView(VerticalScroll):
@@ -166,5 +206,5 @@ class DetailView(VerticalScroll):
         for sec in build_sections(tax, uri, lang):
             if sec.title:
                 widgets.append(SectionHeader(sec.title, danger=sec.danger))
-            widgets.extend(DetailRow(f) for f in sec.fields)
+            widgets.extend(_rows_for(sec.fields))
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

@@ -24,6 +24,18 @@ def _local(uri: str) -> str:
     return uri.rstrip("/#").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
+def languages_in_use(tax: Taxonomy) -> list[str]:
+    """Sorted language codes that appear on any label across the taxonomy."""
+    langs: set[str] = set()
+    stores = (tax.owl_classes, tax.owl_individuals, tax.owl_properties, tax.concepts, tax.schemes)
+    for store in stores:
+        for entity in store.values():
+            for label in getattr(entity, "labels", []):
+                if label.lang:
+                    langs.add(label.lang)
+    return sorted(langs)
+
+
 def label_of(tax: Taxonomy, uri: str, lang: str = "en") -> str:
     """Best human label for *uri* across every layer, falling back to local name."""
     sources = (

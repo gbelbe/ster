@@ -134,6 +134,14 @@ def is_copypaste() -> bool:
     return bool(_load_config().get("copypaste", False))
 
 
+def clear_model() -> None:
+    """Unconfigure the AI: drop the model, endpoint, and copy-paste mode."""
+    cfg = _load_config()
+    for key in ("model", "endpoint", "copypaste"):
+        cfg.pop(key, None)
+    _save_config(cfg)
+
+
 def save_copypaste(enabled: bool) -> None:
     """Persist copy-paste mode to ai.json."""
     cfg = _load_config()

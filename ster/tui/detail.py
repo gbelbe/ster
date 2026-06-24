@@ -24,12 +24,14 @@ from ster.nav.logic import (
     build_rdf_class_detail,
     build_scheme_detail,
     build_tui_ontology_overview_fields,
+    build_tui_taxonomy_overview_fields,
 )
 
 from . import data
 
-# Sentinel "uri" for the ontology overview node (the global window).
-OVERVIEW_URI = "__ster:overview__"
+# Sentinel "uris" for the overview nodes (no real entity behind them).
+OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
+TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 
 # Field meta["type"] values that start a new section rather than render a row.
 _SEPARATORS = frozenset({"separator", "separator_danger"})
@@ -75,17 +77,42 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
     return sections
 
 
+def _fields_for(tax: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+    """The flat DetailField list for *uri* (overview sentinel or entity builder)."""
+    if uri == OVERVIEW_URI:
+        return build_tui_ontology_overview_fields(tax, lang)
+    if uri == TAXONOMY_URI:
+        return build_tui_taxonomy_overview_fields(tax, lang)
+    builder = _BUILDERS.get(data.kind_of(tax, uri))
+    return builder(tax, uri, lang) if builder else []
+
+
+def _is_create(f: DetailField) -> bool:
+    """True for a constructive (＋ Add…) action row."""
+    return f.meta.get("type") == "action_add" or f.display.lstrip().startswith("＋")
+
+
+def _creates_first(fields: list[DetailField]) -> list[DetailField]:
+    """Stable-reorder a section's fields so its ＋ Add… action sits first.
+
+    Keeps the create affordance visible at the top of its section (e.g. "＋ Add
+    metadata" right under the "Metadata" title) without scrolling past the values.
+    """
+    creates = [f for f in fields if _is_create(f)]
+    rest = [f for f in fields if not _is_create(f)]
+    return creates + rest
+
+
 def build_sections(tax: Taxonomy, uri: str, lang: str = "en") -> list[DetailSection]:
     """Return the grouped detail sections for *uri*, dispatched by entity kind.
 
-    Returns ``[]`` for a uri with no detail builder (e.g. a tree section node).
+    Within each section the constructive ＋ Add… action is hoisted to the top
+    (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
-    if uri == OVERVIEW_URI:
-        return group_sections(build_tui_ontology_overview_fields(tax, lang))
-    builder = _BUILDERS.get(data.kind_of(tax, uri))
-    if builder is None:
-        return []
-    return group_sections(builder(tax, uri, lang))
+    sections = group_sections(_fields_for(tax, uri, lang))
+    for sec in sections:
+        sec.fields = _creates_first(sec.fields)
+    return sections
 
 
 def field_markup(f: DetailField) -> str:

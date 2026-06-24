@@ -2571,6 +2571,46 @@ def _ontology_identity_action_fields(taxonomy: Taxonomy) -> list[DetailField]:
     return actions
 
 
+def _tui_ontology_separator(taxonomy: Taxonomy, root: str) -> str:
+    """The base-URI separator: the raw trailing #/ if any, else detected from
+    existing entity URIs, else ``#``."""
+    raw = taxonomy.ontology_uri or ""
+    if raw[-1:] in ("#", "/"):
+        return raw[-1]
+    for u in list(taxonomy.owl_classes) + list(taxonomy.owl_individuals):
+        if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+            return u[len(root)]
+    return "#"
+
+
+def _tui_identity_rows(taxonomy: Taxonomy) -> list[DetailField]:
+    """New-TUI overview identity: one line showing the full base URI (with its
+    ``#`` / ``/`` separator) and the prefix. Activating it opens the identity
+    modal, which edits the domain / path / separator / prefix as independent fields.
+    """
+    raw = taxonomy.ontology_uri
+    if not raw:
+        return []
+    if not raw.startswith(("http://", "https://")):
+        value = raw  # non-http: show as-is, no separator/prefix decomposition
+    else:
+        from ster.domain.onto import ontology_prefix
+
+        root = raw.rstrip("#/")
+        full = root + _tui_ontology_separator(taxonomy, root)
+        prefix = ontology_prefix(taxonomy) or ""
+        value = f"{full}   ·   prefix: {prefix or 'none'}"
+    return [
+        DetailField(
+            "ont:uri",
+            "URI",
+            value,
+            editable=False,
+            meta={"type": "uri", "action": "edit_ontology_uri"},
+        )
+    ]
+
+
 def _overview_metadata_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
     """Setup + ontology-metadata rows (URI, identity actions, version, title…)."""
     fields = [_sep("Setup"), _display_lang_field(lang), _sep("Ontology")]
@@ -2900,12 +2940,7 @@ def build_tui_ontology_overview_fields(
     # ── Identity ──────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
     if taxonomy.ontology_uri:
-        fields.append(
-            DetailField(
-                "ont:uri", "URI", taxonomy.ontology_uri, editable=False, meta={"type": "uri"}
-            )
-        )
-        fields.extend(_ontology_identity_action_fields(taxonomy))
+        fields.extend(_tui_identity_rows(taxonomy))
 
     # ── Descriptive metadata ──────────────────────────────────────────────────
     fields.append(_sep("Metadata"))
@@ -2919,6 +2954,44 @@ def build_tui_ontology_overview_fields(
         )
     )
 
+    return fields
+
+
+def build_tui_taxonomy_overview_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
+    """Detail panel for the Taxonomy (SKOS) overview node — New-TUI only.
+
+    Mirrors the ontology overview but with the *taxonomy's* identity and metadata:
+    the concept-scheme namespace + prefix, and the scheme's SKOS metadata (title,
+    creator, created, languages, descriptions, other annotations).
+    """
+    scheme = taxonomy.primary_scheme()
+    if scheme is None:
+        return [_stat("tax:none", "", "No concept scheme in this taxonomy yet.")]
+
+    target = scheme.uri  # scheme-keyed edits route here via meta["target_uri"]
+
+    def _scheme_field(key: str, label: str, value: str, ftype: str) -> DetailField:
+        return DetailField(
+            key, label, value, editable=True, meta={"type": ftype, "target_uri": target}
+        )
+
+    fields: list[DetailField] = [_sep("Metadata")]
+    fields.append(_scheme_field("tax:title", "title", scheme.title(lang), "scheme_title"))
+    fields.append(_scheme_field("tax:creator", "creator", scheme.creator, "scheme_creator"))
+    fields.append(_scheme_field("tax:created", "created", scheme.created, "scheme_created"))
+    fields.append(
+        _scheme_field("tax:langs", "languages", ", ".join(scheme.languages), "scheme_languages")
+    )
+    for i, desc in enumerate(scheme.descriptions):
+        fields.append(_stat(f"tax:desc:{i}", "description", desc.value))
+    for annotation in scheme.annotations:
+        fields.append(
+            _stat(
+                f"tax:ann:{annotation.predicate}",
+                _annotation_display(annotation.predicate),
+                annotation.value,
+            )
+        )
     return fields
 
 

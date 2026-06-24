@@ -36,6 +36,44 @@ def _save_lang_pref(file_path: Path, lang: str) -> None:
         pass
 
 
+# ── configured languages (per file) ──────────────────────────────────────────
+# The set of language codes the user authors in — drives how many label / prefLabel
+# / comment fields language-dependent create flows offer. Stored per taxonomy file,
+# like the display-language preference.
+
+
+def _configured_langs_path() -> Path:
+    return Path.home() / ".config" / "ster" / "configured_langs.json"
+
+
+def load_configured_langs(file_path: Path) -> list[str]:
+    """Return the configured language codes for *file_path* (empty if unset)."""
+    p = _configured_langs_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text())
+            value = data.get(str(file_path.resolve()))
+            if isinstance(value, list):
+                return [str(code) for code in value]
+        except Exception:
+            pass
+    return []
+
+
+def save_configured_langs(file_path: Path, langs: list[str]) -> None:
+    """Persist the configured language codes for *file_path*."""
+    p = _configured_langs_path()
+    try:
+        data: dict = {}
+        if p.exists():
+            data = json.loads(p.read_text())
+        data[str(file_path.resolve())] = langs
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
 # ── general prefs ─────────────────────────────────────────────────────────────
 
 

@@ -78,6 +78,26 @@ async def _activate(app, pilot, predicate) -> None:  # noqa: ANN001
     await pilot.pause()
 
 
+async def _activate_menu(app, pilot, predicate, choice: str) -> None:  # noqa: ANN001
+    """Open a value row's Edit/Delete submenu and pick *choice* ("edit"|"delete").
+
+    Rows that are both editable and deletable (e.g. ontology annotations) now open
+    a submenu on Enter instead of editing directly.
+    """
+    from ster.tui.context_menu import ContextMenu
+    from ster.tui.detail_view import DetailRow
+
+    row = next(r for r in app.query(DetailRow) if predicate(r.field))
+    row.focus()
+    await pilot.pause()
+    await pilot.press("enter")  # opens the Edit/Delete submenu
+    await pilot.pause()
+    menu = app.query_one("#ctx-menu", ContextMenu)
+    menu.highlighted = 0 if choice == "edit" else 1
+    await pilot.press("enter")
+    await pilot.pause()
+
+
 async def _submit_text(app, pilot, value: str) -> None:  # noqa: ANN001
     from textual.widgets import Input
 
@@ -247,15 +267,14 @@ def when_set_ont_title(ctx: dict, title: str) -> None:
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
         # In the new-TUI overview, the title field is a generic ont_annotation row
-        # keyed by the dcterms:title predicate (may or may not exist yet).
-        # Try the annotation row first; fall back to the legacy ont_title type.
-        await _activate(
+        # keyed by the dcterms:title predicate — editable + deletable → submenu.
+        await _activate_menu(
             app,
             pilot,
             lambda f: (
-                (f.meta.get("type") == "ont_annotation" and "title" in f.meta.get("predicate", ""))
-                or f.meta.get("type") == "ont_title"
+                f.meta.get("type") == "ont_annotation" and "title" in f.meta.get("predicate", "")
             ),
+            "edit",
         )
         await _submit_text(app, pilot, title)
 
@@ -265,10 +284,15 @@ def when_set_ont_title(ctx: dict, title: str) -> None:
 @when(parsers.parse('I set the ontology prefix to "{prefix}"'))
 def when_set_ont_prefix(ctx: dict, prefix: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
+        from textual.widgets import Input
+
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("edit_ontology_prefix"))
-        await _submit_text(app, pilot, prefix)
+        await _activate(app, pilot, _by_action("edit_ontology_uri"))  # identity modal
+        modal = app.screen
+        modal.query_one("#oi-prefix", Input).value = prefix
+        modal._submit()  # URI unchanged → prefix set directly (no confirm)
+        await pilot.pause()
 
     _edit(ctx, do)
 
@@ -578,10 +602,25 @@ def when_convert_class_to_ind(ctx: dict, cls: str, choice: str) -> None:
 @when(parsers.parse('I change the ontology base URI to "{base}"'))
 def when_change_base_uri(ctx: dict, base: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
+        from urllib.parse import urlsplit
+
+        from textual.widgets import Input, RadioButton
+
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("edit_ontology_uri"))
-        await _submit_text(app, pilot, base)
+        await _activate(app, pilot, _by_action("edit_ontology_uri"))  # identity modal
+        # Decompose the target into the modal's independent fields.
+        sep = base[-1] if base[-1:] in "#/" else "#"
+        parts = urlsplit(base.rstrip("#/"))
+        modal = app.screen
+        modal.query_one("#oi-domain", Input).value = parts.netloc
+        modal.query_one("#oi-path", Input).value = parts.path.strip("/")
+        list(modal.query(RadioButton))[1 if sep == "/" else 0].value = True
+        await pilot.pause()
+        modal._submit()  # → impact-confirm modal
+        await pilot.pause()
+        await pilot.press("enter")  # confirm the rename (first button focused)
+        await pilot.pause()
 
     _edit(ctx, do)
 
@@ -589,10 +628,17 @@ def when_change_base_uri(ctx: dict, base: str) -> None:
 @when(parsers.parse('I change the ontology domain to "{domain}"'))
 def when_change_domain(ctx: dict, domain: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
+        from textual.widgets import Input
+
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("edit_ontology_domain"))
-        await _submit_text(app, pilot, domain)
+        await _activate(app, pilot, _by_action("edit_ontology_uri"))  # identity modal
+        modal = app.screen
+        modal.query_one("#oi-domain", Input).value = domain  # edit only the host
+        modal._submit()
+        await pilot.pause()
+        await pilot.press("enter")  # confirm the cascade
+        await pilot.pause()
 
     _edit(ctx, do)
 
@@ -886,10 +932,11 @@ def when_edit_annotation(ctx: dict, predicate_label: str, new_value: str) -> Non
     async def do(app, pilot):  # noqa: ANN001
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(
+        await _activate_menu(
             app,
             pilot,
             lambda f: f.meta.get("type") == "ont_annotation" and predicate_label in f.display,
+            "edit",
         )
         await _submit_text(app, pilot, new_value)
 
@@ -911,14 +958,16 @@ def when_remove_annotation(ctx: dict, predicate_label: str, value: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(detail.OVERVIEW_URI)
         await pilot.pause()
-        await _activate(
+        # The "✕ remove" row is folded into the value row's submenu → pick Delete.
+        await _activate_menu(
             app,
             pilot,
             lambda f: (
-                f.meta.get("action") == "remove_ont_annotation"
+                f.meta.get("type") == "ont_annotation"
                 and predicate_label in f.display
-                and f.meta.get("value") == value
+                and f.meta.get("old_value") == value
             ),
+            "delete",
         )
 
     _edit(ctx, do)

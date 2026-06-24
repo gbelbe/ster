@@ -13,7 +13,13 @@ from pathlib import Path
 
 from ster import store
 from ster.nav.logic import DetailField, build_rdf_class_detail
-from ster.tui.detail import DetailSection, group_sections, render_detail
+from ster.tui.detail import (
+    OVERVIEW_URI,
+    DetailSection,
+    build_sections,
+    group_sections,
+    render_detail,
+)
 
 _DEMO = Path(__file__).parents[2] / "ster" / "tui" / "demo.ttl"
 _ZOO = "https://example.org/zoo/"
@@ -66,6 +72,28 @@ def test_group_sections_class_detail_titles_in_order() -> None:
     assert "Labels" in titles and "Hierarchy" in titles
     assert titles[-1] == "Danger Zone"
     assert isinstance(sections[0], DetailSection)
+
+
+# ── build_sections hoists ＋ Add… to the top of each section ────────────────────
+
+
+def test_build_sections_hoists_create_action_to_top_of_section() -> None:
+    tax = store.load(_DEMO)
+    sections = build_sections(tax, OVERVIEW_URI, "en")
+    metadata = next(s for s in sections if s.title == "Metadata")
+    # The "＋ Add metadata" action is the first row, above the annotation values.
+    assert metadata.fields, "Metadata section should not be empty"
+    assert metadata.fields[0].display.lstrip().startswith("＋")
+
+
+def test_build_sections_keeps_value_order_after_the_create_action() -> None:
+    # A synthetic section: value, create, value → create hoisted, values keep order.
+    from ster.tui.detail import _creates_first
+
+    a = DetailField("a", "alpha", "1", editable=True, meta={"type": "rdf_label"})
+    add = DetailField("add", "＋ Add", "", editable=False, meta={"type": "action_add"})
+    b = DetailField("b", "beta", "2", editable=True, meta={"type": "rdf_label"})
+    assert [f.display for f in _creates_first([a, add, b])] == ["＋ Add", "alpha", "beta"]
 
 
 # ── render_detail (Rich markup) ─────────────────────────────────────────────────

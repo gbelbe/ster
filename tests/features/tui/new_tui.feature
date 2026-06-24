@@ -48,7 +48,7 @@ Feature: New-TUI — the Textual ontology browser
 
   Scenario: Searching for an unknown entity leaves the view unchanged
     When I search for "https://example.org/zoo/Nonexistent"
-    Then the detail panel still shows the placeholder
+    Then the detail panel still shows the overview
 
   Scenario: Browsing a SKOS concept scheme
     Given a SKOS scheme "Animals" with concepts "Cat" and "Dog" is open in the New-TUI
