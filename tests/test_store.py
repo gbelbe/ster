@@ -81,6 +81,38 @@ def test_taxonomy_base_uri_derived_from_concepts(simple_taxonomy):
     assert simple_taxonomy.base_uri() == BASE
 
 
+def test_user_declared_wv_prefix_is_captured_on_load(tmp_path):
+    """Regression: a file that genuinely uses 'wv:' must keep it (was filtered out
+    as if it were an rdflib default, so the prefix read back as None)."""
+    p = tmp_path / "wv.ttl"
+    p.write_text(
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+        "@prefix wv: <https://example.org/wind/> .\n"
+        "wv:scheme a skos:ConceptScheme .\n",
+        encoding="utf-8",
+    )
+    t = store.load(p)
+    assert t.namespace_bindings.get("wv") == "https://example.org/wind/"
+
+
+def test_custom_prefix_survives_save_reload_without_wv_clobber(tmp_path):
+    """Regression: a prefix set on a SKOS taxonomy persists across save/reload and
+    the auto 'wv' fallback no longer overrides the user's choice."""
+    from ster.operations import ontology_prefix, set_ontology_prefix
+
+    t = Taxonomy()
+    from ster import operations
+
+    operations.create_scheme(t, BASE + "Scheme", {"en": "Test"}, base_uri=BASE)
+    set_ontology_prefix(t, "wind")
+    out = tmp_path / "out.ttl"
+    store.save(t, out)
+    text = out.read_text(encoding="utf-8")
+    assert "@prefix wind:" in text
+    assert "@prefix wv:" not in text  # the fallback must not clobber the user prefix
+    assert ontology_prefix(store.load(out)) == "wind"
+
+
 def test_unsupported_extension_raises(tmp_path):
     p = tmp_path / "bad.csv"
     p.write_text("nope")

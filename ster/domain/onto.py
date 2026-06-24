@@ -188,15 +188,38 @@ def validate_prefix(prefix: str) -> str | None:
     return None
 
 
+def _ontology_prefix_namespace(taxonomy: Taxonomy) -> str:
+    """The namespace the ontology prefix binds to.
+
+    When an ``owl:Ontology`` URI is set, that is *its own* namespace (root +
+    separator) — independent of ``base_uri()``, which a SKOS scheme's
+    ``void:uriSpace`` can override to an unrelated value. Falls back to
+    ``base_uri()`` for prefix-less SKOS taxonomies.
+    """
+    root = (taxonomy.ontology_uri or "").rstrip("#/")
+    if root:
+        return root + _ontology_separator(taxonomy)
+    return taxonomy.base_uri()
+
+
 def ontology_prefix(taxonomy: Taxonomy) -> str | None:
-    """Return the prefix bound to the ontology base namespace, or None."""
-    base = taxonomy.base_uri()
-    if not base:
+    """Return the prefix bound to the ontology namespace, or None.
+
+    A named prefix is preferred over the empty default ("``:``") binding: after
+    setting a prefix, serialization keeps both bound to the base, and returning the
+    empty one would make the prefix appear lost on reload.
+    """
+    ns = _ontology_prefix_namespace(taxonomy)
+    if not ns:
         return None
-    for prefix, ns in taxonomy.namespace_bindings.items():
-        if ns == base:
-            return prefix
-    return None
+    ns_root = ns.rstrip("#/")  # match by root: '#' vs '/' representations may differ
+    matches = [
+        prefix for prefix, n in taxonomy.namespace_bindings.items() if n.rstrip("#/") == ns_root
+    ]
+    if not matches:
+        return None
+    named = [prefix for prefix in matches if prefix]
+    return named[0] if named else matches[0]
 
 
 def count_prefix_uses(taxonomy: Taxonomy, prefix: str) -> int:
@@ -237,10 +260,10 @@ def set_ontology_prefix(taxonomy: Taxonomy, new_prefix: str) -> None:
     existing prefix (entity URIs are unchanged)."""
     old = ontology_prefix(taxonomy)
     if old is None:
-        base = taxonomy.base_uri()
-        if base:
-            taxonomy.namespace_bindings[new_prefix] = base
-    else:
+        ns = _ontology_prefix_namespace(taxonomy)
+        if ns:
+            taxonomy.namespace_bindings[new_prefix] = ns
+    elif old != new_prefix:
         rename_prefix(taxonomy, old, new_prefix)
 
 

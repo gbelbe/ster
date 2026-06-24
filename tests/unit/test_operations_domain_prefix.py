@@ -112,6 +112,45 @@ def test_ontology_prefix_none_when_unbound():
     assert ontology_prefix(t) is None
 
 
+def test_ontology_prefix_prefers_named_over_empty_default():
+    """Regression: after setting a prefix, the empty ':' default stays bound to the
+    same base; reading must return the named prefix, not '' (else it looks lost)."""
+    from ster.operations import ontology_prefix
+
+    t = _tax()  # "kai" already bound to BASE + "#"
+    t.namespace_bindings[""] = BASE + "#"  # the default ':' rdflib keeps on save
+    assert ontology_prefix(t) == "kai"
+
+
+def test_set_prefix_survives_save_and_reload(tmp_path):
+    """Regression (close + reopen): a prefix set then persisted reads back after load."""
+    from ster import store
+    from ster.operations import ontology_prefix, set_ontology_prefix
+
+    t = _tax()
+    set_ontology_prefix(t, "zoo")
+    path = tmp_path / "o.ttl"
+    store.save(t, path)
+    assert ontology_prefix(store.load(path)) == "zoo"
+
+
+def test_ontology_prefix_uses_ontology_namespace_not_scheme_base():
+    """Regression: with both an owl:Ontology and a SKOS scheme whose void:uriSpace
+    overrides base_uri(), the ontology prefix tracks the ontology URI's namespace
+    (e.g. the auto 'ns1'), not the scheme's base."""
+    from ster.model import ConceptScheme
+    from ster.operations import ontology_prefix, set_ontology_prefix
+
+    t = _tax()  # ontology_uri = BASE, "kai" bound to BASE + "#"
+    # A SKOS scheme whose base_uri overrides Taxonomy.base_uri() to an unrelated value.
+    t.schemes["s"] = ConceptScheme(uri="s", base_uri="test")
+    assert t.base_uri() == "test"  # scheme wins for base_uri()
+    assert ontology_prefix(t) == "kai"  # …but the ontology prefix follows the ontology URI
+    set_ontology_prefix(t, "renamed")
+    assert ontology_prefix(t) == "renamed"
+    assert t.namespace_bindings.get("renamed") == BASE + "#"  # rebound on the ontology ns
+
+
 def test_rename_prefix_rebinds_namespace():
     from ster.operations import rename_prefix
 
