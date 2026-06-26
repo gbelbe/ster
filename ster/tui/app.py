@@ -246,6 +246,7 @@ class OntologyApp(App):
         self.source = source
         self._path = path
         self.configured_langs = self._load_configured_langs(path, lang)
+        self.metadata_props = self._load_metadata_props()  # ontology-metadata catalog
         self._service = self._make_service(taxonomy, path)
         self.search_rows = data.search_rows(taxonomy, lang)
         self._uri_nodes: dict[str, TreeNode] = {}
@@ -260,6 +261,14 @@ class OntologyApp(App):
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
         self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
+
+    def _load_metadata_props(self) -> list[tuple[str, str]]:
+        """The configured ontology-metadata predicate catalog (built-in defaults
+        when the user has never customised it)."""
+        from ster.nav.logic import default_annotation_catalog
+        from ster.nav.prefs import load_metadata_props
+
+        return load_metadata_props() or default_annotation_catalog()
 
     def _load_configured_langs(self, path: Path | None, lang: str) -> list[str]:
         """Per-file configured languages, defaulting to the display language."""
@@ -276,7 +285,14 @@ class OntologyApp(App):
         available = data.languages_in_use(self.tax)
         themes = sorted(self.available_themes)
         self.push_screen(
-            ConfigModal(self.lang, self.configured_langs, available, themes, self.theme)
+            ConfigModal(
+                self.lang,
+                self.configured_langs,
+                available,
+                themes,
+                self.theme,
+                metadata_props=self.metadata_props,
+            )
         )
 
     def on_config_modal_changed(self, message) -> None:  # type: ignore[no-untyped-def]
@@ -296,13 +312,7 @@ class OntologyApp(App):
         theme = result.get("theme")
         if theme and theme in self.available_themes:
             self.theme = theme  # live preview
-
-        from ster.nav.prefs import _save_lang_pref, _save_prefs, save_configured_langs
-
-        _save_prefs({"theme": self.theme})  # theme is a global preference
-        if self._path is not None:
-            _save_lang_pref(self._path, new_lang)
-            save_configured_langs(self._path, self.configured_langs)
+        self._persist_config(result, new_lang)
 
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
@@ -311,6 +321,24 @@ class OntologyApp(App):
             self._show(self._detail_uri)  # reflect the new configured-language rows
         for lang in removed:
             self._maybe_purge_language(lang)
+
+    def _persist_config(self, result: dict, new_lang: str) -> None:
+        """Save the config modal's settings (theme + metadata catalog globally,
+        display + configured languages per-file)."""
+        from ster.nav.prefs import (
+            _save_lang_pref,
+            _save_prefs,
+            save_configured_langs,
+            save_metadata_props,
+        )
+
+        _save_prefs({"theme": self.theme})  # theme is a global preference
+        if "metadata_props" in result:  # the configurable "Add metadata" catalog (global)
+            self.metadata_props = [tuple(p) for p in result["metadata_props"]]
+            save_metadata_props(self.metadata_props)
+        if self._path is not None:
+            _save_lang_pref(self._path, new_lang)
+            save_configured_langs(self._path, self.configured_langs)
 
     def _maybe_purge_language(self, lang: str) -> None:
         """A configured language was removed: if the file still has data in it,
@@ -1038,7 +1066,7 @@ class OntologyApp(App):
         """Two-step: pick a predicate from the catalog, then enter the value."""
         from ster.nav.logic import annotation_catalog_options
 
-        options = annotation_catalog_options(self.tax)
+        options = annotation_catalog_options(self.tax, self.metadata_props)
         if not options:
             self.notify("All known annotation predicates are already present.", severity="warning")
             return

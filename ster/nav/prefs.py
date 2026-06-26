@@ -74,6 +74,41 @@ def save_configured_langs(file_path: Path, langs: list[str]) -> None:
         pass
 
 
+# ── ontology-metadata predicate catalog (global) ──────────────────────────────
+
+
+def _metadata_props_path() -> Path:
+    return Path.home() / ".config" / "ster" / "metadata_props.json"
+
+
+def load_metadata_props() -> list[tuple[str, str]] | None:
+    """The configured ontology-metadata predicates as ``(predicate, label)`` pairs,
+    or ``None`` when never configured (callers fall back to the built-in defaults)."""
+    p = _metadata_props_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text())
+            if isinstance(data, list):
+                return [
+                    (str(e["predicate"]), str(e.get("label", "")))
+                    for e in data
+                    if isinstance(e, dict) and e.get("predicate")
+                ]
+        except Exception:
+            pass
+    return None
+
+
+def save_metadata_props(props: list[tuple[str, str]]) -> None:
+    """Persist the ontology-metadata predicate catalog (global, tool-wide)."""
+    p = _metadata_props_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps([{"predicate": pr, "label": lb} for pr, lb in props], indent=2))
+    except Exception:
+        pass
+
+
 # ── general prefs ─────────────────────────────────────────────────────────────
 
 

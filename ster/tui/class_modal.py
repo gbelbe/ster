@@ -25,12 +25,14 @@ class ClassModal(ModalBase[dict | None]):
     """Add or edit a class: URI + rdfs:label / rdfs:comment per configured language."""
 
     DEFAULT_CSS = """
-    #class-box { width: 80%; max-width: 90; max-height: 90%; }
+    #class-box { width: 70%; max-width: 64; max-height: 90%; }
     #class-box .cm-label { text-style: bold; margin-top: 1; }
-    #class-box .cm-row { height: auto; }
-    #class-box .cm-lang { width: 6; padding: 1 0 0 0; color: $text-muted; }
-    #class-box Input { border: round $primary; }
-    #class-box Button { margin-top: 1; }
+    #class-box .cm-row { height: 3; }
+    /* The [lang] caption: full row height + vertically centred so it lines up
+       with the input (a 1-row-tall caption with top padding gets clipped). */
+    #class-box .cm-lang { width: 5; height: 3; content-align: right middle; color: $text-muted; }
+    #class-box Input { width: 1fr; border: round $primary; }
+    #class-box #cm-save { margin-top: 1; width: auto; }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -55,8 +57,14 @@ class ClassModal(ModalBase[dict | None]):
 
     def compose(self) -> ComposeResult:
         self._uri = FragmentInput(self._prefix, self._fragment, id="cm-uri")
-        self._label_inputs = {lg: Input(value=self._labels.get(lg, "")) for lg in self._langs}
-        self._comment_inputs = {lg: Input(value=self._comments.get(lg, "")) for lg in self._langs}
+        self._label_inputs = {
+            lg: Input(value=self._labels.get(lg, ""), placeholder=f"label [{lg}]")
+            for lg in self._langs
+        }
+        self._comment_inputs = {
+            lg: Input(value=self._comments.get(lg, ""), placeholder=f"comment [{lg}]")
+            for lg in self._langs
+        }
         with VerticalScroll(id="class-box", classes="modal-box"):
             yield Static("URI", classes="cm-label")
             yield self._uri

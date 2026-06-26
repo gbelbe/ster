@@ -26,6 +26,7 @@ def _isolate_prefs(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
     monkeypatch.setattr(prefs, "_lang_prefs_path", lambda: tmp_path / "lang.json")
     monkeypatch.setattr(prefs, "_configured_langs_path", lambda: tmp_path / "clangs.json")
+    monkeypatch.setattr(prefs, "_metadata_props_path", lambda: tmp_path / "metaprops.json")
     monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", tmp_path / "server_config.json")
     monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
 
@@ -69,15 +70,178 @@ def test_configured_langs_default_to_display_language(tmp_path) -> None:
     assert app.configured_langs == ["de"]  # seeded from the display language
 
 
+# ── ontology-metadata predicate catalog ────────────────────────────────────────
+
+
+def test_metadata_props_round_trip_and_default(tmp_path) -> None:
+    from ster.nav.prefs import load_metadata_props, save_metadata_props
+
+    assert load_metadata_props() is None  # never configured → caller uses defaults
+    props = [("http://x/a", "ex:a"), ("http://x/b", "ex:b (hint)")]
+    save_metadata_props(props)
+    assert load_metadata_props() == props
+
+
+def test_app_metadata_props_default_to_builtin_catalog(tmp_path) -> None:
+    from ster.nav.logic import default_annotation_catalog
+
+    app, _src = _app(tmp_path)
+    assert app.metadata_props == default_annotation_catalog()  # built-ins when unconfigured
+
+
+def test_app_metadata_props_load_from_prefs(tmp_path) -> None:
+    from ster.nav.prefs import save_metadata_props
+
+    save_metadata_props([("http://x/custom", "ex:custom")])
+    app, _src = _app(tmp_path)
+    assert app.metadata_props == [("http://x/custom", "ex:custom")]
+
+
+def test_annotation_catalog_options_honours_passed_catalog() -> None:
+    from ster.model import OntologyAnnotation, Taxonomy
+    from ster.nav.logic import annotation_catalog_options
+
+    t = Taxonomy()
+    t.ontology_annotations.append(OntologyAnnotation("http://x/a", "v"))  # already present
+    catalog = [("http://x/a", "ex:a"), ("http://x/custom", "ex:custom")]
+    opts = annotation_catalog_options(t, catalog)
+    assert opts == [("http://x/custom", "ex:custom")]  # present one filtered out
+
+
+def test_suggest_label_prefixes_known_namespaces() -> None:
+    from ster.tui.config_modal import suggest_label
+
+    assert suggest_label("http://purl.org/dc/terms/rights") == "dcterms:rights"
+    assert suggest_label("http://example.org/x#foo") == "foo"  # unknown → local name
+
+
+# ── Default-properties tab (metadata catalog editor) ───────────────────────────
+
+
+def test_props_tab_lists_the_catalog_and_adds_custom(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            boxes = modal.query(_MetaCheckbox)
+            assert len(boxes) == len(app.metadata_props)  # one checkbox per predicate
+            assert all(cb.value for cb in boxes)  # all ticked by default
+            modal.query_one("#cfg-mp-uri", Input).value = "http://x/custom"
+            await modal._add_metadata_prop()
+            await pilot.pause()
+            preds = {(cb.predicate, cb.label_text) for cb in modal.query(_MetaCheckbox)}
+            assert ("http://x/custom", "custom") in preds  # added + auto-labelled, ticked
+
+    _run(scenario)
+
+
+def test_adding_a_property_persists_and_reaches_the_picker(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.nav.logic import annotation_catalog_options
+        from ster.nav.prefs import load_metadata_props
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            modal.query_one("#cfg-mp-uri", Input).value = "http://x/custom"
+            modal.query_one("#cfg-mp-label", Input).value = "ex:custom"
+            await modal._add_metadata_prop()  # auto-saves → app persists
+            for _ in range(3):
+                await pilot.pause()
+        # Persisted globally, loaded into the app, and offered by the picker.
+        assert ("http://x/custom", "ex:custom") in (load_metadata_props() or [])
+        assert ("http://x/custom", "ex:custom") in app.metadata_props
+        opts = annotation_catalog_options(app.tax, app.metadata_props)
+        assert ("http://x/custom", "ex:custom") in opts
+
+    _run(scenario)
+
+
+def test_unticking_a_property_removes_it_from_the_catalog(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            first = modal.query(_MetaCheckbox).first()
+            excluded = first.predicate
+            first.value = False  # untick → excluded from the catalog (auto-saves)
+            for _ in range(3):
+                await pilot.pause()
+        assert excluded not in {p for p, _ in app.metadata_props}
+
+    _run(scenario)
+
+
+def test_properties_navigate_with_arrows_and_toggle_with_space(tmp_path) -> None:
+    """In the Default-properties tab, arrows rove the checkboxes and space toggles
+    the highlighted one."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            await pilot.press("space")  # → Default-properties tab
+            await pilot.press("down")  # tab bar → the metadata group
+            await pilot.press("down")  # → first property checkbox
+            await pilot.pause()
+            first = modal.query(_MetaCheckbox).first()
+            assert first.has_class("mp-current")  # highlighted
+            assert first.value is True
+            await pilot.press("space")  # toggle it off
+            await pilot.pause()
+            assert first.value is False
+            await pilot.press("down")  # rove to the next property
+            await pilot.pause()
+            assert list(modal.query(_MetaCheckbox))[1].has_class("mp-current")
+
+    _run(scenario)
+
+
+def test_up_at_top_of_property_list_returns_to_tab_bar(tmp_path) -> None:
+    async def scenario() -> None:
+        from textual.widgets import Tabs
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            await _open_app_config(pilot, app)
+            await pilot.press("space")  # → Default-properties tab
+            await pilot.press("down")  # → metadata group
+            await pilot.press("down")  # → first property
+            await pilot.press("up")  # at the top → back to the tab headers
+            await pilot.pause()
+            assert isinstance(app.focused, Tabs)
+
+    _run(scenario)
+
+
 # ── modal structure ─────────────────────────────────────────────────────────────
 
 
-def test_opens_focused_on_display_language(tmp_path) -> None:
+def test_opens_on_tab_bar_and_space_switches_tabs(tmp_path) -> None:
     async def scenario() -> None:
+        from textual.widgets import TabbedContent, Tabs
+
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 40)) as pilot:
-            await _open_app_config(pilot, app)
-            assert app.screen.query_one("#cfg-display", Select).has_focus
+            modal = await _open_app_config(pilot, app)
+            assert modal.query_one(Tabs).has_focus  # lands on the tab bar
+            assert modal.query_one(TabbedContent).active == "cfg-tab-general"
+            await pilot.press("space")  # space cycles to the next tab
+            await pilot.pause()
+            assert modal.query_one(TabbedContent).active == "cfg-tab-props"
+            await pilot.press("space")  # …and back
+            await pilot.pause()
+            assert modal.query_one(TabbedContent).active == "cfg-tab-general"
+            await pilot.press("down")  # arrow enters the tab's items
+            await pilot.pause()
+            assert not isinstance(app.focused, Tabs)  # focus left the tab bar
+            assert app.focused is modal.query_one("#cfg-display", Select)  # first item
 
     _run(scenario)
 
@@ -127,7 +291,9 @@ def test_toggling_a_checkbox_autosaves(tmp_path) -> None:
 def test_add_button_adds_checked_language_and_autosaves(tmp_path) -> None:
     async def scenario() -> None:
         app, src = _app(tmp_path)
-        async with app.run_test(size=(120, 40)) as pilot:
+        # The modal is a fixed 90% height; use a realistic terminal so the
+        # languages add-row (near the bottom of the General tab) is on screen.
+        async with app.run_test(size=(120, 48)) as pilot:
             await _open_app_config(pilot, app)
             app.screen.query_one("#cfg-extra", Input).value = "fr"
             await pilot.click("#cfg-add")

@@ -2907,14 +2907,24 @@ def _annotation_display(predicate: str) -> str:
     return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
-def annotation_catalog_options(taxonomy: Taxonomy) -> list[tuple[str, str]]:
+def default_annotation_catalog() -> list[tuple[str, str]]:
+    """The built-in ontology-metadata predicate catalog — ``(predicate, label)``
+    pairs. Used as the default when no user catalog is configured."""
+    return list(_ANNOTATION_CATALOG)
+
+
+def annotation_catalog_options(
+    taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None = None
+) -> list[tuple[str, str]]:
     """Return ``(predicate_uri, display_label)`` pairs available for "Add metadata".
 
-    Filters out predicates already present in ``taxonomy.ontology_annotations``
+    *catalog* is the configured predicate catalog (built-in default when ``None``);
+    predicates already present in ``taxonomy.ontology_annotations`` are filtered out
     so the picker only shows what can still be added.
     """
+    cat = catalog if catalog is not None else list(_ANNOTATION_CATALOG)
     present = {a.predicate for a in taxonomy.ontology_annotations}
-    return [(pred, label) for pred, label in _ANNOTATION_CATALOG if pred not in present]
+    return [(pred, label) for pred, label in cat if pred not in present]
 
 
 def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
