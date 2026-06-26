@@ -55,6 +55,8 @@ from .domain.owl import find_individuals_using_property as find_individuals_usin
 from .domain.owl import remove_individual_literal as remove_individual_literal
 from .domain.owl import remove_individual_property_value as remove_individual_property_value
 from .domain.owl import remove_individual_type as remove_individual_type
+from .domain.owl import remove_owl_comment as remove_owl_comment
+from .domain.owl import remove_owl_label as remove_owl_label
 from .domain.owl import remove_property_class as remove_property_class
 from .domain.owl import remove_subclass_of as remove_subclass_of
 from .domain.owl import rename_owl_uri as rename_owl_uri

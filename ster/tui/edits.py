@@ -304,6 +304,7 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
 # action is dispatched exactly like its detail-pane row (via _run_field_action).
 _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
     "class": [
+        ("✎ Edit class…", "edit_class"),
         ("↓ Add subclass", "new_subclass"),
         ("+ Add individual", "add_individual"),
         ("↑ Add superclass…", "link_superclass"),

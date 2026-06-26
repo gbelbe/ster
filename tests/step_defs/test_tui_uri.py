@@ -83,12 +83,19 @@ def _foreign_entity(tmp_path: Path, uri: str) -> Path:
 @when(parsers.parse('I add a class with the fragment "{fragment}"'))
 def _add_class(ctx: dict, src: Path, fragment: str) -> None:
     async def scenario() -> None:
+        from ster.tui.class_modal import ClassModal
+
         app = _app_for(ctx, src)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             app._run_field_action(_synth_action("create_owl_class"))
             await pilot.pause()
-            await _type_fragment_and_submit(pilot, app, fragment)
+            modal = app.screen  # creating a class opens the full ClassModal
+            assert isinstance(modal, ClassModal)
+            modal._uri.value = modal._uri.value + fragment  # base is locked; append fragment
+            modal._submit()
+            for _ in range(3):
+                await pilot.pause()
             ctx["tax"] = app.tax
 
     asyncio.run(scenario())

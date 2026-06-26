@@ -102,13 +102,16 @@ async def _submit_text(app, pilot, value: str) -> None:  # noqa: ANN001
     from textual.css.query import NoMatches
     from textual.widgets import Input
 
-    # URI flows open the fragment-locking UriModal (#uri-input); other text edits
-    # use the plain EditModal (#edit-input). The full URI starts with the locked
-    # base, so assigning the whole value leaves the prefix intact either way.
-    try:
-        inp = app.screen.query_one("#uri-input", Input)
-    except NoMatches:
-        inp = app.screen.query_one("#edit-input", Input)
+    # Creating a class opens the full ClassModal (#cm-uri); URI flows open the
+    # fragment-locking UriModal (#uri-input); other text edits use the plain
+    # EditModal (#edit-input). The full URI starts with the locked base, so
+    # assigning the whole value leaves the prefix intact in every case.
+    for sel in ("#cm-uri", "#uri-input", "#edit-input"):
+        try:
+            inp = app.screen.query_one(sel, Input)
+            break
+        except NoMatches:
+            continue
     inp.value = value
     await pilot.press("enter")
 

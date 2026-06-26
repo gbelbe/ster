@@ -55,6 +55,7 @@ _ACTION_HELP = {
     "add_top_concept": "Add a top concept to this scheme",
     "add_scheme": "Create a new SKOS concept scheme",
     "create_owl_class": "Create a new top-level OWL class",
+    "edit_class": "Edit this class — URI, labels and comments in one modal",
     "create_owl_property": "Create a new OWL property",
     "edit_ontology_prefix": "Edit the ontology's namespace prefix",
     "edit_ontology_uri": "Rename the ontology base URI (cascades to every entity)",

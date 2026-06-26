@@ -614,6 +614,9 @@ class OntologyApp(App):
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
+        if action == "edit_class":
+            self._open_class_edit(uri, path)  # full class modal (URI + labels + comments)
+            return
         direct = edits.direct_command(field, uri, path)
         if direct is not None:  # meta-driven removal — run immediately, no modal
             self._apply_command(direct)
@@ -738,9 +741,15 @@ class OntologyApp(App):
             return
         self._apply_command(command)
 
+    _CLASS_CREATE_ACTIONS = frozenset({"create_owl_class", "new_subclass"})
+
     def _open_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Collect a single text/URI value in a modal, then run its action command."""
         action = field.meta.get("action", "")
+        # Creating a class opens the full class modal (URI + labels + comments).
+        if action in self._CLASS_CREATE_ACTIONS:
+            self._open_class_create(action, uri, path)
+            return
         prompt, prefill_kind = edits.INPUT_ACTIONS[action]
 
         def _on_submit(value: str | None) -> None:
@@ -753,6 +762,69 @@ class OntologyApp(App):
             self.push_screen(UriModal(prompt, base), _on_submit)
         else:
             self.push_screen(EditModal(prompt, ""), _on_submit)
+
+    def _class_langs(self) -> list[str]:
+        return self.configured_langs or [self.lang]
+
+    def _open_class_create(self, action: str, uri: str, path: Path) -> None:
+        """Open the full class modal to create a class (top-level or under *uri*)."""
+        from ster.core.commands import OwlCreateClass
+
+        from .class_modal import ClassModal
+
+        base = uri_edit.mint_base(self.tax, action, uri)
+        parent = uri if action == "new_subclass" else None
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlCreateClass(
+                        path,
+                        result["uri"],
+                        parent,
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                    )
+                )
+
+        self.push_screen(ClassModal(prefix=base, langs=self._class_langs()), _on_submit)
+
+    def _open_class_edit(self, uri: str, path: Path) -> None:
+        """Open the full class modal to edit an existing class (URI / labels / comments)."""
+        from ster.core.commands import OwlSaveClass
+
+        from .class_modal import ClassModal
+
+        cls = self.tax.owl_classes.get(uri)
+        if cls is None:
+            return
+        prefix, fragment = uri_edit.split_namespace(uri)
+        labels = {lbl.lang: lbl.value for lbl in cls.labels}
+        comments = {c.lang: c.value for c in cls.comments}
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlSaveClass(
+                        path,
+                        uri,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                    )
+                )
+
+        self.push_screen(
+            ClassModal(
+                prefix=prefix,
+                fragment=fragment,
+                langs=self._class_langs(),
+                labels=labels,
+                comments=comments,
+                title="Edit class",
+            ),
+            _on_submit,
+        )
 
     def _open_meta_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Edit one existing value (the row's meta names which) via a prefilled modal."""

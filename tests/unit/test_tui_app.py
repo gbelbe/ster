@@ -969,8 +969,8 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     """An action row (Enter) → modal → constructive command → reload + save."""
 
     async def scenario() -> None:
+        from ster.tui.class_modal import ClassModal
         from ster.tui.detail_view import DetailRow
-        from ster.tui.uri_modal import FragmentInput, UriModal
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -984,16 +984,19 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             )
             row.focus()
             await pilot.pause()
-            await pilot.press("enter")  # action row → fragment URI modal
+            await pilot.press("enter")  # action row → full class modal
             await pilot.pause()
-            assert isinstance(app.screen, UriModal)
-            inp = app.screen.query_one(FragmentInput)
-            assert inp.value == ZOO  # base locked to the ontology namespace, fragment empty
-            await pilot.press("W", "o", "r", "k", "e", "r")  # type only the fragment
-            await pilot.press("enter")  # submit
+            assert isinstance(app.screen, ClassModal)
+            modal = app.screen
+            assert modal._uri.value == ZOO  # base locked to the ontology namespace
+            modal._uri.value = ZOO + "Worker"  # the new fragment
+            modal._label_inputs[app.lang].value = "Worker"  # also set a label in one go
+            modal._submit()
             for _ in range(3):
                 await pilot.pause()
-            assert ZOO + "Worker" in app.tax.owl_classes  # created under the locked base
+            cls = app.tax.owl_classes.get(ZOO + "Worker")
+            assert cls is not None and ZOO + "Person" in cls.sub_class_of  # created under Person
+            assert {lbl.value for lbl in cls.labels} == {"Worker"}  # label set at creation
             assert "Worker" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
