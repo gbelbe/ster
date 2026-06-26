@@ -13,6 +13,7 @@ from ..exceptions import (
     HandleNotFoundError,
     HasChildrenError,
     RelatedHierarchyConflictError,
+    SchemeNotFoundError,
 )
 from ..handles import assign_handles, handle_for_uri
 from ..model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
@@ -91,6 +92,39 @@ def remove_concept(taxonomy: Taxonomy, uri: str, *, cascade: bool = False) -> se
     _strip_dangling_concept_refs(taxonomy, to_remove)
     assign_handles(taxonomy)  # rebuild handle index (removed concepts gone)
     return to_remove
+
+
+def remove_scheme(taxonomy: Taxonomy, uri: str, *, cascade: bool = False) -> set[str]:
+    """Remove a concept scheme. Returns the set of removed URIs (the scheme, plus
+    every concept in it when *cascade* is True).
+
+    Without cascade the scheme's concepts survive; any concept that was a top
+    concept of this scheme has its ``top_concept_of`` link cleared. With cascade
+    every concept reachable from the scheme's top concepts is deleted too.
+
+    Raises ``SchemeNotFoundError`` if the scheme does not exist.
+    """
+    scheme = taxonomy.schemes.get(uri)
+    if scheme is None:
+        raise SchemeNotFoundError(uri)
+
+    removed: set[str] = {uri}
+    if cascade:
+        concept_uris: set[str] = set()
+        for top_uri in scheme.top_concepts:
+            concept_uris |= _subtree_uris(taxonomy, top_uri)
+        for c_uri in concept_uris:
+            _detach_and_delete_concept(taxonomy, c_uri)
+        _strip_dangling_concept_refs(taxonomy, concept_uris)
+        removed |= concept_uris
+    else:
+        for concept in taxonomy.concepts.values():
+            if concept.top_concept_of == uri:
+                concept.top_concept_of = None
+
+    del taxonomy.schemes[uri]
+    assign_handles(taxonomy)  # rebuild handle index (removed entities gone)
+    return removed
 
 
 def _detach_and_delete_concept(taxonomy: Taxonomy, r_uri: str) -> None:

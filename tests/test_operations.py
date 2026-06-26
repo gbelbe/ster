@@ -531,3 +531,38 @@ def test_create_scheme_default_languages():
     # languages defaults to the label keys
     assert "en" in scheme.languages
     assert "fr" in scheme.languages
+
+
+# ── remove_scheme ─────────────────────────────────────────────────────────────
+
+
+def test_remove_scheme_only_keeps_concepts(simple_taxonomy):
+    """Deleting a scheme without cascade drops only the scheme; its concepts
+    survive and lose their top-concept link to it."""
+    scheme_uri = BASE + "Scheme"
+    removed = operations.remove_scheme(simple_taxonomy, scheme_uri)
+    assert removed == {scheme_uri}
+    assert scheme_uri not in simple_taxonomy.schemes
+    # Every concept is still present …
+    for name in ("Top", "Child1", "Child2", "Grandchild"):
+        assert BASE + name in simple_taxonomy.concepts
+    # … but the former top concept no longer points at the deleted scheme.
+    assert simple_taxonomy.concepts[BASE + "Top"].top_concept_of is None
+
+
+def test_remove_scheme_cascade_deletes_all_its_concepts(simple_taxonomy):
+    """Cascade removes the scheme and every concept reachable from its top concepts."""
+    scheme_uri = BASE + "Scheme"
+    removed = operations.remove_scheme(simple_taxonomy, scheme_uri, cascade=True)
+    assert scheme_uri not in simple_taxonomy.schemes
+    for name in ("Top", "Child1", "Child2", "Grandchild"):
+        assert BASE + name not in simple_taxonomy.concepts
+    assert {BASE + n for n in ("Top", "Child1", "Child2", "Grandchild")} <= removed
+    assert scheme_uri in removed
+
+
+def test_remove_scheme_missing_raises(simple_taxonomy):
+    from ster.exceptions import SchemeNotFoundError
+
+    with pytest.raises(SchemeNotFoundError):
+        operations.remove_scheme(simple_taxonomy, BASE + "NoSuchScheme")

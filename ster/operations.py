@@ -18,6 +18,7 @@ from .domain.cross import resolve as resolve
 
 # Re-export the ontology-metadata layer (moved to ster.domain.onto) so the ~37
 # call sites keep importing from ster.operations. See docs/architecture/module-layout.md.
+from .domain.onto import _ontology_separator as _ontology_separator
 from .domain.onto import collect_ontology_entities as collect_ontology_entities
 from .domain.onto import count_domain_rename_changes as count_domain_rename_changes
 from .domain.onto import count_ontology_rename_changes as count_ontology_rename_changes
@@ -74,6 +75,7 @@ from .domain.skos import remove_concept_mapping_link as remove_concept_mapping_l
 from .domain.skos import remove_definition as remove_definition
 from .domain.skos import remove_label as remove_label
 from .domain.skos import remove_related as remove_related
+from .domain.skos import remove_scheme as remove_scheme
 from .domain.skos import remove_scope_note as remove_scope_note
 from .domain.skos import rename_uri as rename_uri
 from .domain.skos import set_definition as set_definition

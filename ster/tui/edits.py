@@ -56,6 +56,7 @@ from ster.core.commands import (
     SkosCreateScheme,
     SkosMoveConcept,
     SkosRemoveConcept,
+    SkosRemoveScheme,
     SkosSetDefinition,
     SkosSetLabel,
     SkosSetSchemeField,
@@ -237,6 +238,10 @@ DELETE_CHOICES: dict[str, list[tuple[str, str]]] = {
         ("Keep narrower concepts (re-link to parents)", "keep"),
         ("Delete the concept and its descendants", "cascade"),
     ],
+    "delete_scheme": [
+        ("Delete the scheme only (keep its concepts)", "scheme_only"),
+        ("Delete the scheme and all its concepts", "delete_all"),
+    ],
 }
 
 _DeleteFactory = Callable[[str, Path, str], object]
@@ -246,6 +251,7 @@ _DELETE_REGISTRY: dict[str, _DeleteFactory] = {
     "delete_individual": lambda u, p, c: OwlDeleteIndividual(p, u),
     "delete_property": lambda u, p, c: OwlDeleteProperty(p, u, clear_values=(c == "strip")),
     "delete": lambda u, p, c: SkosRemoveConcept(p, u, cascade=(c == "cascade")),
+    "delete_scheme": lambda u, p, c: SkosRemoveScheme(p, u, cascade=(c == "delete_all")),
 }
 
 
@@ -330,6 +336,7 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
     "scheme": [
         ("➕ Add top concept", "add_top_concept"),
         ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete_scheme"),
     ],
 }
 
