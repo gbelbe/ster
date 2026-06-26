@@ -43,6 +43,47 @@ def _app() -> OntologyApp:
     return OntologyApp(store.load(DEMO), source="demo.ttl")
 
 
+def test_is_actionable_distinguishes_info_rows_from_actionable_rows() -> None:
+    """Only editable / action / menu rows are actionable; plain info rows aren't."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import _is_actionable
+
+    info = DetailField("st:classes", "total", "4", editable=False, meta={"type": "stat"})
+    editable = DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"})
+    action = DetailField("a", "＋ Add", "", editable=False, meta={"action": "add_ont_annotation"})
+
+    assert not _is_actionable(info, None)
+    assert _is_actionable(editable, None)
+    assert _is_actionable(action, None)
+    # A value row with a paired delete sibling opens an Edit/Delete menu → actionable.
+    assert _is_actionable(info, editable)
+
+
+def test_clickable_rows_get_an_affordance_icon() -> None:
+    """Clickable value rows show a leading icon (✎ editable, ▸ other); info rows
+    and already-glyphed action rows don't get an extra one."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import _row_content
+
+    info = DetailField("st:classes", "total", "4", editable=False, meta={"type": "stat"})
+    editable = DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"})
+    lint = DetailField(
+        "st:lint_warning",
+        "Warnings",
+        "3",
+        editable=False,
+        meta={"action": "view_lint", "lint_severity": "warning"},
+    )
+    action = DetailField(
+        "a", "＋ Add", "", editable=False, meta={"type": "action_add", "action": "x"}
+    )
+
+    assert "✎" not in _row_content(info, actionable=False)  # info row — no affordance
+    assert _row_content(editable, actionable=True).startswith("✎")  # editable → pencil
+    assert _row_content(lint, actionable=True).startswith("▸")  # clickable non-edit → marker
+    assert "▸" not in _row_content(action, actionable=True)  # already has its own ＋ glyph
+
+
 def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
     """End-to-end mutation pipeline: focus a label row → modal → command → save."""
 
@@ -126,15 +167,47 @@ def test_detail_rows_wrap_around() -> None:
             await pilot.pause()
             app._show(ZOO + "Person")
             await pilot.pause()
-            rows = list(app.query("#detail DetailRow"))
+            rows = [r for r in app.query("#detail DetailRow") if r.can_focus]
             rows[0].focus()
             await pilot.pause()
-            await pilot.press("up")  # wrap to the last row
+            await pilot.press("up")  # wrap to the last actionable row
             await pilot.pause()
             assert app.focused is rows[-1]
-            await pilot.press("down")  # wrap back to the first row
+            await pilot.press("down")  # wrap back to the first actionable row
             await pilot.pause()
             assert app.focused is rows[0]
+
+    _run(scenario)
+
+
+def test_arrows_skip_information_only_rows_on_overview() -> None:
+    """On the ontology overview the arrows step over pure stat / info rows and
+    only land on actionable rows (edit, ＋ add, view actions)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            all_rows = list(app.query(DetailRow))
+            info_rows = [r for r in all_rows if not r.can_focus]
+            assert info_rows, "the overview has information-only rows (stats)"
+            assert all(not r.field.editable and not r.field.meta.get("action") for r in info_rows)
+            # Stepping with the arrows only ever lands on focusable rows.
+            focusable = [r for r in all_rows if r.can_focus]
+            focusable[0].focus()
+            await pilot.pause()
+            seen = set()
+            for _ in range(len(focusable) + 2):
+                await pilot.press("down")
+                await pilot.pause()
+                assert isinstance(app.focused, DetailRow) and app.focused.can_focus
+                seen.add(app.focused)
+            assert seen == set(focusable)  # every actionable row is reachable, no info rows
 
     _run(scenario)
 
@@ -453,6 +526,91 @@ def test_clicking_empty_detail_pane_selects_it() -> None:
     _run(scenario)
 
 
+_SKOS_DUP = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex:   <http://example.org/> .
+
+ex:Scheme a skos:ConceptScheme .
+ex:C1 a skos:Concept ;
+    skos:inScheme ex:Scheme ;
+    skos:prefLabel "One"@en ;
+    skos:prefLabel "Uno"@en .
+"""
+
+
+def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
+    """The overview's 'Errors'/'Warnings' count row for *severity*."""
+    from ster.tui.detail_view import DetailRow
+
+    return next(
+        r
+        for r in app.query(DetailRow)
+        if r.field.meta.get("action") == "view_lint"
+        and r.field.meta.get("lint_severity") == severity
+    )
+
+
+def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
+    """Activating the overview's 'Warnings' count row opens a LintModal scoped to
+    warnings (errors are excluded)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.lint_modal import LintModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            _lint_row(app, "warning").focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, LintModal)
+            assert all(i["severity"] == "warning" for i in app.screen._issues)
+
+    _run(scenario)
+
+
+def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path) -> None:
+    """Pressing enter on a missing-label warning navigates to that concept."""
+
+    async def scenario() -> None:
+        from textual.widgets import OptionList
+
+        from ster.tui import detail
+
+        # ex:C1 has no prefLabel → a navigable SKOS warning pointing at ex:C1.
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:hasTopConcept ex:C1 .\n"
+            "ex:C1 a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme .\n"
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            _lint_row(app, "warning").focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open the warnings modal
+            await pilot.pause()
+            ol = app.screen.query_one(OptionList)
+            assert ol.highlighted is not None  # a selectable (navigable) issue is highlighted
+            await pilot.press("enter")  # activate it → jump to the concept
+            for _ in range(3):
+                await pilot.pause()
+            assert app._detail_uri == "http://example.org/C1"
+
+    _run(scenario)
+
+
 def test_view_graph_action_opens_browser(monkeypatch) -> None:
     """Activating the overview's graph action calls viz_vowl.open_in_browser (read-only OK)."""
 
@@ -524,7 +682,7 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
     async def scenario() -> None:
         from ster.tui.choice_modal import ChoiceModal
         from ster.tui.context_menu import ContextMenu
-        from ster.tui.edit_modal import EditModal
+        from ster.tui.uri_modal import UriModal
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -535,9 +693,9 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
             await pilot.pause()
             assert app.query_one("#ctx-menu", ContextMenu).has_class("open")
 
-            app.on_context_menu_chosen(ContextMenu.Chosen("rename"))  # → rename modal
+            app.on_context_menu_chosen(ContextMenu.Chosen("rename"))  # → fragment rename modal
             await pilot.pause()
-            assert isinstance(app.screen, EditModal)
+            assert isinstance(app.screen, UriModal)
             app.screen.dismiss(None)
             await pilot.pause()
 
@@ -547,6 +705,44 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
             await pilot.pause()
             assert isinstance(app.screen, ChoiceModal)
             assert app.screen.query_one("#choice-box").has_class("-danger")
+
+    _run(scenario)
+
+
+def test_delete_scheme_from_context_menu_removes_it(tmp_path) -> None:
+    """The scheme context menu offers Delete; confirming 'scheme only' drops the
+    scheme but keeps its concepts."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.edits import context_actions
+
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:prefLabel 'S'@en ; skos:hasTopConcept ex:C1 .\n"
+            "ex:C1 a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme ;\n"
+            "    skos:prefLabel 'C1'@en .\n"
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            scheme_uri = "http://example.org/Scheme"
+            assert scheme_uri in app.tax.schemes
+            app.open_context_menu(scheme_uri)
+            await pilot.pause()
+            assert "delete_scheme" in [a for _, a in context_actions("scheme")]
+            app.on_context_menu_chosen(ContextMenu.Chosen("delete_scheme"))
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)
+            app.screen.dismiss("scheme_only")  # keep concepts, drop the scheme
+            for _ in range(3):
+                await pilot.pause()
+            assert scheme_uri not in app.tax.schemes
+            assert "http://example.org/C1" in app.tax.concepts  # concept survived
 
     _run(scenario)
 
@@ -728,9 +924,8 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     """An action row (Enter) → modal → constructive command → reload + save."""
 
     async def scenario() -> None:
-        from textual.widgets import Input
-
         from ster.tui.detail_view import DetailRow
+        from ster.tui.uri_modal import FragmentInput, UriModal
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -744,14 +939,16 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             )
             row.focus()
             await pilot.pause()
-            await pilot.press("enter")  # action row → modal
+            await pilot.press("enter")  # action row → fragment URI modal
             await pilot.pause()
-            assert app.screen.__class__.__name__ == "EditModal"
-            app.screen.query_one("#edit-input", Input).value = ZOO + "Worker"
+            assert isinstance(app.screen, UriModal)
+            inp = app.screen.query_one(FragmentInput)
+            assert inp.value == ZOO  # base locked to the ontology namespace, fragment empty
+            await pilot.press("W", "o", "r", "k", "e", "r")  # type only the fragment
             await pilot.press("enter")  # submit
             for _ in range(3):
                 await pilot.pause()
-            assert ZOO + "Worker" in app.tax.owl_classes  # created in memory
+            assert ZOO + "Worker" in app.tax.owl_classes  # created under the locked base
             assert "Worker" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
@@ -859,9 +1056,9 @@ def test_expand_collapse_keys_and_jump_to_deep_node() -> None:
     _run(scenario)
 
 
-def test_detail_view_composes_focusable_rows() -> None:
+def test_detail_view_composes_rows_only_actionable_focusable() -> None:
     async def scenario() -> None:
-        from ster.tui.detail_view import DetailRow, SectionHeader
+        from ster.tui.detail_view import DetailRow, SectionHeader, _is_actionable
 
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -870,8 +1067,12 @@ def test_detail_view_composes_focusable_rows() -> None:
             await pilot.pause()
             rows = list(app.query(DetailRow))
             headers = list(app.query(SectionHeader))
-            assert rows, "detail view should compose one focusable row per field"
-            assert all(r.can_focus for r in rows)
+            assert rows, "detail view should compose one row per field"
+            # A row is focusable iff it is actionable (editable / action / has a menu);
+            # pure information rows are skipped by keyboard + click navigation.
+            for r in rows:
+                assert r.can_focus == _is_actionable(r.field, r.delete_field)
+            assert any(r.can_focus for r in rows), "some rows must be reachable"
             assert any(h.title_text == "Identity" for h in headers)
 
     _run(scenario)

@@ -26,7 +26,7 @@ from textual.widgets.tree import TreeNode
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
-from . import data, detail, edits
+from . import data, detail, edits, uri_edit
 from .choice_modal import ChoiceModal
 from .context_menu import ContextMenu
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
@@ -35,6 +35,7 @@ from .help_screen import HelpScreen
 from .ontology_identity_modal import OntologyIdentityModal
 from .picker_modal import PickerModal
 from .theme import STER_THEME, THEME_CYCLE
+from .uri_modal import UriModal
 
 # Sentinel URI prefix for tree action nodes (create class/scheme/concept).
 # Format:  "__action:<action>[:<extra>]__"
@@ -64,9 +65,9 @@ class OntologyTree(Tree):
     BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
 
     def action_focus_detail(self) -> None:
-        rows = list(self.app.query("#detail DetailRow"))
+        rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
         if rows:
-            rows[0].focus()
+            rows[0].focus()  # first actionable row (info-only rows are skipped)
 
     def action_cursor_down(self) -> None:
         before = self.cursor_line
@@ -168,6 +169,10 @@ class OntologyApp(App):
     /* $boost is a translucent overlay → invisible on light themes; use a solid
        accent tint so the mouse-over highlight shows in every theme. */
     .detail-row:hover { background: $secondary 20%; }
+    /* Information-only rows are not interactive — no hover affordance. */
+    .detail-row.info-row:hover { background: transparent; }
+    /* The Errors count row is red (theme-aware, readable on light + dark). */
+    .detail-row.danger-row { color: $text-error; }
 
     /* Hierarchy guide lines: a dim foreground tint so the tree structure stays
        visible in every theme (selected/hover branches pick up the accents). */
@@ -242,6 +247,11 @@ class OntologyApp(App):
         self._uri_nodes: dict[str, TreeNode] = {}
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
+        self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
+        self._activity_computed = False
+        # Lazily-computed semanticlint result (per session): (counts, issues).
+        self._lint_cache: tuple[dict, list] | None = None
+        self._lint_computed = False
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -415,9 +425,37 @@ class OntologyApp(App):
         # text view); the DetailView builds the composed, focusable widgets.
         self._detail_uri = uri
         self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
+        is_overview = uri == detail.OVERVIEW_URI
+        activity = self._ontology_activity() if is_overview else None
+        lint = self._ontology_lint() if is_overview else None
         view = self.query_one("#detail", DetailView)
-        view.update_entity(self.tax, uri, self.lang)
+        view.update_entity(self.tax, uri, self.lang, activity, lint[0] if lint else None)
         view.border_title = self._detail_title(uri)
+
+    def _ontology_activity(self) -> dict | None:
+        """Git edit-activity for the file (computed once per session, cached)."""
+        if self._path is None:
+            return None
+        if not self._activity_computed:
+            from ster.git.manager import file_activity
+
+            self._activity_cache = file_activity(self._path)
+            self._activity_computed = True
+        return self._activity_cache
+
+    def _ontology_lint(self) -> tuple[dict, list] | None:
+        """semanticlint result for the file (computed once per session, cached)."""
+        if self._path is None:
+            return None
+        if not self._lint_computed:
+            from ster.lint_runner import lint_overview
+
+            try:
+                self._lint_cache = lint_overview(self._path)
+            except Exception:  # noqa: BLE001 — a lint failure must never break the view
+                self._lint_cache = None
+            self._lint_computed = True
+        return self._lint_cache
 
     def _detail_title(self, uri: str | None) -> str:
         """The detail pane's border title — the current entity, or a generic label."""
@@ -460,7 +498,7 @@ class OntologyApp(App):
 
     def _restore_focus(self) -> None:
         """Land focus on a usable widget after a mutation rebuilt the panes."""
-        rows = list(self.query("#detail DetailRow"))
+        rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
         (rows[0] if rows else self.query_one("#tree", Tree)).focus()
 
     def on_detail_row_edit_requested(self, message: DetailRow.EditRequested) -> None:
@@ -491,7 +529,12 @@ class OntologyApp(App):
                 return
             self._apply_command(command)
 
-        self.push_screen(EditModal(field.display, field.value), _on_submit)
+        # A URI value is renamed fragment-only: lock its namespace, edit the local name.
+        if field.meta.get("type") == "uri":
+            prefix, fragment = uri_edit.split_namespace(field.value)
+            self.push_screen(UriModal(field.display, prefix, fragment), _on_submit)
+        else:
+            self.push_screen(EditModal(field.display, field.value), _on_submit)
 
     def on_detail_row_menu_requested(self, message: DetailRow.MenuRequested) -> None:
         """A value row with both edit and delete was activated → Edit/Delete submenu."""
@@ -520,6 +563,9 @@ class OntologyApp(App):
         action = field.meta.get("action", "")
         if action in ("view_ontology_graph", "view_focused_graph"):
             self._open_graph(action, field)  # a view, not a mutation — no service needed
+            return
+        if action == "view_lint":
+            self._open_lint(field.meta.get("lint_severity"))  # a view — no service needed
             return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
@@ -587,7 +633,8 @@ class OntologyApp(App):
                 if command is not None:
                     self._apply_command(command)
 
-        self.push_screen(EditModal("Rename URI", uri), _on_submit)
+        prefix, fragment = uri_edit.split_namespace(uri)
+        self.push_screen(UriModal("Rename URI", prefix, fragment), _on_submit)
 
     def _route_action(self, action: str):  # type: ignore[no-untyped-def]
         """Pick the flow opener for *action* — first table whose set contains it."""
@@ -639,26 +686,34 @@ class OntologyApp(App):
         """Collect a single text/URI value in a modal, then run its action command."""
         action = field.meta.get("action", "")
         prompt, prefill_kind = edits.INPUT_ACTIONS[action]
-        prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
 
         def _on_submit(value: str | None) -> None:
             if value:
                 self._run_or_warn(edits.action_command(action, uri, path, value, self.lang))
 
-        self.push_screen(EditModal(prompt, prefill), _on_submit)
+        # A new URI is minted fragment-only under the locked ontology/scheme base.
+        if prefill_kind == "base_uri":
+            base = uri_edit.mint_base(self.tax, action, uri)
+            self.push_screen(UriModal(prompt, base), _on_submit)
+        else:
+            self.push_screen(EditModal(prompt, ""), _on_submit)
 
     def _open_meta_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Edit one existing value (the row's meta names which) via a prefilled modal."""
-        prompt, prefill_key = edits.META_INPUT_ACTIONS[field.meta.get("action", "")]
-        prefill = (
-            self.tax.base_uri() if prefill_key == "base_uri" else field.meta.get(prefill_key, "")
-        )
+        action = field.meta.get("action", "")
+        prompt, prefill_key = edits.META_INPUT_ACTIONS[action]
 
         def _on_submit(value: str | None) -> None:
             if value:
                 self._run_or_warn(edits.meta_input_command(field, uri, path, value, self.lang))
 
-        self.push_screen(EditModal(prompt, prefill), _on_submit)
+        # base_uri-kind meta inputs (e.g. add_class_property) mint a new URI fragment-only.
+        if prefill_key == "base_uri":
+            base = uri_edit.mint_base(self.tax, action, uri)
+            self.push_screen(UriModal(prompt, base), _on_submit)
+            return
+
+        self.push_screen(EditModal(prompt, field.meta.get(prefill_key, "")), _on_submit)
 
     def _confirm_delete(self, field: DetailField, uri: str, path: Path) -> None:
         """Ask for the delete mode, then run the destructive command + navigate away."""
@@ -989,6 +1044,27 @@ class OntologyApp(App):
             self.notify(f"Graph opened in your browser — {url}")
         except Exception as exc:  # surfacing beats crashing the UI for a view action
             self.notify(f"Couldn't open the graph: {exc}", severity="error")
+
+    def _open_lint(self, severity: str | None = None) -> None:
+        """Open a modal listing the semanticlint issues of *severity* (a read-only
+        view). Selecting an issue that points at a known entity jumps straight to
+        it (e.g. a missing-label warning → that class), so it can be fixed in place.
+        """
+        from .lint_modal import LintModal
+
+        result = self._ontology_lint()
+        issues = result[1] if result else []
+        if severity:
+            issues = [i for i in issues if i.get("severity") == severity]
+        kind = {"error": "Errors", "warning": "Warnings"}.get(severity or "", "semanticlint")
+        self.push_screen(
+            LintModal(issues, set(self._uri_nodes), kind=kind), self._goto_lint_subject
+        )
+
+    def _goto_lint_subject(self, subject: str | None) -> None:
+        """Callback for the lint modal: navigate to the chosen issue's subject."""
+        if subject:
+            self.jump_to(subject)
 
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""

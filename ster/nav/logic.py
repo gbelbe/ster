@@ -2916,9 +2916,158 @@ def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
     return [value_row, remove_row]
 
 
+def _class_depths(taxonomy: Taxonomy) -> dict[str, int]:
+    """Depth of each OWL class = its longest local subClassOf chain (roots = 0)."""
+    classes = taxonomy.owl_classes
+    cache: dict[str, int] = {}
+
+    def depth(uri: str, seen: frozenset[str]) -> int:
+        if uri in cache:
+            return cache[uri]
+        if uri in seen:  # cycle guard
+            return 0
+        cls = classes.get(uri)
+        parents = [p for p in cls.sub_class_of if p in classes] if cls else []
+        cache[uri] = 1 + max((depth(p, seen | {uri}) for p in parents), default=-1)
+        return cache[uri]
+
+    return {uri: depth(uri, frozenset()) for uri in classes}
+
+
+def _bar_stat(key: str, label: str, count: int, total: int) -> DetailField:
+    """A coverage row rendered as a block bar + percentage, e.g. '████░░░░  50%'."""
+    percent = _pct(count, total)
+    return _stat(key, label, f"{_pct_bar(percent)}  {percent}%")
+
+
+def _stats_classes(taxonomy: Taxonomy) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    roots = sum(1 for c in classes.values() if not any(p in classes for p in c.sub_class_of))
+    parents = {p for c in classes.values() for p in c.sub_class_of if p in classes}
+    leaves = sum(1 for uri in classes if uri not in parents)
+    fields = [
+        _sep("Classes"),
+        _stat("st:classes", "total", str(len(classes))),
+        _stat("st:roots", "root classes", str(roots)),
+        _stat("st:leaves", "leaf classes", str(leaves)),
+    ]
+    depths = _class_depths(taxonomy)
+    if depths:
+        avg = sum(depths.values()) / len(depths)
+        fields.append(_stat("st:avg_depth", "avg depth", f"{avg:.1f}"))
+        fields.append(_stat("st:max_depth", "max depth", str(max(depths.values()))))
+    return fields
+
+
+def _stats_properties(taxonomy: Taxonomy) -> list[DetailField]:
+    props = taxonomy.owl_properties
+    obj = sum(1 for p in props.values() if p.prop_type == "ObjectProperty")
+    datatype = sum(1 for p in props.values() if p.prop_type == "DatatypeProperty")
+    incomplete = sum(1 for p in props.values() if not p.domains or not p.ranges)
+    return [
+        _sep("Properties"),
+        _stat("st:props", "total", str(len(props))),
+        _stat("st:obj_props", "object", str(obj)),
+        _stat("st:dt_props", "datatype", str(datatype)),
+        _stat("st:incomplete_props", "missing domain/range", str(incomplete)),
+    ]
+
+
+def _stats_individuals(taxonomy: Taxonomy) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    typed = {t for ind in taxonomy.owl_individuals.values() for t in ind.types}
+    unused = sum(1 for uri in classes if uri not in typed)
+    return [
+        _sep("Individuals"),
+        _stat("st:individuals", "total", str(len(taxonomy.owl_individuals))),
+        _stat("st:unused", "classes with no individuals", str(unused)),
+    ]
+
+
+def _class_languages(classes: dict) -> list[str]:
+    """Sorted list of every language tag appearing on a class label."""
+    return sorted({lbl.lang for c in classes.values() for lbl in c.labels if lbl.lang})
+
+
+def _lang_coverage_rows(classes: dict, langs: list[str], total: int) -> list[DetailField]:
+    """One coverage bar per language: how many classes carry a label in it."""
+    rows: list[DetailField] = []
+    for code in langs:
+        covered = sum(1 for c in classes.values() if any(lbl.lang == code for lbl in c.labels))
+        rows.append(_bar_stat(f"st:lang_cov:{code}", f"labels · {code}", covered, total))
+    return rows
+
+
+def _stats_quality(taxonomy: Taxonomy) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    total = len(classes)
+    fields: list[DetailField] = [_sep("Quality & coverage")]
+    if total:
+        labelled = sum(1 for c in classes.values() if c.labels)
+        commented = sum(1 for c in classes.values() if c.comments)
+        fields.append(_bar_stat("st:label_cov", "labelled", labelled, total))
+        fields.append(_bar_stat("st:comment_cov", "documented", commented, total))
+    langs = _class_languages(classes)
+    summary = str(len(langs)) + (f" ({', '.join(langs)})" if langs else "")
+    fields.append(_stat("st:langs", "languages", summary))
+    if total:
+        fields.extend(_lang_coverage_rows(classes, langs, total))
+    return fields
+
+
+def _ontology_stats_fields(taxonomy: Taxonomy) -> list[DetailField]:
+    """Global ontology statistics, grouped into visual subject sections."""
+    return [
+        *_stats_classes(taxonomy),
+        *_stats_properties(taxonomy),
+        *_stats_individuals(taxonomy),
+        *_stats_quality(taxonomy),
+    ]
+
+
+def _lint_count_field(severity: str, label: str, count: int) -> DetailField:
+    """A severity count row. When ``count`` > 0 the row links to a modal listing
+    only that severity's issues (``action=view_lint`` + ``lint_severity``); when 0
+    it is a plain, non-actionable info row. The errors row is always red."""
+    meta: dict = {"action": "view_lint", "lint_severity": severity} if count else {"type": "stat"}
+    if severity == "error":
+        meta["danger"] = True  # render the errors row in red
+    return DetailField(f"st:lint_{severity}", label, str(count), editable=False, meta=meta)
+
+
+def _ontology_lint_fields(lint: dict | None) -> list[DetailField]:
+    """semanticlint summary — an Errors row and a Warnings row, each linking to a
+    severity-filtered issue modal when its count is non-zero.
+
+    *lint* is a ``{severity: count}`` dict (from ``lint_runner.lint_overview``),
+    or ``None`` when no file is loaded (the section is then omitted).
+    """
+    if lint is None:
+        return []
+    return [
+        _sep("Errors and Warnings"),
+        _lint_count_field("error", "Errors", lint.get("error", 0)),
+        _lint_count_field("warning", "Warnings", lint.get("warning", 0)),
+    ]
+
+
+def _ontology_activity_fields(activity: dict | None) -> list[DetailField]:
+    """Git edit-activity rows (from ``git.manager.file_activity``), if available."""
+    if not activity:
+        return []
+    return [
+        _sep("Activity"),
+        _stat("st:last_edit", "last edited", str(activity["last"])),
+        _stat("st:total_edits", "total edits", str(activity["total"])),
+        _stat("st:edits_month", "edits (last 30 days)", str(activity["last_month"])),
+    ]
+
+
 def build_tui_ontology_overview_fields(
     taxonomy: Taxonomy,
     lang: str,
+    activity: dict | None = None,
+    lint: dict | None = None,
 ) -> list[DetailField]:
     """Detail panel for the ontology overview node — New-TUI only.
 
@@ -2953,6 +3102,13 @@ def build_tui_ontology_overview_fields(
             "add_ont_annotation",
         )
     )
+
+    # ── Errors & Warnings (right after metadata) ──────────────────────────────
+    fields.extend(_ontology_lint_fields(lint))
+
+    # ── Stats + Activity ──────────────────────────────────────────────────────
+    fields.extend(_ontology_stats_fields(taxonomy))
+    fields.extend(_ontology_activity_fields(activity))
 
     return fields
 
