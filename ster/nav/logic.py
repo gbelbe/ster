@@ -3811,7 +3811,7 @@ def build_global_fields(
                             disp,
                             value,
                             editable=False,
-                            meta={"type": "stat", "color": _quality_color(best_pct)},
+                            meta={"type": "stat"},
                         )
                     )
 

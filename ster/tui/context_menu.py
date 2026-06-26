@@ -67,7 +67,7 @@ class ContextMenu(OptionList):
         self.add_options([Option(label) for label, _ in items])
         self.styles.offset = self._position(anchor, len(items))
         self.add_class("open")
-        self.highlighted = 0
+        self.highlighted = None  # nothing pre-selected — first ↓/↑ moves into the list
         self.focus()
 
     def _position(self, anchor: tuple[int, int] | None, count: int) -> tuple[int, int]:

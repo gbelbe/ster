@@ -215,6 +215,7 @@ class OntologyApp(App):
 
     BINDINGS = [
         Binding("slash", "command_palette", "Search"),
+        Binding("full_stop", "context_menu", "Actions"),
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
         Binding("d", "cycle_theme", "Theme"),
@@ -494,14 +495,20 @@ class OntologyApp(App):
         return self._lint_cache
 
     def _detail_title(self, uri: str | None) -> str:
-        """The detail pane's border title — the current entity, or a generic label."""
+        """The detail pane's border title — the current entity, or a generic label.
+
+        Entities that have a context menu get a trailing ``⋯`` to hint that quick
+        actions are available (right-click, or press ``.``)."""
         if uri is None:
             return "Details"
         if uri == detail.OVERVIEW_URI:
             return "Ontology overview"
         if uri == detail.TAXONOMY_URI:
             return "Taxonomy overview"
-        return data.label_of(self.tax, uri, self.lang) or "Details"
+        label = data.label_of(self.tax, uri, self.lang) or "Details"
+        if edits.context_actions(data.kind_of(self.tax, uri)):
+            label += "  ⋯"  # a context menu is available
+        return label
 
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
@@ -617,10 +624,23 @@ class OntologyApp(App):
             return
         opener(field, uri, path)
 
-    def open_context_menu(self, uri: str, anchor: tuple[int, int] | None = None) -> None:
-        """Right-click handler: select the node and offer kind-appropriate quick actions.
+    def action_context_menu(self) -> None:
+        """'.' → open the context menu for the selected entity, at the tree cursor."""
+        if self._detail_uri:
+            self.open_context_menu(self._detail_uri, self._tree_cursor_anchor())
 
-        *anchor* is the click position; the menu pops up there (not centred).
+    def _tree_cursor_anchor(self) -> tuple[int, int] | None:
+        """Screen position of the focused tree's cursor row (for menu anchoring)."""
+        tree = self.focused if isinstance(self.focused, Tree) else None
+        if tree is None:
+            return None
+        region = tree.region
+        return (region.x + 2, region.y + max(0, tree.cursor_line - tree.scroll_offset.y))
+
+    def open_context_menu(self, uri: str, anchor: tuple[int, int] | None = None) -> None:
+        """Right-click / '.' handler: select the node and offer kind-appropriate
+        quick actions. *anchor* is the cursor position; the menu pops up there
+        (centred when None).
         """
         items = edits.context_actions(data.kind_of(self.tax, uri))
         if not items:

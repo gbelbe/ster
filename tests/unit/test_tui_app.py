@@ -336,7 +336,8 @@ def test_panels_have_border_titles() -> None:
             assert app.query_one("#prop-tree", Tree).border_title == "Properties"
             app._show(ZOO + "Cat")
             await pilot.pause()
-            assert app.query_one("#detail", DetailView).border_title == "Cat"
+            # A class has a context menu → its title carries the ⋯ affordance hint.
+            assert app.query_one("#detail", DetailView).border_title == "Cat  ⋯"
 
     _run(scenario)
 
@@ -705,6 +706,50 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
             await pilot.pause()
             assert isinstance(app.screen, ChoiceModal)
             assert app.screen.query_one("#choice-box").has_class("-danger")
+
+    _run(scenario)
+
+
+def test_dot_opens_context_menu_with_nothing_preselected() -> None:
+    """Pressing '.' opens the selected entity's context menu, and no item is
+    highlighted until the user navigates."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.context_menu import ContextMenu
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.jump_to(ZOO + "Cat")  # select a class
+            for _ in range(3):
+                await pilot.pause()
+            app.query_one("#tree", Tree).focus()
+            await pilot.pause()
+            await pilot.press("full_stop")  # "."
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert menu.highlighted is None  # nothing pre-selected
+            await pilot.press("down")  # first arrow moves into the list
+            await pilot.pause()
+            assert menu.highlighted == 0
+
+    _run(scenario)
+
+
+def test_detail_title_hints_context_menu_only_for_entities() -> None:
+    """The ⋯ menu hint appears for entities with actions, not for the overview."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app._detail_title(ZOO + "Cat").endswith("⋯")  # class → has a menu
+            assert app._detail_title(detail.OVERVIEW_URI) == "Ontology overview"  # no hint
 
     _run(scenario)
 
