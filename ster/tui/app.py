@@ -171,8 +171,11 @@ class OntologyApp(App):
     .detail-row:hover { background: $secondary 20%; }
     /* Information-only rows are not interactive — no hover affordance. */
     .detail-row.info-row:hover { background: transparent; }
-    /* The Errors count row is red (theme-aware, readable on light + dark). */
-    .detail-row.danger-row { color: $text-error; }
+    /* Quality colours — one definition for every %-indicator + errors/warnings.
+       Change a colour here and every indicator updates at once. */
+    .detail-row.q-red    { color: #d70000; }
+    .detail-row.q-orange { color: #d75f00; }
+    .detail-row.q-green  { color: #00875f; }
 
     /* Hierarchy guide lines: a dim foreground tint so the tree structure stays
        visible in every theme (selected/hover branches pick up the accents). */
@@ -280,10 +283,15 @@ class OntologyApp(App):
         self._apply_config(message.result)
 
     def _apply_config(self, result: dict) -> None:
-        """Apply + persist the chosen languages and theme (re-rendering only on a
-        display-language change)."""
+        """Apply + persist the chosen languages and theme. Re-renders the detail
+        whenever the configured set changes (so new add-label rows appear), and
+        offers to purge data for any language that was removed."""
         new_lang = result["display"] or self.lang
+        display_changed = new_lang != self.lang
+        removed = sorted(set(self.configured_langs) - set(result["configured"]))
+        langs_changed = set(self.configured_langs) != set(result["configured"])
         self.configured_langs = result["configured"]  # exact selection (may be empty)
+        self.lang = new_lang
         theme = result.get("theme")
         if theme and theme in self.available_themes:
             self.theme = theme  # live preview
@@ -295,11 +303,36 @@ class OntologyApp(App):
             _save_lang_pref(self._path, new_lang)
             save_configured_langs(self._path, self.configured_langs)
 
-        if new_lang != self.lang:  # only a display-language change needs a re-render
-            self.lang = new_lang
+        if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
             self._rebuild_tree()
-            self._show(self._detail_uri)
+        if display_changed or langs_changed:
+            self._show(self._detail_uri)  # reflect the new configured-language rows
+        for lang in removed:
+            self._maybe_purge_language(lang)
+
+    def _maybe_purge_language(self, lang: str) -> None:
+        """A configured language was removed: if the file still has data in it,
+        ask whether to delete every ⟨lang⟩ literal or keep it."""
+        from ster.operations import language_in_use
+
+        if self._service is None or self._path is None or not language_in_use(self.tax, lang):
+            return
+        path = self._path
+        prompt = f"Delete all “{lang}” labels, comments, definitions & scope notes?"
+
+        def _on_choice(choice: str | None) -> None:
+            if choice == "delete":
+                from ster.core.commands import RemoveLanguage
+
+                self._apply_command(RemoveLanguage(path, lang))
+
+        self.push_screen(
+            ChoiceModal(
+                prompt, [("Delete all", "delete"), ("Keep them in the file", "keep")], danger=True
+            ),
+            _on_choice,
+        )
 
     def _make_service(self, taxonomy: Taxonomy, path: Path | None):  # type: ignore[no-untyped-def]
         """Build the TaxonomyService when editing a real file (None = read-only)."""
@@ -424,12 +457,15 @@ class OntologyApp(App):
         # _detail_text mirrors the rendered markup (used by tests + as a quick
         # text view); the DetailView builds the composed, focusable widgets.
         self._detail_uri = uri
-        self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
+        clangs = self.configured_langs or [self.lang]
+        self._detail_text = (
+            detail.render_detail(self.tax, uri, self.lang, clangs) if uri else PLACEHOLDER
+        )
         is_overview = uri == detail.OVERVIEW_URI
         activity = self._ontology_activity() if is_overview else None
         lint = self._ontology_lint() if is_overview else None
         view = self.query_one("#detail", DetailView)
-        view.update_entity(self.tax, uri, self.lang, activity, lint[0] if lint else None)
+        view.update_entity(self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs)
         view.border_title = self._detail_title(uri)
 
     def _ontology_activity(self) -> dict | None:

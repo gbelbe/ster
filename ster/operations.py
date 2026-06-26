@@ -12,6 +12,8 @@ from .domain.cross import _owns_owl as _owns_owl
 from .domain.cross import add_schema_media as add_schema_media
 from .domain.cross import count_uri_references as count_uri_references
 from .domain.cross import expand_uri as expand_uri
+from .domain.cross import language_in_use as language_in_use
+from .domain.cross import remove_language as remove_language
 from .domain.cross import remove_schema_media as remove_schema_media
 from .domain.cross import rename_entity_uri as rename_entity_uri
 from .domain.cross import resolve as resolve

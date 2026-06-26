@@ -194,8 +194,9 @@ class DetailRow(Static):
         self.can_focus = actionable
         if not actionable:
             self.add_class("info-row")
-        if field.meta.get("danger"):
-            self.add_class("danger-row")  # e.g. the Errors count — rendered red
+        color = field.meta.get("color")  # quality colour: red / orange / green
+        if color in ("red", "orange", "green"):
+            self.add_class(f"q-{color}")
         tip = _row_tooltip(field)
         if tip:
             self.tooltip = tip
@@ -238,6 +239,7 @@ class DetailView(VerticalScroll):
         lang: str = "en",
         activity: dict | None = None,
         lint: dict | None = None,
+        configured_langs: list[str] | None = None,
     ) -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None)."""
         self.remove_children()
@@ -245,7 +247,7 @@ class DetailView(VerticalScroll):
             self.mount(Static(PLACEHOLDER))
             return
         widgets: list[Static] = []
-        for sec in build_sections(tax, uri, lang, activity, lint):
+        for sec in build_sections(tax, uri, lang, activity, lint, configured_langs):
             if sec.title:
                 widgets.append(SectionHeader(sec.title, danger=sec.danger))
             widgets.extend(_rows_for(sec.fields))

@@ -366,8 +366,9 @@ def test_lint_nonzero_rows_link_to_a_severity_filtered_modal() -> None:
     err, warn = by_key["st:lint_error"], by_key["st:lint_warning"]
     assert err.meta.get("action") == "view_lint" and err.meta.get("lint_severity") == "error"
     assert warn.meta.get("action") == "view_lint" and warn.meta.get("lint_severity") == "warning"
-    # The errors row is always red.
-    assert err.meta.get("danger") is True
+    # 2 errors → red; 3 warnings (< 10) → green.
+    assert err.meta.get("color") == "red"
+    assert warn.meta.get("color") == "green"
 
 
 def test_lint_zero_rows_are_not_actionable() -> None:
@@ -375,7 +376,8 @@ def test_lint_zero_rows_are_not_actionable() -> None:
     by_key = _by_key(build_tui_ontology_overview_fields(_tax(), "en", None, lint))
     assert by_key["st:lint_error"].meta.get("action") is None  # nothing to open
     assert by_key["st:lint_warning"].meta.get("action") is None
-    assert by_key["st:lint_error"].meta.get("danger") is True  # still red
+    assert by_key["st:lint_error"].meta.get("color") == "green"  # 0 errors → green
+    assert by_key["st:lint_warning"].meta.get("color") == "green"  # 0 warnings → green
 
 
 def test_lint_section_sits_right_after_metadata() -> None:

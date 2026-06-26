@@ -36,8 +36,9 @@ TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 # Field meta["type"] values that start a new section rather than render a row.
 _SEPARATORS = frozenset({"separator", "separator_danger"})
 
-# entity kind (data.kind_of) → its DetailField builder. All share (tax, uri, lang).
-_BUILDERS: dict[str, Callable[[Taxonomy, str, str], list[DetailField]]] = {
+# entity kind (data.kind_of) → its DetailField builder. All accept the keyword
+# ``configured_langs`` (the languages whose label/description add rows to offer).
+_BUILDERS: dict[str, Callable[..., list[DetailField]]] = {
     "class": build_rdf_class_detail,
     "individual": build_individual_detail,
     "property": build_property_detail,
@@ -78,15 +79,20 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
 
 
 def _fields_for(
-    tax: Taxonomy, uri: str, lang: str, activity: dict | None = None, lint: dict | None = None
+    tax: Taxonomy,
+    uri: str,
+    lang: str,
+    activity: dict | None = None,
+    lint: dict | None = None,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """The flat DetailField list for *uri* (overview sentinel or entity builder)."""
     if uri == OVERVIEW_URI:
-        return build_tui_ontology_overview_fields(tax, lang, activity, lint)
+        return build_tui_ontology_overview_fields(tax, lang, activity, lint, configured_langs)
     if uri == TAXONOMY_URI:
         return build_tui_taxonomy_overview_fields(tax, lang)
     builder = _BUILDERS.get(data.kind_of(tax, uri))
-    return builder(tax, uri, lang) if builder else []
+    return builder(tax, uri, lang, configured_langs=configured_langs) if builder else []
 
 
 def _is_create(f: DetailField) -> bool:
@@ -111,13 +117,14 @@ def build_sections(
     lang: str = "en",
     activity: dict | None = None,
     lint: dict | None = None,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailSection]:
     """Return the grouped detail sections for *uri*, dispatched by entity kind.
 
     Within each section the constructive ＋ Add… action is hoisted to the top
     (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
-    sections = group_sections(_fields_for(tax, uri, lang, activity, lint))
+    sections = group_sections(_fields_for(tax, uri, lang, activity, lint, configured_langs))
     for sec in sections:
         sec.fields = _creates_first(sec.fields)
     return sections
@@ -136,7 +143,9 @@ def _render_row(f: DetailField) -> str:
     return f"  {field_markup(f)}"
 
 
-def render_detail(tax: Taxonomy, uri: str, lang: str = "en") -> str:
+def render_detail(
+    tax: Taxonomy, uri: str, lang: str = "en", configured_langs: list[str] | None = None
+) -> str:
     """Rich-markup detail for *uri*, grouped into titled sections (read-only).
 
     Replaces the spike's flat ``data.detail_markup`` — this renders the full
@@ -144,7 +153,7 @@ def render_detail(tax: Taxonomy, uri: str, lang: str = "en") -> str:
     labels / hierarchy / properties / actions as the curses panel.
     """
     lines: list[str] = []
-    for sec in build_sections(tax, uri, lang):
+    for sec in build_sections(tax, uri, lang, configured_langs=configured_langs):
         if sec.title:
             style = "bold red" if sec.danger else "bold"
             lines.append(f"[{style}]{_esc(sec.title)}[/]")

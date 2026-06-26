@@ -566,3 +566,70 @@ def test_remove_scheme_missing_raises(simple_taxonomy):
 
     with pytest.raises(SchemeNotFoundError):
         operations.remove_scheme(simple_taxonomy, BASE + "NoSuchScheme")
+
+
+# ── remove_language / language_in_use ─────────────────────────────────────────
+
+
+def _multilang_taxonomy():
+    """A taxonomy with en+fr labels and descriptions across every entity kind."""
+    from ster.model import (
+        Concept,
+        ConceptScheme,
+        Definition,
+        Label,
+        OWLIndividual,
+        OWLProperty,
+        RDFClass,
+        Taxonomy,
+    )
+
+    t = Taxonomy()
+    t.owl_classes["c"] = RDFClass(
+        uri="c",
+        labels=[Label("en", "Wheel"), Label("fr", "Roue")],
+        comments=[Definition("en", "round"), Definition("fr", "rond")],
+    )
+    t.owl_properties["p"] = OWLProperty(
+        uri="p", labels=[Label("en", "has"), Label("fr", "a")], comments=[Definition("fr", "lien")]
+    )
+    t.owl_individuals["i"] = OWLIndividual(uri="i", labels=[Label("fr", "Inst")])
+    t.concepts["k"] = Concept(
+        uri="k",
+        labels=[Label("en", "Top"), Label("fr", "Sommet")],
+        definitions=[Definition("fr", "déf")],
+        scope_notes=[Definition("fr", "note")],
+    )
+    t.schemes["s"] = ConceptScheme(
+        uri="s", labels=[Label("fr", "Schéma")], descriptions=[Definition("fr", "desc")]
+    )
+    return t
+
+
+def test_language_in_use_true_when_present_false_otherwise():
+    t = _multilang_taxonomy()
+    assert operations.language_in_use(t, "fr")
+    assert operations.language_in_use(t, "en")
+    assert not operations.language_in_use(t, "de")
+
+
+def test_remove_language_strips_every_literal_kind():
+    t = _multilang_taxonomy()
+    count = operations.remove_language(t, "fr")
+    assert count == 10  # class 2 + property 2 + individual 1 + concept 3 + scheme 2
+    # No 'fr' literal survives anywhere…
+    assert not operations.language_in_use(t, "fr")
+    # …and the 'en' values are untouched.
+    assert [lbl.lang for lbl in t.owl_classes["c"].labels] == ["en"]
+    assert [c.lang for c in t.owl_classes["c"].comments] == ["en"]
+    assert [lbl.lang for lbl in t.concepts["k"].labels] == ["en"]
+    assert t.concepts["k"].definitions == []
+    assert t.concepts["k"].scope_notes == []
+    assert t.owl_individuals["i"].labels == []
+    assert t.schemes["s"].labels == []
+    assert t.schemes["s"].descriptions == []
+
+
+def test_remove_language_absent_is_a_noop():
+    t = _multilang_taxonomy()
+    assert operations.remove_language(t, "de") == 0

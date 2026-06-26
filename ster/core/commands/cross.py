@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...model import Taxonomy
-from ...operations import add_schema_media, remove_schema_media, rename_entity_uri
+from ...operations import (
+    add_schema_media,
+    remove_language,
+    remove_schema_media,
+    rename_entity_uri,
+)
 
 
 @dataclass(frozen=True)
@@ -53,3 +58,19 @@ class RemoveSchemaMedia:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         remove_schema_media(taxonomy, self.uri, self.kind, self.url)
         return (self.uri,)
+
+
+@dataclass(frozen=True)
+class RemoveLanguage:
+    """Strip every language-tagged literal in *lang* across all entities.
+
+    Used when a language is removed from the configured set and the user chooses
+    to delete its data (labels, comments, definitions, scope notes, descriptions).
+    """
+
+    target_path: Path
+    lang: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_language(taxonomy, self.lang)
+        return ()
