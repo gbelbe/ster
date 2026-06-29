@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App
-from textual.widgets import Checkbox, Input, Select
+from textual.widgets import Button, Checkbox, Input, Select
 
 from ster import store
 from ster.nav.prefs import _load_prefs, load_configured_langs, save_configured_langs
@@ -27,6 +27,9 @@ def _isolate_prefs(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "_lang_prefs_path", lambda: tmp_path / "lang.json")
     monkeypatch.setattr(prefs, "_configured_langs_path", lambda: tmp_path / "clangs.json")
     monkeypatch.setattr(prefs, "_metadata_props_path", lambda: tmp_path / "metaprops.json")
+    monkeypatch.setattr(
+        prefs, "_entity_metadata_props_path", lambda: tmp_path / "entity_metaprops.json"
+    )
     monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", tmp_path / "server_config.json")
     monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
 
@@ -118,6 +121,25 @@ def test_suggest_label_prefixes_known_namespaces() -> None:
 # ── Default-properties tab (metadata catalog editor) ───────────────────────────
 
 
+def _ont_catalog(modal):  # noqa: ANN001 - test helper
+    from ster.tui.config_modal import _MetaCatalog
+
+    return modal.query_one("#cfg-ont-meta", _MetaCatalog)
+
+
+def _entity_catalog(modal):  # noqa: ANN001 - test helper
+    from ster.tui.config_modal import _MetaCatalog
+
+    return modal.query_one("#cfg-entity-meta", _MetaCatalog)
+
+
+def _headers(modal):  # noqa: ANN001 - test helper
+    """The two collapsible group headers, in DOM order [Ontology, Entity]."""
+    from textual.widgets._collapsible import CollapsibleTitle
+
+    return list(modal.query(CollapsibleTitle))
+
+
 def test_props_tab_lists_the_catalog_and_adds_custom(tmp_path) -> None:
     async def scenario() -> None:
         from ster.tui.config_modal import _MetaCheckbox
@@ -125,13 +147,14 @@ def test_props_tab_lists_the_catalog_and_adds_custom(tmp_path) -> None:
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
-            boxes = modal.query(_MetaCheckbox)
+            catalog = _ont_catalog(modal)
+            boxes = catalog.query(_MetaCheckbox)
             assert len(boxes) == len(app.metadata_props)  # one checkbox per predicate
             assert all(cb.value for cb in boxes)  # all ticked by default
-            modal.query_one("#cfg-mp-uri", Input).value = "http://x/custom"
-            await modal._add_metadata_prop()
+            catalog.query_one(".cfg-mp-uri", Input).value = "http://x/custom"
+            await catalog.add_typed()
             await pilot.pause()
-            preds = {(cb.predicate, cb.label_text) for cb in modal.query(_MetaCheckbox)}
+            preds = {(cb.predicate, cb.label_text) for cb in catalog.query(_MetaCheckbox)}
             assert ("http://x/custom", "custom") in preds  # added + auto-labelled, ticked
 
     _run(scenario)
@@ -145,9 +168,10 @@ def test_adding_a_property_persists_and_reaches_the_picker(tmp_path) -> None:
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
-            modal.query_one("#cfg-mp-uri", Input).value = "http://x/custom"
-            modal.query_one("#cfg-mp-label", Input).value = "ex:custom"
-            await modal._add_metadata_prop()  # auto-saves → app persists
+            catalog = _ont_catalog(modal)
+            catalog.query_one(".cfg-mp-uri", Input).value = "http://x/custom"
+            catalog.query_one(".cfg-mp-label", Input).value = "ex:custom"
+            await catalog.add_typed()  # auto-saves → app persists
             for _ in range(3):
                 await pilot.pause()
         # Persisted globally, loaded into the app, and offered by the picker.
@@ -166,7 +190,7 @@ def test_unticking_a_property_removes_it_from_the_catalog(tmp_path) -> None:
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
-            first = modal.query(_MetaCheckbox).first()
+            first = _ont_catalog(modal).query(_MetaCheckbox).first()
             excluded = first.predicate
             first.value = False  # untick → excluded from the catalog (auto-saves)
             for _ in range(3):
@@ -176,9 +200,9 @@ def test_unticking_a_property_removes_it_from_the_catalog(tmp_path) -> None:
     _run(scenario)
 
 
-def test_properties_navigate_with_arrows_and_toggle_with_space(tmp_path) -> None:
-    """In the Default-properties tab, arrows rove the checkboxes and space toggles
-    the highlighted one."""
+def test_item_list_roves_with_arrows_and_space_toggles(tmp_path) -> None:
+    """After entering a group with Right, Up/Down rove the checkboxes and Space
+    toggles the highlighted one."""
 
     async def scenario() -> None:
         from ster.tui.config_modal import _MetaCheckbox
@@ -186,11 +210,12 @@ def test_properties_navigate_with_arrows_and_toggle_with_space(tmp_path) -> None
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
-            await pilot.press("space")  # → Default-properties tab
-            await pilot.press("down")  # tab bar → the metadata group
-            await pilot.press("down")  # → first property checkbox
+            catalog = _ont_catalog(modal)
+            _headers(modal)[0].focus()  # land on the Ontology group header
             await pilot.pause()
-            first = modal.query(_MetaCheckbox).first()
+            await pilot.press("right")  # drill into the item list → first checkbox
+            await pilot.pause()
+            first = catalog.query(_MetaCheckbox).first()
             assert first.has_class("mp-current")  # highlighted
             assert first.value is True
             await pilot.press("space")  # toggle it off
@@ -198,24 +223,229 @@ def test_properties_navigate_with_arrows_and_toggle_with_space(tmp_path) -> None
             assert first.value is False
             await pilot.press("down")  # rove to the next property
             await pilot.pause()
-            assert list(modal.query(_MetaCheckbox))[1].has_class("mp-current")
+            assert list(catalog.query(_MetaCheckbox))[1].has_class("mp-current")
 
     _run(scenario)
 
 
-def test_up_at_top_of_property_list_returns_to_tab_bar(tmp_path) -> None:
+def test_up_at_top_of_item_list_returns_to_its_header(tmp_path) -> None:
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            _headers(modal)[0].focus()
+            await pilot.pause()
+            await pilot.press("right")  # → first item
+            await pilot.press("up")  # at the top → back to the group header
+            await pilot.pause()
+            assert app.focused is _headers(modal)[0]
+
+    _run(scenario)
+
+
+# ── entity-metadata catalog (second group) ─────────────────────────────────────
+
+
+def test_entity_metadata_props_round_trip_and_default(tmp_path) -> None:
+    from ster.nav.prefs import load_entity_metadata_props, save_entity_metadata_props
+
+    assert load_entity_metadata_props() is None  # never configured → caller uses defaults
+    props = [("http://x/e1", "ex:e1"), ("http://x/e2", "ex:e2")]
+    save_entity_metadata_props(props)
+    assert load_entity_metadata_props() == props
+    # The two catalogs are stored independently — saving entity props leaves the
+    # ontology catalog untouched.
+    from ster.nav.prefs import load_metadata_props
+
+    assert load_metadata_props() is None
+
+
+def test_app_entity_metadata_props_default_to_builtin_catalog(tmp_path) -> None:
+    from ster.nav.logic import default_entity_annotation_catalog
+
+    app, _src = _app(tmp_path)
+    assert app.entity_metadata_props == default_entity_annotation_catalog()
+
+
+def test_app_entity_metadata_props_load_from_prefs(tmp_path) -> None:
+    from ster.nav.prefs import save_entity_metadata_props
+
+    save_entity_metadata_props([("http://x/custom", "ex:custom")])
+    app, _src = _app(tmp_path)
+    assert app.entity_metadata_props == [("http://x/custom", "ex:custom")]
+
+
+def test_annotation_tab_renamed_and_has_two_foldable_groups(tmp_path) -> None:
+    """The tab is "Annotation properties" and holds two collapsible groups —
+    Ontology Metadata and Entity metadata — each its own catalog editor."""
+
+    async def scenario() -> None:
+        from textual.widgets import Collapsible, TabbedContent
+
+        from ster.tui.config_modal import _MetaCatalog
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            pane = modal.query_one(TabbedContent).get_pane("cfg-tab-props")
+            assert str(pane._title) == "Annotation properties"
+            titles = {c.title for c in modal.query(Collapsible)}
+            assert {"Ontology Metadata", "Entity metadata"} <= titles
+            # Two independent catalog editors, each with its own add row.
+            assert len(modal.query(_MetaCatalog)) == 2
+            assert _ont_catalog(modal).query_one(".cfg-mp-uri")
+            assert _entity_catalog(modal).query_one(".cfg-mp-uri")
+
+    _run(scenario)
+
+
+def test_adding_to_entity_group_persists_to_entity_catalog_only(tmp_path) -> None:
+    """A predicate added in the Entity group lands in the entity catalog and is
+    saved there — the ontology catalog is left unchanged (and vice-versa)."""
+
+    async def scenario() -> None:
+        from ster.nav.prefs import load_entity_metadata_props, load_metadata_props
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            entity = _entity_catalog(modal)
+            entity.query_one(".cfg-mp-uri", Input).value = "http://x/entity-only"
+            entity.query_one(".cfg-mp-label", Input).value = "ex:entityOnly"
+            await entity.add_typed()
+            for _ in range(3):
+                await pilot.pause()
+        # Saved to the entity catalog + app state, absent from the ontology one.
+        assert ("http://x/entity-only", "ex:entityOnly") in app.entity_metadata_props
+        assert ("http://x/entity-only", "ex:entityOnly") in (load_entity_metadata_props() or [])
+        assert "http://x/entity-only" not in {p for p, _ in app.metadata_props}
+        assert "http://x/entity-only" not in {p for p, _ in (load_metadata_props() or [])}
+
+    _run(scenario)
+
+
+def test_unticking_in_entity_group_drops_from_entity_catalog_only(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            first = _entity_catalog(modal).query(_MetaCheckbox).first()
+            excluded = first.predicate
+            first.value = False  # untick in the entity group → drops from entity catalog
+            for _ in range(3):
+                await pilot.pause()
+        from ster.nav.logic import default_annotation_catalog
+
+        assert excluded not in {p for p, _ in app.entity_metadata_props}
+        assert app.metadata_props == default_annotation_catalog()  # ontology catalog untouched
+
+    _run(scenario)
+
+
+def test_down_on_header_moves_to_the_next_group(tmp_path) -> None:
+    """On a group header, Down moves to the next group's header."""
+
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            headers = _headers(modal)
+            headers[0].focus()
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.focused is headers[1]
+
+    _run(scenario)
+
+
+def test_up_on_header_moves_to_the_previous_group(tmp_path) -> None:
+    """On a group header, Up moves back to the previous group's header."""
+
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            headers = _headers(modal)
+            headers[1].focus()
+            await pilot.pause()
+            await pilot.press("up")
+            await pilot.pause()
+            assert app.focused is headers[0]
+
+    _run(scenario)
+
+
+def test_up_on_first_header_returns_to_the_tab_bar(tmp_path) -> None:
     async def scenario() -> None:
         from textual.widgets import Tabs
 
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
-            await _open_app_config(pilot, app)
-            await pilot.press("space")  # → Default-properties tab
-            await pilot.press("down")  # → metadata group
-            await pilot.press("down")  # → first property
-            await pilot.press("up")  # at the top → back to the tab headers
+            modal = await _open_app_config(pilot, app)
+            _headers(modal)[0].focus()
+            await pilot.pause()
+            await pilot.press("up")  # at the first group → back to the tab bar
             await pilot.pause()
             assert isinstance(app.focused, Tabs)
+
+    _run(scenario)
+
+
+def test_right_on_header_enters_the_item_list(tmp_path) -> None:
+    """On a group header, Right drills into that group's item list (first item)."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            _headers(modal)[1].focus()  # Entity group header
+            await pilot.pause()
+            await pilot.press("right")
+            await pilot.pause()
+            assert app.focused is catalog
+            assert catalog.current_item() is catalog.query(_MetaCheckbox).first()
+
+    _run(scenario)
+
+
+def test_left_in_item_list_returns_to_its_header(tmp_path) -> None:
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            headers = _headers(modal)
+            headers[0].focus()
+            await pilot.pause()
+            await pilot.press("right")  # into the item list
+            await pilot.press("left")  # back out to the header
+            await pilot.pause()
+            assert app.focused is headers[0]
+
+    _run(scenario)
+
+
+def test_down_on_last_item_moves_to_the_next_group(tmp_path) -> None:
+    """Down on the last item (the ＋ button) of a group moves to the next group's header."""
+
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            ont, headers = _ont_catalog(modal), _headers(modal)
+            headers[0].focus()
+            await pilot.pause()
+            await pilot.press("right")  # enter the Ontology group's items
+            await pilot.pause()
+            ont._cursor = len(ont._items()) - 1  # jump the cursor onto the ＋ button
+            await pilot.press("down")  # past the bottom → the next group
+            await pilot.pause()
+            assert app.focused is headers[1]  # Entity group header
 
     _run(scenario)
 
@@ -413,3 +643,222 @@ def test_app_loads_saved_display_language(tmp_path) -> None:
     _save_lang_pref(src, "fr")  # a previously-saved display language
     app = OntologyApp(store.load(src), source="o.ttl", path=src, lang="en")
     assert app.lang == "fr"  # restored on open
+
+
+# ── annotation-property verification on add ────────────────────────────────────
+
+
+def test_known_annotation_predicate_is_added_without_warning(tmp_path) -> None:
+    """Typing a well-known annotation predicate adds it straight away — no warning."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            uri = "http://xmlns.com/foaf/0.1/depiction"  # well-known annotation prop
+            catalog.query_one(".cfg-mp-uri", Input).value = uri
+            await catalog._submit()
+            await pilot.pause()
+            assert not isinstance(app.screen, ChoiceModal)  # no confirmation needed
+            assert uri in {cb.predicate for cb in catalog.query(_MetaCheckbox)}
+
+    _run(scenario)
+
+
+def test_unknown_predicate_warns_then_confirm_adds_and_declares(tmp_path) -> None:
+    """An unknown predicate triggers a confirmation modal; confirming adds it to the
+    catalog AND declares it locally as an owl:AnnotationProperty (persisted)."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            uri = "https://example.org/onto#myAnno"
+            catalog.query_one(".cfg-mp-uri", Input).value = uri
+            await catalog._submit()
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)  # warning shown
+            app.screen.dismiss("use")  # confirm
+            for _ in range(5):
+                await pilot.pause()
+            assert uri in {cb.predicate for cb in catalog.query(_MetaCheckbox)}  # added
+            prop = app.tax.owl_properties.get(uri)  # declared locally...
+            assert prop is not None and prop.prop_type == "AnnotationProperty"
+        assert uri in store.load(src).owl_properties  # ...and persisted to disk
+
+    _run(scenario)
+
+
+def test_unknown_predicate_cancel_does_not_add(tmp_path) -> None:
+    """Cancelling the warning leaves the catalog and ontology untouched."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            uri = "https://example.org/onto#nope"
+            catalog.query_one(".cfg-mp-uri", Input).value = uri
+            await catalog._submit()
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)
+            app.screen.dismiss(None)  # Escape / Cancel
+            for _ in range(4):
+                await pilot.pause()
+            assert uri not in {cb.predicate for cb in catalog.query(_MetaCheckbox)}
+            assert uri not in app.tax.owl_properties
+
+    _run(scenario)
+
+
+# ── new local annotation property (button → create modal) ──────────────────────
+
+_BASE = "https://example.org/zoo/"  # demo.ttl base IRI
+
+
+def test_each_group_offers_an_add_local_annotation_property_button(tmp_path) -> None:
+    """Both groups expose a single 'Add local annotation property' button wired to
+    the ontology base IRI — and no inline create fields."""
+
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            for catalog in (_ont_catalog(modal), _entity_catalog(modal)):
+                btn = catalog.query_one(".cfg-mp-new", Button)
+                assert "Add local annotation property" in str(btn.label)
+                assert catalog._base_uri == _BASE  # wired to the base IRI
+                assert not catalog.query(".cfg-mp-new-name")  # no inline form fields
+
+    _run(scenario)
+
+
+def test_add_local_button_opens_the_creation_modal(tmp_path) -> None:
+    """Pressing the button opens the (placeholder) property-creation modal."""
+
+    async def scenario() -> None:
+        from ster.tui.local_property_modal import LocalPropertyModal
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            btn = catalog.query_one(".cfg-mp-new", Button)
+            await catalog._on_new(Button.Pressed(btn))  # press the button
+            await pilot.pause()
+            assert isinstance(app.screen, LocalPropertyModal)
+            assert app.screen._base_uri == _BASE  # modal told the fixed prefix
+
+    _run(scenario)
+
+
+def test_modal_result_declares_in_ttl_and_ticks_into_group(tmp_path) -> None:
+    """A confirmed create result writes a local owl:AnnotationProperty (with label +
+    comment) to the open .ttl and adds it ticked to that group's catalog."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            await catalog._on_new_property(
+                {"name": "reviewedBy", "label": "Reviewed by", "comment": "QA reviewer"}
+            )
+            for _ in range(5):
+                await pilot.pause()
+            uri = f"{_BASE}reviewedBy"
+            ticked = {cb.predicate for cb in catalog.query(_MetaCheckbox) if cb.value}
+            assert uri in ticked  # added + ticked to the catalog
+            prop = app.tax.owl_properties.get(uri)  # declared locally...
+            assert prop is not None and prop.prop_type == "AnnotationProperty"
+        saved = store.load(src).owl_properties.get(uri)  # ...and persisted
+        assert saved is not None and saved.prop_type == "AnnotationProperty"
+        assert any(lbl.value == "Reviewed by" for lbl in saved.labels)
+        assert any(c.value == "QA reviewer" for c in saved.comments)
+
+    _run(scenario)
+
+
+def test_modal_result_works_in_the_ontology_group_too(tmp_path) -> None:
+    """Both groups can mint a local property, not just the entity one."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _ont_catalog(modal)
+            await catalog._on_new_property({"name": "curatedBy"})
+            for _ in range(5):
+                await pilot.pause()
+            uri = f"{_BASE}curatedBy"
+            assert uri in {cb.predicate for cb in catalog.query(_MetaCheckbox)}
+            assert app.tax.owl_properties[uri].prop_type == "AnnotationProperty"
+
+    _run(scenario)
+
+
+def test_modal_result_label_defaults_to_the_name(tmp_path) -> None:
+    """With the label omitted, the rdfs:label defaults to the predicate name."""
+
+    async def scenario() -> None:
+        app, src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            await _entity_catalog(modal)._on_new_property({"name": "approvedBy"})
+            for _ in range(5):
+                await pilot.pause()
+        saved = store.load(src).owl_properties.get(f"{_BASE}approvedBy")
+        assert saved is not None
+        assert any(lbl.value == "approvedBy" for lbl in saved.labels)  # defaulted
+
+    _run(scenario)
+
+
+def test_cancelling_the_modal_creates_nothing(tmp_path) -> None:
+    """A cancelled modal (None result) adds no checkbox and declares nothing."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            catalog = _entity_catalog(modal)
+            before = len(catalog.query(_MetaCheckbox))
+            await catalog._on_new_property(None)  # cancelled
+            await catalog._on_new_property({"name": "   "})  # whitespace name
+            for _ in range(3):
+                await pilot.pause()
+            assert len(catalog.query(_MetaCheckbox)) == before
+            assert not [u for u in app.tax.owl_properties if u.startswith(_BASE + " ")]
+
+    _run(scenario)
+
+
+def test_add_local_button_absent_without_an_open_file(tmp_path) -> None:
+    """A read-only session (no file / no base IRI) offers no create button."""
+
+    async def scenario() -> None:
+        host = _Host()
+        async with host.run_test(size=(120, 48)) as pilot:
+            modal = ConfigModal("en", ["en"], ["en"], can_declare=False, base_uri="")
+            await host.push_screen(modal)
+            await pilot.pause()
+            assert not modal.query(".cfg-mp-new")  # no create button anywhere
+
+    _run(scenario)

@@ -2913,6 +2913,25 @@ def default_annotation_catalog() -> list[tuple[str, str]]:
     return list(_ANNOTATION_CATALOG)
 
 
+# ── Entity-metadata catalog (classes / properties / individuals) ──────────────
+# A separate catalog of descriptive predicates offered on any entity (not the
+# ontology node). Same shape as the ontology catalog.
+
+_ENTITY_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
+    ("http://www.w3.org/2000/01/rdf-schema#seeAlso", "rdfs:seeAlso  (IRI)"),
+    ("http://www.w3.org/2000/01/rdf-schema#isDefinedBy", "rdfs:isDefinedBy  (IRI)"),
+    ("http://www.w3.org/2004/02/skos/core#note", "skos:note"),
+    ("http://www.w3.org/2004/02/skos/core#example", "skos:example"),
+    ("http://purl.org/dc/terms/source", "dcterms:source"),
+)
+
+
+def default_entity_annotation_catalog() -> list[tuple[str, str]]:
+    """The built-in entity-metadata predicate catalog — ``(predicate, label)``
+    pairs offered on classes / properties / individuals when none is configured."""
+    return list(_ENTITY_ANNOTATION_CATALOG)
+
+
 def annotation_catalog_options(
     taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None = None
 ) -> list[tuple[str, str]]:

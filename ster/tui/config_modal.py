@@ -19,6 +19,7 @@ from textual.message import Message
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     Input,
     Select,
     Static,
@@ -26,10 +27,30 @@ from textual.widgets import (
     TabPane,
     Tabs,
 )
+from textual.widgets._collapsible import CollapsibleTitle
 
+from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup
 from .llm_group import LlmSetup
+from .local_property_modal import LocalPropertyModal
 from .modal import ModalBase
+
+
+class DeclareAnnotationProperty(Message):
+    """Ask the app to declare *uri* as a local ``owl:AnnotationProperty``.
+
+    Posted when the user confirms keeping a predicate that is not (yet) a known
+    annotation property, or creates a brand-new local one from the config modal.
+    The app runs the OWL command(s) — writing *label* / *comment* when given —
+    and saves to the open ``.ttl``.
+    """
+
+    def __init__(self, uri: str, label: str = "", comment: str = "") -> None:
+        super().__init__()
+        self.uri = uri
+        self.label = label
+        self.comment = comment
+
 
 # Common namespaces → prefix, for suggesting a label when registering a predicate.
 _KNOWN_PREFIXES: tuple[tuple[str, str], ...] = (
@@ -113,20 +134,139 @@ class _LangGroup(FocusGroup):
             box.remove_class("lang-current")
 
 
-class _MetaGroup(FocusGroup):
-    """The ontology-metadata checklist + add row as one Tab stop: the arrow keys
-    rove the property checkboxes and the add fields, space toggles the current
-    checkbox, and Tab/Shift+Tab return to the tab bar."""
+class _MetaCatalog(FocusGroup):
+    """One predicate catalog editor — a checklist of ``_MetaCheckbox`` plus an
+    add row (URI + label + ＋) — as a single Tab stop.
 
-    exit_next = "Tabs"
-    exit_prev = "Tabs"
+    Entered from the group's collapsible header with Right; inside, Up/Down rove the
+    checkboxes and the add fields, space toggles the current checkbox, and Left (or
+    Up past the top) returns to the header. Tab/Shift+Tab jump to *next_target* /
+    *prev_target*. Children are queried by class (scoped to this group), so two
+    instances on the same screen stay independent.
+    """
 
+    class Changed(Message):
+        """A predicate was added to this catalog (toggles bubble Checkbox.Changed)."""
+
+    def __init__(  # type: ignore[no-untyped-def]
+        self,
+        props: list[tuple[str, str]],
+        *,
+        prev_target: str = "Tabs",
+        next_target: str = "Tabs",
+        verifier=None,  # Callable[[str], bool] | None — is the URI an annotation property?
+        can_declare: bool = False,  # may we declare it locally on confirm?
+        base_uri: str = "",  # ontology base IRI — fixed prefix for new local properties
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._initial = list(props)
+        self.exit_prev = prev_target  # Shift+Tab target
+        self.exit_next = next_target  # Tab target
+        self._verifier = verifier
+        self._can_declare = can_declare
+        self._base_uri = base_uri
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="cfg-mprops"):
+            for pred, label in self._initial:
+                yield _MetaCheckbox(pred, label)
+        with Horizontal(classes="cfg-mp-add-row"):
+            yield Input(placeholder="predicate URI — http://…", classes="cfg-mp-uri")
+            yield Input(placeholder="label (optional)", classes="cfg-mp-label")
+            yield Button("+", classes="cfg-mp-add")
+        if self._can_declare and self._base_uri:
+            yield Button("Add local annotation property", classes="cfg-mp-new")
+
+    def props(self) -> list[tuple[str, str]]:
+        """The ticked predicates as ``(predicate, label)`` pairs."""
+        return [(cb.predicate, cb.label_text) for cb in self.query(_MetaCheckbox) if cb.value]
+
+    async def add_typed(self) -> None:
+        """Mount a checkbox for the typed predicate (deduped); clear the fields."""
+        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
+        label = self.query_one(".cfg-mp-label", Input).value.strip()
+        present = {cb.predicate for cb in self.query(_MetaCheckbox)}
+        if not uri or uri in present:
+            return
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        self.query_one(".cfg-mp-uri", Input).value = ""
+        self.query_one(".cfg-mp-label", Input).value = ""
+        self.post_message(self.Changed())  # ask the modal to auto-save
+
+    @on(Button.Pressed, ".cfg-mp-add")
+    async def _on_add(self, event: Button.Pressed) -> None:
+        event.stop()
+        await self._submit()
+
+    @on(Input.Submitted, ".cfg-mp-uri, .cfg-mp-label")
+    async def _on_submit(self, event: Input.Submitted) -> None:
+        event.stop()
+        await self._submit()
+
+    @on(Button.Pressed, ".cfg-mp-new")
+    async def _on_new(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.app.push_screen(LocalPropertyModal(self._base_uri), self._on_new_property)
+
+    async def _on_new_property(self, result: dict | None) -> None:
+        """Result of the create modal — ``{name, label, comment}`` or None on cancel."""
+        if not result:
+            return
+        await self._create_local(
+            result.get("name", ""), result.get("label", ""), result.get("comment", "")
+        )
+
+    async def _create_local(self, name: str, label: str, comment: str) -> None:
+        """Mint a new local annotation property: declare it in the open ``.ttl``
+        (label / comment included) and tick it into this catalog."""
+        name = name.strip()
+        uri = f"{self._base_uri}{name}"
+        present = {cb.predicate for cb in self.query(_MetaCheckbox)}
+        if not name or uri in present:
+            return
+        label = label.strip() or name
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        self.post_message(self.Changed())  # auto-save the catalog
+        self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
+
+    async def _submit(self) -> None:
+        """Add the typed predicate. If it is not a known annotation property, warn
+        and ask for confirmation first — *Use it* adds it (declared locally as an
+        annotation property when a file is open); Esc/Cancel skips the add."""
+        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
+        present = {cb.predicate for cb in self.query(_MetaCheckbox)}
+        if not uri or uri in present:
+            return
+        if self._verifier is None or self._verifier(uri):
+            await self.add_typed()
+            return
+        self.app.push_screen(
+            ChoiceModal(
+                f"“{uri}” is not defined as an annotation property. "
+                "Use it as an annotation property anyway?",
+                [("Use as annotation property", "use"), ("Cancel", "cancel")],
+            ),
+            self._on_unverified_choice,
+        )
+
+    async def _on_unverified_choice(self, choice: str | None) -> None:
+        """Confirmation result for an unknown predicate (None/`cancel` = skip)."""
+        if choice != "use":
+            return
+        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
+        await self.add_typed()  # mounts the checkbox, clears the fields, posts Changed
+        if self._can_declare and uri:
+            self.post_message(DeclareAnnotationProperty(uri))  # app declares it locally
+
+    # ── focus-group navigation ──────────────────────────────────────────────────
     def _items(self) -> list:  # type: ignore[type-arg]
         return [
             *self.query(_MetaCheckbox),
-            *self.query("#cfg-mp-uri"),
-            *self.query("#cfg-mp-label"),
-            *self.query("#cfg-mp-add"),
+            *self.query(".cfg-mp-uri"),
+            *self.query(".cfg-mp-label"),
+            *self.query(".cfg-mp-add"),
+            *self.query(".cfg-mp-new"),
         ]
 
     def _focus_item(self, item) -> None:  # type: ignore[no-untyped-def]
@@ -138,12 +278,72 @@ class _MetaGroup(FocusGroup):
         else:
             item.focus()  # the add field / + button
 
-    def _move(self, delta: int) -> None:
-        # Up from the top of the list returns to the tab headers instead of wrapping.
-        if delta < 0 and (not self._active or self._cursor == 0):
-            self._exit("Tabs")
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        """Inside the list: Up/Down rove the items, Left (or Up past the top) returns
+        to the group header, and Down past the last item (the ＋ button) moves on to
+        the next group. Right is reserved for entering from the header, so it is a
+        no-op here. Space/Enter toggle the current checkbox.
+
+        We share the ``on_key`` handler name with :class:`FocusGroup`; Textual would
+        otherwise dispatch *both* (its copy maps Left/Right to a move), so every
+        handled key calls ``prevent_default()`` to suppress the inherited handler.
+        """
+        key = event.key
+        if key == "down":
+            self._rove(1)
+        elif key == "up":
+            self._rove(-1)
+        elif key == "left":
+            self._to_header()
+        elif key == "right":
+            pass  # entering the list is driven from the header; ignore here
+        elif not self._extra_key(event):  # space / enter toggle the current checkbox
+            return  # not one of ours — let it propagate normally
+        event.stop()
+        event.prevent_default()  # suppress FocusGroup.on_key (same handler name in the MRO)
+
+    def _rove(self, delta: int) -> None:
+        items = self._items()
+        if not items:
             return
-        super()._move(delta)
+        if not self._active:  # first arrow lands on the first/last item
+            self._active = True
+            self._cursor = 0 if delta > 0 else len(items) - 1
+        elif self._cursor + delta < 0:  # Up past the top → back to this group's header
+            self._to_header()
+            return
+        elif self._cursor + delta >= len(items):  # Down past the bottom → the next group
+            self._exit_to(self.exit_next)
+            return
+        else:
+            self._cursor += delta
+        self._focus_item(items[self._cursor])
+
+    def _exit_to(self, selector: str | None) -> None:
+        """Leave the list for *selector* — the next group's header, or the tab bar
+        for the last group (its ``exit_next`` is ``Tabs``)."""
+        self._reset()
+        matches = self.screen.query(selector) if selector else None
+        if matches:
+            matches.first().focus()
+
+    def _enter(self) -> None:
+        """Activate this group's cursor on its first item — entered from the header
+        with Right."""
+        items = self._items()
+        if items:
+            self._active = True
+            self._cursor = 0
+            self._focus_item(items[0])
+
+    def _to_header(self) -> None:
+        """Leave the item list, returning focus to this group's collapsible header."""
+        self._reset()
+        node: object = self.parent
+        while node is not None and not isinstance(node, Collapsible):
+            node = node.parent  # type: ignore[attr-defined]
+        if isinstance(node, Collapsible):
+            node.query_one(CollapsibleTitle).focus()
 
     def _extra_key(self, event) -> bool:  # type: ignore[no-untyped-def]
         return event.key in ("space", "enter") and self._toggle_current()
@@ -169,7 +369,6 @@ class ConfigModal(ModalBase[None]):
     #cfg-box { width: 72%; height: 90%; }
     #cfg-box TabbedContent, #cfg-box ContentSwitcher { height: 1fr; }
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
-    #cfg-box .cfg-mp-title { margin-bottom: 1; }   /* space below the section title */
     #cfg-box .cfg-label { color: $text-muted; }
     #cfg-box .cfg-hint { color: $text-muted; }
     /* Narrow dropdowns with clean rounded borders (override the dashed `tall`). */
@@ -195,18 +394,38 @@ class ConfigModal(ModalBase[None]):
     #cfg-add-row { height: auto; margin-top: 1; }
     #cfg-extra { width: 1fr; border: round $primary; }
     #cfg-add { width: auto; min-width: 5; margin-left: 1; }
-    /* Ontology-metadata predicate catalog (Default properties tab): a checklist
-       of predicates (ticked = offered in "Add metadata"), spaced for readability. */
-    /* The group fills the pane; the list takes the full remaining height (the add
-       row sits below it) and scrolls when there are more properties than fit. */
-    #cfg-mp-group { height: 1fr; }
-    #cfg-mprops { height: 1fr; }
-    #cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
-    #cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
-    #cfg-mp-add-row { height: auto; margin-top: 1; }
-    #cfg-mp-uri { width: 2fr; border: round $primary; }
-    #cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
-    #cfg-mp-add { width: auto; min-width: 5; margin-left: 1; }
+    /* Metadata predicate catalogs (Annotation-properties tab): two foldable groups
+       (Ontology Metadata + Entity metadata), each a checklist of predicates (ticked
+       = offered in "Add metadata") above an add row. Both share one _MetaCatalog. */
+    /* Foldable groups: a plain border, no background fill; the border lights up
+       while focus is anywhere inside. */
+    #cfg-tab-props Collapsible {
+        background: transparent;
+        border: round $foreground 40%;
+        border-title-color: $foreground 70%;
+        margin-bottom: 1;
+        padding: 0 1;
+    }
+    #cfg-tab-props Collapsible:focus-within {
+        border: round $primary;
+        border-title-color: $primary;
+    }
+    #cfg-tab-props CollapsibleTitle { background: transparent; }
+    #cfg-tab-props CollapsibleTitle:focus { background: $secondary 30%; }
+    #cfg-tab-props Contents { background: transparent; }
+    _MetaCatalog { height: auto; }
+    .cfg-mprops { height: auto; max-height: 12; }
+    .cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
+    .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
+    .cfg-mp-add-row { height: auto; margin-top: 1; }
+    .cfg-mp-uri { width: 2fr; border: round $primary; }
+    .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
+    /* Keep the rounded border on focus — Input's default `:focus` swaps to a `tall`
+       border (same specificity as our class rule), which breaks the rounded look. */
+    .cfg-mp-uri:focus, .cfg-mp-label:focus { border: round $primary; }
+    .cfg-mp-add { width: auto; min-width: 5; margin-left: 1; }
+    /* Opens the (separate) create-local-annotation-property modal. */
+    .cfg-mp-new { width: auto; min-width: 8; margin-top: 1; }
     /* Local server (ster serve) block: URL / port / bearer token, one Tab stop. */
     #cfg-server {
         height: auto;
@@ -248,6 +467,10 @@ class ConfigModal(ModalBase[None]):
         themes: list[str] | None = None,
         current_theme: str = "ster",
         metadata_props: list[tuple[str, str]] | None = None,
+        entity_metadata_props: list[tuple[str, str]] | None = None,
+        annotation_verifier=None,  # Callable[[str], bool] | None — URI is an annotation property?
+        can_declare: bool = False,  # may a confirmed unknown predicate be declared locally?
+        base_uri: str = "",  # ontology base IRI — fixed prefix for new local properties
     ) -> None:
         super().__init__()
         self._display = display_lang
@@ -256,6 +479,10 @@ class ConfigModal(ModalBase[None]):
         self._theme = current_theme
         self._configured = list(dict.fromkeys(configured_langs))
         self._metadata = list(metadata_props or [])  # ontology-metadata predicate catalog
+        self._entity_metadata = list(entity_metadata_props or [])  # entity-metadata catalog
+        self._annotation_verifier = annotation_verifier
+        self._can_declare = can_declare
+        self._base_uri = base_uri
         from ster.api_server import load_server_config, load_token
 
         self._server_url, self._server_port = load_server_config()
@@ -267,7 +494,7 @@ class ConfigModal(ModalBase[None]):
             with TabbedContent():
                 with TabPane("General", id="cfg-tab-general"):
                     yield from self._general_tab()
-                with TabPane("Default properties", id="cfg-tab-props"):
+                with TabPane("Annotation properties", id="cfg-tab-props"):
                     yield from self._props_tab()
             yield Static(
                 "arrows  move     esc  close     (changes save automatically)",
@@ -323,15 +550,33 @@ class ConfigModal(ModalBase[None]):
         yield LlmSetup(id="cfg-llm")
 
     def _props_tab(self) -> ComposeResult:
-        yield Static("Ontology metadata properties", classes="cfg-label cfg-mp-title")
-        with _MetaGroup(id="cfg-mp-group"):
-            with VerticalScroll(id="cfg-mprops"):
-                for pred, label in self._metadata:
-                    yield _MetaCheckbox(pred, label)
-            with Horizontal(id="cfg-mp-add-row"):
-                yield Input(placeholder="predicate URI — http://…", id="cfg-mp-uri")
-                yield Input(placeholder="label (optional)", id="cfg-mp-label")
-                yield Button("+", id="cfg-mp-add")
+        with Collapsible(title="Ontology Metadata", collapsed=False, id="cfg-ont-meta-group"):
+            yield Static(
+                "Offered when adding metadata to the ontology overview.", classes="cfg-hint"
+            )
+            yield _MetaCatalog(
+                self._metadata,
+                id="cfg-ont-meta",
+                prev_target="#cfg-ont-meta-group CollapsibleTitle",  # Shift+Tab → own header
+                next_target="#cfg-entity-meta-group CollapsibleTitle",  # Tab → next group
+                verifier=self._annotation_verifier,
+                can_declare=self._can_declare,
+                base_uri=self._base_uri,
+            )
+        with Collapsible(title="Entity metadata", collapsed=False, id="cfg-entity-meta-group"):
+            yield Static(
+                "Offered when adding metadata to a class, property or individual.",
+                classes="cfg-hint",
+            )
+            yield _MetaCatalog(
+                self._entity_metadata,
+                id="cfg-entity-meta",
+                prev_target="#cfg-entity-meta-group CollapsibleTitle",  # Shift+Tab → own header
+                next_target="Tabs",  # Tab → tab bar
+                verifier=self._annotation_verifier,
+                can_declare=self._can_declare,
+                base_uri=self._base_uri,
+            )
 
     _TAB_ORDER = ("cfg-tab-general", "cfg-tab-props")
 
@@ -345,20 +590,60 @@ class ConfigModal(ModalBase[None]):
         self._ready = True
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
-        """On the tab bar: space cycles tabs, down enters the tab's items. Text
-        inputs / language checkboxes consume these keys, so this only fires while
-        focus is on the tab bar / chrome."""
-        if event.key == "space" and isinstance(self.focused, Tabs):
+        """Tab bar: space cycles tabs, down enters the active tab. Collapsible
+        headers: Up/Down move between groups, Right drills into the item list. Text
+        inputs / checkboxes / the catalog groups consume these keys themselves, so
+        this only fires while focus is on the tab bar or a group header."""
+        focused = self.focused
+        if isinstance(focused, Tabs):
+            self._tabbar_key(event)
+        elif isinstance(focused, CollapsibleTitle):
+            self._header_key(event, focused)
+
+    def _tabbar_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "space":
             tabs = self.query_one(TabbedContent)
             if tabs.active in self._TAB_ORDER:
-                nxt = self._TAB_ORDER[
+                tabs.active = self._TAB_ORDER[
                     (self._TAB_ORDER.index(tabs.active) + 1) % len(self._TAB_ORDER)
                 ]
-                tabs.active = nxt
                 event.stop()
-        elif event.key == "down" and isinstance(self.focused, Tabs):
+        elif event.key == "down":
             self.focus_next()  # tab bar → first item of the active tab
             event.stop()
+
+    def _header_key(self, event, title: CollapsibleTitle) -> None:  # type: ignore[no-untyped-def]
+        titles = list(self.query(CollapsibleTitle))
+        i = titles.index(title)
+        if event.key == "down":
+            if i + 1 < len(titles):
+                titles[i + 1].focus()  # → next group header
+            event.stop()
+        elif event.key == "up":
+            (titles[i - 1] if i > 0 else self.query_one(Tabs)).focus()  # ← prev group / tab bar
+            event.stop()
+        elif event.key == "right":
+            self._enter_group(title)  # → drill into this group's item list
+            event.stop()
+
+    def _enter_group(self, title: CollapsibleTitle) -> None:
+        """Open (if folded) and focus the catalog under *title*, landing on its first item."""
+        node: object = title.parent
+        while node is not None and not isinstance(node, Collapsible):
+            node = node.parent  # type: ignore[attr-defined]
+        if not isinstance(node, Collapsible):
+            return
+        catalog = node.query_one(_MetaCatalog)
+        if node.collapsed:
+            node.collapsed = False
+            self.call_after_refresh(self._focus_catalog, catalog)
+        else:
+            self._focus_catalog(catalog)
+
+    @staticmethod
+    def _focus_catalog(catalog: _MetaCatalog) -> None:
+        catalog.focus()
+        catalog._enter()
 
     # ── current state + auto-save ───────────────────────────────────────────────
 
@@ -372,11 +657,8 @@ class ConfigModal(ModalBase[None]):
             "display": str(self.query_one("#cfg-display", Select).value),
             "theme": str(self.query_one("#cfg-theme", Select).value),
             "configured": configured,
-            "metadata_props": [
-                (cb.predicate, cb.label_text)
-                for cb in self.query(_MetaCheckbox)
-                if cb.value  # ticked → offered in "Add metadata"
-            ],
+            "metadata_props": self.query_one("#cfg-ont-meta", _MetaCatalog).props(),
+            "entity_metadata_props": self.query_one("#cfg-entity-meta", _MetaCatalog).props(),
         }
 
     def _save(self) -> None:
@@ -426,26 +708,12 @@ class ConfigModal(ModalBase[None]):
         field.value = ""
         self._save()
 
-    # ── ontology-metadata properties ────────────────────────────────────────────
-    @on(Button.Pressed, "#cfg-mp-add")
-    async def _on_add_prop(self, event: Button.Pressed) -> None:
-        await self._add_metadata_prop()
-
-    @on(Input.Submitted, "#cfg-mp-uri")
-    @on(Input.Submitted, "#cfg-mp-label")
-    async def _on_prop_submit(self, event: Input.Submitted) -> None:
-        await self._add_metadata_prop()
-
-    async def _add_metadata_prop(self) -> None:
-        uri = self.query_one("#cfg-mp-uri", Input).value.strip()
-        label = self.query_one("#cfg-mp-label", Input).value.strip()
-        present = {cb.predicate for cb in self.query(_MetaCheckbox)}
-        if not uri or uri in present:
-            return
-        await self.query_one("#cfg-mprops").mount(_MetaCheckbox(uri, label))
-        self.query_one("#cfg-mp-uri", Input).value = ""
-        self.query_one("#cfg-mp-label", Input).value = ""
-        self._save()  # toggling an existing checkbox is handled by _on_checkbox
+    # ── metadata catalogs ───────────────────────────────────────────────────────
+    @on(_MetaCatalog.Changed)
+    def _on_catalog_changed(self, event: _MetaCatalog.Changed) -> None:
+        """A predicate was added to either catalog → auto-save (toggles are handled
+        by ``_on_checkbox``)."""
+        self._save()
 
     def action_cancel(self) -> None:
         self.dismiss(None)

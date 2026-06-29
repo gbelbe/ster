@@ -14,6 +14,8 @@ from __future__ import annotations
 from functools import partial
 from pathlib import Path
 
+from rich.style import Style
+from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -63,6 +65,51 @@ class OntologyTree(Tree):
     _LAST_LINE = 2_000_000_000  # any out-of-range line clamps to the last visible one
 
     BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
+
+    # The node whose guide column is currently lit (the cursor's parent).
+    _branch_parent: TreeNode | None = None
+
+    def watch_cursor_line(self, previous_line: int, line: int) -> None:
+        super().watch_cursor_line(previous_line, line)
+        self._light_branch_column()
+
+    def _light_branch_column(self) -> None:
+        """Keep the guide column at the cursor's own level lit as it moves.
+
+        Textual marks the *cursor node* selected, which lights up the guides
+        *descending from* it — so the highlight vanishes the moment the cursor
+        lands on a leaf. We move that flag onto the cursor's parent instead, so
+        the vertical guide it shares with its siblings stays lit at the cursor's
+        level. ``_selected`` is a pure rich-render hint (it drives the
+        ``tree--guides-selected`` style), independent of node-selection events.
+        """
+        node = self.cursor_node
+        parent = node.parent if node is not None else None
+        # The hidden root's guide spans every line — lighting it would highlight
+        # the whole tree, so top-level nodes get no branch column.
+        if parent is self.root:
+            parent = None
+        if node is not None:
+            node._selected = False  # undo Textual's descend-from-cursor highlight
+        if parent is not self._branch_parent and self._branch_parent is not None:
+            self._branch_parent._selected = False
+            self._refresh_node(self._branch_parent)
+        self._branch_parent = parent
+        if parent is not None:
+            parent._selected = True
+            self._refresh_node(parent)
+
+    def render_label(self, node: TreeNode, base_style: Style, style: Style) -> Text:
+        """Pad childless (non-expandable) labels by the toggle-arrow width so they
+        line up with the expandable siblings that do show a ``▶``/``▼`` arrow.
+
+        Textual omits the arrow for non-expandable nodes (and renders no prefix),
+        which would shift their text left out of alignment; the pad restores it.
+        """
+        label = super().render_label(node, base_style, style)
+        if not node.allow_expand:
+            label.pad_left(len(self.ICON_NODE))  # ICON_NODE = "▶ " → 2 cells
+        return label
 
     def action_focus_detail(self) -> None:
         rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
@@ -247,6 +294,7 @@ class OntologyApp(App):
         self._path = path
         self.configured_langs = self._load_configured_langs(path, lang)
         self.metadata_props = self._load_metadata_props()  # ontology-metadata catalog
+        self.entity_metadata_props = self._load_entity_metadata_props()  # entity-metadata catalog
         self._service = self._make_service(taxonomy, path)
         self.search_rows = data.search_rows(taxonomy, lang)
         self._uri_nodes: dict[str, TreeNode] = {}
@@ -270,6 +318,14 @@ class OntologyApp(App):
 
         return load_metadata_props() or default_annotation_catalog()
 
+    def _load_entity_metadata_props(self) -> list[tuple[str, str]]:
+        """The configured entity-metadata predicate catalog (built-in defaults when
+        the user has never customised it)."""
+        from ster.nav.logic import default_entity_annotation_catalog
+        from ster.nav.prefs import load_entity_metadata_props
+
+        return load_entity_metadata_props() or default_entity_annotation_catalog()
+
     def _load_configured_langs(self, path: Path | None, lang: str) -> list[str]:
         """Per-file configured languages, defaulting to the display language."""
         if path is None:
@@ -280,6 +336,8 @@ class OntologyApp(App):
 
     def action_open_config(self) -> None:
         """Open the global configuration modal (it auto-saves via ConfigModal.Changed)."""
+        from ster.ontology_imports import is_annotation_property
+
         from .config_modal import ConfigModal
 
         available = data.languages_in_use(self.tax)
@@ -292,12 +350,31 @@ class OntologyApp(App):
                 themes,
                 self.theme,
                 metadata_props=self.metadata_props,
+                entity_metadata_props=self.entity_metadata_props,
+                annotation_verifier=lambda uri: is_annotation_property(self.tax, uri),
+                can_declare=self._service is not None and self._path is not None,
+                base_uri=self.tax.base_uri(),
             )
         )
 
     def on_config_modal_changed(self, message) -> None:  # type: ignore[no-untyped-def]
         """A setting changed in the config modal → apply it live and persist."""
         self._apply_config(message.result)
+
+    def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]
+        """A config-modal predicate was confirmed despite not being a known annotation
+        property → declare it locally as an ``owl:AnnotationProperty`` (skip if it is
+        already a property of some kind)."""
+        uri = message.uri
+        if self._path is None or uri in self.tax.owl_properties:
+            return
+        from ster.core.commands import OwlAddProperty, OwlSetComment
+
+        label = getattr(message, "label", "")
+        self._apply_command(OwlAddProperty(self._path, uri, "AnnotationProperty", label, self.lang))
+        comment = getattr(message, "comment", "")
+        if comment:
+            self._apply_command(OwlSetComment(self._path, uri, self.lang, comment))
 
     def _apply_config(self, result: dict) -> None:
         """Apply + persist the chosen languages and theme. Re-renders the detail
@@ -329,6 +406,7 @@ class OntologyApp(App):
             _save_lang_pref,
             _save_prefs,
             save_configured_langs,
+            save_entity_metadata_props,
             save_metadata_props,
         )
 
@@ -336,6 +414,9 @@ class OntologyApp(App):
         if "metadata_props" in result:  # the configurable "Add metadata" catalog (global)
             self.metadata_props = [tuple(p) for p in result["metadata_props"]]
             save_metadata_props(self.metadata_props)
+        if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
+            self.entity_metadata_props = [tuple(p) for p in result["entity_metadata_props"]]
+            save_entity_metadata_props(self.entity_metadata_props)
         if self._path is not None:
             _save_lang_pref(self._path, new_lang)
             save_configured_langs(self._path, self.configured_langs)
@@ -467,18 +548,42 @@ class OntologyApp(App):
                 self._add_concept(sec, c_uri)
             sec.expand()
         tax_sec.expand()
+        self._strip_childless_arrows(root)
 
     def _build_prop_tree(self, tree: Tree) -> None:
-        """Bottom pane: every property, in its own always-visible 1/4-height list."""
+        """Bottom pane: properties grouped by kind — Object / Datatype / Annotation
+        always shown, plus an orange "Untyped Properties" group for bare
+        ``rdf:Property`` entries. Within a group the locally-declared properties come
+        first, then predicates merely *used* on the ontology header (e.g.
+        ``dcterms:creator``), each flagged with a small ``(ext)`` indicator."""
         tax = self.tax
-        if not tax.owl_properties:
+        if not tax.owl_properties and not tax.ontology_annotations:
             return
-        sec = tree.root.add(f"{data.ICON['section']} Properties", data=None)
-        for uri in data.properties(tax, self.lang):
-            ptype = tax.owl_properties[uri].prop_type
-            tag = f"  [dim]({ptype[:3]})[/dim]" if ptype else ""
-            self._leaf(sec, uri, "property", suffix=tag)
-        sec.expand()
+        for title, local, external in data.property_groups(tax, self.lang):
+            label = (
+                f"[orange1]{title}[/orange1]" if title == data.UNTYPED_PROPERTIES_TITLE else title
+            )
+            sec = tree.root.add(label, data=None)
+            for uri in local:
+                self._leaf(sec, uri, "property")
+            for uri in external:
+                self._leaf(sec, uri, "property", suffix="  [dim](ext)[/dim]")
+            sec.expand()
+        self._strip_childless_arrows(tree.root)
+
+    @staticmethod
+    def _strip_childless_arrows(root: TreeNode) -> None:
+        """Drop the expand/collapse arrow from every node that has no children.
+
+        An arrow on a childless node misleadingly hints at a drill-down (click /
+        Enter to open) when there is nothing below it. Nodes keep their arrow only
+        when they actually have a subtree.
+        """
+        stack = list(root.children)
+        while stack:
+            node = stack.pop()
+            node.allow_expand = bool(node.children)
+            stack.extend(node.children)
 
     # ── interaction ─────────────────────────────────────────────────────────--
 
@@ -1234,10 +1339,17 @@ class OntologyApp(App):
         self.theme = cycle[(i + 1) % len(cycle)]
         self.notify(f"Theme: {self.theme}", timeout=2)
 
+    def _active_tree(self) -> Tree:
+        """The tree the expand/collapse shortcuts act on: the focused pane when it is
+        the properties tree, otherwise the main ontology tree."""
+        prop_tree = self.query_one("#prop-tree", Tree)
+        if self.focused is prop_tree:
+            return prop_tree
+        return self.query_one("#tree", Tree)
+
     def action_expand_all(self) -> None:
-        self.query_one("#tree", Tree).root.expand_all()
+        self._active_tree().root.expand_all()
 
     def action_collapse_all(self) -> None:
-        tree = self.query_one("#tree", Tree)
-        for child in tree.root.children:
+        for child in self._active_tree().root.children:
             child.collapse_all()

@@ -235,6 +235,150 @@ def test_tree_cursor_wraps_around() -> None:
     _run(scenario)
 
 
+def test_cursor_on_leaf_lights_parent_branch_column_not_the_leaf() -> None:
+    """The guide column at the cursor's level stays lit: Textual's default lights
+    the guides descending from the cursor (gone on a leaf); we move that flag to
+    the cursor's parent so the branch it shares with its siblings stays lit."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")  # expand all so Rex (a leaf individual) is visible
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            rex = app._uri_nodes[ZOO + "Rex"]  # individual under Dog
+            tree.move_cursor(rex)
+            await pilot.pause()
+            assert rex._selected is False  # the cursor node itself is NOT the lit branch
+            assert rex.parent._selected is True  # its parent's column is lit instead
+
+    _run(scenario)
+
+
+def test_branch_column_persists_when_moving_among_siblings() -> None:
+    """Moving the cursor between two children of the same parent keeps that
+    parent's guide column lit (the highlight tracks the level, not the node)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            cat = app._uri_nodes[ZOO + "Cat"]  # Cat and Dog are siblings under Mammal
+            dog = app._uri_nodes[ZOO + "Dog"]
+            mammal = app._uri_nodes[ZOO + "Mammal"]
+            tree.move_cursor(cat)
+            await pilot.pause()
+            assert mammal._selected is True
+            tree.move_cursor(dog)  # slide to the sibling
+            await pilot.pause()
+            assert mammal._selected is True  # same level → still lit
+            assert cat._selected is False and dog._selected is False
+
+    _run(scenario)
+
+
+def test_moving_across_branches_clears_the_previous_column() -> None:
+    """Jumping to a different branch lights the new parent and unlights the old."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            rex = app._uri_nodes[ZOO + "Rex"]  # parent: Dog
+            alice = app._uri_nodes[ZOO + "Alice"]  # parent: Person
+            tree.move_cursor(rex)
+            await pilot.pause()
+            assert app._uri_nodes[ZOO + "Dog"]._selected is True
+            tree.move_cursor(alice)
+            await pilot.pause()
+            assert app._uri_nodes[ZOO + "Dog"]._selected is False  # old column cleared
+            assert app._uri_nodes[ZOO + "Person"]._selected is True  # new column lit
+
+    _run(scenario)
+
+
+def test_top_level_cursor_does_not_light_the_hidden_root() -> None:
+    """A top-level node's parent is the hidden root, whose guide spans every line —
+    lighting it would highlight the whole tree, so it is left untouched."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.cursor_line = 0  # first visible row = the top-level "Ontology" node
+            await pilot.pause()
+            assert tree.root._selected is False  # the root is never lit
+
+    _run(scenario)
+
+
+def test_childless_nodes_drop_the_expand_arrow() -> None:
+    """A node with no subtree shows no ▶/▼ arrow (it would falsely hint a drill-down);
+    a node that does have children keeps it."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            cat = app._uri_nodes[ZOO + "Eagle"]  # leaf class: no subclasses, no individuals
+            mammal = app._uri_nodes[ZOO + "Mammal"]  # has subclasses Cat + Dog
+            assert cat.allow_expand is False  # arrow removed
+            assert mammal.allow_expand is True  # arrow kept
+            # Individuals (leaves) and properties never get an arrow either.
+            assert app._uri_nodes[ZOO + "Rex"].allow_expand is False
+            props = app.query_one("#prop-tree", Tree)
+            assert app._uri_nodes[ZOO + "hasOwner"].allow_expand is False
+            assert props.root.children[0].allow_expand is True  # the Properties section
+
+    _run(scenario)
+
+
+def test_childless_node_labels_stay_aligned_with_expandable_siblings() -> None:
+    """Removing the arrow must not shift text left: a childless label is padded by
+    the arrow's width so its text starts at the same column as a sibling's."""
+
+    async def scenario() -> None:
+        from rich.style import Style
+        from textual.widgets import Tree
+
+        from ster.tui import data
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            eagle = tree.render_label(app._uri_nodes[ZOO + "Eagle"], Style(), Style())
+            mammal = tree.render_label(app._uri_nodes[ZOO + "Mammal"], Style(), Style())
+            # The childless label carries no arrow, just padding …
+            assert "▶" not in eagle.plain and "▼" not in eagle.plain
+            assert eagle.plain.startswith("  ")
+            # … the expandable one carries the arrow; both prefixes are 2 cells wide,
+            # so the entity text lines up.
+            assert mammal.plain[:2] in ("▶ ", "▼ ")
+            assert eagle.plain[2:].startswith(data.ICON["class"])
+            assert mammal.plain[2:].startswith(data.ICON["class"])
+
+    _run(scenario)
+
+
 def test_picker_list_wraps_around(tmp_path) -> None:
     """The entity picker's up/down wrap around the ends of a long candidate list."""
 
@@ -300,6 +444,111 @@ def test_properties_live_in_their_own_pane() -> None:
             assert ZOO + "hasOwner" not in main
             # the class hierarchy only in the main tree
             assert ZOO + "Animal" in main and ZOO + "Animal" not in props
+
+    _run(scenario)
+
+
+def test_prop_tree_groups_properties_by_kind() -> None:
+    """The three OWL group headers always show, in order; within a group the local
+    properties are listed first, then used-but-undeclared header predicates flagged
+    with a small '(ext)'. An orange 'Untyped Properties' group appears for bare
+    rdf:Property entries."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.model import Label, OWLProperty
+
+        app = _app()
+        app.tax.owl_properties[ZOO + "relatedTo"] = OWLProperty(
+            uri=ZOO + "relatedTo", prop_type="Property", labels=[Label("en", "related to")]
+        )
+
+        def leaves(group):  # [(uri, has_ext_tag), …] in display order
+            return [(n.data, "(ext)" in n.label.plain) for n in group.children]
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            root = app.query_one("#prop-tree", Tree).root
+            groups = {node.label.plain: node for node in root.children}
+            assert [n.label.plain for n in root.children][:3] == [
+                "Object Properties",
+                "Datatype Properties",
+                "Annotation Properties",
+            ]
+            # local properties: flat leaves, no (ext) tag
+            assert leaves(groups["Object Properties"]) == [(ZOO + "hasOwner", False)]
+            assert leaves(groups["Datatype Properties"]) == [(ZOO + "hasAge", False)]
+            # demo's used-but-undeclared header predicates → Annotation, each (ext)-tagged
+            ann = leaves(groups["Annotation Properties"])
+            assert ann == [
+                ("http://purl.org/dc/terms/description", True),
+                ("http://www.w3.org/2000/01/rdf-schema#label", True),
+                ("http://purl.org/dc/terms/title", True),
+            ]
+            # the untyped group is orange and holds relatedTo (local, no tag)
+            untyped = root.children[-1]
+            assert untyped.label.plain == "Untyped Properties"
+            assert any("orange1" in str(span.style) for span in untyped.label.spans)
+            assert leaves(untyped) == [(ZOO + "relatedTo", False)]
+
+    _run(scenario)
+
+
+def test_prop_tree_lists_local_before_external_within_a_group() -> None:
+    """When a group has both declared and used-but-undeclared predicates, the local
+    one comes first and only the external one carries the (ext) flag."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.model import Label, OWLProperty
+
+        app = _app()
+        # a locally-declared annotation property, alongside the demo's external ones
+        app.tax.owl_properties[ZOO + "note"] = OWLProperty(
+            uri=ZOO + "note", prop_type="AnnotationProperty", labels=[Label("en", "note")]
+        )
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            root = app.query_one("#prop-tree", Tree).root
+            ann = {n.label.plain: n for n in root.children}["Annotation Properties"]
+            ordered = [(n.data, "(ext)" in n.label.plain) for n in ann.children]
+            assert ordered[0] == (ZOO + "note", False)  # local first, no tag
+            assert all(is_ext for _, is_ext in ordered[1:])  # the rest are external
+
+    _run(scenario)
+
+
+def test_expand_collapse_target_the_focused_tree() -> None:
+    """The 'e'/'c' expand/collapse actions act on whichever tree pane has focus —
+    the properties tree when it's selected, otherwise the main ontology tree."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            main = app.query_one("#tree", Tree)
+            props = app.query_one("#prop-tree", Tree)
+            # focus the properties pane → collapse acts on it, leaving the main tree be
+            props.focus()
+            await pilot.pause()
+            app.action_collapse_all()
+            await pilot.pause()
+            assert all(not c.is_expanded for c in props.root.children)  # prop groups closed
+            assert any(c.is_expanded for c in main.root.children)  # main tree untouched
+            app.action_expand_all()  # re-open the properties groups
+            await pilot.pause()
+            assert all(c.is_expanded for c in props.root.children)
+            # focus back on the main tree → collapse now targets it, not properties
+            main.focus()
+            await pilot.pause()
+            app.action_collapse_all()
+            await pilot.pause()
+            assert all(not c.is_expanded for c in main.root.children)  # main collapsed
+            assert all(c.is_expanded for c in props.root.children)  # properties untouched
 
     _run(scenario)
 
@@ -799,7 +1048,9 @@ def test_tree_populates_and_focuses() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            assert len(app._uri_nodes) == 12  # every class/individual/property indexed
+            # 7 classes + 3 individuals + 2 local properties + 3 used-but-undeclared
+            # ontology header predicates (rdfs:label, dcterms:title, dcterms:description).
+            assert len(app._uri_nodes) == 15  # every class/individual/property node indexed
             assert isinstance(app.focused, Tree)  # tree gets focus on mount
 
     _run(scenario)
