@@ -21,14 +21,18 @@ class PropertyPresenter(EntityPresenter):
         prop = self.tax.owl_properties.get(self.uri)
         if prop is None:
             return []
-        gaps: list[DetailField] = []
-        if not is_labelled(prop):
-            gaps.append(gap_row("prop:gap_label", "missing rdfs:label / skos:prefLabel"))
-        if not prop.domains:
-            gaps.append(gap_row("prop:gap_domain", "missing rdfs:domain"))
-        if not prop.ranges:
-            gaps.append(gap_row("prop:gap_range", "missing rdfs:range"))
-        return health_section(gaps)
+        # Same categories on every property; the count is 0 (present) or 1 (missing).
+        return health_section(
+            [
+                gap_row(
+                    "prop:gap_label",
+                    "missing rdfs:label / skos:prefLabel",
+                    int(not is_labelled(prop)),
+                ),
+                gap_row("prop:gap_domain", "missing rdfs:domain", int(not prop.domains)),
+                gap_row("prop:gap_range", "missing rdfs:range", int(not prop.ranges)),
+            ]
+        )
 
     def render(self) -> list[DetailField]:
         base = build_property_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)

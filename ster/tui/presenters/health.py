@@ -9,14 +9,17 @@ from __future__ import annotations
 from ster.nav.logic import DetailField, _colored, _sep, _stat
 
 
-def gap_row(key: str, label: str) -> DetailField:
-    """A single actionable gap — always orange (it exists only when something's missing)."""
-    return _colored(_stat(key, label, "—"), "orange")
+def gap_row(key: str, label: str, count: int) -> DetailField:
+    """One Health checklist row: a *count* of affected items, green at 0 else orange.
+
+    Always rendered (even at 0) so the same categories appear on every entity — a
+    stable checklist rather than rows that come and go."""
+    return _colored(_stat(key, label, str(count)), "green" if count == 0 else "orange")
 
 
-def health_section(gaps: list[DetailField]) -> list[DetailField]:
-    """Wrap *gaps* in a 'Health & Issues' section, or nothing when there are none."""
-    return [_sep("Health & Issues"), *gaps] if gaps else []
+def health_section(rows: list[DetailField]) -> list[DetailField]:
+    """Wrap the checklist *rows* in a 'Health & Issues' section (nothing if empty)."""
+    return [_sep("Health & Issues"), *rows] if rows else []
 
 
 def insert_after_identity(base: list[DetailField], extra: list[DetailField]) -> list[DetailField]:

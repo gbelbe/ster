@@ -17,7 +17,6 @@ from ster.nav.logic import (
     _bar_stat,
     _class_depths,
     _class_languages,
-    _colored,
     _lang_coverage_rows,
     _lint_count_field,
     _ontology_activity_fields,
@@ -28,11 +27,7 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-
-
-def _gap_row(key: str, label: str, count: int) -> DetailField:
-    """A structural-gap count — green at zero, else orange (there's work to do)."""
-    return _colored(_stat(key, label, str(count)), "green" if count == 0 else "orange")
+from .health import gap_row as _gap_row
 
 
 def _missing_domain_range(tax: Taxonomy) -> int:

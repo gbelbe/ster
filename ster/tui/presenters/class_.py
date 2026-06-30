@@ -11,27 +11,35 @@ See docs/architecture/detail-presenter.md.
 from __future__ import annotations
 
 from ster.metadata_coverage import is_labelled
-from ster.nav.logic import DetailField, build_rdf_class_detail
+from ster.nav.logic import DetailField, _subtree_class_uris, build_rdf_class_detail
 
 from .base import EntityPresenter
 from .health import gap_row, health_section, insert_after_identity
 
 
 class ClassPresenter(EntityPresenter):
-    """owl:Class / rdfs:Class detail with a leading Health & Issues section."""
+    """owl:Class / rdfs:Class detail with a leading Health & Issues section.
+
+    The checklist always lists the same categories, each a count of affected
+    classes *in this class's subtree* (the class + its descendants) — so a leaf
+    reports on itself and a root on its whole branch, consistently."""
 
     def health(self) -> list[DetailField]:
-        cls = self.tax.owl_classes.get(self.uri)
-        if cls is None:
+        if self.uri not in self.tax.owl_classes:
             return []
-        gaps: list[DetailField] = []
-        if not is_labelled(cls):
-            gaps.append(gap_row("cls:gap_label", "missing rdfs:label / skos:prefLabel"))
-        if not cls.comments:
-            gaps.append(gap_row("cls:gap_comment", "missing rdfs:comment"))
-        if not any(self.uri in ind.types for ind in self.tax.owl_individuals.values()):
-            gaps.append(gap_row("cls:gap_noind", "no individuals"))
-        return health_section(gaps)
+        classes = self.tax.owl_classes
+        subtree = _subtree_class_uris(self.tax, self.uri)
+        typed = {t for ind in self.tax.owl_individuals.values() for t in ind.types}
+        unlabelled = sum(1 for u in subtree if not is_labelled(classes[u]))
+        undocumented = sum(1 for u in subtree if not classes[u].comments)
+        no_individuals = sum(1 for u in subtree if u not in typed)
+        return health_section(
+            [
+                gap_row("cls:gap_unlab", "unlabelled classes", unlabelled),
+                gap_row("cls:gap_undoc", "undocumented classes", undocumented),
+                gap_row("cls:gap_noind", "classes with no individuals", no_individuals),
+            ]
+        )
 
     def render(self) -> list[DetailField]:
         base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)

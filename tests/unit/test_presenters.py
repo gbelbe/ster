@@ -114,23 +114,40 @@ def test_overview_routes_through_its_presenter() -> None:
 # ── P2: ClassPresenter Health section ─────────────────────────────────────────
 
 
-def test_class_presenter_leads_with_health_gaps() -> None:
-    """A class detail gains a Health & Issues section (after Identity) listing its
-    own gaps; a fully-specified class shows none."""
+def _health_by_key(fields: list) -> dict:
+    return {f.key: f for f in fields}
+
+
+def test_class_presenter_health_is_a_stable_subtree_checklist() -> None:
+    """Every class shows the same Health categories (after Identity), each a count of
+    affected classes in its subtree — green at 0, else orange."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
-    fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()
+    fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()  # leaf: subtree is itself
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
-    assert seps[0] == "Identity" and seps[1] == "Health & Issues"  # right after identity
-    keys = {f.key for f in fields}
-    assert "cls:gap_comment" in keys  # Eagle has no rdfs:comment
-    assert "cls:gap_noind" in keys  # …and no individuals
-    assert "cls:gap_label" not in keys  # but it IS labelled
+    assert seps[0] == "Identity" and seps[1] == "Health & Issues"
+    by_key = _health_by_key(fields)
+    # all three categories are always present with a numeric count
+    assert by_key["cls:gap_unlab"].value == "0"  # Eagle is labelled
+    assert by_key["cls:gap_unlab"].meta["color"] == "green"
+    assert by_key["cls:gap_undoc"].value == "1"  # no rdfs:comment
+    assert by_key["cls:gap_undoc"].meta["color"] == "orange"
+    assert by_key["cls:gap_noind"].value == "1"  # no individuals
 
 
-def test_class_presenter_omits_health_when_clean() -> None:
-    """No Health section when the class has a label, a comment and instances."""
+def test_class_health_counts_over_the_whole_subtree() -> None:
+    """A root class counts gaps across its descendants, not just itself."""
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    by_key = _health_by_key(ClassPresenter(_ctx(tax), ZOO + "Animal").render())
+    assert int(by_key["cls:gap_undoc"].value) >= 3  # several undocumented classes below Animal
+    assert by_key["cls:gap_unlab"].value == "0"  # all labelled
+
+
+def test_class_health_all_green_when_subtree_is_clean() -> None:
+    """A clean leaf still shows the checklist — all zeros, all green."""
     from ster.model import Definition, Label, OWLIndividual, RDFClass
     from ster.tui.presenters.class_ import ClassPresenter
 
@@ -140,34 +157,39 @@ def test_class_presenter_omits_health_when_clean() -> None:
         uri=uri, labels=[Label("en", "Tidy")], comments=[Definition("en", "A tidy class.")]
     )
     tax.owl_individuals[ZOO + "t1"] = OWLIndividual(uri=ZOO + "t1", types=[uri])
-    fields = ClassPresenter(_ctx(tax), uri).render()
-    assert "Health & Issues" not in [
-        f.display for f in fields if f.meta.get("type", "").startswith("separator")
-    ]
+    by_key = _health_by_key(ClassPresenter(_ctx(tax), uri).render())
+    assert {by_key[k].value for k in ("cls:gap_unlab", "cls:gap_undoc", "cls:gap_noind")} == {"0"}
+    assert all(
+        by_key[k].meta["color"] == "green"
+        for k in ("cls:gap_unlab", "cls:gap_undoc", "cls:gap_noind")
+    )
 
 
 # ── P3: PropertyPresenter Health section ──────────────────────────────────────
 
 
-def test_property_presenter_surfaces_missing_domain_range() -> None:
-    """A property detail leads with Health & Issues naming its missing domain/range."""
+def test_property_presenter_health_is_a_stable_checklist() -> None:
+    """A property shows the same three facet categories, each 0 (present) or 1 (missing)."""
     from ster.tui.presenters.property_ import PropertyPresenter
 
     tax = store.load(DEMO)
-    fields = PropertyPresenter(_ctx(tax), ZOO + "hasAge").render()  # has domain, no range
-    seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
-    assert seps[0] == "Identity" and seps[1] == "Health & Issues"
-    keys = {f.key for f in fields}
-    assert "prop:gap_range" in keys  # hasAge has no rdfs:range
-    assert "prop:gap_domain" not in keys  # …but it has a domain
+    by_key = _health_by_key(PropertyPresenter(_ctx(tax), ZOO + "hasAge").render())  # no range
+    assert (
+        by_key["prop:gap_domain"].value == "0"
+        and by_key["prop:gap_domain"].meta["color"] == "green"
+    )
+    assert (
+        by_key["prop:gap_range"].value == "1" and by_key["prop:gap_range"].meta["color"] == "orange"
+    )
+    assert by_key["prop:gap_label"].value == "0"
 
 
-def test_property_presenter_omits_health_when_complete() -> None:
-    """A fully-specified property (label + domain + range) shows no Health section."""
+def test_property_health_all_green_when_complete() -> None:
+    """A fully-specified property still shows the checklist — all zeros, all green."""
     from ster.tui.presenters.property_ import PropertyPresenter
 
     tax = store.load(DEMO)
-    fields = PropertyPresenter(_ctx(tax), ZOO + "hasOwner").render()  # domain + range + label
-    assert "Health & Issues" not in [
-        f.display for f in fields if f.meta.get("type", "").startswith("separator")
-    ]
+    by_key = _health_by_key(PropertyPresenter(_ctx(tax), ZOO + "hasOwner").render())
+    assert {by_key[k].value for k in ("prop:gap_label", "prop:gap_domain", "prop:gap_range")} == {
+        "0"
+    }
