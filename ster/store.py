@@ -301,22 +301,29 @@ def _set_note(entity: object, o: object) -> None:
         entity.note = str(o)  # type: ignore[attr-defined]
 
 
+# rdf:type carries the entity's own declaration (owl:Class / owl:*Property); it is
+# never a descriptive annotation, so the generic catch-all skips it.
+_ENTITY_ANNOTATION_SKIP: frozenset[str] = frozenset({str(RDF.type)})
+
+
 def _dispatch_predicates(
     g: Graph,
     subject_uri: str,
     handlers: dict[str, Callable[[object], None]],
-    default: Callable[[str, object], None] | None = None,
+    annotations: list[OntologyAnnotation] | None = None,
 ) -> None:
-    """Apply ``handlers[predicate](object)`` over a subject's triples; a predicate with
-    no handler is passed to *default*(predicate, object) when given — the generic
-    catch-all that captures every other predicate into a model's annotation bucket."""
+    """Apply ``handlers[predicate](object)`` over a subject's triples. A predicate with
+    no handler is captured into *annotations* (the generic bucket) when given — every
+    descriptive predicate the structured fields don't model, so it round-trips."""
     for _, p, o in g.triples((URIRef(subject_uri), None, None)):
         ps = str(p)
         handler = handlers.get(ps)
         if handler is not None:
             handler(o)
-        elif default is not None:
-            default(ps, o)
+        elif annotations is not None and ps not in _ENTITY_ANNOTATION_SKIP:
+            anno = _annotation_from(ps, o)
+            if anno is not None:
+                annotations.append(anno)
 
 
 def _parse_class(g: Graph, uri: str) -> RDFClass:
@@ -333,7 +340,7 @@ def _parse_class(g: Graph, uri: str) -> RDFClass:
         str(SCHEMA.url): lambda o: cls.schema_urls.append(str(o)),
         NOTE_PROPERTY_URI: lambda o: _set_note(cls, o),
     }
-    _dispatch_predicates(g, uri, handlers)
+    _dispatch_predicates(g, uri, handlers, annotations=cls.annotations)
     return cls
 
 
@@ -349,7 +356,7 @@ def _parse_property(g: Graph, uri: str, prop_type_name: str) -> OWLProperty:
         str(OWL.inverseOf): lambda o: _append_uri_ref(prop.inverse_of, o),
         NOTE_PROPERTY_URI: lambda o: _set_note(prop, o),
     }
-    _dispatch_predicates(g, uri, handlers)
+    _dispatch_predicates(g, uri, handlers, annotations=prop.annotations)
     return prop
 
 
@@ -605,6 +612,8 @@ def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass) -> None:
     _serialize_schema_media(g, ref, rdf_class)
     if rdf_class.note:
         g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(rdf_class.note)))
+    for a in rdf_class.annotations:
+        g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
 _OWL_PROP_TYPE: dict[str, URIRef] = {
@@ -629,6 +638,8 @@ def _serialize_property(g: Graph, uri: str, prop: OWLProperty) -> None:
         g.add((ref, OWL.inverseOf, URIRef(inv)))
     if prop.note:
         g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(prop.note)))
+    for a in prop.annotations:
+        g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
 def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
