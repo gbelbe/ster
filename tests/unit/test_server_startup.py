@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import types
 import urllib.request
 from unittest.mock import patch
 
@@ -25,6 +24,20 @@ def _make_taxonomy() -> Taxonomy:
     tax = Taxonomy()
     tax.owl_classes[NS + "Animal"] = RDFClass(uri=NS + "Animal")
     return tax
+
+
+def _free_port() -> int:
+    """Return an OS-assigned free TCP port.
+
+    Real-server tests must not hard-code a port: each leaks a daemon uvicorn for
+    the rest of the session, so a fixed port collides with a leftover server (or
+    a TIME_WAIT socket) across the 3 sequential Python-version CI runs.
+    """
+    import socket as _socket
+
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 # ── shared mock helpers ────────────────────────────────────────────────────────
@@ -66,27 +79,16 @@ def _mock_uvicorn_start(monkeypatch, tmp_path, url: str, port: int) -> dict:
 
     class FakeServer:
         def __init__(self, config):
-            pass
+            self.started = False
 
         async def serve(self) -> None:
-            pass
-
-    class FakeSocket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            pass
-
-        def connect_ex(self, addr):
-            return 0  # pretend port is immediately open
-
-    fake_socket_mod = types.SimpleNamespace(socket=lambda *a, **kw: FakeSocket())
+            # Mimic uvicorn flagging itself as serving once the socket is bound;
+            # _start_api_server keys success off this, not a bare port probe.
+            self.started = True
 
     with (
         patch("uvicorn.Config", FakeConfig),
         patch("uvicorn.Server", FakeServer),
-        patch("ster.viz_vowl.socket", fake_socket_mod),
     ):
         result = vv._start_api_server(_make_taxonomy(), None)
 
@@ -168,14 +170,51 @@ def test_real_server_responds_on_configured_port(monkeypatch, tmp_path):
     """_start_api_server starts a real uvicorn instance; GET /api/graph returns 200."""
     import ster.viz_vowl as vv
 
-    _setup_globals(monkeypatch, tmp_path, "http://127.0.0.1", 19765)
+    port = _free_port()
+    _setup_globals(monkeypatch, tmp_path, "http://127.0.0.1", port)
 
     result = vv._start_api_server(_make_taxonomy(), None)
     assert result is True, "Server failed to start"
 
     req = urllib.request.Request(
-        "http://127.0.0.1:19765/api/graph",
+        f"http://127.0.0.1:{port}/api/graph",
         headers={"Authorization": "Bearer test-token"},
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
         assert resp.status == 200
+
+
+def test_start_api_server_reports_failure_when_uvicorn_cannot_bind(monkeypatch, tmp_path):
+    """A stale server squatting the configured port must NOT count as ours.
+
+    Regression for the "main menu shows a directory listing" symptom: the old
+    readiness probe only checked whether the port was open, so any foreign
+    listener (e.g. the static cache server) made _start_api_server return True.
+    Callers then opened ``/`` against that foreign server. With the fix, when our
+    uvicorn cannot bind the socket (``serve()`` raises), _start_api_server reports
+    failure and resets the globals, so callers fall back to a real static graph
+    file instead.
+    """
+    import ster.viz_vowl as vv
+
+    _setup_globals(monkeypatch, tmp_path, "http://127.0.0.1", 9555)
+
+    class FailingConfig:
+        def __init__(self, app, host, port, log_level="info"):  # noqa: A002
+            pass
+
+    class FailingServer:
+        def __init__(self, config):
+            self.started = False  # never flips: binding failed
+
+        async def serve(self) -> None:
+            raise OSError("address already in use")
+
+    with (
+        patch("uvicorn.Config", FailingConfig),
+        patch("uvicorn.Server", FailingServer),
+    ):
+        result = vv._start_api_server(_make_taxonomy(), None)
+
+    assert result is False, "must not claim success when uvicorn fails to bind"
+    assert vv._api_app is None

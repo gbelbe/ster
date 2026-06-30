@@ -15,25 +15,28 @@ concurrency:
 
 jobs:
 
-  # ── 1. Lint & format ────────────────────────────────────────────────────────
-  lint:
-    name: Lint (ruff)
+  # ── 1. Static checks via prek ────────────────────────────────────────────────
+  # One job drives ruff (lint+format, incl. S security rules + C90 complexity),
+  # mypy, import-linter and file hygiene through prek + .pre-commit-config.yaml
+  # — the exact hooks developers run locally, so CI can never drift from local.
+  # The complexity ratchet is a separate job below: it needs the PR base ref for
+  # diff-awareness, so it is skipped here.
+  checks:
+    name: Static checks (prek)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: astral-sh/setup-uv@v5
 
-      # Use the project's pinned ruff (from uv.lock) — not `uv tool install ruff`
-      # (always-latest) — so CI and local scripts/ci.sh can never drift apart.
+      # Pinned tools from uv.lock back the `uv run` hook entries, so prek uses
+      # identical versions in CI and locally — never an independently-pinned
+      # hook version that could drift.
       - name: Install deps
         run: uv sync --extra dev
 
-      - name: ruff — check rules
-        run: uv run ruff check .
-
-      - name: ruff — check formatting
-        run: uv run ruff format --check .
+      - name: prek — lint, format, types, security, imports, hygiene
+        run: SKIP=complexity-ratchet uvx prek run --all-files
 
   # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
   js:
@@ -77,24 +80,11 @@ jobs:
       - name: Complexity ratchet — no function may grow worse past 10
         run: uv run python scripts/check_complexity_ratchet.py --base "origin/${{ github.base_ref }}"
 
-  # ── 2. Static type checking ──────────────────────────────────────────────────
-  typecheck:
-    name: Type check (mypy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Install deps
-        run: uv sync --extra dev
-
-      - name: mypy
-        run: uv run mypy ster/
-
-  # ── 3. Security ──────────────────────────────────────────────────────────────
+  # ── 2. pip-audit (dependency CVEs) ──────────────────────────────────────────
+  # Kept as its own job (not in the prek 'checks' job) so a CVE advisory failure
+  # is easy to spot and doesn't block the faster lint/type feedback.
   security:
-    name: Security (bandit + pip-audit)
+    name: Security (pip-audit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,27 +93,9 @@ jobs:
 
       - name: Install deps
         run: uv sync --extra dev
-
-      - name: bandit — static analysis
-        run: uv run bandit -r ster/ -c pyproject.toml
 
       - name: pip-audit — dependency CVEs
         run: uv run pip-audit --skip-editable
-
-  # ── 3b. Import contracts (dependency isolation) ──────────────────────────────
-  imports:
-    name: Import contracts (import-linter)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Install deps
-        run: uv sync --extra dev
-
-      - name: lint-imports
-        run: uv run lint-imports
 
   # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
@@ -153,12 +125,25 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run tests with coverage
-        run: uv run pytest --tb=short -q --cov=ster --cov-report=xml --cov-report=term-missing
+        # -n auto: parallel across the runner's cores (safe now that SPARQL
+        # parsing is serialised — sparql_query._SPARQL_LOCK).
+        # COVERAGE_CORE=sysmon uses Python 3.12+'s low-overhead sys.monitoring
+        # backend; 3.11 has no sysmon, so it uses the C tracer.
+        env:
+          COVERAGE_CORE: ${{ matrix.python-version == '3.11' && 'ctrace' || 'sysmon' }}
+        run: uv run pytest --tb=short -q -n auto --cov=ster --cov-report=xml --cov-report=term-missing
 
       - name: Patch coverage — changed lines must be ≥ 90% covered
         # Diff-aware: only on PRs, once (latest Python).
+        # The interactive curses layer (viewer.py / ai_model_picker.py) is driven by
+        # terminal I/O that unit tests can't exercise, so it is excluded from the
+        # patch-coverage gate — the 90% floor still applies to every other module.
         if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
-        run: uv run diff-cover coverage.xml --compare-branch "origin/${{ github.base_ref }}" --fail-under 90
+        run: >
+          uv run diff-cover coverage.xml
+          --compare-branch "origin/${{ github.base_ref }}"
+          --fail-under 90
+          --exclude '*/nav/viewer.py' '*/nav/ai_model_picker.py'
 
       - name: Upload coverage to Codecov
         # Upload only once (latest Python) to avoid duplicate reports
@@ -183,7 +168,7 @@ jobs:
   #     Environment:    (leave blank)
   publish:
     name: Publish to PyPI
-    needs: [lint, js, typecheck, security, test]
+    needs: [checks, js, security, test]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:

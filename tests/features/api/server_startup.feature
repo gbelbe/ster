@@ -29,6 +29,6 @@ Feature: Server starts on the configured address and port
     Then uvicorn.run was called with port 9444
 
   Scenario: A real server responds on the configured port
-    Given server config is set to URL "http://127.0.0.1" and port 19766
+    Given server config is set to a free port
     When the server is started via _start_api_server
-    Then GET /api/graph on port 19766 returns HTTP 200
+    Then GET /api/graph on the configured port returns HTTP 200

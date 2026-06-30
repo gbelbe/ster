@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Local CI — mirrors .github/workflows/ci.yml exactly.
+# Local CI — same checks as .github/workflows/ci.yml, driven by prek.
 # Run this before every push; it must be fully green before shipping.
 #
+# Static checks run via prek (.pre-commit-config.yaml) — the exact hooks the
+# GitHub 'checks' job runs. Tests run on the current Python only (fast); GitHub
+# Actions runs the full 3.11 / 3.12 / 3.13 matrix on every PR.
+#
 # Usage:
-#   scripts/ci.sh            # full run (lint + types + security + tests on 3.11/3.12/3.13)
-#   scripts/ci.sh --fast     # skip multi-version matrix, run only current Python
-#   scripts/ci.sh --fix      # auto-fix lint/format before checking
+#   scripts/ci.sh            # full gate: prek + eslint + pip-audit + tests + diff-cover
+#   scripts/ci.sh --fast     # skip the patch-coverage gate (quick dev check)
+#   scripts/ci.sh --fix      # let prek's hooks auto-fix, then re-run to verify
 
 set -euo pipefail
 
@@ -48,23 +52,19 @@ step "Install deps (main env)"
 uv sync --extra dev --quiet
 ok "deps synced (Python $(uv run python --version | awk '{print $2}'))"
 
-# ── 2. Lint ───────────────────────────────────────────────────────────────────
-step "Lint (ruff check)"
+# ── 2. Static checks via prek ─────────────────────────────────────────────────
+# One runner for ruff (lint+format, incl. S security rules and C90 complexity),
+# mypy, import-linter, the complexity ratchet and file hygiene — defined once in
+# .pre-commit-config.yaml and shared with the GitHub 'checks' job.
+PREK="prek"
+command -v prek >/dev/null 2>&1 || PREK="uv tool run prek"
+step "Static checks (prek run --all-files)"
 if [[ $FIX -eq 1 ]]; then
-  uv run ruff check --fix .
-  ok "ruff check --fix applied"
+  $PREK run --all-files || true   # --fix: let hooks autofix; re-run to verify
+  ok "prek (autofix applied — re-run without --fix to verify)"
 else
-  uv run ruff check .
-  ok "ruff check"
-fi
-
-step "Format (ruff format)"
-if [[ $FIX -eq 1 ]]; then
-  uv run ruff format .
-  ok "ruff format applied"
-else
-  uv run ruff format --check .
-  ok "ruff format"
+  $PREK run --all-files
+  ok "prek checks (ruff · format · mypy · import-linter · ratchet)"
 fi
 
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
@@ -81,70 +81,31 @@ else
   warn "npm not found — skipping JS lint (CI installs Node)"
 fi
 
-# ── 3. Type check ─────────────────────────────────────────────────────────────
-step "Type check (mypy)"
-# --no-incremental: prevents stale cache masking errors that GitHub CI (cold run) would catch
-uv run mypy ster/ --no-incremental
-ok "mypy"
-
-# ── 4. Security ───────────────────────────────────────────────────────────────
-step "Security — bandit"
-uv run bandit -r ster/ -c pyproject.toml -q
-ok "bandit"
-
+# ── 3. Security — pip-audit (dependency CVEs) ────────────────────────────────
 step "Security — pip-audit"
 uv run pip-audit --skip-editable
 ok "pip-audit"
 
-# ── 4c. Complexity ratchet (vs origin/main) ──────────────────────────────────
-# Mirrors the CI 'complexity' job: no function may grow worse past 10.
-step "Complexity ratchet (vs origin/main)"
-if git rev-parse --verify --quiet origin/main >/dev/null; then
-  uv run python scripts/check_complexity_ratchet.py --base origin/main
-  ok "complexity ratchet"
-else
-  warn "origin/main not found — skipping complexity ratchet (run: git fetch origin main)"
-fi
-# ── 4b. Import contracts (dependency isolation) ──────────────────────────────
-step "Import contracts (import-linter)"
-uv run lint-imports
-ok "import contracts"
-
-# ── 5. Tests (per Python version, isolated envs) ─────────────────────────────
-run_tests_for() {
-  local PY="$1"
-  local VENV=".venv-ci-${PY//./}"   # e.g. .venv-ci-311
-
-  if ! uv python find "$PY" &>/dev/null; then
-    warn "Python $PY not found — skipping (install with: uv python install $PY)"
-    return 0
-  fi
-
-  step "Tests (Python $PY)"
-  UV_PROJECT_ENVIRONMENT="$VENV" uv sync --python "$PY" \
-    --extra dev --quiet
-  UV_PROJECT_ENVIRONMENT="$VENV" uv run --python "$PY" pytest tests/ -q \
-    --tb=short \
-    --cov=ster \
-    --cov-report=term-missing \
-    --cov-report=xml
-  ok "pytest Python $PY"
-}
-
+# ── 4. Tests (single Python version locally) ─────────────────────────────────
+# Local CI runs the current interpreter only — fast feedback. GitHub Actions
+# runs the *full* 3.11 / 3.12 / 3.13 matrix on every PR, so support for all
+# three versions is still enforced there before merge.
+#   -n auto → one worker per CPU core. Safe now that SPARQL parsing is
+#             serialised (sparql_query._SPARQL_LOCK) — the rdflib parser
+#             thread-safety flake that previously blocked xdist is fixed.
+#   --fast  → skip coverage entirely (tracing ~doubles runtime); the full gate
+#             keeps it for the diff-cover patch-coverage check.
+step "Tests (current Python $(uv run python --version | awk '{print $2}'))"
 if [[ $FAST -eq 1 ]]; then
-  step "Tests (current Python — fast mode)"
-  uv run pytest tests/ -q --tb=short --cov=ster --cov-report=term-missing
-  ok "pytest (fast)"
+  uv run pytest tests/ -q --tb=short -n auto
+  ok "pytest (fast, no coverage)"
 else
-  for PY in 3.11 3.12 3.13; do
-    run_tests_for "$PY"
-  done
+  uv run pytest tests/ -q --tb=short -n auto \
+    --cov=ster --cov-report=term-missing --cov-report=xml
+  ok "pytest"
 fi
 
-# ── Restore main venv ─────────────────────────────────────────────────────────
-uv sync --extra dev --quiet
-
-# ── Patch coverage gate (diff-cover vs origin/main) — full mode only ──────────
+# ── 5. Patch coverage gate (diff-cover vs origin/main) — full mode only ───────
 # Mirrors the CI 'diff-cover' step: changed lines must be ≥ 90% covered.
 if [[ $FAST -eq 0 ]]; then
   step "Patch coverage (diff-cover vs origin/main)"

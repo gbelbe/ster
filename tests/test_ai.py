@@ -14,22 +14,14 @@ import ster.ai as ai_module
 from ster.ai import (
     _build_alt_labels_prompt,
     _build_concept_names_prompt,
-    _build_sparql_prompt,
     _call,
-    _extract_sparql_body,
     _is_label,
     _load_config,
     _parse_alt_labels,
-    _parse_sparql,
-    _repair_sparql,
     _safe_stderr,
     _save_config,
     _try_copy_to_clipboard,
-    _validate_sparql_syntax,
-    _validated_sparql,
     available_plugins,
-    generate_sparql,
-    generate_sparql_from_prompt,
     get_config,
     get_model,
     get_model_for,
@@ -37,7 +29,6 @@ from ster.ai import (
     is_available,
     is_configured,
     is_copypaste,
-    render_generate_sparql_prompt,
     render_suggest_alt_labels_prompt,
     render_suggest_concept_names_prompt,
     save_copypaste,
@@ -415,22 +406,6 @@ def test_render_suggest_alt_labels_prompt():
     assert "Valve" in result
 
 
-def test_build_sparql_prompt_with_uris():
-    result = _build_sparql_prompt("Tax", "Desc", ["http://ex.org/s1"], "find all concepts")
-    assert "find all concepts" in result
-    assert "http://ex.org/s1" in result
-
-
-def test_build_sparql_prompt_no_uris():
-    result = _build_sparql_prompt("Tax", "", [], "find all")
-    assert "find all" in result
-
-
-def test_render_generate_sparql_prompt():
-    result = render_generate_sparql_prompt("Tax", "Desc", [], "find things")
-    assert "find things" in result
-
-
 # ── _parse_alt_labels ─────────────────────────────────────────────────────────
 
 
@@ -452,100 +427,6 @@ def test_parse_alt_labels_skips_preamble():
     result = _parse_alt_labels(text)
     # The preamble line should be filtered out
     assert not any("Sure" in r for r in result)
-
-
-# ── _parse_sparql ─────────────────────────────────────────────────────────────
-
-
-def test_parse_sparql_with_markdown_fence():
-    text = "Here is your query:\n```sparql\nSELECT ?s WHERE { ?s a skos:Concept }\n```"
-    result = _parse_sparql(text)
-    assert "SELECT ?s WHERE" in result
-
-
-def test_parse_sparql_adds_standard_prefixes():
-    text = "SELECT ?s WHERE { ?s a skos:Concept }"
-    result = _parse_sparql(text)
-    assert "PREFIX skos:" in result
-
-
-def test_parse_sparql_no_duplicate_prefixes():
-    text = (
-        "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nSELECT ?s WHERE { ?s a skos:Concept }"
-    )
-    result = _parse_sparql(text)
-    assert result.count("PREFIX skos:") == 1
-
-
-# ── _extract_sparql_body ──────────────────────────────────────────────────────
-
-
-def test_extract_sparql_body_from_select():
-    text = "Here is your query:\nSELECT ?s WHERE { ?s a skos:Concept }"
-    result = _extract_sparql_body(text)
-    assert result.startswith("SELECT")
-
-
-def test_extract_sparql_body_from_prefix():
-    text = "Preamble text\nPREFIX skos: <x>\nSELECT ?s WHERE { ?s a skos:Concept }"
-    result = _extract_sparql_body(text)
-    assert result.startswith("PREFIX")
-
-
-def test_extract_sparql_body_no_keyword_returns_full():
-    text = "This text has no SPARQL keyword at all."
-    result = _extract_sparql_body(text)
-    assert result == text.strip()
-
-
-# ── _validate_sparql_syntax ───────────────────────────────────────────────────
-
-
-def test_validate_sparql_syntax_valid():
-    query = (
-        "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nSELECT ?s WHERE { ?s a skos:Concept }"
-    )
-    assert _validate_sparql_syntax(query) == ""
-
-
-def test_validate_sparql_syntax_invalid():
-    result = _validate_sparql_syntax("NOT VALID SPARQL {{{{ ???")
-    assert isinstance(result, str)
-    assert len(result) > 0
-
-
-# ── _validated_sparql ─────────────────────────────────────────────────────────
-
-
-def test_validated_sparql_valid_query():
-    valid = (
-        "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nSELECT ?s WHERE { ?s a skos:Concept }"
-    )
-    result = _validated_sparql(valid)
-    assert result == valid
-
-
-def test_validated_sparql_repairs(monkeypatch):
-    call_count = [0]
-
-    def mock_validate(q: str) -> str:
-        call_count[0] += 1
-        return "" if call_count[0] > 1 else "syntax error"
-
-    monkeypatch.setattr(ai_module, "_validate_sparql_syntax", mock_validate)
-    monkeypatch.setattr(ai_module, "_repair_sparql", lambda q, e: "REPAIRED")
-    monkeypatch.setattr(ai_module, "is_copypaste", lambda: False)
-    result = _validated_sparql("BAD QUERY")
-    assert result == "REPAIRED"
-
-
-def test_validated_sparql_copypaste_skips_repair(monkeypatch):
-    monkeypatch.setattr(ai_module, "is_copypaste", lambda: True)
-    monkeypatch.setattr(ai_module, "_validate_sparql_syntax", lambda q: "error")
-    repair_calls = []
-    monkeypatch.setattr(ai_module, "_repair_sparql", lambda q, e: repair_calls.append(True) or q)
-    _validated_sparql("BAD QUERY")
-    assert not repair_calls
 
 
 # ── suggest_concept_names (mocked _call) ──────────────────────────────────────
@@ -609,28 +490,4 @@ def test_suggest_definition_no_parent(monkeypatch):
 def test_suggest_definition_with_parent_definition(monkeypatch):
     monkeypatch.setattr(ai_module, "_call", lambda p, t: "Child concept definition.")
     result = suggest_definition("SubWidget", "Tax", "Desc", "Parent", "en", "Parent is a thing")
-    assert len(result) > 0
-
-
-# ── _repair_sparql (mocked _call) ────────────────────────────────────────────
-
-
-def test_repair_sparql(monkeypatch):
-    monkeypatch.setattr(ai_module, "_call", lambda p, t: "SELECT ?s WHERE { ?s a skos:Concept }")
-    result = _repair_sparql("SELECT WHERE {{{", "syntax error near {{{")
-    assert "SELECT" in result or "PREFIX" in result
-
-
-# ── generate_sparql (mocked _call) ───────────────────────────────────────────
-
-
-def test_generate_sparql(monkeypatch):
-    monkeypatch.setattr(ai_module, "_call", lambda p, t: "SELECT ?s WHERE { ?s a skos:Concept }")
-    result = generate_sparql("Tax", "Desc", ["http://ex.org/s"], "find concepts")
-    assert "SELECT" in result or "PREFIX" in result
-
-
-def test_generate_sparql_from_prompt(monkeypatch):
-    monkeypatch.setattr(ai_module, "_call", lambda p, t: "SELECT ?s WHERE { ?s a skos:Concept }")
-    result = generate_sparql_from_prompt("find all concepts in the taxonomy")
     assert len(result) > 0

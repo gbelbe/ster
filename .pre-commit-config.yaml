@@ -1,21 +1,100 @@
-# Pre-commit hooks — mirrors the CI lint job so issues are caught locally.
-# Install once:  pip install pre-commit && pre-commit install
-# Run manually:  pre-commit run --all-files
+# Git hooks — run with prek (https://prek.j178.dev), a fast, drop-in
+# pre-commit replacement (uses uv, runs hooks in parallel).
+#
+#   Install once:   bash scripts/install-hooks.sh      (runs `prek install`)
+#   Run manually:   prek run --all-files                (commit-stage checks)
+#
+# Hook stages:
+#   • pre-commit → the lint / type / security / architecture checks below.
+#   • pre-push   → the CI gate (scripts/pre-push.sh): blocks a push unless the
+#     full local gate (scripts/ci.sh) passed within the last 60 minutes. The
+#     actual tests + pip-audit run inside ci.sh, so we don't duplicate them as
+#     push hooks — the gate guarantees the *whole* suite (incl. eslint and
+#     diff-cover) ran, not just a bare pytest.
+#
+# These commit-stage hooks are the single source of truth for the static
+# checks: scripts/ci.sh and .github/workflows/ci.yml both invoke `prek run`
+# instead of duplicating commands. All project tools run via `uv run` so prek
+# uses the *pinned* versions from uv.lock (identical to CI) — never a
+# separately-pinned hook version that could drift.
+
+default_install_hook_types: [pre-commit, pre-push]
 
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
-    hooks:
-      - id: ruff              # linting
-        args: [--fix]
-      - id: ruff-format       # formatting
-
+  # ── generic file hygiene (skips RDF/data + generated artefacts) ──────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        # RDF/ontology files (.ttl, .rdf, .jsonld, .owl, .n3) and the test
+        # fixture (test-ontology.txt) are serialised by rdflib, which controls
+        # their whitespace. Letting this hook modify them would (1) fight the
+        # serialiser on every commit and (2) break round-trip tests that
+        # compare serialised output byte-for-byte. SVG and .raw are generated
+        # artefacts for the same reason.
+        exclude: '\.(ttl|rdf|jsonld|owl|n3|svg|raw)$|test-ontology\.txt$'
       - id: end-of-file-fixer
+        # Same rationale as trailing-whitespace above.
+        exclude: '\.(ttl|rdf|jsonld|owl|n3|svg|raw)$|test-ontology\.txt$'
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict
       - id: debug-statements   # catch leftover breakpoint() / pdb calls
+
+  # ── project checks via the synced dev env (language: system → uses uv) ───────
+  # Modifying hooks (ruff --fix, ruff format) double as CI checks: if they change
+  # a file, prek exits non-zero, so CI fails on un-formatted / fixable code.
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        # Includes S (flake8-bandit) and C90 (mccabe) — replaces standalone bandit.
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+
+      - id: ruff-format
+        name: ruff (format)
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+
+      - id: mypy
+        # ty (https://astral.sh/blog/ty) is faster but still 0.x: incomplete
+        # rule coverage, no warn_return_any equivalent, missing plugin support.
+        # Worth a spike once ty reaches a stable 1.x release.
+        name: mypy (type check)
+        entry: uv run mypy ster/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: import-linter
+        name: import contracts (import-linter)
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: complexity-ratchet
+        # Diff-aware ratchet: grandfathers existing violations, enforces ≤10 on
+        # touched functions and a HARD_CEILING of 25 on new ones.
+        # ruff C901 (max-complexity=25) provides the same hard ceiling inline
+        # during ruff check above — this script adds the diff-aware ≤10 layer.
+        name: complexity ratchet (<=10; god-functions must shrink)
+        entry: uv run python scripts/check_complexity_ratchet.py
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      # ── push gate (pre-push only) ────────────────────────────────────────────
+      # Don't re-run tests here: block the push unless the full local gate
+      # (scripts/ci.sh — tests, pip-audit, eslint, diff-cover) passed < 60 min
+      # ago. The sentinel .ci-passed is written by ci.sh on success.
+      - id: ci-gate
+        name: CI gate (full scripts/ci.sh passed < 60 min ago)
+        entry: bash scripts/pre-push.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]

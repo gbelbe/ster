@@ -68,6 +68,9 @@ class FakeScreen:
     def keypad(self, flag: bool) -> None:  # noqa: FBT001
         pass
 
+    def nodelay(self, flag: bool) -> None:  # noqa: FBT001
+        pass
+
     def addstr(self, *args: Any, **kwargs: Any) -> None:
         pass
 
@@ -446,24 +449,6 @@ def test_draw_query_kw_popup(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
     viewer._draw_query(scr, *_rc(scr))  # type: ignore[arg-type]
 
 
-def test_draw_query_ai_ask(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = QueryState(
-        file_paths=[Path("/tmp/test.ttl")],
-        ai_step="ask",
-        ai_question="show all concepts",
-    )
-    viewer._draw_query(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
-def test_draw_query_ai_prompt_review(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
-    viewer._state = QueryState(
-        file_paths=[Path("/tmp/test.ttl")],
-        ai_step="prompt_review",
-        ai_prompt_buffer="Generate SPARQL for...",
-    )
-    viewer._draw_query(scr, *_rc(scr))  # type: ignore[arg-type]
-
-
 def test_draw_query_ac(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
     viewer._state = QueryState(
         file_paths=[Path("/tmp/test.ttl")],
@@ -530,3 +515,25 @@ def test_draw_ontology_field_edit_prefix_with_error(
 
     viewer._state = OntologyFieldEditState(kind="prefix", buffer="1bad", pos=4, error="bad prefix")
     viewer._draw_ontology_field_edit(scr, *_rc(scr))  # type: ignore[arg-type]
+
+
+def test_run_generate_surfaces_query_error(viewer: TaxonomyViewer, scr: FakeScreen) -> None:
+    """A failing background worker surfaces the error on a running QueryState.
+
+    Covers the manual-query branch of _run_generate's error handling (the AI
+    SPARQL-generation removal kept this path for the manual query runner).
+    """
+    from ster.nav.state import QueryState
+
+    qs = QueryState()
+    qs.running = True
+    viewer._state = qs
+
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    with patch("ster.ai.is_copypaste", return_value=False), patch("curses.napms"):
+        viewer._run_generate(scr, boom, None)  # type: ignore[arg-type]
+
+    assert qs.running is False
+    assert qs.result_error and "boom" in qs.result_error

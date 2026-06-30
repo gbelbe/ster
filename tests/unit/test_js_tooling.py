@@ -33,7 +33,7 @@ def test_ci_workflow_has_js_job():
     assert "node --check" in ci
     assert "setup-node" in ci
     # The publish gate waits on the js job too.
-    assert "needs: [lint, js, typecheck, security, test]" in ci
+    assert "needs: [checks, js, security, test]" in ci
 
 
 def test_local_ci_script_runs_js_checks():
