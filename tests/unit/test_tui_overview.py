@@ -325,18 +325,18 @@ def test_stats_coverage_languages_and_completeness() -> None:
     assert s["st:unused"] == "3"  # A, B, D
 
 
-def test_stats_grouped_into_canonical_sections() -> None:
+def test_overview_section_order() -> None:
     titles = [
         f.display for f in _fields(_onto_with_hierarchy()) if f.meta.get("type") == "separator"
     ]
-    for section in ("Health & Issues", "Completeness", "Languages", "Structure", "Metadata"):
+    for section in ("Identity", "Metadata", "Structure", "Health & Issues", "Completeness"):
         assert section in titles, section
-    # Canonical order leads with the actionable groups: Health → Completeness → Structure.
+    # Top-to-bottom: Identity → Metadata → Structure, then the Quality group.
+    assert titles.index("Identity") < titles.index("Metadata") < titles.index("Structure")
+    assert titles.index("Structure") < titles.index("Health & Issues")  # quality group last
     assert (
-        titles.index("Health & Issues") < titles.index("Completeness") < titles.index("Structure")
+        titles.index("Health & Issues") < titles.index("Completeness") < titles.index("Languages")
     )
-    # …all after the Identity header.
-    assert titles.index("Health & Issues") > titles.index("Identity")
 
 
 def test_stats_empty_ontology_has_no_depth_rows() -> None:
@@ -384,15 +384,14 @@ def test_lint_zero_rows_are_not_actionable() -> None:
     assert by_key["st:lint_warning"].meta.get("color") == "green"  # 0 warnings → green
 
 
-def test_health_section_leads_before_completeness_and_activity() -> None:
+def test_activity_and_structure_precede_the_quality_group() -> None:
     lint = {"error": 1, "warning": 0, "info": 0}
     activity = {"last": "2026-06-20", "total": 12, "last_month": 3}
     fields = build_tui_ontology_overview_fields(_tax(), "en", activity, lint)
     titles = [f.display for f in fields if f.meta.get("type") == "separator"]
-    # Health leads the dashboard: before Completeness, Structure and Activity.
+    # Activity (3) and Structure (4) come before the Quality group's Health (5).
+    assert titles.index("Activity") < titles.index("Structure") < titles.index("Health & Issues")
     assert titles.index("Health & Issues") < titles.index("Completeness")
-    assert titles.index("Health & Issues") < titles.index("Structure")
-    assert titles.index("Health & Issues") < titles.index("Activity")
 
 
 def test_no_lint_section_without_file() -> None:
@@ -495,19 +494,32 @@ def test_health_surfaces_structural_gaps_colored() -> None:
     assert by_key["st:gap_unlab"].meta["color"] == "orange"
 
 
-def test_quality_group_bands_the_coverage_subsections() -> None:
-    """A 'Quality & Coverage' group header (separator_group) precedes Health and the
-    coverage subsections, before the plain Structure section closes the band."""
+def test_quality_group_opens_and_closes_around_the_coverage_subsections() -> None:
+    """A 'Quality & Coverage' group is opened (separator_group) before Health and
+    closed (separator_group_end) after Languages, wrapping the coverage cluster."""
     fields = build_tui_ontology_overview_fields(_tax(), "en", None, {"error": 1, "warning": 0})
-    titles = [
+    seps = [
         (f.meta.get("type"), f.display)
         for f in fields
         if f.meta.get("type", "").startswith("separator")
     ]
-    seq = [d for _, d in titles]
-    grp = [d for ty, d in titles if ty == "separator_group"]
-    assert grp == ["Quality & Coverage"]  # exactly one group band
-    # the group opens immediately before Health, then the coverage subsections follow
+    seq = [d for _, d in seps]
+    assert [d for ty, d in seps if ty == "separator_group"] == ["Quality & Coverage"]
+    assert sum(1 for ty, _ in seps if ty == "separator_group_end") == 1  # closed once
     gi = seq.index("Quality & Coverage")
-    assert seq[gi + 1] == "Health & Issues"
-    assert seq.index("Health & Issues") < seq.index("Completeness") < seq.index("Structure")
+    assert seq[gi + 1] == "Health & Issues"  # opens right before Health
+    assert seq.index("Health & Issues") < seq.index("Completeness") < seq.index("Languages")
+
+
+def test_structure_counts_first_order_and_meta_classes() -> None:
+    """Structure renames leaves to 'First Order classes', adds 'Meta Classes' (the
+    rest), and drops root-classes and the object/datatype property split."""
+    by_key = _by_key(_fields(_onto_with_hierarchy()))
+    total = int(by_key["st:classes"].value)
+    first_order = int(by_key["st:first_order"].value)
+    assert by_key["st:first_order"].display == "Nr of First Order classes"
+    assert by_key["st:meta_classes"].display == "Nr of Meta Classes"
+    assert int(by_key["st:meta_classes"].value) == total - first_order  # the non-first-order rest
+    # removed rows
+    assert "st:roots" not in by_key
+    assert "st:obj_props" not in by_key and "st:dt_props" not in by_key
