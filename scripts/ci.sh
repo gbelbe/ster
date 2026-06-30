@@ -90,17 +90,17 @@ ok "pip-audit"
 # Local CI runs the current interpreter only — fast feedback. GitHub Actions
 # runs the *full* 3.11 / 3.12 / 3.13 matrix on every PR, so support for all
 # three versions is still enforced there before merge.
-#   --fast → skip coverage entirely (tracing ~doubles runtime); the full gate
-#            keeps it for the diff-cover patch-coverage check.
-# NOTE: parallel execution (pytest-xdist `-n auto`) is intentionally *not* used
-# yet — it surfaced a pre-existing thread-safety flake in rdflib's global SPARQL
-# parser. Deferred to a follow-up that fixes that isolation bug first.
+#   -n auto → one worker per CPU core. Safe now that SPARQL parsing is
+#             serialised (sparql_query._SPARQL_LOCK) — the rdflib parser
+#             thread-safety flake that previously blocked xdist is fixed.
+#   --fast  → skip coverage entirely (tracing ~doubles runtime); the full gate
+#             keeps it for the diff-cover patch-coverage check.
 step "Tests (current Python $(uv run python --version | awk '{print $2}'))"
 if [[ $FAST -eq 1 ]]; then
-  uv run pytest tests/ -q --tb=short
+  uv run pytest tests/ -q --tb=short -n auto
   ok "pytest (fast, no coverage)"
 else
-  uv run pytest tests/ -q --tb=short \
+  uv run pytest tests/ -q --tb=short -n auto \
     --cov=ster --cov-report=term-missing --cov-report=xml
   ok "pytest"
 fi

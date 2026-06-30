@@ -125,13 +125,13 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run tests with coverage
+        # -n auto: parallel across the runner's cores (safe now that SPARQL
+        # parsing is serialised — sparql_query._SPARQL_LOCK).
         # COVERAGE_CORE=sysmon uses Python 3.12+'s low-overhead sys.monitoring
         # backend; 3.11 has no sysmon, so it uses the C tracer.
-        # (pytest-xdist `-n auto` deferred — see scripts/ci.sh: rdflib SPARQL
-        # parser thread-safety flake must be fixed first.)
         env:
           COVERAGE_CORE: ${{ matrix.python-version == '3.11' && 'ctrace' || 'sysmon' }}
-        run: uv run pytest --tb=short -q --cov=ster --cov-report=xml --cov-report=term-missing
+        run: uv run pytest --tb=short -q -n auto --cov=ster --cov-report=xml --cov-report=term-missing
 
       - name: Patch coverage — changed lines must be ≥ 90% covered
         # Diff-aware: only on PRs, once (latest Python).

@@ -351,6 +351,13 @@ UriIndex = dict[str, dict[str, list[str] | dict[str, list[str]]]]
 _uri_index_cache: dict[tuple, UriIndex] = {}
 _uri_index_cache_lock = threading.Lock()
 
+# rdflib's SPARQL parser (pyparsing packrat cache + parse-action binding) is a
+# global and is NOT thread-safe: two threads parsing at once permanently corrupt
+# it. We parse from a background thread (viewer cache-warm) as well as the
+# foreground, so every SPARQL parse/compile in ster must hold this lock. It is
+# re-entrant so a locked path may nest another. See tests/unit/test_sparql_thread_safety.py.
+_SPARQL_LOCK = threading.RLock()
+
 
 def _cache_key(paths: list[Path]) -> tuple:
     """Build a cache key from paths and their current modification times."""
@@ -451,7 +458,8 @@ def warm_graph_caches(paths: list[Path]) -> None:
     if g is not None:
         try:
             t0 = time.time()
-            g.query("SELECT * WHERE { ?s ?p ?o } LIMIT 0")
+            with _SPARQL_LOCK:  # rdflib SPARQL parser is not thread-safe
+                g.query("SELECT * WHERE { ?s ?p ?o } LIMIT 0")
             _trace(f"warm_graph_caches plugin pre-load done in {time.time() - t0:.2f}s")
         except Exception:
             pass
@@ -486,7 +494,8 @@ def run_query_on_graph(g: rdflib.Graph, sparql_text: str) -> QueryResult:
     """
     try:
         t0 = time.time()
-        result = g.query(sparql_text)
+        with _SPARQL_LOCK:  # rdflib SPARQL parser is not thread-safe
+            result = g.query(sparql_text)
         _trace(f"run_query_on_graph g.query() done in {time.time() - t0:.3f}s")
     except Exception as exc:
         return QueryResult(columns=[], rows=[], error=f"Query error: {exc}")
