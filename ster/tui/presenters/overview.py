@@ -25,7 +25,7 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .coverage import class_completeness_section, class_gap_rows, languages_section
+from .coverage import class_completeness_section, languages_section
 from .health import gap_row as _gap_row
 
 
@@ -68,9 +68,9 @@ class OntologyOverviewPresenter(EntityPresenter):
     def health(self) -> list[DetailField]:
         """semanticlint counts + structural gaps — the 'what to fix' section.
 
-        Opens the visual 'Quality & Coverage' group that bands Health, Completeness,
-        Metadata coverage and Languages together. The class-gap rows are shared with
-        the per-class boxes (presenters.coverage) so the labels stay aligned."""
+        Opens the visual 'Quality & Coverage' group. Label/comment gaps live in the
+        Completeness rows now (percent + count missing), so Health keeps only the
+        genuine issues that aren't a coverage percentage."""
         tax, lint = self.tax, self.ctx.lint
         fields = [_sep_group("Quality & Coverage"), _sep("Health & Issues")]
         if lint is not None:
@@ -81,7 +81,6 @@ class OntologyOverviewPresenter(EntityPresenter):
                 "st:incomplete_props", "properties missing domain/range", _missing_domain_range(tax)
             )
         )
-        fields.extend(class_gap_rows(tax, list(tax.owl_classes), "st"))
         return fields
 
     def completeness(self) -> list[DetailField]:

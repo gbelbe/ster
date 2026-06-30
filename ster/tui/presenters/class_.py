@@ -1,11 +1,10 @@
-"""P2 — ClassPresenter: gives an owl:Class the consistent Health & Issues section.
+"""ClassPresenter: a subtree-scoped Quality & Coverage box on every owl:Class.
 
-A first per-entity migration: the class detail now leads (right after Identity)
-with the same actionable Health group the overview uses — this class's own gaps
-(missing label / comment, no individuals) — and delegates the rest of the panel
-to the existing builder. Subsequent steps fold more sections into the hooks.
-
-See docs/architecture/detail-presenter.md.
+The box (right after Identity) uses the same Completeness / Languages rows as the
+ontology overview (presenters.coverage), scoped to the class's subtree, so the two
+stay aligned — plus the class-specific Property Fill detail. Label/comment gaps are
+carried in the Completeness rows (percent + count missing), so there is no separate
+Health section for a class. See docs/architecture/detail-presenter.md.
 """
 
 from __future__ import annotations
@@ -18,22 +17,12 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .coverage import class_completeness_section, class_gap_rows, languages_section
-from .health import health_section, insert_after_identity, quality_group, strip_sections
+from .coverage import class_completeness_section, languages_section
+from .health import insert_after_identity, quality_group, strip_sections
 
 
 class ClassPresenter(EntityPresenter):
-    """owl:Class / rdfs:Class detail with a leading, subtree-scoped Quality & Coverage
-    box. It uses the same Health / Completeness rows as the ontology overview
-    (presenters.coverage), scoped to the class's subtree, so the two stay aligned —
-    plus the class-specific Property Fill detail."""
-
-    def health(self) -> list[DetailField]:
-        if self.uri not in self.tax.owl_classes:
-            return []
-        return health_section(
-            class_gap_rows(self.tax, _subtree_class_uris(self.tax, self.uri), "cls")
-        )
+    """owl:Class / rdfs:Class detail with a leading, subtree-scoped Quality & Coverage box."""
 
     def render(self) -> list[DetailField]:
         base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
@@ -44,10 +33,11 @@ class ClassPresenter(EntityPresenter):
         base = strip_sections(base, titles={"Subtree Quality", "Property Fill"})
         subtree = _subtree_class_uris(self.tax, self.uri)
         completeness = class_completeness_section(self.tax, subtree, "cls")
-        classes = [self.tax.owl_classes[u] for u in subtree]
-        languages = languages_section(classes, "cls", self.ctx.configured_langs)
+        languages = languages_section(
+            [self.tax.owl_classes[u] for u in subtree], "cls", self.ctx.configured_langs
+        )
         property_fill = strip_sections(
             _class_quality_fields(self.tax, self.uri, self.lang), titles={"Subtree Quality"}
         )
-        group = quality_group(self.health(), completeness, languages, property_fill)
+        group = quality_group(completeness, languages, property_fill)
         return insert_after_identity(base, group)

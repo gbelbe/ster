@@ -115,45 +115,43 @@ def test_overview_routes_through_its_presenter() -> None:
     assert [(f.key, f.display) for f in via_seam] == [(f.key, f.display) for f in direct]
 
 
-# ── P2: ClassPresenter Health section ─────────────────────────────────────────
+# ── ClassPresenter Completeness (merged % + missing count) ────────────────────
 
 
 def _health_by_key(fields: list) -> dict:
     return {f.key: f for f in fields}
 
 
-def test_class_presenter_health_is_a_stable_subtree_checklist() -> None:
-    """Every class shows the same Health categories (after Identity), each a count of
-    affected classes in its subtree — green at 0, else orange."""
+def test_class_completeness_shows_percent_and_missing_count() -> None:
+    """A class's Completeness rows carry both views of the metric: percent present
+    and the count still missing (over its subtree) — no separate Health gap rows."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
     fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()  # leaf: subtree is itself
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
-    # the Health checklist sits inside the bordered Quality & Coverage box (after Identity)
-    assert seps[:3] == ["Identity", "Quality & Coverage", "Health & Issues"]
+    # Completeness leads the box (no Health section for a class); the old gap rows are gone
+    assert seps[:3] == ["Identity", "Quality & Coverage", "Completeness"]
     by_key = _health_by_key(fields)
-    # all three categories are always present with a numeric count
-    assert by_key["cls:gap_unlab"].value == "0"  # Eagle is labelled
-    assert by_key["cls:gap_unlab"].meta["color"] == "green"
-    assert by_key["cls:gap_undoc"].value == "1"  # no rdfs:comment
-    assert by_key["cls:gap_undoc"].meta["color"] == "orange"
-    assert "cls:gap_noind" not in by_key  # 'classes with no individuals' was removed
+    assert "cls:gap_unlab" not in by_key and "cls:gap_undoc" not in by_key
+    assert by_key["cls:label_cov"].value.endswith("complete")  # Eagle is labelled
+    assert "1 missing" in by_key["cls:comment_cov"].value  # …but has no rdfs:comment
+    assert by_key["cls:comment_cov"].meta["color"] == "red"  # 0% documented → red
 
 
-def test_class_health_counts_over_the_whole_subtree() -> None:
-    """A root class counts gaps across its descendants, not just itself."""
+def test_class_completeness_missing_count_is_over_the_subtree() -> None:
+    """A root's missing count spans its descendants, not just itself."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
     by_key = _health_by_key(ClassPresenter(_ctx(tax), ZOO + "Animal").render())
-    assert int(by_key["cls:gap_undoc"].value) >= 3  # several undocumented classes below Animal
-    assert by_key["cls:gap_unlab"].value == "0"  # all labelled
+    assert "missing" in by_key["cls:comment_cov"].value  # several undocumented below Animal
+    assert by_key["cls:label_cov"].value.endswith("complete")  # all labelled
 
 
-def test_class_health_all_green_when_subtree_is_clean() -> None:
-    """A clean leaf still shows the checklist — all zeros, all green."""
-    from ster.model import Definition, Label, OWLIndividual, RDFClass
+def test_class_completeness_is_complete_when_subtree_is_clean() -> None:
+    """A fully labelled + documented subtree shows 'complete', coloured green."""
+    from ster.model import Definition, Label, RDFClass
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
@@ -161,10 +159,10 @@ def test_class_health_all_green_when_subtree_is_clean() -> None:
     tax.owl_classes[uri] = RDFClass(
         uri=uri, labels=[Label("en", "Tidy")], comments=[Definition("en", "A tidy class.")]
     )
-    tax.owl_individuals[ZOO + "t1"] = OWLIndividual(uri=ZOO + "t1", types=[uri])
     by_key = _health_by_key(ClassPresenter(_ctx(tax), uri).render())
-    assert {by_key[k].value for k in ("cls:gap_unlab", "cls:gap_undoc")} == {"0"}
-    assert all(by_key[k].meta["color"] == "green" for k in ("cls:gap_unlab", "cls:gap_undoc"))
+    assert by_key["cls:label_cov"].value.endswith("complete")
+    assert by_key["cls:comment_cov"].value.endswith("complete")
+    assert by_key["cls:comment_cov"].meta["color"] == "green"
 
 
 # ── P3: PropertyPresenter Health section ──────────────────────────────────────
@@ -201,8 +199,8 @@ def test_property_health_all_green_when_complete() -> None:
 
 
 def test_class_quality_box_aligns_with_the_overview() -> None:
-    """A class's box uses the same Health & Completeness sections as the overview
-    (plus the class-specific Property Fill), all inside one bordered group."""
+    """A class's box uses the same Completeness section as the overview (plus the
+    class-specific Property Fill), all inside one bordered group."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
@@ -211,7 +209,7 @@ def test_class_quality_box_aligns_with_the_overview() -> None:
     ends = [f for f in fields if f.meta.get("type") == "separator_group_end"]
     assert groups == ["Quality & Coverage"] and len(ends) == 1
     inner = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert "Health & Issues" in inner and "Completeness" in inner and "Property Fill" in inner
+    assert "Completeness" in inner and "Property Fill" in inner
     # Completeness uses the same labels as the overview (shared coverage helper).
     by_key = {f.key: f for f in fields}
     assert by_key["cls:label_cov"].display == "labelled (rdfs:label / skos:prefLabel)"
@@ -255,7 +253,7 @@ def test_class_and_overview_share_health_and_completeness_labels() -> None:
         f.key.split(":", 1)[-1]: f.display
         for f in ClassPresenter(_ctx(tax), ZOO + "Animal").render()
     }
-    for shared in ("gap_unlab", "gap_undoc", "label_cov", "comment_cov"):
+    for shared in ("label_cov", "comment_cov"):
         assert overview[shared] == cls[shared], shared
 
 
@@ -279,3 +277,16 @@ def test_languages_section_is_shared_across_overview_classes_concepts() -> None:
     con = ConceptPresenter(cctx, ZOO + "C").render()
     assert "Languages" in [f.display for f in con if f.meta.get("type") == "separator"]
     assert any(f.key == "concept:langs" for f in con)
+
+
+def test_completeness_rows_align_as_a_table() -> None:
+    """Completeness rows line up: labels padded to equal width and the percent /
+    missing columns at the same offset, so the section reads like a table."""
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    by_key = {f.key: f for f in ClassPresenter(_ctx(tax), ZOO + "Animal").render()}
+    a, b = by_key["cls:label_cov"], by_key["cls:comment_cov"]
+    assert len(a.display) == len(b.display)  # labels padded to a common width
+    assert a.value.index("%") == b.value.index("%")  # percent column aligned
+    assert a.value.rstrip().endswith("complete") and b.value.rstrip().endswith("missing")

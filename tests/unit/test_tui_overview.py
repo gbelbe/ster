@@ -445,7 +445,7 @@ def test_labelled_metric_counts_skos_preflabel() -> None:
     t.owl_classes["b"] = RDFClass(
         uri="b", annotations=[OntologyAnnotation(SKOS_PREFLABEL, "B")]
     )  # skos:prefLabel only
-    assert _by_key(_fields(t))["st:label_cov"].value.endswith("100%")  # both count as labelled
+    assert "100%" in _by_key(_fields(t))["st:label_cov"].value  # both count as labelled
 
 
 def test_metadata_coverage_rows_render_from_the_metadata_dict() -> None:
@@ -475,23 +475,23 @@ def test_metadata_coverage_omitted_when_not_computable() -> None:
 # ── Health & Issues: structural gaps (reorganized overview, P1) ────────────────
 
 
-def test_health_surfaces_structural_gaps_colored() -> None:
-    """The Health group surfaces the actionable structural gaps — missing
-    domain/range, undocumented, unlabelled, no-individuals — coloured green at
-    zero else orange."""
+def test_health_keeps_issues_and_completeness_carries_the_missing_counts() -> None:
+    """Health keeps only non-coverage issues (missing domain/range); the label/comment
+    gaps are merged into the Completeness rows as a 'N missing' count."""
     from ster.model import Label, OWLProperty, RDFClass
 
     t = _tax()
-    t.owl_classes["c"] = RDFClass(uri="c")  # no label, no comment, no individuals
+    t.owl_classes["c"] = RDFClass(uri="c")  # no label, no comment
     t.owl_classes["d"] = RDFClass(uri="d", labels=[Label("en", "D")], comments=[])
     t.owl_properties["p"] = OWLProperty(uri="p", prop_type="ObjectProperty")  # no domain/range
     by_key = _by_key(_fields(t))
-    assert by_key["st:incomplete_props"].value == "1"  # p
-    assert by_key["st:incomplete_props"].meta["color"] == "orange"
-    assert by_key["st:gap_undoc"].value == "2"  # c and d undocumented
-    assert by_key["st:gap_unlab"].value == "1"  # only c unlabelled
-    assert "st:gap_noind" not in by_key  # 'classes with no individuals' was removed
-    assert by_key["st:gap_unlab"].meta["color"] == "orange"
+    # Health: only the property issue remains (no separate label/comment gap rows)
+    assert by_key["st:incomplete_props"].value == "1"
+    assert "st:gap_undoc" not in by_key and "st:gap_unlab" not in by_key
+    # Completeness rows carry both percent and the count missing
+    assert "2 missing" in by_key["st:comment_cov"].value  # c and d undocumented
+    assert "1 missing" in by_key["st:label_cov"].value  # only c unlabelled
+    assert by_key["st:label_cov"].meta["color"] == "orange"  # 50% labelled → orange
 
 
 def test_quality_group_opens_and_closes_around_the_coverage_subsections() -> None:
