@@ -1218,13 +1218,7 @@ class TaxonomyViewer:
                 self._on_map_concept_pick(key, rows)
 
             elif isinstance(self._state, QueryState):
-                if self._state.ai_generating:
-                    self._run_generate(
-                        stdscr,
-                        self._generate_sparql_query,
-                        lambda r=rows, c=cols: self._draw_query(stdscr, r, c),
-                    )
-                elif self._state.running:
+                if self._state.running:
                     self._run_generate(
                         stdscr,
                         self._execute_sparql_query,
@@ -3960,13 +3954,8 @@ class TaxonomyViewer:
                 st.error = msg
                 st.ai_generating = False
             elif isinstance(st, QueryState):
-                if st.ai_generating:
-                    st.ai_generating = False
-                    st.ai_step = ""
-                    st.result_error = msg
-                else:
-                    st.result_error = msg
-                    st.running = False
+                st.result_error = msg
+                st.running = False
 
     def _create_ai_generate(self) -> None:
         """Called from main loop when CreateState.ai_generating is True."""
@@ -8715,19 +8704,11 @@ class TaxonomyViewer:
         # Draw the tree first so it's visible through the modal border.
         self._draw_tree(stdscr, rows, cols)
 
-        # AI sub-flow screens take over the full modal
+        # Centred modal box for the query editor.
         modal_h = int((rows - 4) * 0.8)
         modal_w = int((cols - 8) * 0.8)
         modal_y = (rows - modal_h) // 2
         modal_x = (cols - modal_w) // 2
-
-        if qs.ai_step == "prompt_review" or qs.ai_generating:
-            try:
-                win = stdscr.derwin(modal_h, modal_w, modal_y, modal_x)
-            except curses.error:
-                win, modal_h, modal_w = stdscr, rows, cols
-            self._draw_query_ai_prompt_review(win, modal_h, modal_w, qs)
-            return
 
         # ── Modal border ──────────────────────────────────────────────────────
         border_attr = curses.color_pair(_C_FIELD_LABEL)
@@ -8949,10 +8930,6 @@ class TaxonomyViewer:
         if qs.show_presets:
             self._draw_query_presets(win, rows, cols, qs)
 
-        # ── AI ask overlay (drawn on top of everything) ───────────────────────
-        if qs.ai_step == "ask":
-            self._draw_query_ai_ask(win, rows, cols, qs)
-
         # ── @ autocomplete overlay ────────────────────────────────────────────
         if qs.ac_active and qs.panel == "editor":
             self._draw_query_ac(win, rows, cols, qs)
@@ -8993,8 +8970,6 @@ class TaxonomyViewer:
         # ── Footer ────────────────────────────────────────────────────────────
         if qs.show_presets:
             hint_text = "  ↑↓: navigate   Enter: load preset   Ctrl+L/Esc: close  "
-        elif qs.ai_step == "ask":
-            hint_text = ""
         elif qs.ac_active:
             if qs.ac_level == 1:
                 hint_text = "  ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel  "
@@ -9005,9 +8980,9 @@ class TaxonomyViewer:
         elif qs.var_active:
             hint_text = "  ↑↓: navigate   Tab/Enter: insert variable   Esc: cancel  "
         elif qs.panel == "editor":
-            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: close  "
+            hint_text = "  Ctrl+R/F5: run   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: close  "
         else:
-            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   A: AI   Ctrl+L: presets   Esc: close  "
+            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   Ctrl+L: presets   Esc: close  "
         _draw_bar(win, rows - 1, 0, cols, hint_text, dim=True)
 
     def _draw_query_presets(
@@ -9387,14 +9362,6 @@ class TaxonomyViewer:
         if not isinstance(qs, QueryState):
             return False
 
-        # ── AI sub-flow ───────────────────────────────────────────────────────
-        if qs.ai_step == "ask":
-            self._on_query_ai_ask(key, rows, cols, qs)
-            return False
-        if qs.ai_step == "prompt_review":
-            self._on_query_ai_prompt_review(key, qs)
-            return False
-
         # ── Presets overlay is open ───────────────────────────────────────────
         if qs.show_presets:
             from .. import sparql_query as _sq
@@ -9705,10 +9672,6 @@ class TaxonomyViewer:
                     from .. import sparql_query as _sq_tr
 
                     _sq_tr._trace("KEY Ctrl+R pressed — qs.running = True")
-            elif key == 7:  # Ctrl+G → AI generate
-                qs.ai_step = "ask"
-                qs.ai_question = ""
-                qs.ai_question_pos = 0
             elif key == 22:  # Ctrl+V → visualize results
                 self._open_query_result_viz(qs)
             elif key == 9:  # Tab → results (no kw popup active)
@@ -9741,7 +9704,6 @@ class TaxonomyViewer:
                 # Trigger @ autocomplete when '@' is typed
                 if key == ord("@"):
                     qs.ac_active = True
-                    qs.ac_context = "editor"
                     qs.ac_trigger_pos = qs.query_pos  # pos is now right after '@'
                     qs.ac_cursor = 0
                     qs.ac_scroll = 0
@@ -9850,10 +9812,6 @@ class TaxonomyViewer:
                 qs.show_presets = True
             elif key == 22:  # Ctrl+V → visualize results
                 self._open_query_result_viz(qs)
-            elif key in (ord("a"), ord("A"), 7):  # A or Ctrl+G → AI generate
-                qs.ai_step = "ask"
-                qs.ai_question = ""
-                qs.ai_question_pos = 0
             elif key == 27:  # Esc → back to editor first
                 qs.panel = "editor"
 
@@ -9957,279 +9915,6 @@ class TaxonomyViewer:
 
             threading.Thread(target=_update_viz, daemon=True, name="ster-viz-update").start()
 
-    def _generate_sparql_query(self) -> None:
-        """Background worker: call the LLM to generate a SPARQL query.
-
-        Reads ``qs.ai_prompt_buffer`` (possibly user-edited), calls
-        ``ai.generate_sparql_from_prompt``, and places the resulting SPARQL
-        into ``qs.query_buffer`` so the user can inspect/run/edit it.
-        """
-        from .. import ai as _ai
-
-        qs = self._state
-        if not isinstance(qs, QueryState):
-            return
-        sparql = _ai.generate_sparql_from_prompt(qs.ai_prompt_buffer)
-        qs.query_buffer = sparql
-        qs.query_pos = len(sparql)
-        qs.query_scroll = 0
-        qs.ai_generating = False
-        qs.ai_step = ""
-        qs.panel = "editor"
-
-    def _draw_query_ai_ask(
-        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
-    ) -> None:
-        """Overlay: single-line natural language question input."""
-        box_h = 5
-        box_w = min(cols - 4, 70)
-        by = (rows - box_h) // 2
-        bx = (cols - box_w) // 2
-
-        for y in range(box_h):
-            try:
-                stdscr.addstr(by + y, bx, " " * box_w, curses.color_pair(_C_FIELD_VAL))
-            except curses.error:
-                pass
-
-        title = " ✦ Ask AI — describe what you want to query "
-        try:
-            stdscr.addstr(
-                by, bx, title.center(box_w)[:box_w], curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
-            )
-        except curses.error:
-            pass
-
-        buf = qs.ai_question
-        pos = qs.ai_question_pos
-        visible_w = box_w - 2
-        start = max(0, pos - visible_w + 1)
-        visible = buf[start : start + visible_w]
-        cursor_col = pos - start
-        display = visible[:cursor_col] + "▌" + visible[cursor_col:]
-        try:
-            stdscr.addstr(
-                by + 2,
-                bx + 1,
-                display[:visible_w].ljust(visible_w)[:visible_w],
-                curses.color_pair(_C_EDIT_BAR),
-            )
-        except curses.error:
-            pass
-
-        if qs.ac_active:
-            if qs.ac_level == 1:
-                hint = " ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel "
-            else:
-                hint = (
-                    f" In {qs.ac_scheme_label} — ↑↓: navigate   Tab/Enter: insert URI   Esc: back "
-                )
-        else:
-            hint = " Enter: review prompt   @: autocomplete   Esc: cancel "
-        try:
-            stdscr.addstr(by + 4, bx, hint.center(box_w)[:box_w], curses.color_pair(_C_DIM))
-        except curses.error:
-            pass
-
-        # AC popup anchored just below the dialog box
-        if qs.ac_active:
-            self._draw_query_ac(stdscr, rows, cols, qs, anchor_y=by + box_h, anchor_x=bx + 1)
-
-    def _draw_query_ai_prompt_review(
-        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
-    ) -> None:
-        """Full-screen: editable AI prompt before submission."""
-        _draw_bar(
-            stdscr,
-            0,
-            0,
-            cols,
-            " ✦ AI SPARQL — review & edit prompt — Enter: generate   Esc: back ",
-            dim=False,
-        )
-
-        if qs.ai_generating:
-            sp = self._SPINNER[self._install_spinner % 4]
-            try:
-                stdscr.addstr(
-                    rows // 2,
-                    2,
-                    f"{sp}  Generating SPARQL query…",
-                    curses.color_pair(_C_DIM),
-                )
-            except curses.error:
-                pass
-            _draw_bar(stdscr, rows - 1, 0, cols, "", dim=True)
-            return
-
-        buf = qs.ai_prompt_buffer
-        pos = qs.ai_prompt_pos
-        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
-        raw_lines = text_with_cursor.splitlines() or ["▌"]
-        display_lines: list[str] = []
-        for raw in raw_lines:
-            while len(raw) > cols:
-                display_lines.append(raw[:cols])
-                raw = raw[cols:]
-            display_lines.append(raw)
-
-        list_h = rows - 2
-        cursor_line = len((buf[:pos] + "▌").splitlines()) - 1
-        if qs.ai_prompt_scroll > cursor_line:
-            qs.ai_prompt_scroll = cursor_line
-        if cursor_line >= qs.ai_prompt_scroll + list_h:
-            qs.ai_prompt_scroll = cursor_line - list_h + 1
-
-        for i in range(list_h):
-            idx = qs.ai_prompt_scroll + i
-            line = display_lines[idx] if idx < len(display_lines) else ""
-            try:
-                stdscr.addstr(1 + i, 0, line[:cols])
-            except curses.error:
-                pass
-
-        _draw_bar(
-            stdscr,
-            rows - 1,
-            0,
-            cols,
-            "  ↑↓: scroll   type to edit   Enter: generate   Esc: back  ",
-            dim=True,
-        )
-
-    def _on_query_ai_ask(self, key: int, rows: int, cols: int, qs: QueryState) -> None:
-        """Handle keypresses in the AI question input overlay."""
-        from .. import ai as _ai
-
-        # ── @ autocomplete intercept ──────────────────────────────────────────
-        if qs.ac_active:
-            candidates = self._query_ac_candidates(
-                qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos],
-                qs.ac_level,
-                qs.ac_scheme_uri,
-            )
-            if key == 27:  # Esc
-                if qs.ac_level == 2:
-                    # Back to scheme selection (don't cancel the ask dialog)
-                    self._query_ac_clear_filter(qs)
-                    qs.ac_level = 1
-                    qs.ac_scheme_uri = ""
-                    qs.ac_scheme_label = ""
-                    qs.ac_cursor = 0
-                    qs.ac_scroll = 0
-                else:
-                    # Remove @ and filter text, but keep the ask dialog open
-                    self._query_ac_cancel(qs)
-                return
-            if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):  # Tab/Enter
-                if qs.ac_level == 1:
-                    if candidates:
-                        s_label, s_uri, _k, _sl = candidates[qs.ac_cursor]
-                        self._query_ac_clear_filter(qs)
-                        qs.ac_level = 2
-                        qs.ac_scheme_uri = s_uri
-                        qs.ac_scheme_label = s_label
-                        qs.ac_cursor = 0
-                        qs.ac_scroll = 0
-                    else:
-                        qs.ac_active = False
-                else:
-                    if candidates:
-                        self._query_ac_insert(qs, candidates[qs.ac_cursor])
-                    else:
-                        qs.ac_active = False
-                return
-            if key == curses.KEY_UP:
-                qs.ac_cursor = max(0, qs.ac_cursor - 1)
-                return
-            if key == curses.KEY_DOWN:
-                qs.ac_cursor = min(max(0, len(candidates) - 1), qs.ac_cursor + 1)
-                return
-            # Pass other keys through to the input, then re-check AC state
-            qs.ai_question, qs.ai_question_pos = _apply_line_edit(
-                qs.ai_question, qs.ai_question_pos, key
-            )
-            if qs.ai_question_pos < qs.ac_trigger_pos or (
-                qs.ac_trigger_pos > 0
-                and qs.ai_question[qs.ac_trigger_pos - 1 : qs.ac_trigger_pos] != "@"
-            ):
-                qs.ac_active = False
-                qs.ac_cursor = 0
-                qs.ac_scroll = 0
-                qs.ac_level = 1
-                qs.ac_scheme_uri = ""
-                qs.ac_scheme_label = ""
-            else:
-                qs.ac_cursor = 0
-            return
-
-        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if not qs.ai_question.strip():
-                return
-            if not _ai.is_configured():
-                qs.result_error = "AI not configured. Press ⚙ from the main menu."
-                qs.ai_step = ""
-                return
-            # Build taxonomy context from current taxonomy
-            scheme = self.taxonomy.primary_scheme()
-            taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
-            taxonomy_description = ""
-            if scheme and scheme.descriptions:
-                for d in scheme.descriptions:
-                    if d.lang == self.lang:
-                        taxonomy_description = d.value
-                        break
-                if not taxonomy_description and scheme.descriptions:
-                    taxonomy_description = scheme.descriptions[0].value
-            scheme_uris = list(self.taxonomy.schemes.keys())
-            prompt = _ai.render_generate_sparql_prompt(
-                taxonomy_name, taxonomy_description, scheme_uris, qs.ai_question
-            )
-            qs.ai_prompt_buffer = prompt
-            qs.ai_prompt_pos = len(prompt)
-            qs.ai_prompt_scroll = 0
-            qs.ai_step = "prompt_review"
-        elif key == 27:
-            qs.ai_step = ""
-        else:
-            qs.ai_question, qs.ai_question_pos = _apply_line_edit(
-                qs.ai_question, qs.ai_question_pos, key
-            )
-            # Trigger @ autocomplete when '@' is typed
-            if key == ord("@"):
-                qs.ac_active = True
-                qs.ac_context = "ai_ask"
-                qs.ac_trigger_pos = qs.ai_question_pos  # pos is now right after '@'
-                qs.ac_cursor = 0
-                qs.ac_scroll = 0
-                qs.ac_level = 1
-                qs.ac_scheme_uri = ""
-                qs.ac_scheme_label = ""
-
-    def _on_query_ai_prompt_review(self, key: int, qs: QueryState) -> None:
-        """Handle keypresses in the AI prompt review screen."""
-        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            qs.ai_generating = True
-        elif key == 27:
-            qs.ai_step = "ask"
-        elif key == curses.KEY_UP:
-            qs.ai_prompt_pos = _query_pos_up(qs.ai_prompt_buffer, qs.ai_prompt_pos)
-        elif key == curses.KEY_DOWN:
-            qs.ai_prompt_pos = _query_pos_down(qs.ai_prompt_buffer, qs.ai_prompt_pos)
-        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            qs.ai_prompt_buffer = (
-                qs.ai_prompt_buffer[: qs.ai_prompt_pos]
-                + "\n"
-                + qs.ai_prompt_buffer[qs.ai_prompt_pos :]
-            )
-            qs.ai_prompt_pos += 1
-        else:
-            qs.ai_prompt_buffer, qs.ai_prompt_pos = _apply_line_edit(
-                qs.ai_prompt_buffer, qs.ai_prompt_pos, key
-            )
-
-    # ── @ autocomplete ────────────────────────────────────────────────────────
-
     def _query_ac_candidates(
         self, ac_query: str, level: int = 1, scheme_uri: str = ""
     ) -> list[tuple[str, str, str, str]]:
@@ -10282,14 +9967,9 @@ class TaxonomyViewer:
         _label, uri, _kind, _scheme = candidate
         start = qs.ac_trigger_pos - 1  # include the '@' itself
         replacement = f"<{uri}>"
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + replacement + qs.ai_question[end:]
-            qs.ai_question_pos = start + len(replacement)
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + replacement + qs.query_buffer[end:]
-            qs.query_pos = start + len(replacement)
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + replacement + qs.query_buffer[end:]
+        qs.query_pos = start + len(replacement)
         qs.ac_active = False
         qs.ac_cursor = 0
         qs.ac_scroll = 0
@@ -10300,26 +9980,16 @@ class TaxonomyViewer:
     def _query_ac_clear_filter(self, qs: QueryState) -> None:
         """Remove filter text typed after '@' (used when transitioning AC levels)."""
         start = qs.ac_trigger_pos
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
-            qs.ai_question_pos = start
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
-            qs.query_pos = start
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+        qs.query_pos = start
 
     def _query_ac_cancel(self, qs: QueryState) -> None:
         """Remove the '@' trigger character and any filter text, then close AC."""
         start = qs.ac_trigger_pos - 1  # include the '@' itself
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
-            qs.ai_question_pos = start
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
-            qs.query_pos = start
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+        qs.query_pos = start
         qs.ac_active = False
         qs.ac_cursor = 0
         qs.ac_scroll = 0
@@ -10338,14 +10008,10 @@ class TaxonomyViewer:
     ) -> None:
         """Draw the @ autocomplete popup.
 
-        When *anchor_y* is given the popup is anchored at that screen row (used
-        by the AI-ask overlay). Otherwise the popup is positioned below the
-        cursor line in the editor area.
+        When *anchor_y* is given the popup is anchored at that screen row;
+        otherwise it is positioned below the cursor line in the editor area.
         """
-        if qs.ac_context == "ai_ask":
-            ac_q = qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos]
-        else:
-            ac_q = qs.query_buffer[qs.ac_trigger_pos : qs.query_pos]
+        ac_q = qs.query_buffer[qs.ac_trigger_pos : qs.query_pos]
         candidates = self._query_ac_candidates(ac_q, qs.ac_level, qs.ac_scheme_uri)
 
         n_cands = len(candidates)

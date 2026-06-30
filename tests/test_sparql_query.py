@@ -228,10 +228,6 @@ def test_query_state_defaults() -> None:
     assert not qs.show_presets
     assert qs.columns == []
     assert qs.rows == []
-    # AI fields
-    assert qs.ai_step == ""
-    assert qs.ai_question == ""
-    assert not qs.ai_generating
     # @ autocomplete fields
     assert not qs.ac_active
     assert qs.ac_trigger_pos == 0
@@ -240,136 +236,6 @@ def test_query_state_defaults() -> None:
     assert qs.ac_level == 1
     assert qs.ac_scheme_uri == ""
     assert qs.ac_scheme_label == ""
-
-
-# ── AI SPARQL generation (ai.py) ──────────────────────────────────────────────
-
-
-def test_parse_sparql_strips_fenced_code_block() -> None:
-    from ster.ai import _parse_sparql
-
-    text = "Here is the query:\n```sparql\nSELECT ?s WHERE { ?s ?p ?o }\n```"
-    result = _parse_sparql(text)
-    assert "SELECT ?s WHERE { ?s ?p ?o }" in result
-    assert "PREFIX skos:" in result
-
-
-def test_parse_sparql_strips_plain_fence() -> None:
-    from ster.ai import _parse_sparql
-
-    text = "```\nSELECT ?s WHERE { ?s ?p ?o }\n```"
-    result = _parse_sparql(text)
-    assert "SELECT ?s WHERE { ?s ?p ?o }" in result
-    assert "PREFIX skos:" in result
-
-
-def test_parse_sparql_returns_raw_when_no_fence() -> None:
-    from ster.ai import _parse_sparql
-
-    text = "SELECT ?s WHERE { ?s ?p ?o }"
-    result = _parse_sparql(text)
-    assert "SELECT ?s WHERE { ?s ?p ?o }" in result
-    assert result.startswith("PREFIX")
-
-
-def test_parse_sparql_strips_leading_prose() -> None:
-    from ster.ai import _parse_sparql
-
-    text = "Sure, here is the query:\nSELECT ?s WHERE { ?s ?p ?o }"
-    result = _parse_sparql(text)
-    assert "SELECT" in result
-    assert "PREFIX skos:" in result
-
-
-def test_parse_sparql_keeps_existing_prefixes() -> None:
-    from ster.ai import _parse_sparql
-
-    # LLM included its own prefixes → don't double-prepend
-    text = "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nSELECT ?s WHERE { ?s ?p ?o }"
-    result = _parse_sparql(text)
-    assert result.count("PREFIX skos:") == 1
-
-
-def test_render_generate_sparql_prompt_contains_question() -> None:
-    from ster.ai import render_generate_sparql_prompt
-
-    prompt = render_generate_sparql_prompt(
-        taxonomy_name="My Taxonomy",
-        taxonomy_description="A test taxonomy.",
-        scheme_uris=["https://example.org/scheme"],
-        question="find all concepts without a definition",
-    )
-    assert "find all concepts without a definition" in prompt
-    assert "My Taxonomy" in prompt
-    # Prefixes are injected post-processing, not in the prompt itself
-    assert "PREFIX skos:" not in prompt
-
-
-def test_render_generate_sparql_prompt_includes_scheme_uri() -> None:
-    from ster.ai import render_generate_sparql_prompt
-
-    prompt = render_generate_sparql_prompt(
-        taxonomy_name="T",
-        taxonomy_description="",
-        scheme_uris=["https://example.org/s1", "https://example.org/s2"],
-        question="list all top concepts",
-    )
-    assert "https://example.org/s1" in prompt
-
-
-def test_render_generate_sparql_prompt_no_description() -> None:
-    from ster.ai import render_generate_sparql_prompt
-
-    prompt = render_generate_sparql_prompt(
-        taxonomy_name="T",
-        taxonomy_description="",
-        scheme_uris=[],
-        question="q",
-    )
-    assert "Description:" not in prompt
-
-
-def test_generate_sparql_task_registered() -> None:
-    from ster.prompts import ALL_TASKS, GENERATE_SPARQL, SPARQL_REPAIR
-
-    assert GENERATE_SPARQL in ALL_TASKS
-    assert SPARQL_REPAIR in ALL_TASKS
-
-
-# ── _validate_sparql_syntax ───────────────────────────────────────────────────
-
-
-def test_validate_sparql_syntax_valid() -> None:
-    from ster.ai import _validate_sparql_syntax
-
-    q = "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nSELECT ?c WHERE { ?c a skos:Concept }"
-    assert _validate_sparql_syntax(q) == ""
-
-
-def test_validate_sparql_syntax_two_forms() -> None:
-    from ster.ai import _validate_sparql_syntax
-
-    # SELECT and ASK in the same statement — invalid
-    q = "SELECT ?s WHERE { ?s ?p ?o } ASK { ?s ?p ?o }"
-    assert _validate_sparql_syntax(q) != ""
-
-
-def test_validate_sparql_syntax_filter_triple() -> None:
-    from ster.ai import _validate_sparql_syntax
-
-    # FILTER with a triple pattern instead of a boolean — invalid
-    q = (
-        "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\n"
-        "SELECT ?c WHERE { ?c a skos:Concept . FILTER(?c skos:prefLabel != null) }"
-    )
-    assert _validate_sparql_syntax(q) != ""
-
-
-def test_validate_sparql_syntax_ask() -> None:
-    from ster.ai import _validate_sparql_syntax
-
-    q = "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nASK { ?c a skos:Concept }"
-    assert _validate_sparql_syntax(q) == ""
 
 
 # ── _ac_matches ───────────────────────────────────────────────────────────────
@@ -394,3 +260,51 @@ def test_ac_matches(label: str, q: str, expected: bool) -> None:
     from ster.nav import _ac_matches
 
     assert _ac_matches(label, q) == expected
+
+
+# ── query autocomplete buffer helpers (TaxonomyViewer._query_ac_*) ─────────────
+# These mutate a QueryState's buffer/cursor and use no `self`, so we call them on
+# the class with a stub self — pure, terminal-free coverage of the kept manual-
+# query autocomplete code that the AI-removal touched.
+
+
+def _qs(buffer: str, pos: int, trigger: int):  # noqa: ANN202
+    from ster.nav.state import QueryState
+
+    qs = QueryState()
+    qs.query_buffer = buffer
+    qs.query_pos = pos
+    qs.ac_trigger_pos = trigger
+    qs.ac_active = True
+    qs.ac_level = 2
+    return qs
+
+
+def test_query_ac_insert_replaces_at_filter_with_uri() -> None:
+    from ster.nav.viewer import TaxonomyViewer
+
+    qs = _qs("ASK { @Ch", pos=9, trigger=7)  # '@' at idx 6, filter "Ch"
+    TaxonomyViewer._query_ac_insert(None, qs, ("Child", "https://ex/Child", "CON", ""))
+    assert qs.query_buffer == "ASK { <https://ex/Child>"
+    assert qs.query_pos == len("ASK { <https://ex/Child>")
+    assert qs.ac_active is False
+    assert qs.ac_level == 1
+
+
+def test_query_ac_clear_filter_drops_text_after_at() -> None:
+    from ster.nav.viewer import TaxonomyViewer
+
+    qs = _qs("ASK { @Child", pos=12, trigger=7)
+    TaxonomyViewer._query_ac_clear_filter(None, qs)
+    assert qs.query_buffer == "ASK { @"
+    assert qs.query_pos == 7
+
+
+def test_query_ac_cancel_removes_at_and_filter() -> None:
+    from ster.nav.viewer import TaxonomyViewer
+
+    qs = _qs("ASK { @Child", pos=12, trigger=7)
+    TaxonomyViewer._query_ac_cancel(None, qs)
+    assert qs.query_buffer == "ASK { "
+    assert qs.query_pos == 6
+    assert qs.ac_active is False

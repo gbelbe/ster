@@ -330,14 +330,6 @@ class QueryState:
     panel: str = "editor"
     # Async SPARQL execution flag
     running: bool = False
-    # AI generation sub-flow: "" | "ask" | "prompt_review"
-    ai_step: str = ""
-    ai_question: str = ""
-    ai_question_pos: int = 0
-    ai_prompt_buffer: str = ""
-    ai_prompt_pos: int = 0
-    ai_prompt_scroll: int = 0
-    ai_generating: bool = False
     # Keyword autocomplete popup cursor
     kw_cursor: int = 0
     # @ autocomplete state
@@ -345,7 +337,6 @@ class QueryState:
     ac_trigger_pos: int = 0  # buffer position right after the '@' character
     ac_cursor: int = 0
     ac_scroll: int = 0
-    ac_context: str = "editor"  # "editor" | "ai_ask"
     # Two-level AC: 1 = scheme selection, 2 = concept selection within scheme
     ac_level: int = 1
     ac_scheme_uri: str = ""

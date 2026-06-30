@@ -11,15 +11,11 @@ from string import Template
 SUGGEST_CONCEPT_NAMES = "suggest_concept_names"
 SUGGEST_ALT_LABELS = "suggest_alt_labels"
 SUGGEST_DEFINITION = "suggest_definition"
-GENERATE_SPARQL = "generate_sparql"
-SPARQL_REPAIR = "sparql_repair"
 
 ALL_TASKS = [
     SUGGEST_CONCEPT_NAMES,
     SUGGEST_ALT_LABELS,
     SUGGEST_DEFINITION,
-    GENERATE_SPARQL,
-    SPARQL_REPAIR,
 ]
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -55,41 +51,6 @@ shorter than 60 characters. \
 Do NOT add definitions, numbers, bullets, or any explanation.
 
 Reply with ONLY the alternative labels in $lang, one per line.\
-""")
-
-TMPL_GENERATE_SPARQL = Template("""\
-SPARQL 1.1 query for the "$taxonomy_name" SKOS taxonomy.
-${taxonomy_description_line}${scheme_uris_line}\
-Question: $question
-- SELECT preferred; ASK for yes/no only.
-- Omit PREFIX declarations (added automatically).
-- Raw SPARQL only — no explanation, no markdown.
-- FILTER() takes a boolean expression only — never a triple pattern. \
-Use FILTER EXISTS { } or FILTER NOT EXISTS { } to test for the presence \
-or absence of triples.
-- Bind variables in the WHERE clause rather than testing for null; \
-?var being unbound means the triple is absent.
-- Use OPTIONAL { } to make a pattern optional, then FILTER(BOUND(?var)) \
-if you need to test whether it was matched.
-- Property paths use * (zero or more), + (one or more), ? (zero or one), \
-and / for sequencing — e.g. skos:narrower+ for transitive narrower.\
-""")
-
-TMPL_SPARQL_REPAIR = Template("""\
-Fix the following invalid SPARQL 1.1 query.
-Parse error: $error
-
-Faulty query:
-$faulty_query
-
-Rules:
-- A query must have exactly one form: SELECT, ASK, CONSTRUCT, or DESCRIBE.
-- FILTER() takes a boolean expression only — not a triple pattern.
-- Use FILTER EXISTS { } or FILTER NOT EXISTS { } to test triple existence.
-- LANG() applies to string literals only, not to URIs.
-- Bind variables in WHERE; do not test for null.
-- Omit PREFIX declarations (added automatically).
-- Raw SPARQL only — no explanation, no markdown.\
 """)
 
 TMPL_SUGGEST_DEFINITION = Template("""\
