@@ -496,8 +496,12 @@ def test_health_keeps_issues_and_completeness_carries_the_missing_counts() -> No
 
 def test_quality_group_opens_and_closes_around_the_coverage_subsections() -> None:
     """A 'Quality & Coverage' group is opened (separator_group) before Health and
-    closed (separator_group_end) after Languages, wrapping the coverage cluster."""
-    fields = build_tui_ontology_overview_fields(_tax(), "en", None, {"error": 1, "warning": 0})
+    closed (separator_group_end) after the coverage cluster."""
+    from ster.model import Label, RDFClass
+
+    t = _tax()
+    t.owl_classes["a"] = RDFClass(uri="a", labels=[Label("en", "A")])  # gives a Languages row
+    fields = build_tui_ontology_overview_fields(t, "en", None, {"error": 1, "warning": 0})
     seps = [
         (f.meta.get("type"), f.display)
         for f in fields

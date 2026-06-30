@@ -270,23 +270,24 @@ def test_languages_section_is_shared_across_overview_classes_concepts() -> None:
     cls_seps = [f.display for f in cls if f.meta.get("type") == "separator"]
     assert "Languages" in cls_seps  # now present on classes
     by_key = {f.key: f for f in cls}
-    assert by_key["cls:langs"].display == "languages"
+    assert "cls:langs" not in by_key  # the 'languages: 2 (en, fr)' summary row was removed
     assert "cls:lang_cov:fr" in by_key  # per-configured-language coverage row
 
     tax.concepts[ZOO + "C"] = Concept(uri=ZOO + "C", labels=[Label("en", "C")])
     con = ConceptPresenter(cctx, ZOO + "C").render()
     assert "Languages" in [f.display for f in con if f.meta.get("type") == "separator"]
-    assert any(f.key == "concept:langs" for f in con)
+    assert any(f.key == "concept:lang_cov:en" for f in con)
 
 
 def test_completeness_rows_align_as_a_table() -> None:
-    """Completeness rows line up: labels padded to equal width and the percent /
-    missing columns at the same offset, so the section reads like a table."""
+    """Completeness rows line up: the ':' sits right after each label, padding follows,
+    and the percent column lands at the same offset in the rendered 'label: value'."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
     by_key = {f.key: f for f in ClassPresenter(_ctx(tax), ZOO + "Animal").render()}
     a, b = by_key["cls:label_cov"], by_key["cls:comment_cov"]
-    assert len(a.display) == len(b.display)  # labels padded to a common width
-    assert a.value.index("%") == b.value.index("%")  # percent column aligned
-    assert a.value.rstrip().endswith("complete") and b.value.rstrip().endswith("missing")
+    assert not a.display.endswith(" ") and not b.display.endswith(" ")  # ':' right after label
+    full_a, full_b = f"{a.display}: {a.value}", f"{b.display}: {b.value}"
+    assert full_a.index("%") == full_b.index("%")  # percent column aligned across rows
+    assert full_a.rstrip().endswith("complete") and full_b.rstrip().endswith("missing")

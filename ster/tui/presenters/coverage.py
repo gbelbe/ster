@@ -29,14 +29,16 @@ class _Labelled(Protocol):
 
 
 def _coverage_row(key: str, label: str, present: int, total: int, label_width: int) -> DetailField:
-    """One coverage row as a fixed-width table cell set — label, bar, percent
-    *present*, and count *missing* in aligned columns so a section reads like a table.
-    The label/percent/missing are padded; coloured by the percentage."""
+    """One coverage row as a fixed-width table cell set — bar, percent *present*, and
+    count *missing* in aligned columns so a section reads like a table. The ':' stays
+    right after the label; the alignment padding goes after it (at the value's start).
+    Coloured by the percentage."""
     pct = _pct(present, total)
     missing = total - present
     gap = "complete" if not missing else f"{missing} missing"
-    value = f"{_pct_bar(pct)}  {pct:>3}%   {gap:>10}"
-    return _colored(_stat(key, label.ljust(label_width), value), _quality_color(pct))
+    pad = " " * (label_width - len(label))  # align value columns after the 'label: '
+    value = f"{pad}{_pct_bar(pct)}  {pct:>3}%   {gap:>10}"
+    return _colored(_stat(key, label, value), _quality_color(pct))
 
 
 _COMPLETENESS_ROWS = (
@@ -69,23 +71,22 @@ def class_completeness_section(
     ]
 
 
-def _lang_summary(langs: list[str]) -> str:
-    return str(len(langs)) + (f" ({', '.join(langs)})" if langs else "")
-
-
 def languages_section(
     entities: Sequence[_Labelled], prefix: str, configured_langs: list[str] | None = None
 ) -> list[DetailField]:
-    """The 'Languages' subsection: the language set + per-language label coverage over
-    *entities* (anything with a ``.labels`` list). Shared by the overview, classes and
-    concepts so the label and format stay identical everywhere. When *configured_langs*
-    is given it drives the rows; otherwise the languages found on the entities do."""
+    """The 'Languages' subsection: one per-language label-coverage bar over *entities*
+    (anything with a ``.labels`` list). Shared by the overview, classes and concepts so
+    the label and format stay identical everywhere. When *configured_langs* is given it
+    drives the rows; otherwise the languages found on the entities do. Empty when there
+    are no languages."""
     total = len(entities)
     if configured_langs is not None:
         langs = list(configured_langs)
     else:
         langs = sorted({lbl.lang for e in entities for lbl in e.labels if lbl.lang})
-    fields = [_sep("Languages"), _stat(f"{prefix}:langs", "languages", _lang_summary(langs))]
+    if not langs:
+        return []
+    fields: list[DetailField] = [_sep("Languages")]
     for code in langs:
         covered = sum(1 for e in entities if any(lbl.lang == code for lbl in e.labels))
         fields.append(_bar_stat(f"{prefix}:lang_cov:{code}", f"labels · {code}", covered, total))
