@@ -35,7 +35,7 @@ OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
 TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 
 # Field meta["type"] values that start a new section rather than render a row.
-_SEPARATORS = frozenset({"separator", "separator_danger", "separator_group"})
+_SEPARATORS = frozenset({"separator", "separator_danger", "separator_group", "separator_group_end"})
 
 # entity kind (data.kind_of) → its DetailField builder. All accept the keyword
 # ``configured_langs`` (the languages whose label/description add rows to offer).
@@ -55,7 +55,8 @@ class DetailSection:
     title: str
     fields: list[DetailField] = dc_field(default_factory=list)
     danger: bool = False  # True for the "Danger Zone" (separator_danger) section
-    group: bool = False  # True for a heavier group band (separator_group)
+    group: bool = False  # opens a bordered group box (separator_group)
+    group_end: bool = False  # closes the current group box (separator_group_end)
 
 
 def group_sections(fields: list[DetailField]) -> list[DetailSection]:
@@ -74,6 +75,7 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
                 title=f.display,
                 danger=(ftype == "separator_danger"),
                 group=(ftype == "separator_group"),
+                group_end=(ftype == "separator_group_end"),
             )
             sections.append(current)
         else:

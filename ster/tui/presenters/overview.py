@@ -22,6 +22,7 @@ from ster.nav.logic import (
     _ontology_activity_fields,
     _sep,
     _sep_group,
+    _sep_group_end,
     _stat,
     _stats_metadata,
     _tui_identity_rows,
@@ -120,6 +121,7 @@ class OntologyOverviewPresenter(EntityPresenter):
         fields.append(_stat("st:langs", "languages", summary))
         if total:
             fields.extend(_lang_coverage_rows(classes, langs, total))
+        fields.append(_sep_group_end())  # close the 'Quality & Coverage' box
         return fields
 
     def relations(self) -> list[DetailField]:

@@ -1422,3 +1422,27 @@ def test_browser_snapshot(snap_compare) -> None:
         await pilot.pause()
 
     assert snap_compare(_app(), terminal_size=(120, 40), run_before=jump)
+
+
+def test_overview_quality_sections_render_in_a_bordered_group_box() -> None:
+    """The overview's Health/Completeness/Metadata-coverage/Languages sections are
+    enclosed in one bordered '.detail-group' box; Structure sits outside it."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.detail_view import SectionHeader
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.jump_to(detail.OVERVIEW_URI)
+            await pilot.pause()
+            boxes = list(app.query(".detail-group"))
+            assert len(boxes) == 1
+            box = boxes[0]
+            assert str(box.border_title) == "Quality & Coverage"
+            inside = {h.title_text for h in box.query(SectionHeader)}
+            assert {"Health & Issues", "Completeness", "Metadata coverage", "Languages"} <= inside
+            assert "Structure" not in inside  # Structure is a sibling, outside the box
+
+    _run(scenario)

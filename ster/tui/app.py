@@ -211,14 +211,15 @@ class OntologyApp(App):
     }
 
     .section-header { margin-top: 1; }
-    /* A group band: an accent-tinted bar over its clustered subsections. */
-    .group-header {
-        margin-top: 1;
+    /* A visual group: a bordered, titled box enclosing its clustered sections. */
+    .detail-group {
+        height: auto;
+        border: round $secondary;
+        border-title-color: $secondary;
         padding: 0 1;
-        color: $secondary;
-        background: $secondary 15%;
-        text-style: bold;
+        margin: 1 0;
     }
+    .detail-group .section-header:first-of-type { margin-top: 0; }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
     /* $boost is a translucent overlay → invisible on light themes; use a solid

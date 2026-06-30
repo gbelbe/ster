@@ -417,14 +417,22 @@ def _sep(label: str) -> DetailField:
 
 
 def _sep_group(label: str) -> DetailField:
-    """A heavier *group* heading that visually bands the sections beneath it
-    (e.g. 'Quality & Coverage' over Health / Completeness / Languages)."""
+    """Open a visual *group*: the sections up to the matching :func:`_sep_group_end`
+    are wrapped in one bordered, titled box (e.g. 'Quality & Coverage' over Health /
+    Completeness / Languages)."""
     return DetailField(
         f"sep_group:{label}",
         label,
         "",
         editable=False,
         meta={"type": "separator_group"},
+    )
+
+
+def _sep_group_end() -> DetailField:
+    """Close the visual group opened by the preceding :func:`_sep_group`."""
+    return DetailField(
+        "sep_group_end", "", "", editable=False, meta={"type": "separator_group_end"}
     )
 
 
