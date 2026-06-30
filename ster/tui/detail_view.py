@@ -119,13 +119,16 @@ def _rows_for(fields: list[DetailField]) -> list[DetailRow]:
 
 
 class SectionHeader(Static):
-    """A non-focusable section title (e.g. 'Identity', 'Danger Zone')."""
+    """A non-focusable section title (e.g. 'Identity', 'Danger Zone').
 
-    def __init__(self, title: str, *, danger: bool = False) -> None:
+    A *group* header is a heavier band that visually clusters the sections under
+    it (e.g. 'Quality & Coverage' over Health / Completeness / Languages)."""
+
+    def __init__(self, title: str, *, danger: bool = False, group: bool = False) -> None:
         style = "bold red" if danger else "bold"
         super().__init__(f"[{style}]{title}[/]")
         self.title_text = title  # plain title, for queries/tests
-        self.add_class("section-header")
+        self.add_class("group-header" if group else "section-header")
 
 
 class DetailRow(Static):
@@ -251,6 +254,6 @@ class DetailView(VerticalScroll):
         widgets: list[Static] = []
         for sec in build_sections(tax, uri, lang, activity, lint, configured_langs, metadata):
             if sec.title:
-                widgets.append(SectionHeader(sec.title, danger=sec.danger))
+                widgets.append(SectionHeader(sec.title, danger=sec.danger, group=sec.group))
             widgets.extend(_rows_for(sec.fields))
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

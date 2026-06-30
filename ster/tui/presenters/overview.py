@@ -21,6 +21,7 @@ from ster.nav.logic import (
     _lint_count_field,
     _ontology_activity_fields,
     _sep,
+    _sep_group,
     _stat,
     _stats_metadata,
     _tui_identity_rows,
@@ -73,10 +74,13 @@ class OntologyOverviewPresenter(EntityPresenter):
         return fields
 
     def health(self) -> list[DetailField]:
-        """semanticlint counts + structural gaps — the 'what to fix' section."""
+        """semanticlint counts + structural gaps — the 'what to fix' section.
+
+        Opens the visual 'Quality & Coverage' group that bands Health, Completeness,
+        Metadata coverage and Languages together."""
         tax, lint = self.tax, self.ctx.lint
         classes = tax.owl_classes
-        fields = [_sep("Health & Issues")]
+        fields = [_sep_group("Quality & Coverage"), _sep("Health & Issues")]
         if lint is not None:
             fields.append(_lint_count_field("error", "Errors", lint.get("error", 0)))
             fields.append(_lint_count_field("warning", "Warnings", lint.get("warning", 0)))

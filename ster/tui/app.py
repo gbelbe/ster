@@ -211,6 +211,14 @@ class OntologyApp(App):
     }
 
     .section-header { margin-top: 1; }
+    /* A group band: an accent-tinted bar over its clustered subsections. */
+    .group-header {
+        margin-top: 1;
+        padding: 0 1;
+        color: $secondary;
+        background: $secondary 15%;
+        text-style: bold;
+    }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
     /* $boost is a translucent overlay → invisible on light themes; use a solid

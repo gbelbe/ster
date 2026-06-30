@@ -416,6 +416,18 @@ def _sep(label: str) -> DetailField:
     )
 
 
+def _sep_group(label: str) -> DetailField:
+    """A heavier *group* heading that visually bands the sections beneath it
+    (e.g. 'Quality & Coverage' over Health / Completeness / Languages)."""
+    return DetailField(
+        f"sep_group:{label}",
+        label,
+        "",
+        editable=False,
+        meta={"type": "separator_group"},
+    )
+
+
 # ──────────────────────────── scheme dashboard helpers ───────────────────────
 
 _SEVERITY_ICONS = {"error": "⊘", "warning": "⚠", "info": "ℹ"}

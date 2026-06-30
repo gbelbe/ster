@@ -493,3 +493,21 @@ def test_health_surfaces_structural_gaps_colored() -> None:
     assert by_key["st:gap_unlab"].value == "1"  # only c unlabelled
     assert by_key["st:unused"].value == "2"  # neither class has individuals
     assert by_key["st:gap_unlab"].meta["color"] == "orange"
+
+
+def test_quality_group_bands_the_coverage_subsections() -> None:
+    """A 'Quality & Coverage' group header (separator_group) precedes Health and the
+    coverage subsections, before the plain Structure section closes the band."""
+    fields = build_tui_ontology_overview_fields(_tax(), "en", None, {"error": 1, "warning": 0})
+    titles = [
+        (f.meta.get("type"), f.display)
+        for f in fields
+        if f.meta.get("type", "").startswith("separator")
+    ]
+    seq = [d for _, d in titles]
+    grp = [d for ty, d in titles if ty == "separator_group"]
+    assert grp == ["Quality & Coverage"]  # exactly one group band
+    # the group opens immediately before Health, then the coverage subsections follow
+    gi = seq.index("Quality & Coverage")
+    assert seq[gi + 1] == "Health & Issues"
+    assert seq.index("Health & Issues") < seq.index("Completeness") < seq.index("Structure")

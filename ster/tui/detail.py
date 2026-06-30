@@ -35,7 +35,7 @@ OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
 TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 
 # Field meta["type"] values that start a new section rather than render a row.
-_SEPARATORS = frozenset({"separator", "separator_danger"})
+_SEPARATORS = frozenset({"separator", "separator_danger", "separator_group"})
 
 # entity kind (data.kind_of) → its DetailField builder. All accept the keyword
 # ``configured_langs`` (the languages whose label/description add rows to offer).
@@ -55,6 +55,7 @@ class DetailSection:
     title: str
     fields: list[DetailField] = dc_field(default_factory=list)
     danger: bool = False  # True for the "Danger Zone" (separator_danger) section
+    group: bool = False  # True for a heavier group band (separator_group)
 
 
 def group_sections(fields: list[DetailField]) -> list[DetailSection]:
@@ -69,7 +70,11 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
     for f in fields:
         ftype = f.meta.get("type")
         if ftype in _SEPARATORS:
-            current = DetailSection(title=f.display, danger=(ftype == "separator_danger"))
+            current = DetailSection(
+                title=f.display,
+                danger=(ftype == "separator_danger"),
+                group=(ftype == "separator_group"),
+            )
             sections.append(current)
         else:
             if current is None:
@@ -190,7 +195,7 @@ def render_detail(
     lines: list[str] = []
     for sec in build_sections(tax, uri, lang, configured_langs=configured_langs):
         if sec.title:
-            style = "bold red" if sec.danger else "bold"
+            style = "bold red" if sec.danger else "bold underline" if sec.group else "bold"
             lines.append(f"[{style}]{_esc(sec.title)}[/]")
         lines.extend(_render_row(f) for f in sec.fields)
     return "\n".join(lines)
