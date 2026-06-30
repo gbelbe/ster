@@ -122,21 +122,34 @@ def _health_by_key(fields: list) -> dict:
     return {f.key: f for f in fields}
 
 
+def _with_subclass(tax, parent_uri, child):  # noqa: ANN001
+    """Attach *child* RDFClass under *parent_uri* so the parent is non-leaf."""
+    child.sub_class_of = [parent_uri]
+    tax.owl_classes[child.uri] = child
+
+
 def test_class_completeness_shows_percent_and_missing_count() -> None:
-    """A class's Completeness rows carry both views of the metric: percent present
-    and the count still missing (over its subtree) — no separate Health gap rows."""
+    """A non-leaf class's Completeness rows carry both views of the metric: percent
+    present and the count still missing (over its subtree) — no separate Health rows."""
+    from ster.model import Definition, Label, RDFClass
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
-    fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()  # leaf: subtree is itself
+    parent = ZOO + "Vehicle"
+    tax.owl_classes[parent] = RDFClass(
+        uri=parent, labels=[Label("en", "Vehicle")], comments=[Definition("en", "A vehicle.")]
+    )
+    _with_subclass(
+        tax, parent, RDFClass(uri=ZOO + "Car", labels=[Label("en", "Car")])
+    )  # no comment
+    fields = ClassPresenter(_ctx(tax), parent).render()  # non-leaf → has the box
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
-    # Completeness leads the box (no Health section for a class); the old gap rows are gone
     assert seps[:3] == ["Identity", "Quality & Coverage", "Completeness"]
     by_key = _health_by_key(fields)
     assert "cls:gap_unlab" not in by_key and "cls:gap_undoc" not in by_key
-    assert by_key["cls:label_cov"].value.endswith("complete")  # Eagle is labelled
-    assert "1 missing" in by_key["cls:comment_cov"].value  # …but has no rdfs:comment
-    assert by_key["cls:comment_cov"].meta["color"] == "red"  # 0% documented → red
+    assert by_key["cls:label_cov"].value.endswith("complete")  # Vehicle + Car both labelled
+    assert "1 missing" in by_key["cls:comment_cov"].value  # Car has no rdfs:comment
+    assert by_key["cls:comment_cov"].meta["color"] == "orange"  # 1 of 2 documented → 50%
 
 
 def test_class_completeness_missing_count_is_over_the_subtree() -> None:
@@ -155,14 +168,48 @@ def test_class_completeness_is_complete_when_subtree_is_clean() -> None:
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
-    uri = ZOO + "Tidy"
-    tax.owl_classes[uri] = RDFClass(
-        uri=uri, labels=[Label("en", "Tidy")], comments=[Definition("en", "A tidy class.")]
+    parent = ZOO + "Tidy"
+    tax.owl_classes[parent] = RDFClass(
+        uri=parent, labels=[Label("en", "Tidy")], comments=[Definition("en", "A tidy class.")]
     )
-    by_key = _health_by_key(ClassPresenter(_ctx(tax), uri).render())
+    _with_subclass(
+        tax,
+        parent,
+        RDFClass(
+            uri=ZOO + "TidyChild", labels=[Label("en", "C")], comments=[Definition("en", "c")]
+        ),
+    )
+    by_key = _health_by_key(ClassPresenter(_ctx(tax), parent).render())
     assert by_key["cls:label_cov"].value.endswith("complete")
     assert by_key["cls:comment_cov"].value.endswith("complete")
     assert by_key["cls:comment_cov"].meta["color"] == "green"
+
+
+def test_no_quality_box_on_first_order_classes_or_leaf_concepts() -> None:
+    """The box is dropped on a first-order (leaf) class and a leaf concept; it appears
+    once they gain a subclass / narrower (the check is live)."""
+    from ster.model import Concept, Label
+    from ster.tui.presenters.class_ import ClassPresenter
+    from ster.tui.presenters.concept_ import ConceptPresenter
+
+    tax = store.load(DEMO)
+
+    def has_box(fields):  # noqa: ANN001, ANN202
+        return any(f.meta.get("type") == "separator_group" for f in fields)
+
+    assert not has_box(ClassPresenter(_ctx(tax), ZOO + "Eagle").render())  # leaf class
+    assert has_box(ClassPresenter(_ctx(tax), ZOO + "Animal").render())  # has subclasses
+
+    leaf = ZOO + "Wild"
+    tax.concepts[leaf] = Concept(uri=leaf, labels=[Label("en", "Wild")])
+    assert not has_box(ConceptPresenter(_ctx(tax), leaf).render())  # leaf concept
+    # give it a narrower child → the box appears (dynamic)
+    tax.concepts[ZOO + "WildChild"] = Concept(uri=ZOO + "WildChild", labels=[Label("en", "WC")])
+    tax.concepts[leaf] = Concept(
+        uri=leaf, labels=[Label("en", "Wild")], narrower=[ZOO + "WildChild"]
+    )
+    # also need it discoverable as a class? no — concept dispatch is by tax.concepts
+    assert has_box(ConceptPresenter(_ctx(tax), leaf).render())
 
 
 # ── P3: PropertyPresenter Health section ──────────────────────────────────────
@@ -273,8 +320,11 @@ def test_languages_section_is_shared_across_overview_classes_concepts() -> None:
     assert "cls:langs" not in by_key  # the 'languages: 2 (en, fr)' summary row was removed
     assert "cls:lang_cov:fr" in by_key  # per-configured-language coverage row
 
-    tax.concepts[ZOO + "C"] = Concept(uri=ZOO + "C", labels=[Label("en", "C")])
-    con = ConceptPresenter(cctx, ZOO + "C").render()
+    tax.concepts[ZOO + "Cc"] = Concept(uri=ZOO + "Cc", labels=[Label("en", "Cc")])
+    tax.concepts[ZOO + "C"] = Concept(
+        uri=ZOO + "C", labels=[Label("en", "C")], narrower=[ZOO + "Cc"]
+    )
+    con = ConceptPresenter(cctx, ZOO + "C").render()  # non-leaf concept → has the box
     assert "Languages" in [f.display for f in con if f.meta.get("type") == "separator"]
     assert any(f.key == "concept:lang_cov:en" for f in con)
 

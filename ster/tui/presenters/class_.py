@@ -22,15 +22,22 @@ from .health import insert_after_identity, quality_group, strip_sections
 
 
 class ClassPresenter(EntityPresenter):
-    """owl:Class / rdfs:Class detail with a leading, subtree-scoped Quality & Coverage box."""
+    """owl:Class / rdfs:Class detail with a leading, subtree-scoped Quality & Coverage
+    box — shown only on classes that have subclasses (a first-order / leaf class has no
+    meaningful subtree, so no box). The check is live, so a class that later gains a
+    subclass gets the box."""
+
+    def _has_subclasses(self) -> bool:
+        return any(self.uri in c.sub_class_of for c in self.tax.owl_classes.values())
 
     def render(self) -> list[DetailField]:
         base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
         if self.uri not in self.tax.owl_classes:
             return base
-        # Rebuild the quality box from the shared rows; keep only the class-specific
-        # Property Fill from the legacy helper.
+        # The legacy quality sections move into our box (or are dropped on a leaf).
         base = strip_sections(base, titles={"Subtree Quality", "Property Fill"})
+        if not self._has_subclasses():
+            return base  # first-order (leaf) class → no Quality & Coverage box
         subtree = _subtree_class_uris(self.tax, self.uri)
         completeness = class_completeness_section(self.tax, subtree, "cls")
         languages = languages_section(
