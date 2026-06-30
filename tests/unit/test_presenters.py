@@ -67,16 +67,18 @@ def test_legacy_presenter_delegates_to_its_render_fn() -> None:
     assert seen["uri"] == ZOO + "Cat" and seen["ctx"].tax is tax
 
 
-def test_dispatch_falls_back_to_legacy_for_unmigrated_kinds() -> None:
-    """Kinds without a dedicated presenter (and the SKOS overview) route through a
-    LegacyPresenter; the ontology overview has its own presenter (P1)."""
+def test_dispatch_routes_to_registered_presenters_else_legacy() -> None:
+    """Migrated kinds use their presenter (overview, class); unmigrated kinds (e.g.
+    an individual) and the SKOS overview still route through a LegacyPresenter."""
+    from ster.tui.presenters.class_ import ClassPresenter
     from ster.tui.presenters.overview import OntologyOverviewPresenter
 
     tax = store.load(DEMO)
     ctx = _ctx(tax)
     assert isinstance(detail._presenter_for(ctx, detail.OVERVIEW_URI), OntologyOverviewPresenter)
+    assert isinstance(detail._presenter_for(ctx, ZOO + "Cat"), ClassPresenter)
     assert isinstance(detail._presenter_for(ctx, detail.TAXONOMY_URI), LegacyPresenter)
-    assert isinstance(detail._presenter_for(ctx, ZOO + "Cat"), LegacyPresenter)
+    assert isinstance(detail._presenter_for(ctx, ZOO + "Rex"), LegacyPresenter)  # individual
 
 
 def test_registered_presenter_takes_priority_over_legacy(monkeypatch) -> None:
@@ -104,3 +106,38 @@ def test_overview_routes_through_its_presenter() -> None:
     via_seam = detail._fields_for(tax, detail.OVERVIEW_URI, "en")
     direct = OntologyOverviewPresenter(PresenterContext(tax, "en"), "").render()
     assert [(f.key, f.display) for f in via_seam] == [(f.key, f.display) for f in direct]
+
+
+# ── P2: ClassPresenter Health section ─────────────────────────────────────────
+
+
+def test_class_presenter_leads_with_health_gaps() -> None:
+    """A class detail gains a Health & Issues section (after Identity) listing its
+    own gaps; a fully-specified class shows none."""
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()
+    seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
+    assert seps[0] == "Identity" and seps[1] == "Health & Issues"  # right after identity
+    keys = {f.key for f in fields}
+    assert "cls:gap_comment" in keys  # Eagle has no rdfs:comment
+    assert "cls:gap_noind" in keys  # …and no individuals
+    assert "cls:gap_label" not in keys  # but it IS labelled
+
+
+def test_class_presenter_omits_health_when_clean() -> None:
+    """No Health section when the class has a label, a comment and instances."""
+    from ster.model import Definition, Label, OWLIndividual, RDFClass
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    uri = ZOO + "Tidy"
+    tax.owl_classes[uri] = RDFClass(
+        uri=uri, labels=[Label("en", "Tidy")], comments=[Definition("en", "A tidy class.")]
+    )
+    tax.owl_individuals[ZOO + "t1"] = OWLIndividual(uri=ZOO + "t1", types=[uri])
+    fields = ClassPresenter(_ctx(tax), uri).render()
+    assert "Health & Issues" not in [
+        f.display for f in fields if f.meta.get("type", "").startswith("separator")
+    ]

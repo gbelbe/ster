@@ -6,11 +6,19 @@ See docs/architecture/detail-presenter.md.
 from __future__ import annotations
 
 from .base import EntityPresenter, LegacyPresenter
+from .class_ import ClassPresenter
 from .context import PresenterContext
 
-# kind (``data.kind_of``) → Presenter subclass. Empty until each kind is migrated
-# off its legacy ``build_*`` function; unregistered kinds fall back to a
-# LegacyPresenter (see ``ster.tui.detail``).
-PRESENTERS: dict[str, type[EntityPresenter]] = {}
+# kind (``data.kind_of``) → Presenter subclass. Unregistered kinds fall back to a
+# LegacyPresenter wrapping their legacy ``build_*`` function (see ``ster.tui.detail``).
+PRESENTERS: dict[str, type[EntityPresenter]] = {
+    "class": ClassPresenter,
+}
 
-__all__ = ["PRESENTERS", "EntityPresenter", "LegacyPresenter", "PresenterContext"]
+__all__ = [
+    "PRESENTERS",
+    "ClassPresenter",
+    "EntityPresenter",
+    "LegacyPresenter",
+    "PresenterContext",
+]
