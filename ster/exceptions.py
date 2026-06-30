@@ -23,6 +23,12 @@ class ConceptAlreadyExistsError(SkostaxError):
         self.uri = uri
 
 
+class SchemeNotFoundError(SkostaxError):
+    def __init__(self, uri: str) -> None:
+        super().__init__(f"Concept scheme not found: {uri!r}")
+        self.uri = uri
+
+
 class HasChildrenError(SkostaxError):
     def __init__(self, uri: str, count: int) -> None:
         super().__init__(

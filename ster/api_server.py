@@ -50,6 +50,17 @@ def _load_or_create_token() -> str:
     return token
 
 
+def load_token() -> str:
+    """Return the persisted API bearer token (creating one if absent)."""
+    return _load_or_create_token()
+
+
+def save_token(token: str) -> None:
+    """Persist the API bearer token."""
+    _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _TOKEN_FILE.write_text(token.strip())
+
+
 def _start_file_watcher(
     file_path: Path,
     app: Any,  # FastAPI app — typed as Any to avoid hard import

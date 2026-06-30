@@ -24,14 +24,31 @@ from ...operations import (
     remove_individual_literal,
     remove_individual_property_value,
     remove_individual_type,
+    remove_owl_comment,
+    remove_owl_label,
     remove_property_class,
     remove_subclass_of,
+    rename_entity_uri,
     set_individual_literal,
     set_individual_property_value,
     set_owl_comment,
     set_owl_label,
     set_owl_note,
 )
+
+_LangPairs = tuple[tuple[str, str], ...]  # ((lang, value), …) — frozen-friendly
+
+
+def _set_localized(taxonomy: Taxonomy, uri: str, pairs: _LangPairs, *, kind: str) -> None:
+    """Apply a label/comment desired-state: a non-empty value upserts, an empty one
+    removes that language's entry. *kind* is ``"label"`` or ``"comment"``."""
+    set_fn = set_owl_label if kind == "label" else set_owl_comment
+    remove_fn = remove_owl_label if kind == "label" else remove_owl_comment
+    for lang, value in pairs:
+        if value:
+            set_fn(taxonomy, uri, lang, value)
+        else:
+            remove_fn(taxonomy, uri, lang)
 
 
 @dataclass(frozen=True)
@@ -93,6 +110,58 @@ class OwlCreateSubclass:
                 pass
         assign_handles(taxonomy)
         return (self.class_uri,)
+
+
+@dataclass(frozen=True)
+class OwlCreateClass:
+    """Create an OWL class (under *parent_uri*, or top-level) with its rdfs:label /
+    rdfs:comment in one step. Empty values are skipped (no blank labels)."""
+
+    target_path: Path
+    class_uri: str
+    parent_uri: str | None = None
+    labels: _LangPairs = ()
+    comments: _LangPairs = ()
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        if self.class_uri not in taxonomy.owl_classes:
+            taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
+        if self.parent_uri:
+            try:
+                add_subclass_of(taxonomy, self.class_uri, self.parent_uri)
+            except (CircularHierarchyError, ClassNotFoundError):
+                pass
+        for lang, value in self.labels:
+            if value:
+                set_owl_label(taxonomy, self.class_uri, lang, value)
+        for lang, value in self.comments:
+            if value:
+                set_owl_comment(taxonomy, self.class_uri, lang, value)
+        assign_handles(taxonomy)
+        return (self.class_uri,)
+
+
+@dataclass(frozen=True)
+class OwlSaveClass:
+    """Edit an existing class: rename it when *new_uri* differs (cascading across
+    references), then apply the label/comment desired-state — non-empty values
+    upsert, empty ones clear that language."""
+
+    target_path: Path
+    old_uri: str
+    new_uri: str
+    labels: _LangPairs = ()
+    comments: _LangPairs = ()
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        uri = self.old_uri
+        if self.new_uri and self.new_uri != self.old_uri:
+            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
+            uri = self.new_uri
+        _set_localized(taxonomy, uri, self.labels, kind="label")
+        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        assign_handles(taxonomy)
+        return (uri,)
 
 
 @dataclass(frozen=True)

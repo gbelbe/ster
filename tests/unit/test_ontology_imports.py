@@ -353,3 +353,98 @@ def test_suggest_properties_merged(tmp_path: Path):
     uris = [p.uri for p in props]
     assert _FOAF_KNOWS in uris
     assert len(uris) == len(set(uris)), "duplicate URIs found"
+
+
+# ── is_annotation_property ───────────────────────────────────────────────────
+
+_SKOS_NS = "http://www.w3.org/2004/02/skos/core#"
+_FOAF_DEPICTION = f"{_FOAF_NS}depiction"
+_SKOS_SCOPE_NOTE = f"{_SKOS_NS}scopeNote"
+
+
+def test_well_known_predicates_are_annotation_properties():
+    """Common annotation predicates beyond dcterms (foaf, skos) are recognised."""
+    from ster.ontology_imports import is_annotation_property
+
+    taxonomy = _make_taxonomy()
+    assert is_annotation_property(taxonomy, _FOAF_DEPICTION)
+    assert is_annotation_property(taxonomy, _SKOS_SCOPE_NOTE)
+
+
+def test_unknown_predicate_is_not_an_annotation_property():
+    """A bespoke URI with no declaration anywhere is not recognised."""
+    from ster.ontology_imports import is_annotation_property
+
+    taxonomy = _make_taxonomy()
+    assert not is_annotation_property(taxonomy, f"{_KAI_NS}bespoke")
+
+
+def test_locally_declared_annotation_property_is_recognised():
+    """A URI declared owl:AnnotationProperty in the local ontology is recognised."""
+    from ster.ontology_imports import is_annotation_property
+
+    uri = f"{_KAI_NS}myAnno"
+    taxonomy = _make_taxonomy()
+    prop = MagicMock()
+    prop.prop_type = "AnnotationProperty"
+    taxonomy.owl_properties[uri] = prop
+    assert is_annotation_property(taxonomy, uri)
+
+
+def test_locally_declared_non_annotation_property_is_not_recognised():
+    """A URI declared as a different property type is not an annotation property."""
+    from ster.ontology_imports import is_annotation_property
+
+    uri = f"{_KAI_NS}knows2"
+    taxonomy = _make_taxonomy()
+    prop = MagicMock()
+    prop.prop_type = "ObjectProperty"
+    taxonomy.owl_properties[uri] = prop
+    assert not is_annotation_property(taxonomy, uri)
+
+
+def test_external_cached_annotation_property_is_recognised(tmp_path, monkeypatch):
+    """A predicate declared owl:AnnotationProperty in a bound, cached external
+    ontology is recognised; the same predicate with no binding is not."""
+    import rdflib
+
+    from ster import ontology_imports
+    from ster.ontology_imports import is_annotation_property
+
+    cache = tmp_path / "ont-cache"
+    cache.mkdir()
+    monkeypatch.setattr(ontology_imports, "_DEFAULT_CACHE_DIR", cache)
+
+    ns = "https://ext.example.org/v#"
+    uri = f"{ns}myAnno"
+    g = rdflib.Graph()
+    g.add((rdflib.URIRef(uri), rdflib.RDF.type, rdflib.OWL.AnnotationProperty))
+    g.serialize(destination=str(ontology_imports._cache_file(ns, cache)), format="turtle")
+
+    bound = _make_taxonomy(namespace_bindings={"ext": ns})
+    assert is_annotation_property(bound, uri)
+
+    unbound = _make_taxonomy()
+    assert not is_annotation_property(unbound, uri)
+
+
+def test_external_cached_non_annotation_property_is_not_recognised(tmp_path, monkeypatch):
+    """A predicate present in the cached external ontology but NOT typed as an
+    annotation property is not recognised."""
+    import rdflib
+
+    from ster import ontology_imports
+    from ster.ontology_imports import is_annotation_property
+
+    cache = tmp_path / "ont-cache"
+    cache.mkdir()
+    monkeypatch.setattr(ontology_imports, "_DEFAULT_CACHE_DIR", cache)
+
+    ns = "https://ext.example.org/v#"
+    uri = f"{ns}someObjectProp"
+    g = rdflib.Graph()
+    g.add((rdflib.URIRef(uri), rdflib.RDF.type, rdflib.OWL.ObjectProperty))
+    g.serialize(destination=str(ontology_imports._cache_file(ns, cache)), format="turtle")
+
+    bound = _make_taxonomy(namespace_bindings={"ext": ns})
+    assert not is_annotation_property(bound, uri)

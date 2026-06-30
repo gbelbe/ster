@@ -531,3 +531,105 @@ def test_create_scheme_default_languages():
     # languages defaults to the label keys
     assert "en" in scheme.languages
     assert "fr" in scheme.languages
+
+
+# ── remove_scheme ─────────────────────────────────────────────────────────────
+
+
+def test_remove_scheme_only_keeps_concepts(simple_taxonomy):
+    """Deleting a scheme without cascade drops only the scheme; its concepts
+    survive and lose their top-concept link to it."""
+    scheme_uri = BASE + "Scheme"
+    removed = operations.remove_scheme(simple_taxonomy, scheme_uri)
+    assert removed == {scheme_uri}
+    assert scheme_uri not in simple_taxonomy.schemes
+    # Every concept is still present …
+    for name in ("Top", "Child1", "Child2", "Grandchild"):
+        assert BASE + name in simple_taxonomy.concepts
+    # … but the former top concept no longer points at the deleted scheme.
+    assert simple_taxonomy.concepts[BASE + "Top"].top_concept_of is None
+
+
+def test_remove_scheme_cascade_deletes_all_its_concepts(simple_taxonomy):
+    """Cascade removes the scheme and every concept reachable from its top concepts."""
+    scheme_uri = BASE + "Scheme"
+    removed = operations.remove_scheme(simple_taxonomy, scheme_uri, cascade=True)
+    assert scheme_uri not in simple_taxonomy.schemes
+    for name in ("Top", "Child1", "Child2", "Grandchild"):
+        assert BASE + name not in simple_taxonomy.concepts
+    assert {BASE + n for n in ("Top", "Child1", "Child2", "Grandchild")} <= removed
+    assert scheme_uri in removed
+
+
+def test_remove_scheme_missing_raises(simple_taxonomy):
+    from ster.exceptions import SchemeNotFoundError
+
+    with pytest.raises(SchemeNotFoundError):
+        operations.remove_scheme(simple_taxonomy, BASE + "NoSuchScheme")
+
+
+# ── remove_language / language_in_use ─────────────────────────────────────────
+
+
+def _multilang_taxonomy():
+    """A taxonomy with en+fr labels and descriptions across every entity kind."""
+    from ster.model import (
+        Concept,
+        ConceptScheme,
+        Definition,
+        Label,
+        OWLIndividual,
+        OWLProperty,
+        RDFClass,
+        Taxonomy,
+    )
+
+    t = Taxonomy()
+    t.owl_classes["c"] = RDFClass(
+        uri="c",
+        labels=[Label("en", "Wheel"), Label("fr", "Roue")],
+        comments=[Definition("en", "round"), Definition("fr", "rond")],
+    )
+    t.owl_properties["p"] = OWLProperty(
+        uri="p", labels=[Label("en", "has"), Label("fr", "a")], comments=[Definition("fr", "lien")]
+    )
+    t.owl_individuals["i"] = OWLIndividual(uri="i", labels=[Label("fr", "Inst")])
+    t.concepts["k"] = Concept(
+        uri="k",
+        labels=[Label("en", "Top"), Label("fr", "Sommet")],
+        definitions=[Definition("fr", "déf")],
+        scope_notes=[Definition("fr", "note")],
+    )
+    t.schemes["s"] = ConceptScheme(
+        uri="s", labels=[Label("fr", "Schéma")], descriptions=[Definition("fr", "desc")]
+    )
+    return t
+
+
+def test_language_in_use_true_when_present_false_otherwise():
+    t = _multilang_taxonomy()
+    assert operations.language_in_use(t, "fr")
+    assert operations.language_in_use(t, "en")
+    assert not operations.language_in_use(t, "de")
+
+
+def test_remove_language_strips_every_literal_kind():
+    t = _multilang_taxonomy()
+    count = operations.remove_language(t, "fr")
+    assert count == 10  # class 2 + property 2 + individual 1 + concept 3 + scheme 2
+    # No 'fr' literal survives anywhere…
+    assert not operations.language_in_use(t, "fr")
+    # …and the 'en' values are untouched.
+    assert [lbl.lang for lbl in t.owl_classes["c"].labels] == ["en"]
+    assert [c.lang for c in t.owl_classes["c"].comments] == ["en"]
+    assert [lbl.lang for lbl in t.concepts["k"].labels] == ["en"]
+    assert t.concepts["k"].definitions == []
+    assert t.concepts["k"].scope_notes == []
+    assert t.owl_individuals["i"].labels == []
+    assert t.schemes["s"].labels == []
+    assert t.schemes["s"].descriptions == []
+
+
+def test_remove_language_absent_is_a_noop():
+    t = _multilang_taxonomy()
+    assert operations.remove_language(t, "de") == 0

@@ -16,7 +16,7 @@ import …`` regardless of which layer module a command lives in.
 from __future__ import annotations
 
 from .base import ChangeSet, Command
-from .cross import AddSchemaMedia, RemoveSchemaMedia, RenameEntity
+from .cross import AddSchemaMedia, RemoveLanguage, RemoveSchemaMedia, RenameEntity
 from .onto import (
     OntoRemoveAnnotation,
     OntoRenameUri,
@@ -31,6 +31,7 @@ from .owl import (
     OwlAddPropertyClass,
     OwlConvertClassToIndividual,
     OwlConvertIndividualToClass,
+    OwlCreateClass,
     OwlCreateIndividual,
     OwlCreateSubclass,
     OwlDeleteClass,
@@ -42,6 +43,7 @@ from .owl import (
     OwlRemoveIndividualValue,
     OwlRemovePropertyClass,
     OwlRemoveSuperclass,
+    OwlSaveClass,
     OwlSetComment,
     OwlSetIndividualLiteral,
     OwlSetIndividualValue,
@@ -58,6 +60,7 @@ from .skos import (
     SkosRemoveDefinition,
     SkosRemoveLabel,
     SkosRemoveMappingLink,
+    SkosRemoveScheme,
     SkosRemoveScopeNote,
     SkosSetDefinition,
     SkosSetLabel,
@@ -80,6 +83,7 @@ __all__ = [
     "OwlAddPropertyClass",
     "OwlConvertClassToIndividual",
     "OwlConvertIndividualToClass",
+    "OwlCreateClass",
     "OwlCreateIndividual",
     "OwlCreateSubclass",
     "OwlDeleteClass",
@@ -91,11 +95,13 @@ __all__ = [
     "OwlRemoveIndividualValue",
     "OwlRemovePropertyClass",
     "OwlRemoveSuperclass",
+    "OwlSaveClass",
     "OwlSetComment",
     "OwlSetIndividualLiteral",
     "OwlSetIndividualValue",
     "OwlSetLabel",
     "OwlSetNote",
+    "RemoveLanguage",
     "RemoveSchemaMedia",
     "RenameEntity",
     "SkosAddConcept",
@@ -107,6 +113,7 @@ __all__ = [
     "SkosRemoveDefinition",
     "SkosRemoveLabel",
     "SkosRemoveMappingLink",
+    "SkosRemoveScheme",
     "SkosRemoveScopeNote",
     "SkosSetDefinition",
     "SkosSetLabel",

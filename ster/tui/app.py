@@ -14,25 +14,30 @@ from __future__ import annotations
 from functools import partial
 from pathlib import Path
 
+from rich.style import Style
+from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Tree
 from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
-from . import data, detail, edits
+from . import data, detail, edits, uri_edit
 from .choice_modal import ChoiceModal
 from .context_menu import ContextMenu
 from .detail_view import PLACEHOLDER, DetailRow, DetailView
 from .edit_modal import EditModal
 from .help_screen import HelpScreen
+from .ontology_identity_modal import OntologyIdentityModal
 from .picker_modal import PickerModal
 from .theme import STER_THEME, THEME_CYCLE
+from .uri_modal import UriModal
 
 # Sentinel URI prefix for tree action nodes (create class/scheme/concept).
 # Format:  "__action:<action>[:<extra>]__"
@@ -61,10 +66,55 @@ class OntologyTree(Tree):
 
     BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
 
+    # The node whose guide column is currently lit (the cursor's parent).
+    _branch_parent: TreeNode | None = None
+
+    def watch_cursor_line(self, previous_line: int, line: int) -> None:
+        super().watch_cursor_line(previous_line, line)
+        self._light_branch_column()
+
+    def _light_branch_column(self) -> None:
+        """Keep the guide column at the cursor's own level lit as it moves.
+
+        Textual marks the *cursor node* selected, which lights up the guides
+        *descending from* it — so the highlight vanishes the moment the cursor
+        lands on a leaf. We move that flag onto the cursor's parent instead, so
+        the vertical guide it shares with its siblings stays lit at the cursor's
+        level. ``_selected`` is a pure rich-render hint (it drives the
+        ``tree--guides-selected`` style), independent of node-selection events.
+        """
+        node = self.cursor_node
+        parent = node.parent if node is not None else None
+        # The hidden root's guide spans every line — lighting it would highlight
+        # the whole tree, so top-level nodes get no branch column.
+        if parent is self.root:
+            parent = None
+        if node is not None:
+            node._selected = False  # undo Textual's descend-from-cursor highlight
+        if parent is not self._branch_parent and self._branch_parent is not None:
+            self._branch_parent._selected = False
+            self._refresh_node(self._branch_parent)
+        self._branch_parent = parent
+        if parent is not None:
+            parent._selected = True
+            self._refresh_node(parent)
+
+    def render_label(self, node: TreeNode, base_style: Style, style: Style) -> Text:
+        """Pad childless (non-expandable) labels by the toggle-arrow width so they
+        line up with the expandable siblings that do show a ``▶``/``▼`` arrow.
+
+        Textual omits the arrow for non-expandable nodes (and renders no prefix),
+        which would shift their text left out of alignment; the pad restores it.
+        """
+        label = super().render_label(node, base_style, style)
+        if not node.allow_expand:
+            label.pad_left(len(self.ICON_NODE))  # ICON_NODE = "▶ " → 2 cells
+        return label
+
     def action_focus_detail(self) -> None:
-        rows = list(self.app.query("#detail DetailRow"))
+        rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
         if rows:
-            rows[0].focus()
+            rows[0].focus()  # first actionable row (info-only rows are skipped)
 
     def action_cursor_down(self) -> None:
         before = self.cursor_line
@@ -137,6 +187,8 @@ class OntologyApp(App):
        translucent dim and makes it opaque (hiding the TUI). Modals own their
        background via ModalBase; the panes below cover the main screen anyway. */
     Screen { layers: base overlay; }
+    /* Left-align the header title (default is centred). */
+    HeaderTitle { content-align: left middle; padding-left: 1; }
     #body { height: 1fr; }
     #nav { width: 25%; min-width: 24; }
 
@@ -164,6 +216,13 @@ class OntologyApp(App):
     /* $boost is a translucent overlay → invisible on light themes; use a solid
        accent tint so the mouse-over highlight shows in every theme. */
     .detail-row:hover { background: $secondary 20%; }
+    /* Information-only rows are not interactive — no hover affordance. */
+    .detail-row.info-row:hover { background: transparent; }
+    /* Quality colours — one definition for every %-indicator + errors/warnings.
+       Change a colour here and every indicator updates at once. */
+    .detail-row.q-red    { color: #d70000; }
+    .detail-row.q-orange { color: #d75f00; }
+    .detail-row.q-green  { color: #00875f; }
 
     /* Hierarchy guide lines: a dim foreground tint so the tree structure stays
        visible in every theme (selected/hover branches pick up the accents). */
@@ -176,9 +235,14 @@ class OntologyApp(App):
     Tree > .tree--cursor { text-style: bold; background: $secondary 40%; color: $foreground; }
     Tree:focus > .tree--cursor { background: $secondary; color: auto; }
 
+    /* Give the footer a neutral surface background (not the theme's $primary,
+       which is blue on solarized-light → invisible key hints) with readable text. */
+    Footer { background: $surface; color: $foreground; }
+    FooterKey { background: $surface; color: $foreground; }
+    FooterKey:hover { background: $boost; }
     /* Footer key hints read as actionable (and are clickable). */
     FooterKey > .footer-key--key { color: $secondary; text-style: bold; }
-    FooterKey > .footer-key--description { color: $primary; }
+    FooterKey > .footer-key--description { color: $foreground; }
 
     /* Notifications: a left accent bar, colour-coded by severity. */
     Toast { border-left: wide $primary; }
@@ -198,9 +262,11 @@ class OntologyApp(App):
 
     BINDINGS = [
         Binding("slash", "command_palette", "Search"),
+        Binding("full_stop", "context_menu", "Actions"),
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
         Binding("d", "cycle_theme", "Theme"),
+        Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
@@ -215,16 +281,168 @@ class OntologyApp(App):
     ) -> None:
         super().__init__()
         self.register_theme(STER_THEME)  # available alongside every built-in theme
-        self.theme = "solarized-light"  # default; `d` or the palette switch (incl. "ster")
+        from ster.nav.prefs import _load_prefs
+
+        self.theme = _load_prefs().get("theme") or "solarized-light"  # saved pref, else default
         self.tax = taxonomy
+        if path is not None:
+            from ster.nav.prefs import _load_lang_pref
+
+            lang = _load_lang_pref(path) or lang  # restore the saved display language
         self.lang = lang
         self.source = source
         self._path = path
+        self.configured_langs = self._load_configured_langs(path, lang)
+        self.metadata_props = self._load_metadata_props()  # ontology-metadata catalog
+        self.entity_metadata_props = self._load_entity_metadata_props()  # entity-metadata catalog
         self._service = self._make_service(taxonomy, path)
         self.search_rows = data.search_rows(taxonomy, lang)
         self._uri_nodes: dict[str, TreeNode] = {}
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
+        self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
+        self._activity_computed = False
+        # Lazily-computed semanticlint result (per session): (counts, issues).
+        self._lint_cache: tuple[dict, list] | None = None
+        self._lint_computed = False
+        # The value row whose Edit/Delete submenu is open (set while it is shown).
+        self._row_menu_field: DetailField | None = None
+        self._row_menu_delete: DetailField | None = None
+        self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
+
+    def _load_metadata_props(self) -> list[tuple[str, str]]:
+        """The configured ontology-metadata predicate catalog (built-in defaults
+        when the user has never customised it)."""
+        from ster.nav.logic import default_annotation_catalog
+        from ster.nav.prefs import load_metadata_props
+
+        return load_metadata_props() or default_annotation_catalog()
+
+    def _load_entity_metadata_props(self) -> list[tuple[str, str]]:
+        """The configured entity-metadata predicate catalog (built-in defaults when
+        the user has never customised it)."""
+        from ster.nav.logic import default_entity_annotation_catalog
+        from ster.nav.prefs import load_entity_metadata_props
+
+        return load_entity_metadata_props() or default_entity_annotation_catalog()
+
+    def _load_configured_langs(self, path: Path | None, lang: str) -> list[str]:
+        """Per-file configured languages, defaulting to the display language."""
+        if path is None:
+            return [lang]
+        from ster.nav.prefs import load_configured_langs
+
+        return load_configured_langs(path) or [lang]
+
+    def action_open_config(self) -> None:
+        """Open the global configuration modal (it auto-saves via ConfigModal.Changed)."""
+        from ster.ontology_imports import is_annotation_property
+
+        from .config_modal import ConfigModal
+
+        available = data.languages_in_use(self.tax)
+        themes = sorted(self.available_themes)
+        self.push_screen(
+            ConfigModal(
+                self.lang,
+                self.configured_langs,
+                available,
+                themes,
+                self.theme,
+                metadata_props=self.metadata_props,
+                entity_metadata_props=self.entity_metadata_props,
+                annotation_verifier=lambda uri: is_annotation_property(self.tax, uri),
+                can_declare=self._service is not None and self._path is not None,
+                base_uri=self.tax.base_uri(),
+            )
+        )
+
+    def on_config_modal_changed(self, message) -> None:  # type: ignore[no-untyped-def]
+        """A setting changed in the config modal → apply it live and persist."""
+        self._apply_config(message.result)
+
+    def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]
+        """A config-modal predicate was confirmed despite not being a known annotation
+        property → declare it locally as an ``owl:AnnotationProperty`` (skip if it is
+        already a property of some kind)."""
+        uri = message.uri
+        if self._path is None or uri in self.tax.owl_properties:
+            return
+        from ster.core.commands import OwlAddProperty, OwlSetComment
+
+        label = getattr(message, "label", "")
+        self._apply_command(OwlAddProperty(self._path, uri, "AnnotationProperty", label, self.lang))
+        comment = getattr(message, "comment", "")
+        if comment:
+            self._apply_command(OwlSetComment(self._path, uri, self.lang, comment))
+
+    def _apply_config(self, result: dict) -> None:
+        """Apply + persist the chosen languages and theme. Re-renders the detail
+        whenever the configured set changes (so new add-label rows appear), and
+        offers to purge data for any language that was removed."""
+        new_lang = result["display"] or self.lang
+        display_changed = new_lang != self.lang
+        removed = sorted(set(self.configured_langs) - set(result["configured"]))
+        langs_changed = set(self.configured_langs) != set(result["configured"])
+        self.configured_langs = result["configured"]  # exact selection (may be empty)
+        self.lang = new_lang
+        theme = result.get("theme")
+        if theme and theme in self.available_themes:
+            self.theme = theme  # live preview
+        self._persist_config(result, new_lang)
+
+        if display_changed:
+            self.search_rows = data.search_rows(self.tax, self.lang)
+            self._rebuild_tree()
+        if display_changed or langs_changed:
+            self._show(self._detail_uri)  # reflect the new configured-language rows
+        for lang in removed:
+            self._maybe_purge_language(lang)
+
+    def _persist_config(self, result: dict, new_lang: str) -> None:
+        """Save the config modal's settings (theme + metadata catalog globally,
+        display + configured languages per-file)."""
+        from ster.nav.prefs import (
+            _save_lang_pref,
+            _save_prefs,
+            save_configured_langs,
+            save_entity_metadata_props,
+            save_metadata_props,
+        )
+
+        _save_prefs({"theme": self.theme})  # theme is a global preference
+        if "metadata_props" in result:  # the configurable "Add metadata" catalog (global)
+            self.metadata_props = [tuple(p) for p in result["metadata_props"]]
+            save_metadata_props(self.metadata_props)
+        if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
+            self.entity_metadata_props = [tuple(p) for p in result["entity_metadata_props"]]
+            save_entity_metadata_props(self.entity_metadata_props)
+        if self._path is not None:
+            _save_lang_pref(self._path, new_lang)
+            save_configured_langs(self._path, self.configured_langs)
+
+    def _maybe_purge_language(self, lang: str) -> None:
+        """A configured language was removed: if the file still has data in it,
+        ask whether to delete every ⟨lang⟩ literal or keep it."""
+        from ster.operations import language_in_use
+
+        if self._service is None or self._path is None or not language_in_use(self.tax, lang):
+            return
+        path = self._path
+        prompt = f"Delete all “{lang}” labels, comments, definitions & scope notes?"
+
+        def _on_choice(choice: str | None) -> None:
+            if choice == "delete":
+                from ster.core.commands import RemoveLanguage
+
+                self._apply_command(RemoveLanguage(path, lang))
+
+        self.push_screen(
+            ChoiceModal(
+                prompt, [("Delete all", "delete"), ("Keep them in the file", "keep")], danger=True
+            ),
+            _on_choice,
+        )
 
     def _make_service(self, taxonomy: Taxonomy, path: Path | None):  # type: ignore[no-untyped-def]
         """Build the TaxonomyService when editing a real file (None = read-only)."""
@@ -248,8 +466,8 @@ class OntologyApp(App):
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
-        self.title = "ster · ontology browser"
-        self.sub_title = self.source
+        self.title = f"ster ontology browser - {self.source}"
+        self.sub_title = ""
         for tree in self.query(Tree):
             tree.show_root = False
             tree.guide_depth = 3
@@ -259,6 +477,11 @@ class OntologyApp(App):
         self.query_one("#prop-tree", Tree).border_title = "Properties"
         self.query_one("#detail", DetailView).border_title = "Details"
         self.query_one("#tree", Tree).focus()
+        # Both trees emit a spurious initial NodeHighlighted on mount (the
+        # prop-tree's lands on its data-less header → _show(None)), which would
+        # clobber the detail pane. Show the overview after the refresh settles so
+        # it is the last word; the Ontology node (first row) carries the URI.
+        self.call_after_refresh(self._show, detail.OVERVIEW_URI)
 
     # ── tree building ─────────────────────────────────────────────────────────
 
@@ -290,14 +513,16 @@ class OntologyApp(App):
             self._add_concept(node, child)
 
     def _build_main_tree(self, tree: Tree) -> None:
-        """Top pane: Overview leaf, Ontology section (classes), Taxonomy section (schemes)."""
+        """Top pane: Ontology section (classes), Taxonomy section (schemes).
+
+        The Ontology and Taxonomy section nodes carry the overview URI, so
+        highlighting either one shows the ontology overview in the detail pane
+        (there is no separate Overview leaf).
+        """
         tax, root = self.tax, tree.root
 
-        # ── Overview leaf ─────────────────────────────────────────────────────
-        root.add_leaf(f"{data.ICON['section']} Overview", data=detail.OVERVIEW_URI)
-
         # ── Ontology section (OWL classes) ────────────────────────────────────
-        ont_sec = root.add(f"{data.ICON['section']} Ontology", data=None)
+        ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
         ont_sec.add_leaf("＋ Add class", data=_action_uri("create_owl_class"))
         for uri in data.class_roots(tax, self.lang):
             self._add_class(ont_sec, uri)
@@ -311,7 +536,7 @@ class OntologyApp(App):
                 self._leaf(ind_sec, uri, "individual")
 
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
-        tax_sec = root.add(f"{data.ICON['section']} Taxonomy", data=None)
+        tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)
         tax_sec.add_leaf("＋ Add concept scheme", data=_action_uri("add_scheme"))
         for s_uri in data.scheme_roots(tax, self.lang):
             sec = tax_sec.add(
@@ -323,18 +548,42 @@ class OntologyApp(App):
                 self._add_concept(sec, c_uri)
             sec.expand()
         tax_sec.expand()
+        self._strip_childless_arrows(root)
 
     def _build_prop_tree(self, tree: Tree) -> None:
-        """Bottom pane: every property, in its own always-visible 1/4-height list."""
+        """Bottom pane: properties grouped by kind — Object / Datatype / Annotation
+        always shown, plus an orange "Untyped Properties" group for bare
+        ``rdf:Property`` entries. Within a group the locally-declared properties come
+        first, then predicates merely *used* on the ontology header (e.g.
+        ``dcterms:creator``), each flagged with a small ``(ext)`` indicator."""
         tax = self.tax
-        if not tax.owl_properties:
+        if not tax.owl_properties and not tax.ontology_annotations:
             return
-        sec = tree.root.add(f"{data.ICON['section']} Properties", data=None)
-        for uri in data.properties(tax, self.lang):
-            ptype = tax.owl_properties[uri].prop_type
-            tag = f"  [dim]({ptype[:3]})[/dim]" if ptype else ""
-            self._leaf(sec, uri, "property", suffix=tag)
-        sec.expand()
+        for title, local, external in data.property_groups(tax, self.lang):
+            label = (
+                f"[orange1]{title}[/orange1]" if title == data.UNTYPED_PROPERTIES_TITLE else title
+            )
+            sec = tree.root.add(label, data=None)
+            for uri in local:
+                self._leaf(sec, uri, "property")
+            for uri in external:
+                self._leaf(sec, uri, "property", suffix="  [dim](ext)[/dim]")
+            sec.expand()
+        self._strip_childless_arrows(tree.root)
+
+    @staticmethod
+    def _strip_childless_arrows(root: TreeNode) -> None:
+        """Drop the expand/collapse arrow from every node that has no children.
+
+        An arrow on a childless node misleadingly hints at a drill-down (click /
+        Enter to open) when there is nothing below it. Nodes keep their arrow only
+        when they actually have a subtree.
+        """
+        stack = list(root.children)
+        while stack:
+            node = stack.pop()
+            node.allow_expand = bool(node.children)
+            stack.extend(node.children)
 
     # ── interaction ─────────────────────────────────────────────────────────--
 
@@ -342,18 +591,57 @@ class OntologyApp(App):
         # _detail_text mirrors the rendered markup (used by tests + as a quick
         # text view); the DetailView builds the composed, focusable widgets.
         self._detail_uri = uri
-        self._detail_text = detail.render_detail(self.tax, uri, self.lang) if uri else PLACEHOLDER
+        clangs = self.configured_langs or [self.lang]
+        self._detail_text = (
+            detail.render_detail(self.tax, uri, self.lang, clangs) if uri else PLACEHOLDER
+        )
+        is_overview = uri == detail.OVERVIEW_URI
+        activity = self._ontology_activity() if is_overview else None
+        lint = self._ontology_lint() if is_overview else None
         view = self.query_one("#detail", DetailView)
-        view.update_entity(self.tax, uri, self.lang)
+        view.update_entity(self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs)
         view.border_title = self._detail_title(uri)
 
+    def _ontology_activity(self) -> dict | None:
+        """Git edit-activity for the file (computed once per session, cached)."""
+        if self._path is None:
+            return None
+        if not self._activity_computed:
+            from ster.git.manager import file_activity
+
+            self._activity_cache = file_activity(self._path)
+            self._activity_computed = True
+        return self._activity_cache
+
+    def _ontology_lint(self) -> tuple[dict, list] | None:
+        """semanticlint result for the file (computed once per session, cached)."""
+        if self._path is None:
+            return None
+        if not self._lint_computed:
+            from ster.lint_runner import lint_overview
+
+            try:
+                self._lint_cache = lint_overview(self._path)
+            except Exception:  # noqa: BLE001 — a lint failure must never break the view
+                self._lint_cache = None
+            self._lint_computed = True
+        return self._lint_cache
+
     def _detail_title(self, uri: str | None) -> str:
-        """The detail pane's border title — the current entity, or a generic label."""
+        """The detail pane's border title — the current entity, or a generic label.
+
+        Entities that have a context menu get a trailing ``⋯`` to hint that quick
+        actions are available (right-click, or press ``.``)."""
         if uri is None:
             return "Details"
         if uri == detail.OVERVIEW_URI:
             return "Ontology overview"
-        return data.label_of(self.tax, uri, self.lang) or "Details"
+        if uri == detail.TAXONOMY_URI:
+            return "Taxonomy overview"
+        label = data.label_of(self.tax, uri, self.lang) or "Details"
+        if edits.context_actions(data.kind_of(self.tax, uri)):
+            label += "  ⋯"  # a context menu is available
+        return label
 
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
@@ -386,19 +674,30 @@ class OntologyApp(App):
 
     def _restore_focus(self) -> None:
         """Land focus on a usable widget after a mutation rebuilt the panes."""
-        rows = list(self.query("#detail DetailRow"))
+        rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
         (rows[0] if rows else self.query_one("#tree", Tree)).focus()
 
     def on_detail_row_edit_requested(self, message: DetailRow.EditRequested) -> None:
-        """A focusable detail row asked to be edited → open the modal → command."""
-        field = message.field
-        uri, path = self._detail_uri, self._path
+        """An edit-only value row asked to be edited → open the modal → command."""
+        self._open_edit_modal(message.field, origin=self.focused)
+
+    def _open_edit_modal(self, field: DetailField, origin: Widget | None = None) -> None:
+        """Open the prefilled edit modal for *field* and apply the resulting command.
+
+        On cancel, focus returns to *origin* (the row being edited) so it stays in
+        the detail pane instead of jumping back to the tree.
+        """
+        # A field may target a different entity than the shown one (e.g. the taxonomy
+        # overview edits the primary scheme via meta["target_uri"]).
+        uri, path = field.meta.get("target_uri") or self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
 
         def _on_submit(value: str | None) -> None:
             if value is None:
+                if origin is not None:
+                    origin.focus()  # Esc/cancel: keep focus in the detail pane
                 return
             command = edits.edit_command(field, uri, path, value)
             if command is None:
@@ -406,7 +705,30 @@ class OntologyApp(App):
                 return
             self._apply_command(command)
 
-        self.push_screen(EditModal(field.display, field.value), _on_submit)
+        # A URI value is renamed fragment-only: lock its namespace, edit the local name.
+        if field.meta.get("type") == "uri":
+            prefix, fragment = uri_edit.split_namespace(field.value)
+            self.push_screen(UriModal(field.display, prefix, fragment), _on_submit)
+        else:
+            self.push_screen(EditModal(field.display, field.value), _on_submit)
+
+    def on_detail_row_menu_requested(self, message: DetailRow.MenuRequested) -> None:
+        """A value row with both edit and delete was activated → Edit/Delete submenu."""
+        self._row_menu_field = message.field
+        self._row_menu_delete = message.delete_field
+        self._row_menu_origin = self.focused  # the row, before the menu grabs focus
+        items = [("✎ Edit", "row_edit"), ("⊘ Delete", "row_delete")]
+        self.query_one("#ctx-menu", ContextMenu).show(message.field.display, items, message.anchor)
+
+    def _apply_row_delete(self, delete_field: DetailField) -> None:
+        """Run the paired removal command for a row's Delete submenu choice."""
+        uri, path = self._detail_uri, self._path
+        if self._service is None or uri is None or path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        command = edits.direct_command(delete_field, uri, path)
+        if command is not None:
+            self._apply_command(command)
 
     def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
         """An action row was activated → run it (shared with the right-click menu)."""
@@ -418,9 +740,15 @@ class OntologyApp(App):
         if action in ("view_ontology_graph", "view_focused_graph"):
             self._open_graph(action, field)  # a view, not a mutation — no service needed
             return
+        if action == "view_lint":
+            self._open_lint(field.meta.get("lint_severity"))  # a view — no service needed
+            return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        if action == "edit_class":
+            self._open_class_edit(uri, path)  # full class modal (URI + labels + comments)
             return
         direct = edits.direct_command(field, uri, path)
         if direct is not None:  # meta-driven removal — run immediately, no modal
@@ -432,10 +760,23 @@ class OntologyApp(App):
             return
         opener(field, uri, path)
 
-    def open_context_menu(self, uri: str, anchor: tuple[int, int] | None = None) -> None:
-        """Right-click handler: select the node and offer kind-appropriate quick actions.
+    def action_context_menu(self) -> None:
+        """'.' → open the context menu for the selected entity, at the tree cursor."""
+        if self._detail_uri:
+            self.open_context_menu(self._detail_uri, self._tree_cursor_anchor())
 
-        *anchor* is the click position; the menu pops up there (not centred).
+    def _tree_cursor_anchor(self) -> tuple[int, int] | None:
+        """Screen position of the focused tree's cursor row (for menu anchoring)."""
+        tree = self.focused if isinstance(self.focused, Tree) else None
+        if tree is None:
+            return None
+        region = tree.region
+        return (region.x + 2, region.y + max(0, tree.cursor_line - tree.scroll_offset.y))
+
+    def open_context_menu(self, uri: str, anchor: tuple[int, int] | None = None) -> None:
+        """Right-click / '.' handler: select the node and offer kind-appropriate
+        quick actions. *anchor* is the cursor position; the menu pops up there
+        (centred when None).
         """
         items = edits.context_actions(data.kind_of(self.tax, uri))
         if not items:
@@ -446,6 +787,18 @@ class OntologyApp(App):
 
     def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
         """A context-menu action was picked → run it against the selected entity."""
+        # Detail-row Edit/Delete submenu (takes priority over the tree-node menu).
+        if message.action == "row_edit" and self._row_menu_field is not None:
+            field, self._row_menu_field = self._row_menu_field, None
+            self._row_menu_delete = None
+            self._open_edit_modal(field, origin=self._row_menu_origin)
+            return
+        if message.action == "row_delete" and self._row_menu_delete is not None:
+            delete_field, self._row_menu_delete = self._row_menu_delete, None
+            self._row_menu_field = None
+            self._apply_row_delete(delete_field)
+            return
+
         uri = self._detail_uri
         if uri is None:
             return
@@ -472,7 +825,8 @@ class OntologyApp(App):
                 if command is not None:
                     self._apply_command(command)
 
-        self.push_screen(EditModal("Rename URI", uri), _on_submit)
+        prefix, fragment = uri_edit.split_namespace(uri)
+        self.push_screen(UriModal("Rename URI", prefix, fragment), _on_submit)
 
     def _route_action(self, action: str):  # type: ignore[no-untyped-def]
         """Pick the flow opener for *action* — first table whose set contains it."""
@@ -520,30 +874,107 @@ class OntologyApp(App):
             return
         self._apply_command(command)
 
+    _CLASS_CREATE_ACTIONS = frozenset({"create_owl_class", "new_subclass"})
+
     def _open_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Collect a single text/URI value in a modal, then run its action command."""
         action = field.meta.get("action", "")
+        # Creating a class opens the full class modal (URI + labels + comments).
+        if action in self._CLASS_CREATE_ACTIONS:
+            self._open_class_create(action, uri, path)
+            return
         prompt, prefill_kind = edits.INPUT_ACTIONS[action]
-        prefill = self.tax.base_uri() if prefill_kind == "base_uri" else ""
 
         def _on_submit(value: str | None) -> None:
             if value:
                 self._run_or_warn(edits.action_command(action, uri, path, value, self.lang))
 
-        self.push_screen(EditModal(prompt, prefill), _on_submit)
+        # A new URI is minted fragment-only under the locked ontology/scheme base.
+        if prefill_kind == "base_uri":
+            base = uri_edit.mint_base(self.tax, action, uri)
+            self.push_screen(UriModal(prompt, base), _on_submit)
+        else:
+            self.push_screen(EditModal(prompt, ""), _on_submit)
+
+    def _class_langs(self) -> list[str]:
+        return self.configured_langs or [self.lang]
+
+    def _open_class_create(self, action: str, uri: str, path: Path) -> None:
+        """Open the full class modal to create a class (top-level or under *uri*)."""
+        from ster.core.commands import OwlCreateClass
+
+        from .class_modal import ClassModal
+
+        base = uri_edit.mint_base(self.tax, action, uri)
+        parent = uri if action == "new_subclass" else None
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlCreateClass(
+                        path,
+                        result["uri"],
+                        parent,
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                    )
+                )
+
+        self.push_screen(ClassModal(prefix=base, langs=self._class_langs()), _on_submit)
+
+    def _open_class_edit(self, uri: str, path: Path) -> None:
+        """Open the full class modal to edit an existing class (URI / labels / comments)."""
+        from ster.core.commands import OwlSaveClass
+
+        from .class_modal import ClassModal
+
+        cls = self.tax.owl_classes.get(uri)
+        if cls is None:
+            return
+        prefix, fragment = uri_edit.split_namespace(uri)
+        labels = {lbl.lang: lbl.value for lbl in cls.labels}
+        comments = {c.lang: c.value for c in cls.comments}
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlSaveClass(
+                        path,
+                        uri,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                    )
+                )
+
+        self.push_screen(
+            ClassModal(
+                prefix=prefix,
+                fragment=fragment,
+                langs=self._class_langs(),
+                labels=labels,
+                comments=comments,
+                title="Edit class",
+            ),
+            _on_submit,
+        )
 
     def _open_meta_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Edit one existing value (the row's meta names which) via a prefilled modal."""
-        prompt, prefill_key = edits.META_INPUT_ACTIONS[field.meta.get("action", "")]
-        prefill = (
-            self.tax.base_uri() if prefill_key == "base_uri" else field.meta.get(prefill_key, "")
-        )
+        action = field.meta.get("action", "")
+        prompt, prefill_key = edits.META_INPUT_ACTIONS[action]
 
         def _on_submit(value: str | None) -> None:
             if value:
                 self._run_or_warn(edits.meta_input_command(field, uri, path, value, self.lang))
 
-        self.push_screen(EditModal(prompt, prefill), _on_submit)
+        # base_uri-kind meta inputs (e.g. add_class_property) mint a new URI fragment-only.
+        if prefill_key == "base_uri":
+            base = uri_edit.mint_base(self.tax, action, uri)
+            self.push_screen(UriModal(prompt, base), _on_submit)
+            return
+
+        self.push_screen(EditModal(prompt, field.meta.get(prefill_key, "")), _on_submit)
 
     def _confirm_delete(self, field: DetailField, uri: str, path: Path) -> None:
         """Ask for the delete mode, then run the destructive command + navigate away."""
@@ -636,22 +1067,26 @@ class OntologyApp(App):
         from ster.operations import ontology_domain
 
         is_domain = field.meta.get("action") == "edit_ontology_domain"
-        prompt = "Ontology domain (host)" if is_domain else "Ontology base URI"
-        prefill = ontology_domain(self.tax) if is_domain else self.tax.base_uri()
+        if not is_domain:  # base URI → dedicated separator picker + impact confirm
+            self._edit_ontology_uri(path, origin=self.focused)
+            return
+        prompt = "Ontology domain (host)"
+        prefill = field.value or ontology_domain(self.tax)
+        origin = self.focused
 
         def _on_submit(value: str | None) -> None:
             if not value:
+                if origin is not None:
+                    origin.focus()
                 return
-            base = self._resolve_ontology_base(is_domain, value)
+            base = self._resolve_domain_base(value)
             if base is not None:
                 self._apply_command(edits.ontology_rename_command(path, base))
 
         self.push_screen(EditModal(prompt, prefill), _on_submit)
 
-    def _resolve_ontology_base(self, is_domain: bool, value: str) -> str | None:
-        """The new base URI (with separator): typed directly, or host-swapped for a domain."""
-        if not is_domain:
-            return value
+    def _resolve_domain_base(self, value: str) -> str | None:
+        """The new base URI (with separator) for a host swap, or None if invalid."""
         from ster.operations import count_domain_rename_changes, validate_domain
 
         err = validate_domain(value)
@@ -660,11 +1095,83 @@ class OntologyApp(App):
             return None
         return count_domain_rename_changes(self.tax, value)[1]  # new_base, sep included
 
+    def _edit_ontology_uri(self, path: Path, origin: Widget | None = None) -> None:
+        """Open the ontology-identity modal (domain / path / sep / prefix)."""
+        scheme, domain, ont_path, sep, prefix = self._ontology_identity_parts()
+
+        def _on_done(result: dict | None) -> None:
+            if result is None:
+                if origin is not None:
+                    origin.focus()
+                return
+            self._apply_identity_changes(path, scheme, result, prefix, origin)
+
+        self.push_screen(
+            OntologyIdentityModal(domain=domain, path=ont_path, sep=sep, prefix=prefix), _on_done
+        )
+
+    def _ontology_identity_parts(self) -> tuple[str, str, str, str, str]:
+        """Decompose the ontology URI into (scheme, domain, path, sep, prefix)."""
+        from urllib.parse import urlsplit
+
+        from ster.domain.onto import ontology_prefix
+
+        root = (self.tax.ontology_uri or "").rstrip("#/")
+        sep = "#"
+        for u in list(self.tax.owl_classes) + list(self.tax.owl_individuals):
+            if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+                sep = u[len(root)]
+                break
+        parts = urlsplit(root)
+        return (
+            parts.scheme or "https",
+            parts.netloc,
+            parts.path.strip("/"),
+            sep,
+            ontology_prefix(self.tax) or "",
+        )
+
+    def _apply_identity_changes(
+        self, path: Path, scheme: str, result: dict, old_prefix: str, origin: Widget | None
+    ) -> None:
+        """Recompose the URI; confirm + cascade the rename, then set the prefix."""
+        from ster.operations import count_ontology_rename_changes
+
+        new_root = f"{scheme}://{result['domain']}"
+        if result["path"]:
+            new_root += "/" + result["path"]
+        sep = result["sep"]
+        old_base, new_base, count = count_ontology_rename_changes(self.tax, new_root, sep)
+        prefix_changed = result["prefix"] != (old_prefix or "")
+
+        def _set_prefix() -> None:
+            if prefix_changed and result["prefix"]:
+                self._apply_command(
+                    edits.action_command("edit_ontology_prefix", "", path, result["prefix"])
+                )
+
+        if old_base != new_base:  # URI changed → confirm the cascade first
+            noun = "entity" if count == 1 else "entities"
+            prompt = f"Rename → {new_base}   ·   {count} {noun} updated"
+
+            def _on_confirm(choice: str | None) -> None:
+                if choice == "ok":
+                    self._apply_command(edits.ontology_rename_command(path, new_root + sep))
+                    _set_prefix()
+                elif origin is not None:
+                    origin.focus()
+
+            self.push_screen(ChoiceModal(prompt, [("Confirm rename", "ok")]), _on_confirm)
+        elif prefix_changed:
+            _set_prefix()
+        elif origin is not None:
+            origin.focus()
+
     def _add_ont_annotation(self, field: DetailField, uri: str, path: Path) -> None:
         """Two-step: pick a predicate from the catalog, then enter the value."""
         from ster.nav.logic import annotation_catalog_options
 
-        options = annotation_catalog_options(self.tax)
+        options = annotation_catalog_options(self.tax, self.metadata_props)
         if not options:
             self.notify("All known annotation predicates are already present.", severity="warning")
             return
@@ -799,6 +1306,27 @@ class OntologyApp(App):
         except Exception as exc:  # surfacing beats crashing the UI for a view action
             self.notify(f"Couldn't open the graph: {exc}", severity="error")
 
+    def _open_lint(self, severity: str | None = None) -> None:
+        """Open a modal listing the semanticlint issues of *severity* (a read-only
+        view). Selecting an issue that points at a known entity jumps straight to
+        it (e.g. a missing-label warning → that class), so it can be fixed in place.
+        """
+        from .lint_modal import LintModal
+
+        result = self._ontology_lint()
+        issues = result[1] if result else []
+        if severity:
+            issues = [i for i in issues if i.get("severity") == severity]
+        kind = {"error": "Errors", "warning": "Warnings"}.get(severity or "", "semanticlint")
+        self.push_screen(
+            LintModal(issues, set(self._uri_nodes), kind=kind), self._goto_lint_subject
+        )
+
+    def _goto_lint_subject(self, subject: str | None) -> None:
+        """Callback for the lint modal: navigate to the chosen issue's subject."""
+        if subject:
+            self.jump_to(subject)
+
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""
         cycle = [name for name in THEME_CYCLE if name in self.available_themes]
@@ -811,10 +1339,17 @@ class OntologyApp(App):
         self.theme = cycle[(i + 1) % len(cycle)]
         self.notify(f"Theme: {self.theme}", timeout=2)
 
+    def _active_tree(self) -> Tree:
+        """The tree the expand/collapse shortcuts act on: the focused pane when it is
+        the properties tree, otherwise the main ontology tree."""
+        prop_tree = self.query_one("#prop-tree", Tree)
+        if self.focused is prop_tree:
+            return prop_tree
+        return self.query_one("#tree", Tree)
+
     def action_expand_all(self) -> None:
-        self.query_one("#tree", Tree).root.expand_all()
+        self._active_tree().root.expand_all()
 
     def action_collapse_all(self) -> None:
-        tree = self.query_one("#tree", Tree)
-        for child in tree.root.children:
+        for child in self._active_tree().root.children:
             child.collapse_all()

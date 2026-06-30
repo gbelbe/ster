@@ -143,6 +143,30 @@ def _make_ssl_context():
         return ssl.create_default_context()
 
 
+def _cache_file(namespace_url: str, cache_dir: Path) -> Path:
+    """The disk-cache path for *namespace_url* (deterministic, slug + md5 key)."""
+    key = hashlib.md5(namespace_url.encode(), usedforsecurity=False).hexdigest()[:8]
+    slug = namespace_url.replace("https://", "").replace("http://", "").replace("/", "_")
+    return cache_dir / f"{slug}{key}.ttl"
+
+
+def load_cached_ontology(namespace_url: str, cache_dir: Path | None = None):
+    """Return the cached rdflib Graph for *namespace_url* if present, else ``None``.
+
+    Reads the disk cache only — never hits the network — so it is safe to call
+    synchronously from the UI thread. The cache directory is resolved at call
+    time so tests can redirect ``_DEFAULT_CACHE_DIR``.
+    """
+    import rdflib
+
+    cache_file = _cache_file(namespace_url, cache_dir or _DEFAULT_CACHE_DIR)
+    if not cache_file.exists():
+        return None
+    g = rdflib.Graph()
+    g.parse(str(cache_file), format="turtle")
+    return g
+
+
 def fetch_ontology(namespace_url: str, cache_dir: Path = _DEFAULT_CACHE_DIR):
     """Return an rdflib Graph for *namespace_url*, using a disk cache.
 
@@ -151,9 +175,7 @@ def fetch_ontology(namespace_url: str, cache_dir: Path = _DEFAULT_CACHE_DIR):
     import rdflib
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(namespace_url.encode(), usedforsecurity=False).hexdigest()[:8]
-    slug = namespace_url.replace("https://", "").replace("http://", "").replace("/", "_")
-    cache_file = cache_dir / f"{slug}{key}.ttl"
+    cache_file = _cache_file(namespace_url, cache_dir)
 
     if cache_file.exists():
         g = rdflib.Graph()
@@ -288,6 +310,111 @@ def suggest_external_properties(
                 result.append(p)
 
     return result
+
+
+# ── annotation-property verification ──────────────────────────────────────────
+# Predicates that are annotation properties by definition in widely-used
+# vocabularies — accepted without a per-ontology lookup. The long tail is covered
+# by checking an imported ontology's own `rdf:type owl:AnnotationProperty`.
+
+_RDFS = "http://www.w3.org/2000/01/rdf-schema#"
+_SKOS = "http://www.w3.org/2004/02/skos/core#"
+_OWL = "http://www.w3.org/2002/07/owl#"
+_DCT = "http://purl.org/dc/terms/"
+_DC = "http://purl.org/dc/elements/1.1/"
+_FOAF = "http://xmlns.com/foaf/0.1/"
+_VANN = "http://purl.org/vocab/vann/"
+_SCHEMA = "https://schema.org/"
+
+WELL_KNOWN_ANNOTATION_PROPS: frozenset[str] = frozenset(
+    {
+        *(f"{_RDFS}{p}" for p in ("label", "comment", "seeAlso", "isDefinedBy")),
+        *(
+            f"{_SKOS}{p}"
+            for p in (
+                "note",
+                "scopeNote",
+                "definition",
+                "example",
+                "editorialNote",
+                "changeNote",
+                "historyNote",
+                "prefLabel",
+                "altLabel",
+                "hiddenLabel",
+                "notation",
+            )
+        ),
+        *(
+            f"{_OWL}{p}"
+            for p in (
+                "versionInfo",
+                "deprecated",
+                "priorVersion",
+                "backwardCompatibleWith",
+                "incompatibleWith",
+            )
+        ),
+        *(
+            f"{_DCT}{p}"
+            for p in (
+                "title",
+                "description",
+                "creator",
+                "contributor",
+                "publisher",
+                "created",
+                "modified",
+                "date",
+                "source",
+                "license",
+                "rights",
+                "subject",
+                "language",
+                "identifier",
+                "abstract",
+                "bibliographicCitation",
+            )
+        ),
+        *(f"{_DC}{p}" for p in ("title", "description", "creator", "subject", "rights")),
+        *(f"{_FOAF}{p}" for p in ("depiction", "homepage", "name", "page", "logo", "maker")),
+        *(
+            f"{_VANN}{p}"
+            for p in ("preferredNamespacePrefix", "preferredNamespaceUri", "example", "usageNote")
+        ),
+        *(f"{_SCHEMA}{p}" for p in ("image", "description", "name", "sameAs", "url")),
+    }
+)
+
+
+def _external_is_annotation_property(taxonomy, predicate: str) -> bool:
+    """True when *predicate* is declared ``owl:AnnotationProperty`` in an imported
+    (cached) external ontology — i.e. one bound in ``namespace_bindings``."""
+    import rdflib
+
+    ns = namespace_url_from_uri(predicate)
+    if ns not in set(taxonomy.namespace_bindings.values()):
+        return False
+    g = load_cached_ontology(ns)
+    if g is None:
+        return False
+    return (rdflib.URIRef(predicate), rdflib.RDF.type, rdflib.OWL.AnnotationProperty) in g
+
+
+def is_annotation_property(taxonomy, predicate: str) -> bool:
+    """Whether *predicate* is (known to be) an annotation property.
+
+    True when it is declared ``owl:AnnotationProperty`` in the local ontology, is a
+    well-known annotation predicate, or is declared ``owl:AnnotationProperty`` in an
+    imported (cached) external ontology. Otherwise False — the caller warns and may
+    declare it locally.
+    """
+    prop = taxonomy.owl_properties.get(predicate)
+    if prop is not None and prop.prop_type == "AnnotationProperty":
+        return True
+    if predicate in WELL_KNOWN_ANNOTATION_PROPS:
+        return True
+    return _external_is_annotation_property(taxonomy, predicate)
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────

@@ -602,6 +602,20 @@ def set_owl_comment(taxonomy: Taxonomy, uri: str, lang: str, value: str) -> None
         _upsert_localized(entity.comments, lang, value, Definition(lang=lang, value=value))
 
 
+def remove_owl_label(taxonomy: Taxonomy, uri: str, lang: str) -> None:
+    """Drop the ``rdfs:label`` of an OWL entity for *lang* (no-op if absent)."""
+    entity = _owl_entity(taxonomy, uri)
+    if entity is not None:
+        entity.labels = [lbl for lbl in entity.labels if lbl.lang != lang]
+
+
+def remove_owl_comment(taxonomy: Taxonomy, uri: str, lang: str) -> None:
+    """Drop the ``rdfs:comment`` of an OWL entity for *lang* (no-op if absent)."""
+    entity = _owl_entity(taxonomy, uri)
+    if entity is not None:
+        entity.comments = [c for c in entity.comments if c.lang != lang]
+
+
 def set_owl_note(taxonomy: Taxonomy, uri: str, note: str) -> None:
     """Set the free-text editor note of an OWL class/individual/property (``""`` clears it)."""
     entity = _owl_entity(taxonomy, uri)

@@ -62,6 +62,43 @@ def _owns_owl(taxonomy: Taxonomy, uri: str) -> bool:
     )
 
 
+def _language_literal_lists(taxonomy: Taxonomy) -> list[list]:
+    """Every language-tagged literal list (labels / comments / definitions /
+    scope-notes / descriptions) across all entities — the things a language tag
+    can appear on."""
+    lists: list[list] = []
+    for cls in taxonomy.owl_classes.values():
+        lists += [cls.labels, cls.comments]
+    for prop in taxonomy.owl_properties.values():
+        lists += [prop.labels, prop.comments]
+    for ind in taxonomy.owl_individuals.values():
+        lists += [ind.labels, ind.comments]
+    for concept in taxonomy.concepts.values():
+        lists += [concept.labels, concept.definitions, concept.scope_notes]
+    for scheme in taxonomy.schemes.values():
+        lists += [scheme.labels, scheme.descriptions]
+    return lists
+
+
+def language_in_use(taxonomy: Taxonomy, lang: str) -> bool:
+    """True if any language-tagged literal anywhere carries *lang*."""
+    return any(item.lang == lang for lst in _language_literal_lists(taxonomy) for item in lst)
+
+
+def remove_language(taxonomy: Taxonomy, lang: str) -> int:
+    """Strip every language-tagged literal in *lang* across all entities.
+
+    Removes labels, comments, definitions, scope notes and scheme descriptions
+    tagged *lang*. Returns the number of literals removed.
+    """
+    removed = 0
+    for lst in _language_literal_lists(taxonomy):
+        kept = [item for item in lst if item.lang != lang]
+        removed += len(lst) - len(kept)
+        lst[:] = kept  # mutate in place — the entity holds this exact list
+    return removed
+
+
 def count_uri_references(taxonomy: Taxonomy, uri: str) -> int:
     """Total statements affected by renaming *uri*, across every layer it owns.
 

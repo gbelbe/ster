@@ -18,9 +18,11 @@ VANN = Namespace("http://purl.org/vocab/vann/")
 NOTE_PROPERTY_URI = "https://example.org/ontology/kai-internal-knowledge#note"
 
 # Prefixes rdflib injects into every fresh Graph — not declared by the user's file.
+# (The empty default ":" is excluded too; "wv" is NOT — it is a real user prefix and
+# must round-trip, see _bind_namespace.)
 _RDFLIB_DEFAULT_PREFIXES: frozenset[str] = frozenset(
     p for p, _ in Graph().namespace_manager.namespaces()
-) | frozenset({"wv", ""})
+) | frozenset({""})
 
 from .handles import assign_handles
 from .model import (
@@ -785,7 +787,8 @@ def _concept_scheme_uri(
 
 
 def _bind_namespace(g: Graph, taxonomy: Taxonomy) -> None:
-    """Attempt to bind a short 'wv' prefix for the primary concept namespace."""
+    """Bind a short 'wv' fallback prefix for the primary concept namespace —
+    unless the user already bound a prefix to it (don't clobber their choice)."""
     uris = list(taxonomy.concepts) + list(taxonomy.schemes)
     if not uris:
         return
@@ -795,5 +798,8 @@ def _bind_namespace(g: Graph, taxonomy: Taxonomy) -> None:
         if sep in first:
             base = first.rsplit(sep, 1)[0] + sep
             if all(u.startswith(base) for u in uris):
+                base_root = base.rstrip("#/")
+                if any(ns.rstrip("#/") == base_root for ns in taxonomy.namespace_bindings.values()):
+                    return  # a user prefix is already bound to this namespace
                 g.bind("wv", Namespace(base))
                 return

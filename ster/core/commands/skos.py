@@ -17,6 +17,7 @@ from ...operations import (
     remove_concept_mapping_link,
     remove_definition,
     remove_label,
+    remove_scheme,
     remove_scope_note,
     set_definition,
     set_label,
@@ -59,6 +60,19 @@ class SkosRemoveConcept:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         return tuple(sorted(remove_concept(taxonomy, self.uri, cascade=self.cascade)))
+
+
+@dataclass(frozen=True)
+class SkosRemoveScheme:
+    """Delete a SKOS concept scheme. ``cascade=True`` also removes its concepts;
+    otherwise the concepts survive (their top-concept link to it is cleared)."""
+
+    target_path: Path
+    uri: str
+    cascade: bool = False
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        return tuple(sorted(remove_scheme(taxonomy, self.uri, cascade=self.cascade)))
 
 
 @dataclass(frozen=True)

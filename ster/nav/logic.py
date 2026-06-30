@@ -442,7 +442,7 @@ def _coverage_fields(key_prefix: str, comp: object) -> list[DetailField]:
                 f"[{lg}]",
                 f"{count}/{total}  {bar}  ({p}%)",
                 editable=False,
-                meta={"type": "stat"},
+                meta={"type": "stat", "color": _quality_color(p)},
             )
         )
     return fields
@@ -509,6 +509,33 @@ def _stat(key: str, label: str, value: str) -> DetailField:
     return DetailField(key, label, value, editable=False, meta={"type": "stat"})
 
 
+# ── quality colour — single source of truth for every %-indicator ──────────────
+# Change these thresholds (or the colour names, mapped to CSS in app.py) once and
+# every quality / completeness / coverage percentage re-colours at the same time.
+def _quality_color(pct: int) -> str:
+    """Global rule: < 50 % red, 50–79 % orange, ≥ 80 % green."""
+    if pct >= 80:
+        return "green"
+    if pct >= 50:
+        return "orange"
+    return "red"
+
+
+def _colored(field: DetailField, color: str) -> DetailField:
+    """Tag a row with a quality colour (``red`` / ``orange`` / ``green``)."""
+    field.meta["color"] = color
+    return field
+
+
+def _pct_stat(key: str, label: str, pct: int, *, prefix: str = "", suffix: str = "") -> DetailField:
+    """The canonical percentage-indicator row — block bar + percent, coloured by
+    :func:`_quality_color`. Every %-indicator routes through here (or through
+    ``_colored(..., _quality_color(pct))`` when its value needs a custom layout)
+    so colours and thresholds live in one place."""
+    value = f"{prefix}{_pct_bar(pct)}  {pct}%{suffix}"
+    return _colored(_stat(key, label, value), _quality_color(pct))
+
+
 def _add_action_field(key: str, label: str, action: str, **extra_meta) -> DetailField:
     """Helper for action rows."""
     return DetailField(
@@ -528,6 +555,30 @@ def _add_action_del_field(key: str, label: str, action: str, **extra_meta) -> De
     return DetailField(
         key, label, "", editable=False, meta={"type": "action_del", "action": action, **extra_meta}
     )
+
+
+def _lang_add_actions(
+    configured_langs: list[str],
+    key_prefix: str,
+    label_tmpl: str,
+    action: str,
+    *,
+    present: set[str] | None = None,
+    green: bool = True,
+) -> list[DetailField]:
+    """A "+ Add … [lang]" affordance for each *configured* language.
+
+    With *present* given, only languages missing from it get a row (e.g. one
+    label per language); without it, every configured language gets one (e.g.
+    altLabels, which may repeat per language). *green* picks the constructive
+    (``action_add``) vs plain (``action``) row style.
+    """
+    factory = _add_action_add_field if green else _add_action_field
+    return [
+        factory(f"{key_prefix}:{lang}", label_tmpl.format(lang=lang), action, lang=lang)
+        for lang in configured_langs
+        if present is None or lang not in present
+    ]
 
 
 def _sep_danger(label: str) -> DetailField:
@@ -946,8 +997,8 @@ def _class_quality_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[Detai
     fields: list[DetailField] = [_sep("Subtree Quality")]
     if n_classes > 1:
         fields.append(_stat("cls:q:n_classes", "classes in subtree", str(n_classes)))
-    fields.append(_stat("cls:q:lbl", "rdfs:label", f"{_pct_bar(label_p)}  {label_p}%"))
-    fields.append(_stat("cls:q:cmt", "rdfs:comment", f"{_pct_bar(comment_p)}  {comment_p}%"))
+    fields.append(_pct_stat("cls:q:lbl", "rdfs:label", label_p))
+    fields.append(_pct_stat("cls:q:cmt", "rdfs:comment", comment_p))
     fields.append(_stat("cls:q:inst:subtree", "instances (subtree)", str(n_subtree_inds)))
 
     fill_fields: list[DetailField] = []
@@ -980,7 +1031,7 @@ def _class_quality_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[Detai
                     break
         fill_pct = _pct(filled, len(domain_inds))
         lbl = prop.label(lang) or prop.local_name
-        fill_fields.append(_stat(f"cls:q:fill:{p_uri}", lbl, f"{_pct_bar(fill_pct)}  {fill_pct}%"))
+        fill_fields.append(_pct_stat(f"cls:q:fill:{p_uri}", lbl, fill_pct))
 
     if fill_fields:
         fields.append(_sep("Property Fill"))
@@ -1028,7 +1079,7 @@ def _concept_completion_fields(taxonomy: Taxonomy, uri: str) -> list[DetailField
                     f"[{lg}]",
                     f"{count}/{comp.total}  {bar}  ({pct}%)",
                     editable=False,
-                    meta={"type": "stat"},
+                    meta={"type": "stat", "color": _quality_color(pct)},
                 )
             )
     return fields
@@ -1070,36 +1121,46 @@ def _concept_mappings_fields(taxonomy: Taxonomy, concept, lang: str) -> list[Det
     return fields
 
 
-def _concept_action_fields(lang: str, concept, show_mappings: bool) -> list[DetailField]:
+def _concept_action_fields(
+    lang: str, concept, show_mappings: bool, configured_langs: list[str] | None = None
+) -> list[DetailField]:
     """Actions section for a concept."""
+    clangs = configured_langs or [lang]
     fields = []
-    # Add-label/note actions for current lang
+    # Add-label/note actions, one per configured language that's still missing.
     pref_langs = {lbl.lang for lbl in concept.labels if lbl.type == LabelType.PREF}
-    def_langs = {d.lang for d in concept.definitions}
-    scope_langs = {d.lang for d in concept.scope_notes}
-    if lang not in pref_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_pref:{lang}", f"+ Add prefLabel [{lang}]", "add_pref_label", lang=lang
-            )
-        )
-    fields.append(
-        _add_action_field(
-            f"action:add_alt:{lang}", f"+ Add altLabel [{lang}]", "add_alt_label", lang=lang
-        )
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_pref",
+        "+ Add prefLabel [{lang}]",
+        "add_pref_label",
+        present=pref_langs,
+        green=False,
     )
-    if lang not in def_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_def:{lang}", f"+ Add definition [{lang}]", "add_def", lang=lang
-            )
-        )
-    if lang not in scope_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_scope:{lang}", f"+ Add scopeNote [{lang}]", "add_scope_note", lang=lang
-            )
-        )
+    # altLabels may repeat per language → offer one for every configured language.
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_alt",
+        "+ Add altLabel [{lang}]",
+        "add_alt_label",
+        green=False,
+    )
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_def",
+        "+ Add definition [{lang}]",
+        "add_def",
+        present={d.lang for d in concept.definitions},
+        green=False,
+    )
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_scope",
+        "+ Add scopeNote [{lang}]",
+        "add_scope_note",
+        present={d.lang for d in concept.scope_notes},
+        green=False,
+    )
     # Structural actions
     fields.append(_add_action_field("action:add_child", "+ Add narrower concept", "add_narrower"))
     fields.append(
@@ -1224,6 +1285,7 @@ def build_concept_detail(
     lang: str,
     analysis: dict | None = None,
     show_mappings: bool = False,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Unified concept detail: Identity → Labels → Notes → Hierarchy → Mappings → Statistics → Actions."""
     concept = taxonomy.concepts.get(uri)
@@ -1277,7 +1339,7 @@ def build_concept_detail(
 
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
-    fields.extend(_concept_action_fields(lang, concept, show_mappings))
+    fields.extend(_concept_action_fields(lang, concept, show_mappings, configured_langs))
     fields.extend(_schema_media_action_fields(concept, "c:"))
 
     return fields
@@ -1288,6 +1350,7 @@ def build_scheme_detail(
     scheme_uri: str,
     lang: str,
     analysis: dict | None = None,
+    configured_langs: list[str] | None = None,  # accepted for builder-dispatch uniformity
 ) -> list[DetailField]:
     """Unified scheme detail: Settings → Labels → Notes → Metadata → Top Concepts → Statistics → Completion → Issues → Actions."""
     scheme = taxonomy.schemes.get(scheme_uri)
@@ -1846,12 +1909,14 @@ def build_rdf_class_detail(
     taxonomy: Taxonomy,
     uri: str,
     lang: str,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:Class / rdfs:Class node."""
     rdf_class = taxonomy.owl_classes.get(uri)
     if not rdf_class:
         return []
 
+    clangs = configured_langs or [lang]
     node_t = taxonomy.node_type(uri)
     fields: list[DetailField] = []
 
@@ -1888,16 +1953,15 @@ def build_rdf_class_detail(
                 meta={"type": "rdf_label", "lang": lbl.lang},
             )
         )
-    label_langs = {lbl.lang for lbl in rdf_class.labels}
-    if lang not in label_langs:
-        fields.append(
-            _add_action_add_field(
-                f"action:add_rdf_label:{lang}",
-                f"+ Add rdfs:label [{lang}]",
-                "add_rdf_label",
-                lang=lang,
-            )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_rdf_label",
+            "+ Add rdfs:label [{lang}]",
+            "add_rdf_label",
+            present={lbl.lang for lbl in rdf_class.labels},
         )
+    )
 
     # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
     fields.append(_sep("Notes"))
@@ -1911,16 +1975,15 @@ def build_rdf_class_detail(
                 meta={"type": "rdf_comment", "lang": comment.lang},
             )
         )
-    comment_langs = {cmt.lang for cmt in rdf_class.comments}
-    if lang not in comment_langs:
-        fields.append(
-            _add_action_add_field(
-                f"action:add_rdf_comment:{lang}",
-                f"+ Add rdfs:comment [{lang}]",
-                "add_rdf_comment",
-                lang=lang,
-            )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_rdf_comment",
+            "+ Add rdfs:comment [{lang}]",
+            "add_rdf_comment",
+            present={cmt.lang for cmt in rdf_class.comments},
         )
+    )
 
     # ── Hierarchy — always shown with inline mutations ───────────────────────
     fields.append(_sep("Hierarchy"))
@@ -2072,6 +2135,7 @@ def build_promoted_detail(
     uri: str,
     lang: str,
     show_mappings: bool = False,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Detail panel for a node that is both skos:Concept and owl:Class."""
     concept = taxonomy.concepts.get(uri)
@@ -2175,7 +2239,7 @@ def build_promoted_detail(
 
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
-    fields.extend(_concept_action_fields(lang, concept, show_mappings))
+    fields.extend(_concept_action_fields(lang, concept, show_mappings, configured_langs))
 
     return fields
 
@@ -2187,12 +2251,14 @@ def build_individual_detail(
     taxonomy: Taxonomy,
     uri: str,
     lang: str,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:NamedIndividual."""
     individual = taxonomy.owl_individuals.get(uri)
     if not individual:
         return []
 
+    clangs = configured_langs or [lang]
     fields: list[DetailField] = []
 
     # ── Identity ────────────────────────────────────────────────────────────
@@ -2220,16 +2286,15 @@ def build_individual_detail(
                 meta={"type": "ind_label", "lang": lbl.lang},
             )
         )
-    label_langs = {lbl.lang for lbl in individual.labels}
-    if lang not in label_langs:
-        fields.append(
-            _add_action_add_field(
-                f"action:add_ind_label:{lang}",
-                f"+ Add rdfs:label [{lang}]",
-                "add_ind_label",
-                lang=lang,
-            )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_ind_label",
+            "+ Add rdfs:label [{lang}]",
+            "add_ind_label",
+            present={lbl.lang for lbl in individual.labels},
         )
+    )
 
     # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
     fields.append(_sep("Notes"))
@@ -2243,16 +2308,15 @@ def build_individual_detail(
                 meta={"type": "ind_comment", "lang": comment.lang},
             )
         )
-    comment_langs = {cmt.lang for cmt in individual.comments}
-    if lang not in comment_langs:
-        fields.append(
-            _add_action_add_field(
-                f"action:add_ind_comment:{lang}",
-                f"+ Add rdfs:comment [{lang}]",
-                "add_ind_comment",
-                lang=lang,
-            )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_ind_comment",
+            "+ Add rdfs:comment [{lang}]",
+            "add_ind_comment",
+            present={cmt.lang for cmt in individual.comments},
         )
+    )
 
     # ── Class Membership — always shown with inline mutations ────────────────
     fields.append(_sep("Class Membership"))
@@ -2468,12 +2532,8 @@ def _ontology_quality_fields(
     fields.append(_stat("ont:q:roots", "root classes", str(st.root_classes)))
     fields.append(_stat("ont:q:depth", "max depth", str(st.max_depth)))
     if st.total_classes:
-        fields.append(
-            _stat("ont:q:lbl", "rdfs:label", f"{_pct_bar(st.label_pct)}  {st.label_pct}%")
-        )
-        fields.append(
-            _stat("ont:q:cmt", "rdfs:comment", f"{_pct_bar(st.comment_pct)}  {st.comment_pct}%")
-        )
+        fields.append(_pct_stat("ont:q:lbl", "rdfs:label", st.label_pct))
+        fields.append(_pct_stat("ont:q:cmt", "rdfs:comment", st.comment_pct))
 
     # ── By level ──────────────────────────────────────────────────────────────
     if analysis.level_summaries:
@@ -2482,10 +2542,12 @@ def _ontology_quality_fields(
             n = ls.n_classes
             plural = "classes" if n != 1 else "class"
             fields.append(
-                _stat(
+                _pct_stat(
                     f"ont:q:lvl:{ls.depth}",
                     f"depth {ls.depth}",
-                    f"{n} {plural}  ·  {_pct_bar(ls.label_pct)}  {ls.label_pct}% labeled",
+                    ls.label_pct,
+                    prefix=f"{n} {plural}  ·  ",
+                    suffix=" labeled",
                 )
             )
 
@@ -2493,46 +2555,16 @@ def _ontology_quality_fields(
     if st.total_individuals:
         fields.append(_sep("Individual Quality"))
         fields.append(_stat("ont:q:inds", "total", str(st.total_individuals)))
-        fields.append(
-            _stat(
-                "ont:q:ind_lbl",
-                "labeled",
-                f"{_pct_bar(st.individual_label_pct)}  {st.individual_label_pct}%",
-            )
-        )
-        fields.append(
-            _stat(
-                "ont:q:ind_typed",
-                "typed",
-                f"{_pct_bar(st.individual_typed_pct)}  {st.individual_typed_pct}%",
-            )
-        )
+        fields.append(_pct_stat("ont:q:ind_lbl", "labeled", st.individual_label_pct))
+        fields.append(_pct_stat("ont:q:ind_typed", "typed", st.individual_typed_pct))
 
     # ── Properties ────────────────────────────────────────────────────────────
     if st.total_properties:
         fields.append(_sep("Property Quality"))
         fields.append(_stat("ont:q:props", "total", str(st.total_properties)))
-        fields.append(
-            _stat(
-                "ont:q:prop_lbl",
-                "labeled",
-                f"{_pct_bar(st.property_label_pct)}  {st.property_label_pct}%",
-            )
-        )
-        fields.append(
-            _stat(
-                "ont:q:prop_dom",
-                "has domain",
-                f"{_pct_bar(st.property_with_domain_pct)}  {st.property_with_domain_pct}%",
-            )
-        )
-        fields.append(
-            _stat(
-                "ont:q:prop_rng",
-                "has range",
-                f"{_pct_bar(st.property_with_range_pct)}  {st.property_with_range_pct}%",
-            )
-        )
+        fields.append(_pct_stat("ont:q:prop_lbl", "labeled", st.property_label_pct))
+        fields.append(_pct_stat("ont:q:prop_dom", "has domain", st.property_with_domain_pct))
+        fields.append(_pct_stat("ont:q:prop_rng", "has range", st.property_with_range_pct))
 
     # ── Property fill rates ────────────────────────────────────────────────────
     if analysis.property_fill_global:
@@ -2541,7 +2573,7 @@ def _ontology_quality_fields(
             prop = taxonomy.owl_properties.get(p_uri)
             lbl = prop.label(lang) if prop else p_uri
             fill_pct = int(fill * 100)
-            fields.append(_stat(f"ont:q:fill:{p_uri}", lbl, f"{_pct_bar(fill_pct)}  {fill_pct}%"))
+            fields.append(_pct_stat(f"ont:q:fill:{p_uri}", lbl, fill_pct))
 
     # ── Issues ────────────────────────────────────────────────────────────────
     fields.append(_sep("Issues"))
@@ -2569,6 +2601,46 @@ def _ontology_identity_action_fields(taxonomy: Taxonomy) -> list[DetailField]:
             )
         )
     return actions
+
+
+def _tui_ontology_separator(taxonomy: Taxonomy, root: str) -> str:
+    """The base-URI separator: the raw trailing #/ if any, else detected from
+    existing entity URIs, else ``#``."""
+    raw = taxonomy.ontology_uri or ""
+    if raw[-1:] in ("#", "/"):
+        return raw[-1]
+    for u in list(taxonomy.owl_classes) + list(taxonomy.owl_individuals):
+        if len(u) > len(root) and u.startswith(root) and u[len(root)] in ("#", "/"):
+            return u[len(root)]
+    return "#"
+
+
+def _tui_identity_rows(taxonomy: Taxonomy) -> list[DetailField]:
+    """New-TUI overview identity: one line showing the full base URI (with its
+    ``#`` / ``/`` separator) and the prefix. Activating it opens the identity
+    modal, which edits the domain / path / separator / prefix as independent fields.
+    """
+    raw = taxonomy.ontology_uri
+    if not raw:
+        return []
+    if not raw.startswith(("http://", "https://")):
+        value = raw  # non-http: show as-is, no separator/prefix decomposition
+    else:
+        from ster.domain.onto import ontology_prefix
+
+        root = raw.rstrip("#/")
+        full = root + _tui_ontology_separator(taxonomy, root)
+        prefix = ontology_prefix(taxonomy) or ""
+        value = f"{full}   ·   prefix: {prefix or 'none'}"
+    return [
+        DetailField(
+            "ont:uri",
+            "URI",
+            value,
+            editable=False,
+            meta={"type": "uri", "action": "edit_ontology_uri"},
+        )
+    ]
 
 
 def _overview_metadata_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
@@ -2835,14 +2907,43 @@ def _annotation_display(predicate: str) -> str:
     return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
-def annotation_catalog_options(taxonomy: Taxonomy) -> list[tuple[str, str]]:
+def default_annotation_catalog() -> list[tuple[str, str]]:
+    """The built-in ontology-metadata predicate catalog — ``(predicate, label)``
+    pairs. Used as the default when no user catalog is configured."""
+    return list(_ANNOTATION_CATALOG)
+
+
+# ── Entity-metadata catalog (classes / properties / individuals) ──────────────
+# A separate catalog of descriptive predicates offered on any entity (not the
+# ontology node). Same shape as the ontology catalog.
+
+_ENTITY_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
+    ("http://www.w3.org/2000/01/rdf-schema#seeAlso", "rdfs:seeAlso  (IRI)"),
+    ("http://www.w3.org/2000/01/rdf-schema#isDefinedBy", "rdfs:isDefinedBy  (IRI)"),
+    ("http://www.w3.org/2004/02/skos/core#note", "skos:note"),
+    ("http://www.w3.org/2004/02/skos/core#example", "skos:example"),
+    ("http://purl.org/dc/terms/source", "dcterms:source"),
+)
+
+
+def default_entity_annotation_catalog() -> list[tuple[str, str]]:
+    """The built-in entity-metadata predicate catalog — ``(predicate, label)``
+    pairs offered on classes / properties / individuals when none is configured."""
+    return list(_ENTITY_ANNOTATION_CATALOG)
+
+
+def annotation_catalog_options(
+    taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None = None
+) -> list[tuple[str, str]]:
     """Return ``(predicate_uri, display_label)`` pairs available for "Add metadata".
 
-    Filters out predicates already present in ``taxonomy.ontology_annotations``
+    *catalog* is the configured predicate catalog (built-in default when ``None``);
+    predicates already present in ``taxonomy.ontology_annotations`` are filtered out
     so the picker only shows what can still be added.
     """
+    cat = catalog if catalog is not None else list(_ANNOTATION_CATALOG)
     present = {a.predicate for a in taxonomy.ontology_annotations}
-    return [(pred, label) for pred, label in _ANNOTATION_CATALOG if pred not in present]
+    return [(pred, label) for pred, label in cat if pred not in present]
 
 
 def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
@@ -2876,9 +2977,178 @@ def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
     return [value_row, remove_row]
 
 
+def _class_depths(taxonomy: Taxonomy) -> dict[str, int]:
+    """Depth of each OWL class = its longest local subClassOf chain (roots = 0)."""
+    classes = taxonomy.owl_classes
+    cache: dict[str, int] = {}
+
+    def depth(uri: str, seen: frozenset[str]) -> int:
+        if uri in cache:
+            return cache[uri]
+        if uri in seen:  # cycle guard
+            return 0
+        cls = classes.get(uri)
+        parents = [p for p in cls.sub_class_of if p in classes] if cls else []
+        cache[uri] = 1 + max((depth(p, seen | {uri}) for p in parents), default=-1)
+        return cache[uri]
+
+    return {uri: depth(uri, frozenset()) for uri in classes}
+
+
+def _bar_stat(key: str, label: str, count: int, total: int) -> DetailField:
+    """A coverage row rendered as a block bar + percentage, e.g. '████░░░░  50%'."""
+    percent = _pct(count, total)
+    return _pct_stat(key, label, percent)
+
+
+def _stats_classes(taxonomy: Taxonomy) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    roots = sum(1 for c in classes.values() if not any(p in classes for p in c.sub_class_of))
+    parents = {p for c in classes.values() for p in c.sub_class_of if p in classes}
+    leaves = sum(1 for uri in classes if uri not in parents)
+    fields = [
+        _sep("Classes"),
+        _stat("st:classes", "total", str(len(classes))),
+        _stat("st:roots", "root classes", str(roots)),
+        _stat("st:leaves", "leaf classes", str(leaves)),
+    ]
+    depths = _class_depths(taxonomy)
+    if depths:
+        avg = sum(depths.values()) / len(depths)
+        fields.append(_stat("st:avg_depth", "avg depth", f"{avg:.1f}"))
+        fields.append(_stat("st:max_depth", "max depth", str(max(depths.values()))))
+    return fields
+
+
+def _stats_properties(taxonomy: Taxonomy) -> list[DetailField]:
+    props = taxonomy.owl_properties
+    obj = sum(1 for p in props.values() if p.prop_type == "ObjectProperty")
+    datatype = sum(1 for p in props.values() if p.prop_type == "DatatypeProperty")
+    incomplete = sum(1 for p in props.values() if not p.domains or not p.ranges)
+    return [
+        _sep("Properties"),
+        _stat("st:props", "total", str(len(props))),
+        _stat("st:obj_props", "object", str(obj)),
+        _stat("st:dt_props", "datatype", str(datatype)),
+        _stat("st:incomplete_props", "missing domain/range", str(incomplete)),
+    ]
+
+
+def _stats_individuals(taxonomy: Taxonomy) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    typed = {t for ind in taxonomy.owl_individuals.values() for t in ind.types}
+    unused = sum(1 for uri in classes if uri not in typed)
+    return [
+        _sep("Individuals"),
+        _stat("st:individuals", "total", str(len(taxonomy.owl_individuals))),
+        _stat("st:unused", "classes with no individuals", str(unused)),
+    ]
+
+
+def _class_languages(classes: dict) -> list[str]:
+    """Sorted list of every language tag appearing on a class label."""
+    return sorted({lbl.lang for c in classes.values() for lbl in c.labels if lbl.lang})
+
+
+def _lang_coverage_rows(classes: dict, langs: list[str], total: int) -> list[DetailField]:
+    """One coverage bar per language: how many classes carry a label in it."""
+    rows: list[DetailField] = []
+    for code in langs:
+        covered = sum(1 for c in classes.values() if any(lbl.lang == code for lbl in c.labels))
+        rows.append(_bar_stat(f"st:lang_cov:{code}", f"labels · {code}", covered, total))
+    return rows
+
+
+def _stats_quality(
+    taxonomy: Taxonomy, configured_langs: list[str] | None = None
+) -> list[DetailField]:
+    classes = taxonomy.owl_classes
+    total = len(classes)
+    fields: list[DetailField] = [_sep("Quality & coverage")]
+    if total:
+        labelled = sum(1 for c in classes.values() if c.labels)
+        commented = sum(1 for c in classes.values() if c.comments)
+        fields.append(_bar_stat("st:label_cov", "labelled", labelled, total))
+        fields.append(_bar_stat("st:comment_cov", "documented", commented, total))
+    # Coverage is reported over the configured languages when known; otherwise over
+    # the languages detected in the data.
+    langs = configured_langs if configured_langs is not None else _class_languages(classes)
+    summary = str(len(langs)) + (f" ({', '.join(langs)})" if langs else "")
+    fields.append(_stat("st:langs", "languages", summary))
+    if total:
+        fields.extend(_lang_coverage_rows(classes, langs, total))
+    return fields
+
+
+def _ontology_stats_fields(
+    taxonomy: Taxonomy, configured_langs: list[str] | None = None
+) -> list[DetailField]:
+    """Global ontology statistics, grouped into visual subject sections."""
+    return [
+        *_stats_classes(taxonomy),
+        *_stats_properties(taxonomy),
+        *_stats_individuals(taxonomy),
+        *_stats_quality(taxonomy, configured_langs),
+    ]
+
+
+def _errors_color(count: int) -> str:
+    """Errors: red when there are any, green when clean."""
+    return "red" if count else "green"
+
+
+def _warnings_color(count: int) -> str:
+    """Warnings: < 10 green, 10–49 orange, ≥ 50 red."""
+    if count >= 50:
+        return "red"
+    if count >= 10:
+        return "orange"
+    return "green"
+
+
+def _lint_count_field(severity: str, label: str, count: int) -> DetailField:
+    """A severity count row, coloured by its own rule (errors / warnings). When
+    ``count`` > 0 the row links to a modal listing only that severity's issues
+    (``action=view_lint`` + ``lint_severity``); when 0 it is a plain info row."""
+    meta: dict = {"action": "view_lint", "lint_severity": severity} if count else {"type": "stat"}
+    meta["color"] = (_errors_color if severity == "error" else _warnings_color)(count)
+    return DetailField(f"st:lint_{severity}", label, str(count), editable=False, meta=meta)
+
+
+def _ontology_lint_fields(lint: dict | None) -> list[DetailField]:
+    """semanticlint summary — an Errors row and a Warnings row, each linking to a
+    severity-filtered issue modal when its count is non-zero.
+
+    *lint* is a ``{severity: count}`` dict (from ``lint_runner.lint_overview``),
+    or ``None`` when no file is loaded (the section is then omitted).
+    """
+    if lint is None:
+        return []
+    return [
+        _sep("Errors and Warnings"),
+        _lint_count_field("error", "Errors", lint.get("error", 0)),
+        _lint_count_field("warning", "Warnings", lint.get("warning", 0)),
+    ]
+
+
+def _ontology_activity_fields(activity: dict | None) -> list[DetailField]:
+    """Git edit-activity rows (from ``git.manager.file_activity``), if available."""
+    if not activity:
+        return []
+    return [
+        _sep("Activity"),
+        _stat("st:last_edit", "last edited", str(activity["last"])),
+        _stat("st:total_edits", "total edits", str(activity["total"])),
+        _stat("st:edits_month", "edits (last 30 days)", str(activity["last_month"])),
+    ]
+
+
 def build_tui_ontology_overview_fields(
     taxonomy: Taxonomy,
     lang: str,
+    activity: dict | None = None,
+    lint: dict | None = None,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Detail panel for the ontology overview node — New-TUI only.
 
@@ -2900,12 +3170,7 @@ def build_tui_ontology_overview_fields(
     # ── Identity ──────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
     if taxonomy.ontology_uri:
-        fields.append(
-            DetailField(
-                "ont:uri", "URI", taxonomy.ontology_uri, editable=False, meta={"type": "uri"}
-            )
-        )
-        fields.extend(_ontology_identity_action_fields(taxonomy))
+        fields.extend(_tui_identity_rows(taxonomy))
 
     # ── Descriptive metadata ──────────────────────────────────────────────────
     fields.append(_sep("Metadata"))
@@ -2919,6 +3184,51 @@ def build_tui_ontology_overview_fields(
         )
     )
 
+    # ── Errors & Warnings (right after metadata) ──────────────────────────────
+    fields.extend(_ontology_lint_fields(lint))
+
+    # ── Stats + Activity ──────────────────────────────────────────────────────
+    fields.extend(_ontology_stats_fields(taxonomy, configured_langs))
+    fields.extend(_ontology_activity_fields(activity))
+
+    return fields
+
+
+def build_tui_taxonomy_overview_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:
+    """Detail panel for the Taxonomy (SKOS) overview node — New-TUI only.
+
+    Mirrors the ontology overview but with the *taxonomy's* identity and metadata:
+    the concept-scheme namespace + prefix, and the scheme's SKOS metadata (title,
+    creator, created, languages, descriptions, other annotations).
+    """
+    scheme = taxonomy.primary_scheme()
+    if scheme is None:
+        return [_stat("tax:none", "", "No concept scheme in this taxonomy yet.")]
+
+    target = scheme.uri  # scheme-keyed edits route here via meta["target_uri"]
+
+    def _scheme_field(key: str, label: str, value: str, ftype: str) -> DetailField:
+        return DetailField(
+            key, label, value, editable=True, meta={"type": ftype, "target_uri": target}
+        )
+
+    fields: list[DetailField] = [_sep("Metadata")]
+    fields.append(_scheme_field("tax:title", "title", scheme.title(lang), "scheme_title"))
+    fields.append(_scheme_field("tax:creator", "creator", scheme.creator, "scheme_creator"))
+    fields.append(_scheme_field("tax:created", "created", scheme.created, "scheme_created"))
+    fields.append(
+        _scheme_field("tax:langs", "languages", ", ".join(scheme.languages), "scheme_languages")
+    )
+    for i, desc in enumerate(scheme.descriptions):
+        fields.append(_stat(f"tax:desc:{i}", "description", desc.value))
+    for annotation in scheme.annotations:
+        fields.append(
+            _stat(
+                f"tax:ann:{annotation.predicate}",
+                _annotation_display(annotation.predicate),
+                annotation.value,
+            )
+        )
     return fields
 
 
@@ -2929,12 +3239,14 @@ def build_property_detail(
     taxonomy: Taxonomy,
     uri: str,
     lang: str,
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:ObjectProperty / DatatypeProperty / etc."""
     prop = taxonomy.owl_properties.get(uri)
     if not prop:
         return []
 
+    clangs = configured_langs or [lang]
     fields: list[DetailField] = []
 
     # ── Identity ─────────────────────────────────────────────────────────────
@@ -3032,26 +3344,26 @@ def build_property_detail(
 
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
-    label_langs = {lbl.lang for lbl in prop.labels}
-    if lang not in label_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_prop_label:{lang}",
-                f"+ Add rdfs:label [{lang}]",
-                "add_prop_label",
-                lang=lang,
-            )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_prop_label",
+            "+ Add rdfs:label [{lang}]",
+            "add_prop_label",
+            present={lbl.lang for lbl in prop.labels},
+            green=False,
         )
-    comment_langs = {cmt.lang for cmt in prop.comments}
-    if lang not in comment_langs:
-        fields.append(
-            _add_action_field(
-                f"action:add_prop_comment:{lang}",
-                f"+ Add rdfs:comment [{lang}]",
-                "add_prop_comment",
-                lang=lang,
-            )
+    )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_prop_comment",
+            "+ Add rdfs:comment [{lang}]",
+            "add_prop_comment",
+            present={cmt.lang for cmt in prop.comments},
+            green=False,
         )
+    )
     fields.append(
         _add_action_field("action:add_prop_domain", "→ Add domain class", "add_prop_domain")
     )
@@ -3117,9 +3429,9 @@ def build_properties_section_fields(taxonomy: Taxonomy, lang: str) -> list[Detai
         lbl_pct = _pct(sum(1 for p in props if p.labels), n)
         dom_pct = _pct(sum(1 for p in props if p.domains), n)
         rng_pct = _pct(sum(1 for p in props if p.ranges), n)
-        fields.append(_stat("props:cov:label", "rdfs:label", f"{_pct_bar(lbl_pct)}  {lbl_pct}%"))
-        fields.append(_stat("props:cov:domain", "rdfs:domain", f"{_pct_bar(dom_pct)}  {dom_pct}%"))
-        fields.append(_stat("props:cov:range", "rdfs:range", f"{_pct_bar(rng_pct)}  {rng_pct}%"))
+        fields.append(_pct_stat("props:cov:label", "rdfs:label", lbl_pct))
+        fields.append(_pct_stat("props:cov:domain", "rdfs:domain", dom_pct))
+        fields.append(_pct_stat("props:cov:range", "rdfs:range", rng_pct))
 
     # ── Action (before list so it stays visible) ─────────────────────────────
     fields.append(_sep("Actions"))

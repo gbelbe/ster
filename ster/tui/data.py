@@ -11,9 +11,9 @@ from ster.model import Taxonomy
 
 # Clean geometric glyphs per node kind (monospace-friendly; sharper than emoji).
 ICON = {
-    "class": "■",
-    "individual": "•",
-    "property": "◆",
+    "class": "●",
+    "individual": "⬥",
+    "property": "■",
     "concept": "●",
     "scheme": "◉",
     "section": "▸",
@@ -22,6 +22,18 @@ ICON = {
 
 def _local(uri: str) -> str:
     return uri.rstrip("/#").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+
+
+def languages_in_use(tax: Taxonomy) -> list[str]:
+    """Sorted language codes that appear on any label across the taxonomy."""
+    langs: set[str] = set()
+    stores = (tax.owl_classes, tax.owl_individuals, tax.owl_properties, tax.concepts, tax.schemes)
+    for store in stores:
+        for entity in store.values():
+            for label in getattr(entity, "labels", []):
+                if label.lang:
+                    langs.add(label.lang)
+    return sorted(langs)
 
 
 def label_of(tax: Taxonomy, uri: str, lang: str = "en") -> str:
@@ -92,6 +104,67 @@ def untyped_individuals(tax: Taxonomy, lang: str = "en") -> list[str]:
 
 def properties(tax: Taxonomy, lang: str = "en") -> list[str]:
     return _by_label(tax, list(tax.owl_properties), lang)
+
+
+# The three OWL property kinds, in display order; anything else is "untyped".
+PROPERTY_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("ObjectProperty", "Object Properties"),
+    ("DatatypeProperty", "Datatype Properties"),
+    ("AnnotationProperty", "Annotation Properties"),
+)
+UNTYPED_PROPERTIES_TITLE = "Untyped Properties"
+
+
+def _local_property_buckets(tax: Taxonomy, lang: str) -> dict[str, list[str]]:
+    """Locally-declared properties bucketed by group title (label-sorted)."""
+    titles = dict(PROPERTY_CATEGORIES)
+    buckets: dict[str, list[str]] = {title: [] for _, title in PROPERTY_CATEGORIES}
+    buckets[UNTYPED_PROPERTIES_TITLE] = []
+    for uri in properties(tax, lang):
+        title = titles.get(tax.owl_properties[uri].prop_type, UNTYPED_PROPERTIES_TITLE)
+        buckets[title].append(uri)
+    return buckets
+
+
+def _external_property_buckets(tax: Taxonomy, lang: str) -> dict[str, list[str]]:
+    """Predicates *used* on the ontology header but never declared as properties,
+    bucketed by group: annotation predicates → Annotation, the rest → Untyped."""
+    from ster.ontology_imports import is_annotation_property
+
+    declared = set(tax.owl_properties)
+    seen: set[str] = set()
+    used: list[str] = []
+    for a in tax.ontology_annotations:
+        if a.predicate not in declared and a.predicate not in seen:
+            seen.add(a.predicate)
+            used.append(a.predicate)
+    buckets: dict[str, list[str]] = {}
+    annotation_title = dict(PROPERTY_CATEGORIES)["AnnotationProperty"]
+    for uri in _by_label(tax, used, lang):
+        title = annotation_title if is_annotation_property(tax, uri) else UNTYPED_PROPERTIES_TITLE
+        buckets.setdefault(title, []).append(uri)
+    return buckets
+
+
+def property_groups(tax: Taxonomy, lang: str = "en") -> list[tuple[str, list[str], list[str]]]:
+    """Each property group as ``(title, local_uris, external_uris)``.
+
+    *local* are properties declared in this file (bucketed by their OWL kind);
+    *external* are predicates merely *used* on the ontology header (e.g.
+    ``dcterms:creator``) that were never declared. The three OWL groups always
+    appear (possibly with both lists empty); the trailing "Untyped Properties"
+    group appears only when it holds something.
+    """
+    local = _local_property_buckets(tax, lang)
+    external = _external_property_buckets(tax, lang)
+    ordered = [title for _, title in PROPERTY_CATEGORIES] + [UNTYPED_PROPERTIES_TITLE]
+    result: list[tuple[str, list[str], list[str]]] = []
+    for title in ordered:
+        loc, ext = local[title], external.get(title, [])
+        if title == UNTYPED_PROPERTIES_TITLE and not loc and not ext:
+            continue
+        result.append((title, loc, ext))
+    return result
 
 
 def scheme_roots(tax: Taxonomy, lang: str = "en") -> list[str]:

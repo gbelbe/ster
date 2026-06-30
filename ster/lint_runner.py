@@ -57,6 +57,31 @@ def lint_files(paths: list[Path], cfg: CheckConfig) -> list[Violation]:
     return all_violations
 
 
+def lint_overview(path: Path) -> tuple[dict[str, int], list[dict[str, str]]]:
+    """Run semanticlint on *path* and return plain data for UI consumers.
+
+    Returns ``(counts, issues)`` where *counts* maps severity name → count and
+    *issues* is a list of ``{severity, check_id, message, subject}`` dicts. Pure
+    Python types only, so callers (the TUI) never depend on the semanticlint
+    ``Violation`` type — keeping the library behind this adapter (see CLAUDE.md).
+    """
+    cfg, _ = load_config(path.parent)
+    violations = lint_files([path], cfg)
+    counts = {sev.value: 0 for sev in Severity}
+    for v in violations:
+        counts[v.severity.value] += 1
+    issues = [
+        {
+            "severity": v.severity.value,
+            "check_id": v.check_id,
+            "message": v.message,
+            "subject": str(v.subject) if v.subject else "",
+        }
+        for v in violations
+    ]
+    return counts, issues
+
+
 def has_blocking_violations(violations: list[Violation], fail_on: Severity) -> bool:
     """Return True if any violation meets or exceeds the *fail_on* threshold."""
     threshold = _SEVERITY_ORDER[fail_on]

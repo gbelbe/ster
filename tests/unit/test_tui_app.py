@@ -20,6 +20,20 @@ from ster.tui.app import EntitySearch, OntologyApp
 from .test_tui_data import DEMO, ZOO
 
 
+@pytest.fixture(autouse=True)
+def _isolate_prefs(tmp_path, monkeypatch):
+    """Keep the app independent of the developer's real prefs (theme, language) so
+    snapshots and theme-default assertions are deterministic."""
+    from ster import api_server
+    from ster.nav import prefs
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(prefs, "_lang_prefs_path", lambda: tmp_path / "lang.json")
+    monkeypatch.setattr(prefs, "_configured_langs_path", lambda: tmp_path / "clangs.json")
+    monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", tmp_path / "server_config.json")
+    monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
+
+
 def _run(scenario: Callable[..., Awaitable[None]]) -> None:
     """Run an async Pilot scenario in a fresh loop (no pytest-asyncio needed)."""
     asyncio.run(scenario())
@@ -27,6 +41,47 @@ def _run(scenario: Callable[..., Awaitable[None]]) -> None:
 
 def _app() -> OntologyApp:
     return OntologyApp(store.load(DEMO), source="demo.ttl")
+
+
+def test_is_actionable_distinguishes_info_rows_from_actionable_rows() -> None:
+    """Only editable / action / menu rows are actionable; plain info rows aren't."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import _is_actionable
+
+    info = DetailField("st:classes", "total", "4", editable=False, meta={"type": "stat"})
+    editable = DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"})
+    action = DetailField("a", "＋ Add", "", editable=False, meta={"action": "add_ont_annotation"})
+
+    assert not _is_actionable(info, None)
+    assert _is_actionable(editable, None)
+    assert _is_actionable(action, None)
+    # A value row with a paired delete sibling opens an Edit/Delete menu → actionable.
+    assert _is_actionable(info, editable)
+
+
+def test_clickable_rows_get_an_affordance_icon() -> None:
+    """Clickable value rows show a leading icon (✎ editable, ▸ other); info rows
+    and already-glyphed action rows don't get an extra one."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import _row_content
+
+    info = DetailField("st:classes", "total", "4", editable=False, meta={"type": "stat"})
+    editable = DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"})
+    lint = DetailField(
+        "st:lint_warning",
+        "Warnings",
+        "3",
+        editable=False,
+        meta={"action": "view_lint", "lint_severity": "warning"},
+    )
+    action = DetailField(
+        "a", "＋ Add", "", editable=False, meta={"type": "action_add", "action": "x"}
+    )
+
+    assert "✎" not in _row_content(info, actionable=False)  # info row — no affordance
+    assert _row_content(editable, actionable=True).startswith("✎")  # editable → pencil
+    assert _row_content(lint, actionable=True).startswith("▸")  # clickable non-edit → marker
+    assert "▸" not in _row_content(action, actionable=True)  # already has its own ＋ glyph
 
 
 def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
@@ -112,15 +167,47 @@ def test_detail_rows_wrap_around() -> None:
             await pilot.pause()
             app._show(ZOO + "Person")
             await pilot.pause()
-            rows = list(app.query("#detail DetailRow"))
+            rows = [r for r in app.query("#detail DetailRow") if r.can_focus]
             rows[0].focus()
             await pilot.pause()
-            await pilot.press("up")  # wrap to the last row
+            await pilot.press("up")  # wrap to the last actionable row
             await pilot.pause()
             assert app.focused is rows[-1]
-            await pilot.press("down")  # wrap back to the first row
+            await pilot.press("down")  # wrap back to the first actionable row
             await pilot.pause()
             assert app.focused is rows[0]
+
+    _run(scenario)
+
+
+def test_arrows_skip_information_only_rows_on_overview() -> None:
+    """On the ontology overview the arrows step over pure stat / info rows and
+    only land on actionable rows (edit, ＋ add, view actions)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            all_rows = list(app.query(DetailRow))
+            info_rows = [r for r in all_rows if not r.can_focus]
+            assert info_rows, "the overview has information-only rows (stats)"
+            assert all(not r.field.editable and not r.field.meta.get("action") for r in info_rows)
+            # Stepping with the arrows only ever lands on focusable rows.
+            focusable = [r for r in all_rows if r.can_focus]
+            focusable[0].focus()
+            await pilot.pause()
+            seen = set()
+            for _ in range(len(focusable) + 2):
+                await pilot.press("down")
+                await pilot.pause()
+                assert isinstance(app.focused, DetailRow) and app.focused.can_focus
+                seen.add(app.focused)
+            assert seen == set(focusable)  # every actionable row is reachable, no info rows
 
     _run(scenario)
 
@@ -144,6 +231,150 @@ def test_tree_cursor_wraps_around() -> None:
             await pilot.press("down")  # wrap back to the top
             await pilot.pause()
             assert tree.cursor_line == 0
+
+    _run(scenario)
+
+
+def test_cursor_on_leaf_lights_parent_branch_column_not_the_leaf() -> None:
+    """The guide column at the cursor's level stays lit: Textual's default lights
+    the guides descending from the cursor (gone on a leaf); we move that flag to
+    the cursor's parent so the branch it shares with its siblings stays lit."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")  # expand all so Rex (a leaf individual) is visible
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            rex = app._uri_nodes[ZOO + "Rex"]  # individual under Dog
+            tree.move_cursor(rex)
+            await pilot.pause()
+            assert rex._selected is False  # the cursor node itself is NOT the lit branch
+            assert rex.parent._selected is True  # its parent's column is lit instead
+
+    _run(scenario)
+
+
+def test_branch_column_persists_when_moving_among_siblings() -> None:
+    """Moving the cursor between two children of the same parent keeps that
+    parent's guide column lit (the highlight tracks the level, not the node)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            cat = app._uri_nodes[ZOO + "Cat"]  # Cat and Dog are siblings under Mammal
+            dog = app._uri_nodes[ZOO + "Dog"]
+            mammal = app._uri_nodes[ZOO + "Mammal"]
+            tree.move_cursor(cat)
+            await pilot.pause()
+            assert mammal._selected is True
+            tree.move_cursor(dog)  # slide to the sibling
+            await pilot.pause()
+            assert mammal._selected is True  # same level → still lit
+            assert cat._selected is False and dog._selected is False
+
+    _run(scenario)
+
+
+def test_moving_across_branches_clears_the_previous_column() -> None:
+    """Jumping to a different branch lights the new parent and unlights the old."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            rex = app._uri_nodes[ZOO + "Rex"]  # parent: Dog
+            alice = app._uri_nodes[ZOO + "Alice"]  # parent: Person
+            tree.move_cursor(rex)
+            await pilot.pause()
+            assert app._uri_nodes[ZOO + "Dog"]._selected is True
+            tree.move_cursor(alice)
+            await pilot.pause()
+            assert app._uri_nodes[ZOO + "Dog"]._selected is False  # old column cleared
+            assert app._uri_nodes[ZOO + "Person"]._selected is True  # new column lit
+
+    _run(scenario)
+
+
+def test_top_level_cursor_does_not_light_the_hidden_root() -> None:
+    """A top-level node's parent is the hidden root, whose guide spans every line —
+    lighting it would highlight the whole tree, so it is left untouched."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.cursor_line = 0  # first visible row = the top-level "Ontology" node
+            await pilot.pause()
+            assert tree.root._selected is False  # the root is never lit
+
+    _run(scenario)
+
+
+def test_childless_nodes_drop_the_expand_arrow() -> None:
+    """A node with no subtree shows no ▶/▼ arrow (it would falsely hint a drill-down);
+    a node that does have children keeps it."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            cat = app._uri_nodes[ZOO + "Eagle"]  # leaf class: no subclasses, no individuals
+            mammal = app._uri_nodes[ZOO + "Mammal"]  # has subclasses Cat + Dog
+            assert cat.allow_expand is False  # arrow removed
+            assert mammal.allow_expand is True  # arrow kept
+            # Individuals (leaves) and properties never get an arrow either.
+            assert app._uri_nodes[ZOO + "Rex"].allow_expand is False
+            props = app.query_one("#prop-tree", Tree)
+            assert app._uri_nodes[ZOO + "hasOwner"].allow_expand is False
+            assert props.root.children[0].allow_expand is True  # the Properties section
+
+    _run(scenario)
+
+
+def test_childless_node_labels_stay_aligned_with_expandable_siblings() -> None:
+    """Removing the arrow must not shift text left: a childless label is padded by
+    the arrow's width so its text starts at the same column as a sibling's."""
+
+    async def scenario() -> None:
+        from rich.style import Style
+        from textual.widgets import Tree
+
+        from ster.tui import data
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            eagle = tree.render_label(app._uri_nodes[ZOO + "Eagle"], Style(), Style())
+            mammal = tree.render_label(app._uri_nodes[ZOO + "Mammal"], Style(), Style())
+            # The childless label carries no arrow, just padding …
+            assert "▶" not in eagle.plain and "▼" not in eagle.plain
+            assert eagle.plain.startswith("  ")
+            # … the expandable one carries the arrow; both prefixes are 2 cells wide,
+            # so the entity text lines up.
+            assert mammal.plain[:2] in ("▶ ", "▼ ")
+            assert eagle.plain[2:].startswith(data.ICON["class"])
+            assert mammal.plain[2:].startswith(data.ICON["class"])
 
     _run(scenario)
 
@@ -217,6 +448,111 @@ def test_properties_live_in_their_own_pane() -> None:
     _run(scenario)
 
 
+def test_prop_tree_groups_properties_by_kind() -> None:
+    """The three OWL group headers always show, in order; within a group the local
+    properties are listed first, then used-but-undeclared header predicates flagged
+    with a small '(ext)'. An orange 'Untyped Properties' group appears for bare
+    rdf:Property entries."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.model import Label, OWLProperty
+
+        app = _app()
+        app.tax.owl_properties[ZOO + "relatedTo"] = OWLProperty(
+            uri=ZOO + "relatedTo", prop_type="Property", labels=[Label("en", "related to")]
+        )
+
+        def leaves(group):  # [(uri, has_ext_tag), …] in display order
+            return [(n.data, "(ext)" in n.label.plain) for n in group.children]
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            root = app.query_one("#prop-tree", Tree).root
+            groups = {node.label.plain: node for node in root.children}
+            assert [n.label.plain for n in root.children][:3] == [
+                "Object Properties",
+                "Datatype Properties",
+                "Annotation Properties",
+            ]
+            # local properties: flat leaves, no (ext) tag
+            assert leaves(groups["Object Properties"]) == [(ZOO + "hasOwner", False)]
+            assert leaves(groups["Datatype Properties"]) == [(ZOO + "hasAge", False)]
+            # demo's used-but-undeclared header predicates → Annotation, each (ext)-tagged
+            ann = leaves(groups["Annotation Properties"])
+            assert ann == [
+                ("http://purl.org/dc/terms/description", True),
+                ("http://www.w3.org/2000/01/rdf-schema#label", True),
+                ("http://purl.org/dc/terms/title", True),
+            ]
+            # the untyped group is orange and holds relatedTo (local, no tag)
+            untyped = root.children[-1]
+            assert untyped.label.plain == "Untyped Properties"
+            assert any("orange1" in str(span.style) for span in untyped.label.spans)
+            assert leaves(untyped) == [(ZOO + "relatedTo", False)]
+
+    _run(scenario)
+
+
+def test_prop_tree_lists_local_before_external_within_a_group() -> None:
+    """When a group has both declared and used-but-undeclared predicates, the local
+    one comes first and only the external one carries the (ext) flag."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.model import Label, OWLProperty
+
+        app = _app()
+        # a locally-declared annotation property, alongside the demo's external ones
+        app.tax.owl_properties[ZOO + "note"] = OWLProperty(
+            uri=ZOO + "note", prop_type="AnnotationProperty", labels=[Label("en", "note")]
+        )
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            root = app.query_one("#prop-tree", Tree).root
+            ann = {n.label.plain: n for n in root.children}["Annotation Properties"]
+            ordered = [(n.data, "(ext)" in n.label.plain) for n in ann.children]
+            assert ordered[0] == (ZOO + "note", False)  # local first, no tag
+            assert all(is_ext for _, is_ext in ordered[1:])  # the rest are external
+
+    _run(scenario)
+
+
+def test_expand_collapse_target_the_focused_tree() -> None:
+    """The 'e'/'c' expand/collapse actions act on whichever tree pane has focus —
+    the properties tree when it's selected, otherwise the main ontology tree."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            main = app.query_one("#tree", Tree)
+            props = app.query_one("#prop-tree", Tree)
+            # focus the properties pane → collapse acts on it, leaving the main tree be
+            props.focus()
+            await pilot.pause()
+            app.action_collapse_all()
+            await pilot.pause()
+            assert all(not c.is_expanded for c in props.root.children)  # prop groups closed
+            assert any(c.is_expanded for c in main.root.children)  # main tree untouched
+            app.action_expand_all()  # re-open the properties groups
+            await pilot.pause()
+            assert all(c.is_expanded for c in props.root.children)
+            # focus back on the main tree → collapse now targets it, not properties
+            main.focus()
+            await pilot.pause()
+            app.action_collapse_all()
+            await pilot.pause()
+            assert all(not c.is_expanded for c in main.root.children)  # main collapsed
+            assert all(c.is_expanded for c in props.root.children)  # properties untouched
+
+    _run(scenario)
+
+
 def test_themes_registered_default_solarized_and_cycles() -> None:
     """Default is solarized-light; the branded `ster` theme is available; `d` cycles."""
 
@@ -249,7 +585,8 @@ def test_panels_have_border_titles() -> None:
             assert app.query_one("#prop-tree", Tree).border_title == "Properties"
             app._show(ZOO + "Cat")
             await pilot.pause()
-            assert app.query_one("#detail", DetailView).border_title == "Cat"
+            # A class has a context menu → its title carries the ⋯ affordance hint.
+            assert app.query_one("#detail", DetailView).border_title == "Cat  ⋯"
 
     _run(scenario)
 
@@ -439,6 +776,91 @@ def test_clicking_empty_detail_pane_selects_it() -> None:
     _run(scenario)
 
 
+_SKOS_DUP = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex:   <http://example.org/> .
+
+ex:Scheme a skos:ConceptScheme .
+ex:C1 a skos:Concept ;
+    skos:inScheme ex:Scheme ;
+    skos:prefLabel "One"@en ;
+    skos:prefLabel "Uno"@en .
+"""
+
+
+def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
+    """The overview's 'Errors'/'Warnings' count row for *severity*."""
+    from ster.tui.detail_view import DetailRow
+
+    return next(
+        r
+        for r in app.query(DetailRow)
+        if r.field.meta.get("action") == "view_lint"
+        and r.field.meta.get("lint_severity") == severity
+    )
+
+
+def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
+    """Activating the overview's 'Warnings' count row opens a LintModal scoped to
+    warnings (errors are excluded)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.lint_modal import LintModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            _lint_row(app, "warning").focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, LintModal)
+            assert all(i["severity"] == "warning" for i in app.screen._issues)
+
+    _run(scenario)
+
+
+def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path) -> None:
+    """Pressing enter on a missing-label warning navigates to that concept."""
+
+    async def scenario() -> None:
+        from textual.widgets import OptionList
+
+        from ster.tui import detail
+
+        # ex:C1 has no prefLabel → a navigable SKOS warning pointing at ex:C1.
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:hasTopConcept ex:C1 .\n"
+            "ex:C1 a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme .\n"
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)
+            await pilot.pause()
+            _lint_row(app, "warning").focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open the warnings modal
+            await pilot.pause()
+            ol = app.screen.query_one(OptionList)
+            assert ol.highlighted is not None  # a selectable (navigable) issue is highlighted
+            await pilot.press("enter")  # activate it → jump to the concept
+            for _ in range(3):
+                await pilot.pause()
+            assert app._detail_uri == "http://example.org/C1"
+
+    _run(scenario)
+
+
 def test_view_graph_action_opens_browser(monkeypatch) -> None:
     """Activating the overview's graph action calls viz_vowl.open_in_browser (read-only OK)."""
 
@@ -510,7 +932,7 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
     async def scenario() -> None:
         from ster.tui.choice_modal import ChoiceModal
         from ster.tui.context_menu import ContextMenu
-        from ster.tui.edit_modal import EditModal
+        from ster.tui.uri_modal import UriModal
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -521,9 +943,9 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
             await pilot.pause()
             assert app.query_one("#ctx-menu", ContextMenu).has_class("open")
 
-            app.on_context_menu_chosen(ContextMenu.Chosen("rename"))  # → rename modal
+            app.on_context_menu_chosen(ContextMenu.Chosen("rename"))  # → fragment rename modal
             await pilot.pause()
-            assert isinstance(app.screen, EditModal)
+            assert isinstance(app.screen, UriModal)
             app.screen.dismiss(None)
             await pilot.pause()
 
@@ -537,6 +959,88 @@ def test_context_menu_dispatches_rename_and_delete(tmp_path) -> None:
     _run(scenario)
 
 
+def test_dot_opens_context_menu_with_nothing_preselected() -> None:
+    """Pressing '.' opens the selected entity's context menu, and no item is
+    highlighted until the user navigates."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.context_menu import ContextMenu
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.jump_to(ZOO + "Cat")  # select a class
+            for _ in range(3):
+                await pilot.pause()
+            app.query_one("#tree", Tree).focus()
+            await pilot.pause()
+            await pilot.press("full_stop")  # "."
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert menu.highlighted is None  # nothing pre-selected
+            await pilot.press("down")  # first arrow moves into the list
+            await pilot.pause()
+            assert menu.highlighted == 0
+
+    _run(scenario)
+
+
+def test_detail_title_hints_context_menu_only_for_entities() -> None:
+    """The ⋯ menu hint appears for entities with actions, not for the overview."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app._detail_title(ZOO + "Cat").endswith("⋯")  # class → has a menu
+            assert app._detail_title(detail.OVERVIEW_URI) == "Ontology overview"  # no hint
+
+    _run(scenario)
+
+
+def test_delete_scheme_from_context_menu_removes_it(tmp_path) -> None:
+    """The scheme context menu offers Delete; confirming 'scheme only' drops the
+    scheme but keeps its concepts."""
+
+    async def scenario() -> None:
+        from ster.tui.choice_modal import ChoiceModal
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.edits import context_actions
+
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:prefLabel 'S'@en ; skos:hasTopConcept ex:C1 .\n"
+            "ex:C1 a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme ;\n"
+            "    skos:prefLabel 'C1'@en .\n"
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            scheme_uri = "http://example.org/Scheme"
+            assert scheme_uri in app.tax.schemes
+            app.open_context_menu(scheme_uri)
+            await pilot.pause()
+            assert "delete_scheme" in [a for _, a in context_actions("scheme")]
+            app.on_context_menu_chosen(ContextMenu.Chosen("delete_scheme"))
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)
+            app.screen.dismiss("scheme_only")  # keep concepts, drop the scheme
+            for _ in range(3):
+                await pilot.pause()
+            assert scheme_uri not in app.tax.schemes
+            assert "http://example.org/C1" in app.tax.concepts  # concept survived
+
+    _run(scenario)
+
+
 def test_tree_populates_and_focuses() -> None:
     async def scenario() -> None:
         from textual.widgets import Tree
@@ -544,8 +1048,156 @@ def test_tree_populates_and_focuses() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            assert len(app._uri_nodes) == 12  # every class/individual/property indexed
+            # 7 classes + 3 individuals + 2 local properties + 3 used-but-undeclared
+            # ontology header predicates (rdfs:label, dcterms:title, dcterms:description).
+            assert len(app._uri_nodes) == 15  # every class/individual/property node indexed
             assert isinstance(app.focused, Tree)  # tree gets focus on mount
+
+    _run(scenario)
+
+
+def test_initial_detail_shows_overview() -> None:
+    """On open, the detail pane shows the ontology overview (no Overview leaf).
+
+    Regression: both trees emit a spurious initial NodeHighlighted on mount; the
+    prop-tree's data-less header used to clobber the detail back to the placeholder.
+    """
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            assert app._detail_uri == detail.OVERVIEW_URI
+
+    _run(scenario)
+
+
+def test_editable_deletable_row_opens_edit_delete_submenu() -> None:
+    """A row that is both editable and deletable (an annotation) opens an
+    Edit/Delete submenu on Enter; its standalone "✕ remove" row is folded in."""
+
+    async def scenario() -> None:
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview is shown
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("type") == "ont_annotation"
+            )
+            assert row.delete_field is not None  # paired with its remove sibling
+            # The standalone "✕ remove" action row is no longer rendered.
+            assert not any(
+                r.field.meta.get("action") == "remove_ont_annotation" for r in app.query(DetailRow)
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert [label for label, _ in menu._items] == ["✎ Edit", "⊘ Delete"]
+
+    _run(scenario)
+
+
+def test_identity_modal_decomposes_the_uri_into_fields(tmp_path) -> None:
+    """Activating an Identity row opens the modal with the URI split into
+    domain / path / separator fields (demo URI: https://example.org/zoo/)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input, RadioSet
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "uri")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # opens the identity modal (no delete → no submenu)
+            await pilot.pause()
+            modal = app.screen
+            assert modal.query_one("#oi-domain", Input).value == "example.org"
+            assert modal.query_one("#oi-path", Input).value == "zoo"
+            assert modal.query_one(RadioSet).pressed_index == 1  # "/" detected
+
+    _run(scenario)
+
+
+def test_identity_modal_saves_domain_and_prefix_together(tmp_path) -> None:
+    """Changing the domain and the prefix in one save persists both to the file."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "uri")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open identity modal
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#oi-domain", Input).value = "garden.org"
+            modal.query_one("#oi-prefix", Input).value = "zoo"
+            modal._submit()
+            await pilot.pause()
+            await pilot.press("enter")  # confirm the rename cascade
+            await pilot.pause()
+            await pilot.pause()
+            saved = src.read_text(encoding="utf-8")
+            assert "garden.org" in saved  # domain rename cascaded + saved
+            assert "@prefix zoo:" in saved  # prefix saved too
+
+    _run(scenario)
+
+
+def test_cancel_edit_keeps_focus_in_detail_pane(tmp_path) -> None:
+    """Regression: Esc-ing the edit modal kept focus in the detail pane, not the tree.
+
+    The submenu grabbed focus before the modal, so Textual restored focus to the
+    hidden menu on cancel → it fell back to the tree. We now refocus the row.
+    """
+
+    async def scenario() -> None:
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.pause()  # overview shown
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("type") == "ont_annotation"
+            )
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open Edit/Delete submenu
+            await pilot.pause()
+            app.query_one("#ctx-menu", ContextMenu).highlighted = 0  # Edit
+            await pilot.press("enter")  # open edit modal
+            await pilot.pause()
+            await pilot.press("escape")  # cancel
+            await pilot.pause()
+            assert isinstance(app.focused, DetailRow)  # stayed in the detail pane
 
     _run(scenario)
 
@@ -555,8 +1207,8 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            # Navigate past Overview, Ontology section header, ＋Add class, into first class.
-            await pilot.press("down", "down", "down", "down")
+            # Navigate past the Ontology section header and ＋Add class into the first class.
+            await pilot.press("down", "down", "down")
             await pilot.pause()
             # Detail panel must be showing some OWL class (action nodes show placeholder).
             assert "owl:Class" in app._detail_text
@@ -568,8 +1220,7 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     """An action row (Enter) → modal → constructive command → reload + save."""
 
     async def scenario() -> None:
-        from textual.widgets import Input
-
+        from ster.tui.class_modal import ClassModal
         from ster.tui.detail_view import DetailRow
 
         src = tmp_path / "o.ttl"
@@ -584,14 +1235,19 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             )
             row.focus()
             await pilot.pause()
-            await pilot.press("enter")  # action row → modal
+            await pilot.press("enter")  # action row → full class modal
             await pilot.pause()
-            assert app.screen.__class__.__name__ == "EditModal"
-            app.screen.query_one("#edit-input", Input).value = ZOO + "Worker"
-            await pilot.press("enter")  # submit
+            assert isinstance(app.screen, ClassModal)
+            modal = app.screen
+            assert modal._uri.value == ZOO  # base locked to the ontology namespace
+            modal._uri.value = ZOO + "Worker"  # the new fragment
+            modal._label_inputs[app.lang].value = "Worker"  # also set a label in one go
+            modal._submit()
             for _ in range(3):
                 await pilot.pause()
-            assert ZOO + "Worker" in app.tax.owl_classes  # created in memory
+            cls = app.tax.owl_classes.get(ZOO + "Worker")
+            assert cls is not None and ZOO + "Person" in cls.sub_class_of  # created under Person
+            assert {lbl.value for lbl in cls.labels} == {"Worker"}  # label set at creation
             assert "Worker" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
@@ -699,9 +1355,9 @@ def test_expand_collapse_keys_and_jump_to_deep_node() -> None:
     _run(scenario)
 
 
-def test_detail_view_composes_focusable_rows() -> None:
+def test_detail_view_composes_rows_only_actionable_focusable() -> None:
     async def scenario() -> None:
-        from ster.tui.detail_view import DetailRow, SectionHeader
+        from ster.tui.detail_view import DetailRow, SectionHeader, _is_actionable
 
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
@@ -710,8 +1366,12 @@ def test_detail_view_composes_focusable_rows() -> None:
             await pilot.pause()
             rows = list(app.query(DetailRow))
             headers = list(app.query(SectionHeader))
-            assert rows, "detail view should compose one focusable row per field"
-            assert all(r.can_focus for r in rows)
+            assert rows, "detail view should compose one row per field"
+            # A row is focusable iff it is actionable (editable / action / has a menu);
+            # pure information rows are skipped by keyboard + click navigation.
+            for r in rows:
+                assert r.can_focus == _is_actionable(r.field, r.delete_field)
+            assert any(r.can_focus for r in rows), "some rows must be reachable"
             assert any(h.title_text == "Identity" for h in headers)
 
     _run(scenario)

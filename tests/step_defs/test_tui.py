@@ -283,9 +283,12 @@ def then_class_visible(ctx, name):
     assert ctx["visible"][ZOO + name]
 
 
-@then("the detail panel still shows the placeholder")
-def then_detail_placeholder(ctx):
-    assert PLACEHOLDER in ctx["detail"]
+@then("the detail panel still shows the overview")
+def then_detail_overview(ctx):
+    # An unknown jump leaves the detail unchanged — and the view now opens on the
+    # ontology overview (no Overview leaf), whose Identity row carries the base URI.
+    assert "https://example.org/zoo/" in ctx["detail"]
+    assert PLACEHOLDER not in ctx["detail"]
 
 
 @then(parsers.parse('the tree contains the scheme "{scheme}"'))

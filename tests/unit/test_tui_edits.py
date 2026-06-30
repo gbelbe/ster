@@ -121,8 +121,19 @@ def test_delete_class_maps_to_owl_delete_class_with_mode() -> None:
     assert (cmd.class_uri, cmd.mode) == ("http://ex/C", "delete_all")
 
 
+def test_delete_scheme_maps_to_skos_remove_scheme_with_cascade() -> None:
+    from ster.core.commands import SkosRemoveScheme
+
+    keep = delete_command("delete_scheme", "http://ex/S", _P, "scheme_only")
+    assert isinstance(keep, SkosRemoveScheme)
+    assert (keep.uri, keep.cascade) == ("http://ex/S", False)
+
+    cascade = delete_command("delete_scheme", "http://ex/S", _P, "delete_all")
+    assert isinstance(cascade, SkosRemoveScheme) and cascade.cascade is True
+
+
 def test_unsupported_delete_returns_none() -> None:
-    assert delete_command("delete_scheme", "http://ex/C", _P, "keep_all") is None
+    assert delete_command("delete_nonexistent", "http://ex/C", _P, "keep_all") is None
 
 
 # ── relation_command (picker-driven) ────────────────────────────────────────────
@@ -148,7 +159,11 @@ def test_context_actions_per_kind() -> None:
     assert {"new_subclass", "move_class", "class_to_individual", "rename", "delete_class"} <= set(
         class_actions
     )
-    assert [a for _, a in context_actions("scheme")] == ["add_top_concept", "rename"]
+    assert [a for _, a in context_actions("scheme")] == [
+        "add_top_concept",
+        "rename",
+        "delete_scheme",
+    ]
     assert "delete" in [a for _, a in context_actions("concept")]
     assert context_actions("nonexistent") == []
 

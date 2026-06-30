@@ -55,12 +55,14 @@ _ACTION_HELP = {
     "add_top_concept": "Add a top concept to this scheme",
     "add_scheme": "Create a new SKOS concept scheme",
     "create_owl_class": "Create a new top-level OWL class",
+    "edit_class": "Edit this class — URI, labels and comments in one modal",
     "create_owl_property": "Create a new OWL property",
     "edit_ontology_prefix": "Edit the ontology's namespace prefix",
     "edit_ontology_uri": "Rename the ontology base URI (cascades to every entity)",
     "edit_ontology_domain": "Change the ontology domain/host (cascades to every entity)",
     "edit_note": "Edit the markdown note",
     "delete_note": "Clear the note",
+    "view_lint": "List these issues — Enter to open",
 }
 
 
@@ -72,6 +74,48 @@ def _row_tooltip(field: DetailField) -> str | None:
     if not action:
         return None
     return _ACTION_HELP.get(action, "Enter to run")
+
+
+def _is_actionable(field: DetailField, delete_field: DetailField | None) -> bool:
+    """True when a row does something on activation — so it takes keyboard /
+    click focus. Pure information rows (stats, plain facts) are skipped by the
+    arrows, Tab and clicks; only editable rows, action rows, and rows with an
+    Edit/Delete submenu participate in navigation."""
+    return bool(field.editable or field.meta.get("action") or delete_field is not None)
+
+
+# Action rows (＋ add, ⊘ delete, ✎ rename, …) already render with their own
+# leading glyph; these meta-types are left as-is.
+_GLYPH_ACTION_TYPES = frozenset({"action", "action_add", "action_del"})
+
+
+def _row_content(field: DetailField, actionable: bool) -> str:
+    """The row's markup, prefixed with a small affordance icon when it is
+    clickable but doesn't already carry an action glyph — so every clickable row
+    is visibly interactive. Editable values get ``✎``; other clickable rows ``▸``.
+    """
+    markup = field_markup(field)
+    if actionable and field.meta.get("type") not in _GLYPH_ACTION_TYPES:
+        icon = "✎" if field.editable else "▸"
+        return f"{icon} {markup}"
+    return markup
+
+
+def _rows_for(fields: list[DetailField]) -> list[DetailRow]:
+    """Build a section's rows, folding each editable value's following "✕ remove"
+    sibling into that row's Edit/Delete submenu (so it isn't a separate row)."""
+    rows: list[DetailRow] = []
+    i = 0
+    while i < len(fields):
+        f = fields[i]
+        nxt = fields[i + 1] if i + 1 < len(fields) else None
+        if f.editable and nxt is not None and nxt.meta.get("type") == "action_del":
+            rows.append(DetailRow(f, delete_field=nxt))
+            i += 2
+        else:
+            rows.append(DetailRow(f))
+            i += 1
+    return rows
 
 
 class SectionHeader(Static):
@@ -100,9 +144,11 @@ class DetailRow(Static):
     ]
 
     def action_focus_row(self, delta: int) -> None:
-        """Move focus to the previous/next sibling row, wrapping around the ends."""
-        rows = list(self.app.query("#detail DetailRow"))
-        if rows:  # wrap: up from the first row → last, down from the last → first
+        """Move focus to the previous/next *actionable* sibling row, wrapping.
+
+        Information-only rows are non-focusable, so they're skipped here too."""
+        rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
+        if rows and self in rows:  # wrap: up from the first → last, down from the last → first
             rows[(rows.index(self) + delta) % len(rows)].focus()
 
     def action_focus_tree(self) -> None:
@@ -112,7 +158,7 @@ class DetailRow(Static):
             trees[0].focus()
 
     class EditRequested(Message):
-        """Posted when the user activates an editable value row (Enter)."""
+        """Posted when the user activates an edit-only value row (Enter)."""
 
         def __init__(self, field: DetailField) -> None:
             super().__init__()
@@ -125,19 +171,50 @@ class DetailRow(Static):
             super().__init__()
             self.field = field
 
-    def __init__(self, field: DetailField) -> None:
-        super().__init__(field_markup(field))
+    class MenuRequested(Message):
+        """Posted when a value row that can be both edited and deleted is activated.
+
+        The app shows an Edit / Delete submenu anchored at the row.
+        """
+
+        def __init__(
+            self, field: DetailField, delete_field: DetailField, anchor: tuple[int, int]
+        ) -> None:
+            super().__init__()
+            self.field = field
+            self.delete_field = delete_field
+            self.anchor = anchor
+
+    def __init__(self, field: DetailField, delete_field: DetailField | None = None) -> None:
+        # Only actionable rows take focus; info rows are skipped by arrows/Tab/click.
+        actionable = _is_actionable(field, delete_field)
+        super().__init__(_row_content(field, actionable))
         self.field = field
+        self.delete_field = delete_field  # the paired "✕ remove" row, if any
         self.add_class("detail-row")
+        self.can_focus = actionable
+        if not actionable:
+            self.add_class("info-row")
+        color = field.meta.get("color")  # quality colour: red / orange / green
+        if color in ("red", "orange", "green"):
+            self.add_class(f"q-{color}")
         tip = _row_tooltip(field)
         if tip:
             self.tooltip = tip
 
+    def _anchor(self) -> tuple[int, int]:
+        return (self.region.x, self.region.y)
+
     def action_activate(self) -> None:
-        if self.field.editable:
+        if self.field.editable and self.delete_field is not None:
+            self.post_message(self.MenuRequested(self.field, self.delete_field, self._anchor()))
+        elif self.field.editable:
             self.post_message(self.EditRequested(self.field))
         elif self.field.meta.get("action"):
             self.post_message(self.ActionRequested(self.field))
+
+    def on_click(self) -> None:
+        self.action_activate()
 
 
 class DetailView(VerticalScroll):
@@ -150,21 +227,29 @@ class DetailView(VerticalScroll):
 
     def on_click(self) -> None:
         """Click blank pane space to select this window: focus a row, else the pane."""
-        rows = list(self.query(DetailRow))
+        rows = [r for r in self.query(DetailRow) if r.can_focus]
         if not rows:
-            self.focus()  # empty pane (placeholder) — select the pane itself
+            self.focus()  # nothing actionable (placeholder / info-only) — select the pane
         elif not isinstance(self.app.focused, DetailRow):
-            rows[0].focus()  # a row click self-focuses; blank space → first row
+            rows[0].focus()  # a row click self-focuses; blank space → first actionable row
 
-    def update_entity(self, tax: Taxonomy, uri: str | None, lang: str = "en") -> None:
+    def update_entity(
+        self,
+        tax: Taxonomy,
+        uri: str | None,
+        lang: str = "en",
+        activity: dict | None = None,
+        lint: dict | None = None,
+        configured_langs: list[str] | None = None,
+    ) -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None)."""
         self.remove_children()
         if uri is None:
             self.mount(Static(PLACEHOLDER))
             return
         widgets: list[Static] = []
-        for sec in build_sections(tax, uri, lang):
+        for sec in build_sections(tax, uri, lang, activity, lint, configured_langs):
             if sec.title:
                 widgets.append(SectionHeader(sec.title, danger=sec.danger))
-            widgets.extend(DetailRow(f) for f in sec.fields)
+            widgets.extend(_rows_for(sec.fields))
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

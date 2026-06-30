@@ -12,12 +12,15 @@ from .domain.cross import _owns_owl as _owns_owl
 from .domain.cross import add_schema_media as add_schema_media
 from .domain.cross import count_uri_references as count_uri_references
 from .domain.cross import expand_uri as expand_uri
+from .domain.cross import language_in_use as language_in_use
+from .domain.cross import remove_language as remove_language
 from .domain.cross import remove_schema_media as remove_schema_media
 from .domain.cross import rename_entity_uri as rename_entity_uri
 from .domain.cross import resolve as resolve
 
 # Re-export the ontology-metadata layer (moved to ster.domain.onto) so the ~37
 # call sites keep importing from ster.operations. See docs/architecture/module-layout.md.
+from .domain.onto import _ontology_separator as _ontology_separator
 from .domain.onto import collect_ontology_entities as collect_ontology_entities
 from .domain.onto import count_domain_rename_changes as count_domain_rename_changes
 from .domain.onto import count_ontology_rename_changes as count_ontology_rename_changes
@@ -52,6 +55,8 @@ from .domain.owl import find_individuals_using_property as find_individuals_usin
 from .domain.owl import remove_individual_literal as remove_individual_literal
 from .domain.owl import remove_individual_property_value as remove_individual_property_value
 from .domain.owl import remove_individual_type as remove_individual_type
+from .domain.owl import remove_owl_comment as remove_owl_comment
+from .domain.owl import remove_owl_label as remove_owl_label
 from .domain.owl import remove_property_class as remove_property_class
 from .domain.owl import remove_subclass_of as remove_subclass_of
 from .domain.owl import rename_owl_uri as rename_owl_uri
@@ -74,6 +79,7 @@ from .domain.skos import remove_concept_mapping_link as remove_concept_mapping_l
 from .domain.skos import remove_definition as remove_definition
 from .domain.skos import remove_label as remove_label
 from .domain.skos import remove_related as remove_related
+from .domain.skos import remove_scheme as remove_scheme
 from .domain.skos import remove_scope_note as remove_scope_note
 from .domain.skos import rename_uri as rename_uri
 from .domain.skos import set_definition as set_definition

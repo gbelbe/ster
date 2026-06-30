@@ -6,7 +6,7 @@ from pathlib import Path
 
 from semanticlint.checks.base import Severity
 
-from ster.lint_runner import has_blocking_violations, lint_files, load_config
+from ster.lint_runner import has_blocking_violations, lint_files, lint_overview, load_config
 
 _VALID_SKOS = """\
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
@@ -75,6 +75,28 @@ def test_lint_detects_warnings(tmp_path: Path):
     path = _write(tmp_path, _SKOS_WARNING)
     violations = lint_files([path], CheckConfig())
     assert any(v.severity == Severity.WARNING for v in violations)
+
+
+# ── lint_overview (plain-data adapter for the TUI) ────────────────────────────
+
+
+def test_lint_overview_clean_file_has_zero_counts(tmp_path: Path):
+    path = _write(tmp_path, _VALID_SKOS)
+    counts, issues = lint_overview(path)
+    assert counts == {"error": 0, "warning": 0, "info": 0}
+    assert issues == []
+
+
+def test_lint_overview_returns_plain_issue_dicts(tmp_path: Path):
+    path = _write(tmp_path, _SKOS_ERROR)
+    counts, issues = lint_overview(path)
+    assert counts["error"] >= 1
+    assert issues  # non-empty
+    issue = issues[0]
+    # Plain str-only payload — no semanticlint Violation/Severity leaking out.
+    assert set(issue) == {"severity", "check_id", "message", "subject"}
+    assert all(isinstance(v, str) for v in issue.values())
+    assert any(i["check_id"] == "SKO001" for i in issues)
 
 
 # ── load_config ───────────────────────────────────────────────────────────────
