@@ -1446,3 +1446,20 @@ def test_overview_quality_sections_render_in_a_bordered_group_box() -> None:
             assert "Structure" not in inside  # Structure is a sibling, outside the box
 
     _run(scenario)
+
+
+def test_bottom_bar_shows_the_selected_language() -> None:
+    """The bottom-right status overlay reports the current display language."""
+
+    async def scenario() -> None:
+        from textual.widgets import Static
+
+        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="fr")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            ind = app.query_one("#lang-indicator", Static)
+            assert "selected language: fr" in str(ind.render())
+            # sits at the bottom-right corner
+            assert ind.region.right == 120 and ind.region.bottom == 40
+
+    _run(scenario)

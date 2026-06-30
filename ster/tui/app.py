@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Tree
+from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ster.model import Taxonomy
@@ -247,6 +247,18 @@ class OntologyApp(App):
     /* Give the footer a neutral surface background (not the theme's $primary,
        which is blue on solarized-light → invisible key hints) with readable text. */
     Footer { background: $surface; color: $foreground; }
+    /* Bottom-right status overlay: the current display language. */
+    #lang-indicator {
+        layer: overlay;
+        dock: bottom;
+        width: auto;
+        height: 1;
+        offset-x: 100%;          /* push to the right edge … */
+        constrain: inside none;  /* … then pull fully back into view */
+        background: $surface;
+        color: $text-muted;
+        padding: 0 1;
+    }
     FooterKey { background: $surface; color: $foreground; }
     FooterKey:hover { background: $boost; }
     /* Footer key hints read as actionable (and are clickable). */
@@ -395,6 +407,7 @@ class OntologyApp(App):
         langs_changed = set(self.configured_langs) != set(result["configured"])
         self.configured_langs = result["configured"]  # exact selection (may be empty)
         self.lang = new_lang
+        self._update_lang_indicator()
         theme = result.get("theme")
         if theme and theme in self.available_themes:
             self.theme = theme  # live preview
@@ -472,6 +485,7 @@ class OntologyApp(App):
                 yield OntologyTree("properties", id="prop-tree")
             yield DetailView(id="detail")
         yield Footer()
+        yield Static("", id="lang-indicator")  # bottom-right status: selected language
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
@@ -491,6 +505,13 @@ class OntologyApp(App):
         # clobber the detail pane. Show the overview after the refresh settles so
         # it is the last word; the Ontology node (first row) carries the URI.
         self.call_after_refresh(self._show, detail.OVERVIEW_URI)
+        self._update_lang_indicator()
+
+    def _update_lang_indicator(self) -> None:
+        """Refresh the bottom-right status with the current display language."""
+        indicators = self.query("#lang-indicator")
+        if indicators:
+            indicators.first(Static).update(f"selected language: {self.lang}")
 
     # ── tree building ─────────────────────────────────────────────────────────
 
