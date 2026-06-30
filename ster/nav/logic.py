@@ -3177,48 +3177,17 @@ def build_tui_ontology_overview_fields(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
 ) -> list[DetailField]:
-    """Detail panel for the ontology overview node — New-TUI only.
+    """The ontology overview's detail fields.
 
-    Shows: view-graph shortcut, identity (URI + edit actions), and every
-    annotation as an editable row with a remove sibling. No class/property
-    enumeration (they live in the tree) and no creation actions (they live in
-    the tree's action nodes).
+    Thin wrapper over :class:`OntologyOverviewPresenter` (the live render path);
+    kept so existing callers/tests reach the same presenter-produced fields.
+    Imported lazily to avoid a tui→logic import cycle.
     """
-    fields: list[DetailField] = []
+    from ster.tui.presenters.context import PresenterContext
+    from ster.tui.presenters.overview import OntologyOverviewPresenter
 
-    # ── Quick actions (top) ───────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-    fields.append(
-        _add_action_field(
-            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
-        )
-    )
-
-    # ── Identity ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Identity"))
-    if taxonomy.ontology_uri:
-        fields.extend(_tui_identity_rows(taxonomy))
-
-    # ── Descriptive metadata ──────────────────────────────────────────────────
-    fields.append(_sep("Metadata"))
-    for annotation in taxonomy.ontology_annotations:
-        fields.extend(_annotation_rows(annotation))
-    fields.append(
-        _add_action_field(
-            "action:add_ont_annotation",
-            "＋ Add metadata",
-            "add_ont_annotation",
-        )
-    )
-
-    # ── Errors & Warnings (right after metadata) ──────────────────────────────
-    fields.extend(_ontology_lint_fields(lint))
-
-    # ── Stats + Activity ──────────────────────────────────────────────────────
-    fields.extend(_ontology_stats_fields(taxonomy, configured_langs, metadata))
-    fields.extend(_ontology_activity_fields(activity))
-
-    return fields
+    ctx = PresenterContext(taxonomy, lang, configured_langs, activity, lint, metadata)
+    return OntologyOverviewPresenter(ctx, "").render()
 
 
 def build_tui_taxonomy_overview_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:

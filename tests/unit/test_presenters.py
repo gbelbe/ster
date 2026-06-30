@@ -67,11 +67,14 @@ def test_legacy_presenter_delegates_to_its_render_fn() -> None:
     assert seen["uri"] == ZOO + "Cat" and seen["ctx"].tax is tax
 
 
-def test_dispatch_falls_back_to_legacy_when_kind_unregistered() -> None:
-    """With an empty registry every kind/overview routes through a LegacyPresenter."""
+def test_dispatch_falls_back_to_legacy_for_unmigrated_kinds() -> None:
+    """Kinds without a dedicated presenter (and the SKOS overview) route through a
+    LegacyPresenter; the ontology overview has its own presenter (P1)."""
+    from ster.tui.presenters.overview import OntologyOverviewPresenter
+
     tax = store.load(DEMO)
     ctx = _ctx(tax)
-    assert isinstance(detail._presenter_for(ctx, detail.OVERVIEW_URI), LegacyPresenter)
+    assert isinstance(detail._presenter_for(ctx, detail.OVERVIEW_URI), OntologyOverviewPresenter)
     assert isinstance(detail._presenter_for(ctx, detail.TAXONOMY_URI), LegacyPresenter)
     assert isinstance(detail._presenter_for(ctx, ZOO + "Cat"), LegacyPresenter)
 
@@ -91,14 +94,13 @@ def test_registered_presenter_takes_priority_over_legacy(monkeypatch) -> None:
     assert presenter.render() == sentinel
 
 
-def test_dispatch_preserves_legacy_overview_output() -> None:
-    """The seam is byte-identical: routing through the presenter yields exactly the
-    same fields the legacy builder produced directly."""
-    from ster.nav.logic import build_tui_ontology_overview_fields
+def test_overview_routes_through_its_presenter() -> None:
+    """detail._fields_for for the overview yields exactly OntologyOverviewPresenter's
+    render — the seam delegates rather than duplicating."""
+    from ster.tui.presenters.context import PresenterContext
+    from ster.tui.presenters.overview import OntologyOverviewPresenter
 
     tax = store.load(DEMO)
-    via_presenter = detail._fields_for(tax, detail.OVERVIEW_URI, "en")
-    direct = build_tui_ontology_overview_fields(tax, "en", None, None, None, None)
-    assert [(f.key, f.display, f.value) for f in via_presenter] == [
-        (f.key, f.display, f.value) for f in direct
-    ]
+    via_seam = detail._fields_for(tax, detail.OVERVIEW_URI, "en")
+    direct = OntologyOverviewPresenter(PresenterContext(tax, "en"), "").render()
+    assert [(f.key, f.display) for f in via_seam] == [(f.key, f.display) for f in direct]

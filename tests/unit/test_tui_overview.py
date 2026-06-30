@@ -325,14 +325,18 @@ def test_stats_coverage_languages_and_completeness() -> None:
     assert s["st:unused"] == "3"  # A, B, D
 
 
-def test_stats_grouped_into_subject_sections() -> None:
+def test_stats_grouped_into_canonical_sections() -> None:
     titles = [
         f.display for f in _fields(_onto_with_hierarchy()) if f.meta.get("type") == "separator"
     ]
-    for section in ("Classes", "Properties", "Individuals", "Quality & Coverage", "Languages"):
+    for section in ("Health & Issues", "Completeness", "Languages", "Structure", "Metadata"):
         assert section in titles, section
-    # The stats subjects all come after Metadata.
-    assert titles.index("Classes") > titles.index("Metadata")
+    # Canonical order leads with the actionable groups: Health → Completeness → Structure.
+    assert (
+        titles.index("Health & Issues") < titles.index("Completeness") < titles.index("Structure")
+    )
+    # …all after the Identity header.
+    assert titles.index("Health & Issues") > titles.index("Identity")
 
 
 def test_stats_empty_ontology_has_no_depth_rows() -> None:
@@ -348,11 +352,11 @@ def _by_key(fields: list) -> dict:
     return {f.key: f for f in fields}
 
 
-def test_lint_section_shows_error_and_warning_counts() -> None:
+def test_health_section_shows_error_and_warning_counts() -> None:
     lint = {"error": 2, "warning": 3, "info": 1}
     fields = build_tui_ontology_overview_fields(_tax(), "en", None, lint)
     titles = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert "Errors and Warnings" in titles
+    assert "Health & Issues" in titles  # lint counts now live under Health
     by_key = _by_key(fields)
     assert by_key["st:lint_error"].value == "2"
     assert by_key["st:lint_warning"].value == "3"
@@ -380,15 +384,15 @@ def test_lint_zero_rows_are_not_actionable() -> None:
     assert by_key["st:lint_warning"].meta.get("color") == "green"  # 0 warnings → green
 
 
-def test_lint_section_sits_right_after_metadata() -> None:
+def test_health_section_leads_before_completeness_and_activity() -> None:
     lint = {"error": 1, "warning": 0, "info": 0}
     activity = {"last": "2026-06-20", "total": 12, "last_month": 3}
     fields = build_tui_ontology_overview_fields(_tax(), "en", activity, lint)
     titles = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert titles.index("Errors and Warnings") == titles.index("Metadata") + 1
-    # …and therefore before the stats and Activity blocks.
-    assert titles.index("Errors and Warnings") < titles.index("Classes")
-    assert titles.index("Errors and Warnings") < titles.index("Activity")
+    # Health leads the dashboard: before Completeness, Structure and Activity.
+    assert titles.index("Health & Issues") < titles.index("Completeness")
+    assert titles.index("Health & Issues") < titles.index("Structure")
+    assert titles.index("Health & Issues") < titles.index("Activity")
 
 
 def test_no_lint_section_without_file() -> None:
@@ -467,3 +471,25 @@ def test_metadata_coverage_omitted_when_not_computable() -> None:
     assert "Metadata coverage" not in [
         f.display for f in fields if f.meta.get("type") == "separator"
     ]
+
+
+# ── Health & Issues: structural gaps (reorganized overview, P1) ────────────────
+
+
+def test_health_surfaces_structural_gaps_colored() -> None:
+    """The Health group surfaces the actionable structural gaps — missing
+    domain/range, undocumented, unlabelled, no-individuals — coloured green at
+    zero else orange."""
+    from ster.model import Label, OWLProperty, RDFClass
+
+    t = _tax()
+    t.owl_classes["c"] = RDFClass(uri="c")  # no label, no comment, no individuals
+    t.owl_classes["d"] = RDFClass(uri="d", labels=[Label("en", "D")], comments=[])
+    t.owl_properties["p"] = OWLProperty(uri="p", prop_type="ObjectProperty")  # no domain/range
+    by_key = _by_key(_fields(t))
+    assert by_key["st:incomplete_props"].value == "1"  # p
+    assert by_key["st:incomplete_props"].meta["color"] == "orange"
+    assert by_key["st:gap_undoc"].value == "2"  # c and d undocumented
+    assert by_key["st:gap_unlab"].value == "1"  # only c unlabelled
+    assert by_key["st:unused"].value == "2"  # neither class has individuals
+    assert by_key["st:gap_unlab"].meta["color"] == "orange"

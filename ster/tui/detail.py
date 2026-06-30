@@ -23,12 +23,12 @@ from ster.nav.logic import (
     build_property_detail,
     build_rdf_class_detail,
     build_scheme_detail,
-    build_tui_ontology_overview_fields,
     build_tui_taxonomy_overview_fields,
 )
 
 from . import data
 from .presenters import PRESENTERS, EntityPresenter, LegacyPresenter, PresenterContext
+from .presenters.overview import OntologyOverviewPresenter
 
 # Sentinel "uris" for the overview nodes (no real entity behind them).
 OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
@@ -84,12 +84,6 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
 # presenter; LegacyPresenter wraps these so output stays byte-identical.
 
 
-def _overview_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
-    return build_tui_ontology_overview_fields(
-        ctx.tax, ctx.lang, ctx.activity, ctx.lint, ctx.configured_langs, ctx.metadata
-    )
-
-
 def _taxonomy_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
     return build_tui_taxonomy_overview_fields(ctx.tax, ctx.lang)
 
@@ -103,7 +97,7 @@ def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
     """The presenter for *uri*: a registered subclass, else a LegacyPresenter
     wrapping the kind's existing build_* function."""
     if uri == OVERVIEW_URI:
-        return LegacyPresenter(ctx, uri, _overview_render)
+        return OntologyOverviewPresenter(ctx, uri)
     if uri == TAXONOMY_URI:
         return LegacyPresenter(ctx, uri, _taxonomy_render)
     presenter_cls = PRESENTERS.get(data.kind_of(ctx.tax, uri))
