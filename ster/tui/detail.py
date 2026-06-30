@@ -28,6 +28,7 @@ from ster.nav.logic import (
 )
 
 from . import data
+from .presenters import PRESENTERS, EntityPresenter, LegacyPresenter, PresenterContext
 
 # Sentinel "uris" for the overview nodes (no real entity behind them).
 OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
@@ -78,6 +79,39 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
     return sections
 
 
+# ── legacy field builders, adapted to the (ctx, uri) presenter signature ──────
+# Each kind keeps its existing build_* function until it gets a dedicated
+# presenter; LegacyPresenter wraps these so output stays byte-identical.
+
+
+def _overview_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
+    return build_tui_ontology_overview_fields(
+        ctx.tax, ctx.lang, ctx.activity, ctx.lint, ctx.configured_langs, ctx.metadata
+    )
+
+
+def _taxonomy_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
+    return build_tui_taxonomy_overview_fields(ctx.tax, ctx.lang)
+
+
+def _entity_render(ctx: PresenterContext, uri: str) -> list[DetailField]:
+    builder = _BUILDERS.get(data.kind_of(ctx.tax, uri))
+    return builder(ctx.tax, uri, ctx.lang, configured_langs=ctx.configured_langs) if builder else []
+
+
+def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
+    """The presenter for *uri*: a registered subclass, else a LegacyPresenter
+    wrapping the kind's existing build_* function."""
+    if uri == OVERVIEW_URI:
+        return LegacyPresenter(ctx, uri, _overview_render)
+    if uri == TAXONOMY_URI:
+        return LegacyPresenter(ctx, uri, _taxonomy_render)
+    presenter_cls = PRESENTERS.get(data.kind_of(ctx.tax, uri))
+    if presenter_cls is not None:
+        return presenter_cls(ctx, uri)
+    return LegacyPresenter(ctx, uri, _entity_render)
+
+
 def _fields_for(
     tax: Taxonomy,
     uri: str,
@@ -87,15 +121,16 @@ def _fields_for(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
 ) -> list[DetailField]:
-    """The flat DetailField list for *uri* (overview sentinel or entity builder)."""
-    if uri == OVERVIEW_URI:
-        return build_tui_ontology_overview_fields(
-            tax, lang, activity, lint, configured_langs, metadata
-        )
-    if uri == TAXONOMY_URI:
-        return build_tui_taxonomy_overview_fields(tax, lang)
-    builder = _BUILDERS.get(data.kind_of(tax, uri))
-    return builder(tax, uri, lang, configured_langs=configured_langs) if builder else []
+    """The flat DetailField list for *uri*, via its presenter."""
+    ctx = PresenterContext(
+        tax=tax,
+        lang=lang,
+        configured_langs=configured_langs,
+        activity=activity,
+        lint=lint,
+        metadata=metadata,
+    )
+    return _presenter_for(ctx, uri).render()
 
 
 def _is_create(f: DetailField) -> bool:
