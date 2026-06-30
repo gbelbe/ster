@@ -598,9 +598,18 @@ class OntologyApp(App):
         is_overview = uri == detail.OVERVIEW_URI
         activity = self._ontology_activity() if is_overview else None
         lint = self._ontology_lint() if is_overview else None
+        metadata = self._metadata_coverage() if is_overview else None
         view = self.query_one("#detail", DetailView)
-        view.update_entity(self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs)
+        view.update_entity(
+            self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs, metadata
+        )
         view.border_title = self._detail_title(uri)
+
+    def _metadata_coverage(self) -> dict | None:
+        """Ontology/entity metadata-completion percentages vs the configured catalogs."""
+        from ster.metadata_coverage import overview_coverage
+
+        return overview_coverage(self.tax, self.metadata_props, self.entity_metadata_props)
 
     def _ontology_activity(self) -> dict | None:
         """Git edit-activity for the file (computed once per session, cached)."""

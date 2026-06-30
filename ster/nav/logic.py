@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
+from ..metadata_coverage import is_labelled as _is_labelled
 from ..model import LabelType, OntologyAnnotation, Taxonomy
 from ..owl_analysis import (
     ONTOLOGY_ISSUE_DISPLAY_NAMES,
@@ -3064,24 +3065,48 @@ def _stats_quality(
 ) -> list[DetailField]:
     classes = taxonomy.owl_classes
     total = len(classes)
-    fields: list[DetailField] = [_sep("Quality & coverage")]
+    # Heading + class label/documentation coverage. "labelled" accepts rdfs:label or
+    # skos:prefLabel; "documented" is rdfs:comment — each row names its predicate(s).
+    fields: list[DetailField] = [_sep("Quality & Coverage")]
     if total:
-        labelled = sum(1 for c in classes.values() if c.labels)
+        labelled = sum(1 for c in classes.values() if _is_labelled(c))
         commented = sum(1 for c in classes.values() if c.comments)
-        fields.append(_bar_stat("st:label_cov", "labelled", labelled, total))
-        fields.append(_bar_stat("st:comment_cov", "documented", commented, total))
-    # Coverage is reported over the configured languages when known; otherwise over
+        fields.append(
+            _bar_stat("st:label_cov", "labelled (rdfs:label / skos:prefLabel)", labelled, total)
+        )
+        fields.append(_bar_stat("st:comment_cov", "documented (rdfs:comment)", commented, total))
+    # Language coverage — reported over the configured languages when known, else over
     # the languages detected in the data.
     langs = configured_langs if configured_langs is not None else _class_languages(classes)
     summary = str(len(langs)) + (f" ({', '.join(langs)})" if langs else "")
+    fields.append(_sep("Languages"))
     fields.append(_stat("st:langs", "languages", summary))
     if total:
         fields.extend(_lang_coverage_rows(classes, langs, total))
     return fields
 
 
+def _stats_metadata(metadata: dict | None) -> list[DetailField]:
+    """The "Metadata coverage" subsection: how completely the configured annotation
+    properties are populated (ontology header + entities). Omitted when neither
+    percentage is computable (no catalogs configured)."""
+    if not metadata:
+        return []
+    ont, ent = metadata.get("ontology_pct"), metadata.get("entity_pct")
+    if ont is None and ent is None:
+        return []
+    fields: list[DetailField] = [_sep("Metadata coverage")]
+    if ont is not None:
+        fields.append(_pct_stat("st:meta_ont", "Ontology Metadata", ont))
+    if ent is not None:
+        fields.append(_pct_stat("st:meta_entity", "Entity Metadata", ent))
+    return fields
+
+
 def _ontology_stats_fields(
-    taxonomy: Taxonomy, configured_langs: list[str] | None = None
+    taxonomy: Taxonomy,
+    configured_langs: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> list[DetailField]:
     """Global ontology statistics, grouped into visual subject sections."""
     return [
@@ -3089,6 +3114,7 @@ def _ontology_stats_fields(
         *_stats_properties(taxonomy),
         *_stats_individuals(taxonomy),
         *_stats_quality(taxonomy, configured_langs),
+        *_stats_metadata(metadata),
     ]
 
 
@@ -3149,6 +3175,7 @@ def build_tui_ontology_overview_fields(
     activity: dict | None = None,
     lint: dict | None = None,
     configured_langs: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> list[DetailField]:
     """Detail panel for the ontology overview node — New-TUI only.
 
@@ -3188,7 +3215,7 @@ def build_tui_ontology_overview_fields(
     fields.extend(_ontology_lint_fields(lint))
 
     # ── Stats + Activity ──────────────────────────────────────────────────────
-    fields.extend(_ontology_stats_fields(taxonomy, configured_langs))
+    fields.extend(_ontology_stats_fields(taxonomy, configured_langs, metadata))
     fields.extend(_ontology_activity_fields(activity))
 
     return fields
