@@ -17,7 +17,13 @@ from __future__ import annotations
 
 from .base import ChangeSet, Command
 from .cross import AddSchemaMedia, RemoveSchemaMedia, RenameEntity
-from .onto import OntoRenameUri, OntoSetMetadata, OntoSetPrefix
+from .onto import (
+    OntoRemoveAnnotation,
+    OntoRenameUri,
+    OntoSetAnnotation,
+    OntoSetMetadata,
+    OntoSetPrefix,
+)
 from .owl import (
     OwlAddExternalSuperclass,
     OwlAddIndividualType,
@@ -64,6 +70,8 @@ __all__ = [
     "ChangeSet",
     "Command",
     "OntoRenameUri",
+    "OntoRemoveAnnotation",
+    "OntoSetAnnotation",
     "OntoSetMetadata",
     "OntoSetPrefix",
     "OwlAddExternalSuperclass",

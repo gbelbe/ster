@@ -9,10 +9,11 @@ import tempfile
 from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
-from rdflib.namespace import DCTERMS, OWL, RDFS, SKOS, XSD
+from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 
 VOID = Namespace("http://rdfs.org/ns/void#")
 SCHEMA = Namespace("https://schema.org/")
+VANN = Namespace("http://purl.org/vocab/vann/")
 
 NOTE_PROPERTY_URI = "https://example.org/ontology/kai-internal-knowledge#note"
 
@@ -28,11 +29,49 @@ from .model import (
     Definition,
     Label,
     LabelType,
+    OntologyAnnotation,
     OWLIndividual,
     OWLProperty,
     RDFClass,
     Taxonomy,
     is_builtin_uri,
+)
+
+
+def _annotation_from(predicate: str, obj: object) -> OntologyAnnotation | None:
+    """Build an :class:`OntologyAnnotation` from an rdflib object (None for BNodes)."""
+    if isinstance(obj, URIRef):
+        return OntologyAnnotation(predicate=predicate, value=str(obj), is_iri=True)
+    if isinstance(obj, Literal):
+        datatype = str(obj.datatype) if obj.datatype else ""
+        return OntologyAnnotation(
+            predicate=predicate, value=str(obj), lang=obj.language or "", datatype=datatype
+        )
+    return None
+
+
+def _annotation_object(a: OntologyAnnotation) -> URIRef | Literal:
+    """Render an :class:`OntologyAnnotation` back into an rdflib object."""
+    if a.is_iri:
+        return URIRef(a.value)
+    if a.datatype:
+        return Literal(a.value, datatype=URIRef(a.datatype))
+    return Literal(a.value, lang=a.lang or None)
+
+
+# Scheme predicates already captured as structured fields — excluded from the
+# generic annotation store so they are not double-counted.
+_SCHEME_STRUCTURAL_PREDICATES: frozenset[str] = frozenset(
+    {
+        str(RDF.type),
+        str(DCTERMS.title),
+        str(DCTERMS.description),
+        str(DCTERMS.creator),
+        str(DCTERMS.created),
+        str(DCTERMS.language),
+        str(SKOS.hasTopConcept),
+        str(VOID.uriSpace),
+    }
 )
 
 _FORMAT_MAP = {
@@ -216,6 +255,25 @@ def _atomic_write_text(path: Path, data: str) -> None:
 # ──────────────────────────── conversion ─────────────────────────────────────
 
 
+def _load_ontology_node(g: Graph, taxonomy: Taxonomy) -> None:
+    """Load the owl:Ontology node into *taxonomy* (first non-BNode only)."""
+    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
+        if isinstance(ont_ref, BNode):
+            continue
+        taxonomy.ontology_uri = str(ont_ref)
+        for p, o in g.predicate_objects(ont_ref):
+            if p == RDF.type:
+                continue
+            anno = _annotation_from(str(p), o)
+            if anno is not None:
+                taxonomy.ontology_annotations.append(anno)
+        if taxonomy.ontology_title is None and taxonomy.ontology_label:
+            taxonomy.ontology_title = taxonomy.ontology_label
+        if taxonomy.ontology_description is None and taxonomy.ontology_label:
+            taxonomy.ontology_description = taxonomy.ontology_label
+        break
+
+
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
     taxonomy = Taxonomy()
 
@@ -240,6 +298,15 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
             scheme.languages.append(str(o))
         for _, _, o in g.triples((s_ref, VOID.uriSpace, None)):
             scheme.base_uri = str(o)
+        # Any *other* descriptive predicate on the scheme is captured generically
+        # so the overview can show and edit it (the structured ones above are
+        # already modelled and must not be double-counted).
+        for p, o in g.predicate_objects(s_ref):
+            if str(p) in _SCHEME_STRUCTURAL_PREDICATES:
+                continue
+            anno = _annotation_from(str(p), o)
+            if anno is not None:
+                scheme.annotations.append(anno)
 
         taxonomy.schemes[uri] = scheme
 
@@ -356,34 +423,7 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
         taxonomy.owl_classes[uri] = rdf_class
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
-    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
-        if isinstance(ont_ref, BNode):
-            continue
-        taxonomy.ontology_uri = str(ont_ref)
-        for _, _p, o in g.triples((ont_ref, RDFS.label, None)):
-            taxonomy.ontology_label = str(o)
-            break
-        for o in g.objects(ont_ref, DCTERMS.title):
-            taxonomy.ontology_title = str(o)
-            break
-        for o in g.objects(ont_ref, DCTERMS.description):
-            taxonomy.ontology_description = str(o)
-            break
-        for o in g.objects(ont_ref, OWL.versionInfo):
-            taxonomy.version_info = str(o)
-            break
-        for o in g.objects(ont_ref, OWL.versionIRI):
-            taxonomy.version_iri = str(o)
-            break
-        for o in g.objects(ont_ref, OWL.priorVersion):
-            taxonomy.prior_version = str(o)
-            break
-        # Pre-fill title and description from rdfs:label when absent
-        if taxonomy.ontology_title is None and taxonomy.ontology_label:
-            taxonomy.ontology_title = taxonomy.ontology_label
-        if taxonomy.ontology_description is None and taxonomy.ontology_label:
-            taxonomy.ontology_description = taxonomy.ontology_label
-        break  # only take the first owl:Ontology
+    _load_ontology_node(g, taxonomy)
 
     # ── OWL Properties ────────────────────────────────────────────────────────
     _PROP_TYPE_MAP = {
@@ -507,6 +547,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     g.bind("rdfs", RDFS)
     g.bind("owl", OWL)
     g.bind("schema", SCHEMA)
+    g.bind("vann", VANN)
+    g.bind("foaf", FOAF)
 
     # Re-bind any namespaces captured from the source file (enables round-trip of foaf:, kai:, etc.)
     for prefix, ns in taxonomy.namespace_bindings.items():
@@ -533,6 +575,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, VOID.uriSpace, Literal(scheme.base_uri)))
         for tc_uri in scheme.top_concepts:
             g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
+        for a in scheme.annotations:
+            g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
     # ── Concepts ─────────────────────────────────────────────────────────────
     for uri, concept in taxonomy.concepts.items():
@@ -667,18 +711,10 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     if taxonomy.ontology_uri:
         ont_ref = URIRef(taxonomy.ontology_uri)
         g.add((ont_ref, RDF.type, OWL.Ontology))
-        if taxonomy.ontology_label:
-            g.add((ont_ref, RDFS.label, Literal(taxonomy.ontology_label)))
-        if taxonomy.ontology_title:
-            g.set((ont_ref, DCTERMS.title, Literal(taxonomy.ontology_title)))
-        if taxonomy.ontology_description:
-            g.set((ont_ref, DCTERMS.description, Literal(taxonomy.ontology_description)))
-        if taxonomy.version_info:
-            g.set((ont_ref, OWL.versionInfo, Literal(taxonomy.version_info)))
-        if taxonomy.version_iri:
-            g.set((ont_ref, OWL.versionIRI, URIRef(taxonomy.version_iri)))
-        if taxonomy.prior_version:
-            g.set((ont_ref, OWL.priorVersion, URIRef(taxonomy.prior_version)))
+        # Serialise every descriptive annotation generically (the typed accessors
+        # write into this same store, so title/description/version come for free).
+        for a in taxonomy.ontology_annotations:
+            g.add((ont_ref, URIRef(a.predicate), _annotation_object(a)))
 
     return g
 

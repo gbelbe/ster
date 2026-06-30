@@ -1,0 +1,170 @@
+"""Composed detail view for the Textual TUI.
+
+The detail pane is built from real widgets — one per section header and one
+*focusable* row per ``DetailField`` — rather than a single Rich-markup blob.
+This is the foundation of the generic "block" model: focusable rows let later
+phases attach inline edit / action behaviour per row, and specialised block
+widgets can replace ``DetailRow`` without touching the entities that compose them.
+
+See docs/architecture/textual-tui-refactor.md.
+"""
+
+from __future__ import annotations
+
+from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.message import Message
+from textual.widgets import Static
+
+from ster.model import Taxonomy
+from ster.nav.logic import DetailField
+
+from .detail import build_sections, field_markup
+
+PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
+
+# Hover help for action rows (mouse + keyboard discoverability). Anything not
+# listed falls back to a generic hint; editable rows say "Enter to edit".
+_ACTION_HELP = {
+    "new_subclass": "Create a child class under this one",
+    "add_individual": "Create an instance (individual) of this class",
+    "link_superclass": "Add another parent class (polyhierarchy)",
+    "remove_superclass": "Detach this parent class",
+    "add_class_property": "Define a new property with this class as its domain",
+    "class_to_individual": "Convert this class into an individual (punning)",
+    "delete_class": "Delete this class — you'll choose what happens to its subclasses & instances",
+    "add_ind_type": "Add a class membership (rdf:type) to this individual",
+    "remove_ind_type": "Remove this class membership",
+    "add_prop_value": "Add a property value — pick a property, then a value",
+    "edit_prop_value": "Change this value to another individual",
+    "remove_prop_value": "Remove this value",
+    "edit_literal_value": "Edit this literal value",
+    "remove_literal_value": "Remove this literal value",
+    "individual_to_class": "Convert this individual into a class (punning)",
+    "delete_individual": "Delete this individual",
+    "add_prop_domain": "Add a class to this property's domain",
+    "add_prop_range": "Add a class to this property's range",
+    "remove_prop_domain": "Remove this domain class",
+    "remove_prop_range": "Remove this range class",
+    "delete_property": "Delete this property",
+    "add_narrower": "Add a child (narrower) concept",
+    "link_broader": "Link to a broader concept",
+    "add_related": "Add a related concept",
+    "move": "Move this concept under a different parent",
+    "delete": "Delete this concept — you'll choose whether to keep its descendants",
+    "add_top_concept": "Add a top concept to this scheme",
+    "add_scheme": "Create a new SKOS concept scheme",
+    "create_owl_class": "Create a new top-level OWL class",
+    "create_owl_property": "Create a new OWL property",
+    "edit_ontology_prefix": "Edit the ontology's namespace prefix",
+    "edit_ontology_uri": "Rename the ontology base URI (cascades to every entity)",
+    "edit_ontology_domain": "Change the ontology domain/host (cascades to every entity)",
+    "edit_note": "Edit the markdown note",
+    "delete_note": "Clear the note",
+}
+
+
+def _row_tooltip(field: DetailField) -> str | None:
+    """Hover help for a row: edit hint, a per-action description, or a run hint."""
+    if field.editable:
+        return "Enter to edit"
+    action = field.meta.get("action")
+    if not action:
+        return None
+    return _ACTION_HELP.get(action, "Enter to run")
+
+
+class SectionHeader(Static):
+    """A non-focusable section title (e.g. 'Identity', 'Danger Zone')."""
+
+    def __init__(self, title: str, *, danger: bool = False) -> None:
+        style = "bold red" if danger else "bold"
+        super().__init__(f"[{style}]{title}[/]")
+        self.title_text = title  # plain title, for queries/tests
+        self.add_class("section-header")
+
+
+class DetailRow(Static):
+    """A focusable detail field row; carries its ``DetailField`` for later actions.
+
+    Arrow keys move between rows (``up``/``down``) and back to the tree (``left``),
+    so the whole UI is navigable without reaching for Tab.
+    """
+
+    can_focus = True
+    BINDINGS = [
+        Binding("enter", "activate", "Edit / run"),
+        Binding("down", "focus_row(1)", "Next", show=False),
+        Binding("up", "focus_row(-1)", "Prev", show=False),
+        Binding("left", "focus_tree", "Tree", show=False),
+    ]
+
+    def action_focus_row(self, delta: int) -> None:
+        """Move focus to the previous/next sibling row, wrapping around the ends."""
+        rows = list(self.app.query("#detail DetailRow"))
+        if rows:  # wrap: up from the first row → last, down from the last → first
+            rows[(rows.index(self) + delta) % len(rows)].focus()
+
+    def action_focus_tree(self) -> None:
+        """Jump focus back to the tree (the left pane)."""
+        trees = list(self.app.query("#tree"))
+        if trees:
+            trees[0].focus()
+
+    class EditRequested(Message):
+        """Posted when the user activates an editable value row (Enter)."""
+
+        def __init__(self, field: DetailField) -> None:
+            super().__init__()
+            self.field = field
+
+    class ActionRequested(Message):
+        """Posted when the user activates an action row (Enter)."""
+
+        def __init__(self, field: DetailField) -> None:
+            super().__init__()
+            self.field = field
+
+    def __init__(self, field: DetailField) -> None:
+        super().__init__(field_markup(field))
+        self.field = field
+        self.add_class("detail-row")
+        tip = _row_tooltip(field)
+        if tip:
+            self.tooltip = tip
+
+    def action_activate(self) -> None:
+        if self.field.editable:
+            self.post_message(self.EditRequested(self.field))
+        elif self.field.meta.get("action"):
+            self.post_message(self.ActionRequested(self.field))
+
+
+class DetailView(VerticalScroll):
+    """Compose an entity's detail into section headers + focusable field rows."""
+
+    can_focus = True  # so clicking the (empty) pane can still select it
+
+    def compose(self):  # type: ignore[no-untyped-def]
+        yield Static(PLACEHOLDER)
+
+    def on_click(self) -> None:
+        """Click blank pane space to select this window: focus a row, else the pane."""
+        rows = list(self.query(DetailRow))
+        if not rows:
+            self.focus()  # empty pane (placeholder) — select the pane itself
+        elif not isinstance(self.app.focused, DetailRow):
+            rows[0].focus()  # a row click self-focuses; blank space → first row
+
+    def update_entity(self, tax: Taxonomy, uri: str | None, lang: str = "en") -> None:
+        """Rebuild the pane to show *uri* (or a placeholder when None)."""
+        self.remove_children()
+        if uri is None:
+            self.mount(Static(PLACEHOLDER))
+            return
+        widgets: list[Static] = []
+        for sec in build_sections(tax, uri, lang):
+            if sec.title:
+                widgets.append(SectionHeader(sec.title, danger=sec.danger))
+            widgets.extend(DetailRow(f) for f in sec.fields)
+        self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

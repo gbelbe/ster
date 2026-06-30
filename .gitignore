@@ -22,3 +22,7 @@ docs/internal/
 
 # Node / JS tooling
 node_modules/
+
+# Claude Code personal permissions
+.claude/settings.local.json
+snapshot_report.html

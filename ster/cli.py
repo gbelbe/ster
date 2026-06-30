@@ -8,6 +8,7 @@ import re
 import tempfile
 import threading
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
@@ -186,6 +187,7 @@ def _print_welcome() -> None:
 _SUBCOMMANDS = frozenset(
     {
         "show",
+        "new-tui",
         "add",
         "remove",
         "move",
@@ -210,6 +212,7 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
+_NEW_TUI_SENTINEL: Path = Path(".__ster_new_tui__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
@@ -707,6 +710,7 @@ def _multi_file_picker(
     # Action items — cursor lives here only
     _ACTIONS: list[tuple[object, str]] = [
         (True, "↵  Open Tree View"),  # True = "open" sentinel
+        (_NEW_TUI_SENTINEL, "🖥  Open New-TUI (Textual)"),
         (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
@@ -724,36 +728,32 @@ def _multi_file_picker(
         for f in found:
             console.print(f"  ✓  {f.name}")
         console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
-        console.print("  [cyan] 2[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
-        console.print("  [cyan] 3[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
-        console.print("  [cyan] 4[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
-        console.print("  [cyan] 5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
-        console.print("  [cyan] 6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print("  [cyan] 7[/cyan]  [green]📦 Version & Publish LD[/green]")
-        console.print("  [cyan] 8[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan] 9[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan] 2[/cyan]  [bold cyan]🖥  Open New-TUI (Textual)[/bold cyan]")
+        console.print("  [cyan] 3[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
+        console.print("  [cyan] 4[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
+        console.print("  [cyan] 5[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
+        console.print("  [cyan] 6[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
+        console.print("  [cyan] 7[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan] 8[/cyan]  [green]📦 Version & Publish LD[/green]")
+        console.print("  [cyan] 9[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
+        console.print("  [cyan]10[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–9)", default="1")
+        choice = Prompt.ask("Action (1–10)", default="1")
         s = choice.strip().lower()
-        if s == "1" or s == "all":
+        if s in ("1", "all"):
             return list(found)
-        if s == "2":
-            return _GRAPH_SENTINEL  # type: ignore[return-value]
-        if s == "3":
-            return _QUERY_SENTINEL  # type: ignore[return-value]
-        if s == "4":
-            return _EXT_ONT_SENTINEL  # type: ignore[return-value]
-        if s == "5":
-            return _HTML_SENTINEL  # type: ignore[return-value]
-        if s == "6":
-            return _GIT_LOG_SENTINEL  # type: ignore[return-value]
-        if s == "7":
-            return _PUBLISH_SENTINEL  # type: ignore[return-value]
-        if s == "8":
-            return _AI_CONFIG_SENTINEL  # type: ignore[return-value]
-        if s == "9":
-            return _QUIT_SENTINEL  # type: ignore[return-value]
-        return list(found)
+        fallback: dict[str, Path] = {
+            "2": _NEW_TUI_SENTINEL,
+            "3": _GRAPH_SENTINEL,
+            "4": _QUERY_SENTINEL,
+            "5": _EXT_ONT_SENTINEL,
+            "6": _HTML_SENTINEL,
+            "7": _GIT_LOG_SENTINEL,
+            "8": _PUBLISH_SENTINEL,
+            "9": _AI_CONFIG_SENTINEL,
+            "10": _QUIT_SENTINEL,
+        }
+        return fallback.get(s, list(found))  # type: ignore[return-value]
 
     try:
         import termios
@@ -777,6 +777,8 @@ def _multi_file_picker(
     action_cursor = 0
 
     def _action_colour(sentinel: object) -> str:
+        if sentinel == _NEW_TUI_SENTINEL:
+            return BCY  # bright cyan — the modern browser
         if sentinel == _GIT_LOG_SENTINEL:
             return MG
         if sentinel == _HTML_SENTINEL:
@@ -941,6 +943,52 @@ def _launch_setup(found: list[Path]) -> None:  # noqa: ARG001
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
 
+def _launch_ext_ontologies(found: list[Path]) -> None:  # noqa: ARG001
+    """Home-menu action: open the external-ontologies import screen."""
+    from .ext_ontologies_ui import run_ext_ontologies_screen
+
+    run_ext_ontologies_screen(taxonomy=None)
+
+
+def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
+    """Run the home-menu handler for a sentinel selection. True when handled.
+
+    A plain list/file selection (not a sentinel) returns False so the caller
+    falls through to the open-file path.
+    """
+    from .git.log import launch_git_log
+
+    actions: dict[Path, Callable[[list[Path]], None]] = {
+        _GIT_LOG_SENTINEL: lambda f: launch_git_log(path=f[0] if f else None),
+        _HTML_SENTINEL: _run_html_export_interactive,
+        _NEW_TUI_SENTINEL: _launch_new_tui,
+        _GRAPH_SENTINEL: _run_graph_viz_interactive,
+        _AI_CONFIG_SENTINEL: _launch_setup,
+        _QUERY_SENTINEL: _launch_query,
+        _EXT_ONT_SENTINEL: _launch_ext_ontologies,
+        _PUBLISH_SENTINEL: _run_publish_interactive,
+    }
+    action = actions.get(selected) if isinstance(selected, Path) else None
+    if action is None:
+        return False
+    action(found)
+    return True
+
+
+def _launch_new_tui(found: list[Path]) -> None:
+    """Home-menu action: open the New-TUI (Textual ontology browser)."""
+    if not found:
+        err.print("[red]No taxonomy files to open.[/red]")
+        return
+    primary = found[0]
+    taxonomy = _load_safe(primary)
+    if taxonomy is None:
+        return
+    from .tui import launch
+
+    launch(taxonomy, source=primary.name, path=primary)
+
+
 def _launch_query(found: list[Path]) -> None:
     """Open the TUI in SPARQL query mode for the given files."""
     from .git.manager import GitManager
@@ -1103,6 +1151,28 @@ def cmd_show(
         return
 
     _open_viewer(taxonomy_file, lang=lang, jump_concept=concept)
+
+
+@app.command("new-tui")
+def cmd_new_tui(
+    file: Path | None = typer.Argument(
+        None, help="Taxonomy file (.ttl / .rdf / .jsonld). Auto-detected if omitted."
+    ),
+    lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
+) -> None:
+    """Open the New-TUI — the modern Textual ontology browser & editor.
+
+    A mouse- and keyboard-driven tree of classes / individuals / properties with a
+    fuzzy search palette (press ``/``) and a live detail panel. Fully editable:
+    create / rename / re-link / delete classes, individuals, properties, concepts
+    and schemes — every change is validated and saved to the file. Arrow keys move
+    between the tree and the detail rows; Enter edits (or runs) the focused row.
+    """
+    from .tui import launch
+
+    taxonomy_file = _resolve_file(file)
+    taxonomy = _load(taxonomy_file)
+    launch(taxonomy, source=taxonomy_file.name, lang=lang, path=taxonomy_file)
 
 
 # ──────────────────────────── add ────────────────────────────────────────────
@@ -2257,8 +2327,6 @@ def _home_screen(initial_file: Path | None = None) -> None:
     """
     global _ci_check_done, _session_file
 
-    from .git.log import launch_git_log
-
     pending_open = initial_file
     while True:
         try:
@@ -2309,34 +2377,7 @@ def _home_screen(initial_file: Path | None = None) -> None:
         if selected is _QUIT_SENTINEL or selected is None:
             break
 
-        if selected is _GIT_LOG_SENTINEL:
-            launch_git_log(path=found[0] if found else None)
-            continue
-
-        if selected is _HTML_SENTINEL:
-            _run_html_export_interactive(found)
-            continue
-
-        if selected is _GRAPH_SENTINEL:
-            _run_graph_viz_interactive(found)
-            continue
-
-        if selected is _AI_CONFIG_SENTINEL:
-            _launch_setup(found)
-            continue
-
-        if selected is _QUERY_SENTINEL:
-            _launch_query(found)
-            continue
-
-        if selected is _EXT_ONT_SENTINEL:
-            from .ext_ontologies_ui import run_ext_ontologies_screen
-
-            run_ext_ontologies_screen(taxonomy=None)
-            continue
-
-        if selected is _PUBLISH_SENTINEL:
-            _run_publish_interactive(found)
+        if _dispatch_menu_action(selected, found):
             continue
 
         if not selected:
