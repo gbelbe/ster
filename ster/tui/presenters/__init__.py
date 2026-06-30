@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .base import EntityPresenter, LegacyPresenter
 from .class_ import ClassPresenter
+from .concept_ import ConceptPresenter
 from .context import PresenterContext
 from .property_ import PropertyPresenter
 
@@ -14,12 +15,14 @@ from .property_ import PropertyPresenter
 # LegacyPresenter wrapping their legacy ``build_*`` function (see ``ster.tui.detail``).
 PRESENTERS: dict[str, type[EntityPresenter]] = {
     "class": ClassPresenter,
+    "concept": ConceptPresenter,
     "property": PropertyPresenter,
 }
 
 __all__ = [
     "PRESENTERS",
     "ClassPresenter",
+    "ConceptPresenter",
     "EntityPresenter",
     "LegacyPresenter",
     "PresenterContext",

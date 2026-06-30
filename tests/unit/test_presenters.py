@@ -76,10 +76,14 @@ def test_dispatch_routes_to_registered_presenters_else_legacy() -> None:
     tax = store.load(DEMO)
     ctx = _ctx(tax)
     assert isinstance(detail._presenter_for(ctx, detail.OVERVIEW_URI), OntologyOverviewPresenter)
+    from ster.model import Concept, Label
+    from ster.tui.presenters.concept_ import ConceptPresenter
     from ster.tui.presenters.property_ import PropertyPresenter
 
+    tax.concepts[ZOO + "Wild"] = Concept(uri=ZOO + "Wild", labels=[Label("en", "Wild")])
     assert isinstance(detail._presenter_for(ctx, ZOO + "Cat"), ClassPresenter)
     assert isinstance(detail._presenter_for(ctx, ZOO + "hasAge"), PropertyPresenter)
+    assert isinstance(detail._presenter_for(ctx, ZOO + "Wild"), ConceptPresenter)
     assert isinstance(detail._presenter_for(ctx, detail.TAXONOMY_URI), LegacyPresenter)
     assert isinstance(detail._presenter_for(ctx, ZOO + "Rex"), LegacyPresenter)  # individual
 
@@ -126,7 +130,8 @@ def test_class_presenter_health_is_a_stable_subtree_checklist() -> None:
     tax = store.load(DEMO)
     fields = ClassPresenter(_ctx(tax), ZOO + "Eagle").render()  # leaf: subtree is itself
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
-    assert seps[0] == "Identity" and seps[1] == "Health & Issues"
+    # the Health checklist sits inside the bordered Quality & Coverage box (after Identity)
+    assert seps[:3] == ["Identity", "Quality & Coverage", "Health & Issues"]
     by_key = _health_by_key(fields)
     # all three categories are always present with a numeric count
     assert by_key["cls:gap_unlab"].value == "0"  # Eagle is labelled
@@ -193,3 +198,44 @@ def test_property_health_all_green_when_complete() -> None:
     assert {by_key[k].value for k in ("prop:gap_label", "prop:gap_domain", "prop:gap_range")} == {
         "0"
     }
+
+
+# ── P5: Quality & Coverage box on classes and concepts (subtree-scoped) ────────
+
+
+def test_class_quality_box_wraps_health_and_subtree_quality() -> None:
+    """A class's Health + subtree-quality coverage are enclosed in one bordered
+    'Quality & Coverage' group (the inline 'Subtree Quality' section is relocated in)."""
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    fields = ClassPresenter(_ctx(tax), ZOO + "Animal").render()
+    groups = [f.display for f in fields if f.meta.get("type") == "separator_group"]
+    ends = [f for f in fields if f.meta.get("type") == "separator_group_end"]
+    assert groups == ["Quality & Coverage"] and len(ends) == 1
+    inner = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "Health & Issues" in inner and "Subtree Quality" in inner
+
+
+def test_concept_quality_box_is_subtree_scoped() -> None:
+    """A concept leads with a bordered Quality & Coverage box whose Health counts gaps
+    over the concept's subtree (itself + narrower descendants)."""
+    from ster.model import Concept, Definition, Label
+    from ster.tui.presenters.concept_ import ConceptPresenter
+
+    tax = store.load(DEMO)
+    root, child = ZOO + "Habitat", ZOO + "Forest"
+    tax.concepts[child] = Concept(uri=child, labels=[Label("en", "Forest")])  # prefLabel, no def
+    tax.concepts[root] = Concept(
+        uri=root,
+        labels=[Label("en", "Habitat")],
+        definitions=[Definition("en", "Where things live.")],
+        narrower=[child],
+    )
+    fields = ConceptPresenter(_ctx(tax), root).render()
+    seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
+    assert seps[:3] == ["Identity", "Quality & Coverage", "Health & Issues"]
+    by_key = _health_by_key(fields)
+    # subtree = Habitat + Forest; Forest has no definition → 1 without definition
+    assert by_key["concept:gap_def"].value == "1"
+    assert by_key["concept:gap_def"].meta["color"] == "orange"

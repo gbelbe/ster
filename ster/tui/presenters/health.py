@@ -6,7 +6,9 @@ same across the overview, classes, properties, … See docs/architecture/detail-
 
 from __future__ import annotations
 
-from ster.nav.logic import DetailField, _colored, _sep, _stat
+from collections.abc import Iterable
+
+from ster.nav.logic import DetailField, _colored, _sep, _sep_group, _sep_group_end, _stat
 
 
 def gap_row(key: str, label: str, count: int) -> DetailField:
@@ -20,6 +22,31 @@ def gap_row(key: str, label: str, count: int) -> DetailField:
 def health_section(rows: list[DetailField]) -> list[DetailField]:
     """Wrap the checklist *rows* in a 'Health & Issues' section (nothing if empty)."""
     return [_sep("Health & Issues"), *rows] if rows else []
+
+
+def quality_group(*subsections: list[DetailField]) -> list[DetailField]:
+    """Wrap pre-built quality subsections (Health, coverage, …) in one bordered,
+    titled 'Quality & Coverage' box. Empty subsections contribute nothing; the box
+    is omitted entirely when they are all empty."""
+    inner = [field for sub in subsections for field in sub]
+    return [_sep_group("Quality & Coverage"), *inner, _sep_group_end()] if inner else []
+
+
+def strip_sections(
+    fields: list[DetailField], titles: Iterable[str] = (), prefixes: Iterable[str] = ()
+) -> list[DetailField]:
+    """Drop the sections whose title is in *titles* (or starts with one of *prefixes*)
+    — the separator plus its rows up to the next separator — so they can be relocated
+    (e.g. into the Quality & Coverage box)."""
+    titles, prefixes = set(titles), tuple(prefixes)
+    out: list[DetailField] = []
+    skipping = False
+    for f in fields:
+        if f.meta.get("type", "").startswith("separator"):
+            skipping = f.display in titles or any(f.display.startswith(p) for p in prefixes)
+        if not skipping:
+            out.append(f)
+    return out
 
 
 def insert_after_identity(base: list[DetailField], extra: list[DetailField]) -> list[DetailField]:

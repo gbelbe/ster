@@ -11,10 +11,15 @@ See docs/architecture/detail-presenter.md.
 from __future__ import annotations
 
 from ster.metadata_coverage import is_labelled
-from ster.nav.logic import DetailField, _subtree_class_uris, build_rdf_class_detail
+from ster.nav.logic import (
+    DetailField,
+    _class_quality_fields,
+    _subtree_class_uris,
+    build_rdf_class_detail,
+)
 
 from .base import EntityPresenter
-from .health import gap_row, health_section, insert_after_identity
+from .health import gap_row, health_section, insert_after_identity, quality_group, strip_sections
 
 
 class ClassPresenter(EntityPresenter):
@@ -43,4 +48,10 @@ class ClassPresenter(EntityPresenter):
 
     def render(self) -> list[DetailField]:
         base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
-        return insert_after_identity(base, self.health()) if base else base
+        if self.uri not in self.tax.owl_classes:
+            return base
+        # Relocate the inline "Subtree Quality" coverage into the bordered group,
+        # beneath this class's Health checklist.
+        base = strip_sections(base, titles={"Subtree Quality"})
+        coverage = _class_quality_fields(self.tax, self.uri, self.lang)
+        return insert_after_identity(base, quality_group(self.health(), coverage))
