@@ -138,7 +138,7 @@ def test_class_presenter_health_is_a_stable_subtree_checklist() -> None:
     assert by_key["cls:gap_unlab"].meta["color"] == "green"
     assert by_key["cls:gap_undoc"].value == "1"  # no rdfs:comment
     assert by_key["cls:gap_undoc"].meta["color"] == "orange"
-    assert by_key["cls:gap_noind"].value == "1"  # no individuals
+    assert "cls:gap_noind" not in by_key  # 'classes with no individuals' was removed
 
 
 def test_class_health_counts_over_the_whole_subtree() -> None:
@@ -163,11 +163,8 @@ def test_class_health_all_green_when_subtree_is_clean() -> None:
     )
     tax.owl_individuals[ZOO + "t1"] = OWLIndividual(uri=ZOO + "t1", types=[uri])
     by_key = _health_by_key(ClassPresenter(_ctx(tax), uri).render())
-    assert {by_key[k].value for k in ("cls:gap_unlab", "cls:gap_undoc", "cls:gap_noind")} == {"0"}
-    assert all(
-        by_key[k].meta["color"] == "green"
-        for k in ("cls:gap_unlab", "cls:gap_undoc", "cls:gap_noind")
-    )
+    assert {by_key[k].value for k in ("cls:gap_unlab", "cls:gap_undoc")} == {"0"}
+    assert all(by_key[k].meta["color"] == "green" for k in ("cls:gap_unlab", "cls:gap_undoc"))
 
 
 # ── P3: PropertyPresenter Health section ──────────────────────────────────────
@@ -258,7 +255,7 @@ def test_class_and_overview_share_health_and_completeness_labels() -> None:
         f.key.split(":", 1)[-1]: f.display
         for f in ClassPresenter(_ctx(tax), ZOO + "Animal").render()
     }
-    for shared in ("gap_unlab", "gap_undoc", "gap_noind", "label_cov", "comment_cov"):
+    for shared in ("gap_unlab", "gap_undoc", "label_cov", "comment_cov"):
         assert overview[shared] == cls[shared], shared
 
 

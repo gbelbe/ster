@@ -22,17 +22,14 @@ class _Labelled(Protocol):
 
 
 def class_gap_rows(tax: Taxonomy, class_uris: list[str], prefix: str) -> list[DetailField]:
-    """The Health checklist over *class_uris*: unlabelled / undocumented / no-instances
-    counts (green at 0, else orange) — same labels everywhere."""
+    """The Health checklist over *class_uris*: unlabelled / undocumented counts
+    (green at 0, else orange) — same labels everywhere."""
     classes = tax.owl_classes
-    typed = {t for ind in tax.owl_individuals.values() for t in ind.types}
     unlabelled = sum(1 for u in class_uris if not is_labelled(classes[u]))
     undocumented = sum(1 for u in class_uris if not classes[u].comments)
-    no_individuals = sum(1 for u in class_uris if u not in typed)
     return [
         gap_row(f"{prefix}:gap_unlab", "classes unlabelled", unlabelled),
         gap_row(f"{prefix}:gap_undoc", "classes undocumented", undocumented),
-        gap_row(f"{prefix}:gap_noind", "classes with no individuals", no_individuals),
     ]
 
 
