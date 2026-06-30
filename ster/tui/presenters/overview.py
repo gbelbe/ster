@@ -8,13 +8,11 @@ section titles change. See docs/architecture/detail-presenter.md.
 
 from __future__ import annotations
 
-from ster.metadata_coverage import is_labelled
 from ster.model import Taxonomy
 from ster.nav.logic import (
     DetailField,
     _add_action_field,
     _annotation_rows,
-    _bar_stat,
     _class_depths,
     _class_languages,
     _lang_coverage_rows,
@@ -29,16 +27,12 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
+from .coverage import class_completeness_section, class_gap_rows
 from .health import gap_row as _gap_row
 
 
 def _missing_domain_range(tax: Taxonomy) -> int:
     return sum(1 for p in tax.owl_properties.values() if not p.domains or not p.ranges)
-
-
-def _classes_without_individuals(tax: Taxonomy) -> int:
-    typed = {t for ind in tax.owl_individuals.values() for t in ind.types}
-    return sum(1 for uri in tax.owl_classes if uri not in typed)
 
 
 def _first_order_class_count(tax: Taxonomy) -> int:
@@ -77,41 +71,26 @@ class OntologyOverviewPresenter(EntityPresenter):
         """semanticlint counts + structural gaps — the 'what to fix' section.
 
         Opens the visual 'Quality & Coverage' group that bands Health, Completeness,
-        Metadata coverage and Languages together."""
+        Metadata coverage and Languages together. The class-gap rows are shared with
+        the per-class boxes (presenters.coverage) so the labels stay aligned."""
         tax, lint = self.tax, self.ctx.lint
-        classes = tax.owl_classes
         fields = [_sep_group("Quality & Coverage"), _sep("Health & Issues")]
         if lint is not None:
             fields.append(_lint_count_field("error", "Errors", lint.get("error", 0)))
             fields.append(_lint_count_field("warning", "Warnings", lint.get("warning", 0)))
-        undocumented = sum(1 for c in classes.values() if not c.comments)
-        unlabelled = sum(1 for c in classes.values() if not is_labelled(c))
         fields.append(
             _gap_row(
                 "st:incomplete_props", "properties missing domain/range", _missing_domain_range(tax)
             )
         )
-        fields.append(_gap_row("st:gap_undoc", "classes undocumented", undocumented))
-        fields.append(_gap_row("st:gap_unlab", "classes unlabelled", unlabelled))
-        fields.append(
-            _gap_row("st:unused", "classes with no individuals", _classes_without_individuals(tax))
-        )
+        fields.extend(class_gap_rows(tax, list(tax.owl_classes), "st"))
         return fields
 
     def completeness(self) -> list[DetailField]:
         """Coverage bars: labels, docs, metadata, and per-language."""
         classes = self.tax.owl_classes
         total = len(classes)
-        fields = [_sep("Completeness")]
-        if total:
-            labelled = sum(1 for c in classes.values() if is_labelled(c))
-            commented = sum(1 for c in classes.values() if c.comments)
-            fields.append(
-                _bar_stat("st:label_cov", "labelled (rdfs:label / skos:prefLabel)", labelled, total)
-            )
-            fields.append(
-                _bar_stat("st:comment_cov", "documented (rdfs:comment)", commented, total)
-            )
+        fields = class_completeness_section(self.tax, list(classes), "st") or [_sep("Completeness")]
         fields.extend(_stats_metadata(self.ctx.metadata))
         clangs = self.ctx.configured_langs
         langs = clangs if clangs is not None else _class_languages(classes)

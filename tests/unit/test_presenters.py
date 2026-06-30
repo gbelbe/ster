@@ -203,9 +203,9 @@ def test_property_health_all_green_when_complete() -> None:
 # ── P5: Quality & Coverage box on classes and concepts (subtree-scoped) ────────
 
 
-def test_class_quality_box_wraps_health_and_subtree_quality() -> None:
-    """A class's Health + subtree-quality coverage are enclosed in one bordered
-    'Quality & Coverage' group (the inline 'Subtree Quality' section is relocated in)."""
+def test_class_quality_box_aligns_with_the_overview() -> None:
+    """A class's box uses the same Health & Completeness sections as the overview
+    (plus the class-specific Property Fill), all inside one bordered group."""
     from ster.tui.presenters.class_ import ClassPresenter
 
     tax = store.load(DEMO)
@@ -214,7 +214,10 @@ def test_class_quality_box_wraps_health_and_subtree_quality() -> None:
     ends = [f for f in fields if f.meta.get("type") == "separator_group_end"]
     assert groups == ["Quality & Coverage"] and len(ends) == 1
     inner = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert "Health & Issues" in inner and "Subtree Quality" in inner
+    assert "Health & Issues" in inner and "Completeness" in inner and "Property Fill" in inner
+    # Completeness uses the same labels as the overview (shared coverage helper).
+    by_key = {f.key: f for f in fields}
+    assert by_key["cls:label_cov"].display == "labelled (rdfs:label / skos:prefLabel)"
 
 
 def test_concept_quality_box_is_subtree_scoped() -> None:
@@ -239,3 +242,21 @@ def test_concept_quality_box_is_subtree_scoped() -> None:
     # subtree = Habitat + Forest; Forest has no definition → 1 without definition
     assert by_key["concept:gap_def"].value == "1"
     assert by_key["concept:gap_def"].meta["color"] == "orange"
+
+
+def test_class_and_overview_share_health_and_completeness_labels() -> None:
+    """The shared coverage rows guarantee a class box and the ontology overview use
+    identical Health-gap and Completeness labels (the alignment fix)."""
+    from ster.tui.presenters.class_ import ClassPresenter
+
+    tax = store.load(DEMO)
+    overview = {
+        f.key.split(":", 1)[-1]: f.display
+        for f in detail._fields_for(tax, detail.OVERVIEW_URI, "en")
+    }
+    cls = {
+        f.key.split(":", 1)[-1]: f.display
+        for f in ClassPresenter(_ctx(tax), ZOO + "Animal").render()
+    }
+    for shared in ("gap_unlab", "gap_undoc", "gap_noind", "label_cov", "comment_cov"):
+        assert overview[shared] == cls[shared], shared

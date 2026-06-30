@@ -490,7 +490,7 @@ def test_health_surfaces_structural_gaps_colored() -> None:
     assert by_key["st:incomplete_props"].meta["color"] == "orange"
     assert by_key["st:gap_undoc"].value == "2"  # c and d undocumented
     assert by_key["st:gap_unlab"].value == "1"  # only c unlabelled
-    assert by_key["st:unused"].value == "2"  # neither class has individuals
+    assert by_key["st:gap_noind"].value == "2"  # neither class has individuals
     assert by_key["st:gap_unlab"].meta["color"] == "orange"
 
 

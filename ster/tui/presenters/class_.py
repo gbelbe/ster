@@ -10,7 +10,6 @@ See docs/architecture/detail-presenter.md.
 
 from __future__ import annotations
 
-from ster.metadata_coverage import is_labelled
 from ster.nav.logic import (
     DetailField,
     _class_quality_fields,
@@ -19,39 +18,34 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .health import gap_row, health_section, insert_after_identity, quality_group, strip_sections
+from .coverage import class_completeness_section, class_gap_rows
+from .health import health_section, insert_after_identity, quality_group, strip_sections
 
 
 class ClassPresenter(EntityPresenter):
-    """owl:Class / rdfs:Class detail with a leading Health & Issues section.
-
-    The checklist always lists the same categories, each a count of affected
-    classes *in this class's subtree* (the class + its descendants) — so a leaf
-    reports on itself and a root on its whole branch, consistently."""
+    """owl:Class / rdfs:Class detail with a leading, subtree-scoped Quality & Coverage
+    box. It uses the same Health / Completeness rows as the ontology overview
+    (presenters.coverage), scoped to the class's subtree, so the two stay aligned —
+    plus the class-specific Property Fill detail."""
 
     def health(self) -> list[DetailField]:
         if self.uri not in self.tax.owl_classes:
             return []
-        classes = self.tax.owl_classes
-        subtree = _subtree_class_uris(self.tax, self.uri)
-        typed = {t for ind in self.tax.owl_individuals.values() for t in ind.types}
-        unlabelled = sum(1 for u in subtree if not is_labelled(classes[u]))
-        undocumented = sum(1 for u in subtree if not classes[u].comments)
-        no_individuals = sum(1 for u in subtree if u not in typed)
         return health_section(
-            [
-                gap_row("cls:gap_unlab", "unlabelled classes", unlabelled),
-                gap_row("cls:gap_undoc", "undocumented classes", undocumented),
-                gap_row("cls:gap_noind", "classes with no individuals", no_individuals),
-            ]
+            class_gap_rows(self.tax, _subtree_class_uris(self.tax, self.uri), "cls")
         )
 
     def render(self) -> list[DetailField]:
         base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
         if self.uri not in self.tax.owl_classes:
             return base
-        # Relocate the inline "Subtree Quality" coverage into the bordered group,
-        # beneath this class's Health checklist.
-        base = strip_sections(base, titles={"Subtree Quality"})
-        coverage = _class_quality_fields(self.tax, self.uri, self.lang)
-        return insert_after_identity(base, quality_group(self.health(), coverage))
+        # Rebuild the quality box from the shared rows; keep only the class-specific
+        # Property Fill from the legacy helper.
+        base = strip_sections(base, titles={"Subtree Quality", "Property Fill"})
+        subtree = _subtree_class_uris(self.tax, self.uri)
+        completeness = class_completeness_section(self.tax, subtree, "cls")
+        property_fill = strip_sections(
+            _class_quality_fields(self.tax, self.uri, self.lang), titles={"Subtree Quality"}
+        )
+        group = quality_group(self.health(), completeness, property_fill)
+        return insert_after_identity(base, group)
