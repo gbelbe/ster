@@ -18,7 +18,7 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .coverage import class_completeness_section, class_gap_rows
+from .coverage import class_completeness_section, class_gap_rows, languages_section
 from .health import health_section, insert_after_identity, quality_group, strip_sections
 
 
@@ -44,8 +44,10 @@ class ClassPresenter(EntityPresenter):
         base = strip_sections(base, titles={"Subtree Quality", "Property Fill"})
         subtree = _subtree_class_uris(self.tax, self.uri)
         completeness = class_completeness_section(self.tax, subtree, "cls")
+        classes = [self.tax.owl_classes[u] for u in subtree]
+        languages = languages_section(classes, "cls", self.ctx.configured_langs)
         property_fill = strip_sections(
             _class_quality_fields(self.tax, self.uri, self.lang), titles={"Subtree Quality"}
         )
-        group = quality_group(self.health(), completeness, property_fill)
+        group = quality_group(self.health(), completeness, languages, property_fill)
         return insert_after_identity(base, group)

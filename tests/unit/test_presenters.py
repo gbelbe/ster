@@ -260,3 +260,25 @@ def test_class_and_overview_share_health_and_completeness_labels() -> None:
     }
     for shared in ("gap_unlab", "gap_undoc", "gap_noind", "label_cov", "comment_cov"):
         assert overview[shared] == cls[shared], shared
+
+
+def test_languages_section_is_shared_across_overview_classes_concepts() -> None:
+    """The Languages subsection appears in the class and concept boxes too, from the
+    same shared helper (same 'Languages' label + key shape), subtree-scoped."""
+    from ster.model import Concept, Label
+    from ster.tui.presenters.class_ import ClassPresenter
+    from ster.tui.presenters.concept_ import ConceptPresenter
+
+    tax = store.load(DEMO)
+    cctx = PresenterContext(tax=tax, lang="en", configured_langs=["en", "fr"])
+    cls = ClassPresenter(cctx, ZOO + "Animal").render()
+    cls_seps = [f.display for f in cls if f.meta.get("type") == "separator"]
+    assert "Languages" in cls_seps  # now present on classes
+    by_key = {f.key: f for f in cls}
+    assert by_key["cls:langs"].display == "languages"
+    assert "cls:lang_cov:fr" in by_key  # per-configured-language coverage row
+
+    tax.concepts[ZOO + "C"] = Concept(uri=ZOO + "C", labels=[Label("en", "C")])
+    con = ConceptPresenter(cctx, ZOO + "C").render()
+    assert "Languages" in [f.display for f in con if f.meta.get("type") == "separator"]
+    assert any(f.key == "concept:langs" for f in con)

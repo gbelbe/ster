@@ -17,6 +17,7 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
+from .coverage import languages_section
 from .health import gap_row, health_section, insert_after_identity, quality_group, strip_sections
 
 
@@ -50,4 +51,6 @@ class ConceptPresenter(EntityPresenter):
         # Relocate the inline per-property completion bars into the bordered group.
         base = strip_sections(base, prefixes={"Completion —"})
         coverage = _concept_completion_fields(self.tax, self.uri)
-        return insert_after_identity(base, quality_group(self.health(), coverage))
+        subtree = [self.tax.concepts[u] for u in _subtree_concept_uris(self.tax, self.uri)]
+        languages = languages_section(subtree, "concept", self.ctx.configured_langs)
+        return insert_after_identity(base, quality_group(self.health(), coverage, languages))

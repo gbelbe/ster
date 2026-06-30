@@ -14,8 +14,6 @@ from ster.nav.logic import (
     _add_action_field,
     _annotation_rows,
     _class_depths,
-    _class_languages,
-    _lang_coverage_rows,
     _lint_count_field,
     _ontology_activity_fields,
     _sep,
@@ -27,7 +25,7 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .coverage import class_completeness_section, class_gap_rows
+from .coverage import class_completeness_section, class_gap_rows, languages_section
 from .health import gap_row as _gap_row
 
 
@@ -89,16 +87,9 @@ class OntologyOverviewPresenter(EntityPresenter):
     def completeness(self) -> list[DetailField]:
         """Coverage bars: labels, docs, metadata, and per-language."""
         classes = self.tax.owl_classes
-        total = len(classes)
         fields = class_completeness_section(self.tax, list(classes), "st") or [_sep("Completeness")]
         fields.extend(_stats_metadata(self.ctx.metadata))
-        clangs = self.ctx.configured_langs
-        langs = clangs if clangs is not None else _class_languages(classes)
-        fields.append(_sep("Languages"))
-        summary = str(len(langs)) + (f" ({', '.join(langs)})" if langs else "")
-        fields.append(_stat("st:langs", "languages", summary))
-        if total:
-            fields.extend(_lang_coverage_rows(classes, langs, total))
+        fields.extend(languages_section(list(classes.values()), "st", self.ctx.configured_langs))
         fields.append(_sep_group_end())  # close the 'Quality & Coverage' box
         return fields
 
