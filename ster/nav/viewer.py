@@ -375,6 +375,20 @@ class TaxonomyViewer:
             modes.append("ontology")
         return modes or ["mixed"]
 
+    @staticmethod
+    def _graph_opened_status(out: str) -> str:
+        """Status line after opening the graph, flagging the static fallback.
+
+        Without the live server the page is a static snapshot whose
+        explore/extend-relations actions are disabled, so the status says so
+        rather than implying the full interactive graph opened.
+        """
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        if _viz.is_live_server():
+            return f"Graph opened in browser — {out}"
+        return f"Graph opened (static snapshot — no live server, explore disabled) — {out}"
+
     def _rebuild(self) -> None:
         if self._tree.view_mode == "ontology":
             self._tree.flat = flatten_ontology_tree(self._workspace, folded=self._tree.folded)
@@ -1623,54 +1637,184 @@ class TaxonomyViewer:
 
     # ─────────────────────────── TREE events ─────────────────────────────────
 
-    def _on_tree(self, key: int, rows: int) -> bool:
+    def _on_tree_search_active(self, key: int) -> bool:
+        """Handle keypresses while the inline search bar is active. Returns True if handled."""
+        if not self._tree.search.active:
+            return False
+        if key == 27:  # Esc — restore fold state before clearing search
+            if self._search_saved_folded is not None:
+                self._tree.folded = self._search_saved_folded
+                self._search_saved_folded = None
+                self._rebuild()
+            self._tree = search_update(self._tree, key)
+            return True
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            self._search_saved_folded = None
+            self._tree = search_update(self._tree, key)
+            self._open_detail()
+            return True
+        prev_query = self._tree.search.query
+        self._tree = search_update(self._tree, key)
+        if self._tree.search.query != prev_query:
+            self._update_search()
+        return True
+
+    def _on_tree_search_results(self, key: int) -> bool:
+        """Handle navigation through visible search results. Returns True if handled."""
+        if not self._tree.search.matches:
+            return False
+        if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
+            self._search_jump(+1)
+            return True
+        if key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev match
+            self._search_jump(-1)
+            return True
+        if key == ord("n"):
+            self._search_jump(+1)
+            return True
+        if key == ord("N"):
+            self._search_jump(-1)
+            return True
+        if key == 27:  # Esc — clear results
+            self._tree.search.matches = []
+            self._tree.search.pattern = None
+            self._tree.search.query = ""
+            return True
+        return False
+
+    def _on_tree_enter(self, n: int) -> None:
+        """Handle Enter/→ — open property add or enter the focused node's detail."""
+        if 0 <= self._tree.cursor < n:
+            line = self._tree.flat[self._tree.cursor]
+            if line.uri == _ACTION_ADD_PROPERTY:
+                self._trigger_add_global_property()
+                return
+        self._open_detail()
+
+    def _on_tree_action(self, key: int, rows: int) -> bool:
+        """Handle action keys in the tree (space/+/enter/graph/query/quit).
+
+        Called only after navigation and search have already been checked.
+        Returns True when the viewer should quit.
+        """
         n = len(self._tree.flat)
+
+        if key == ord(" "):
+            self._on_tree_space(n)
+        elif key == ord("+"):
+            self._on_tree_plus(n)
+        elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
+            self._on_tree_enter(n)
+        elif key in (curses.KEY_LEFT, ord("h")):
+            self._on_tree_left(n)
+        elif key == ord("G"):
+            self._action_view_ontology_graph(None)
+        elif key == ord("S"):
+            self._trigger_action("open_query")
+        elif key == ord("?"):
+            self._state = WelcomeState()
+        elif key in (ord("q"), ord("Q"), 27):
+            return True
+        return False
+
+    def _toggle_fold_uri(self, uri: str) -> None:
+        """Toggle the fold state of *uri* and re-position the cursor on it."""
+        if uri in self._tree.folded:
+            self._tree.folded.discard(uri)
+        else:
+            self._tree.folded.add(uri)
+        self._rebuild()
+        for i, tl in enumerate(self._tree.flat):
+            if tl.uri == uri:
+                self._tree.cursor = i
+                break
+        self._update_tree_preview()
+
+    def _on_tree_space(self, n: int) -> None:
+        """Handle Space — toggle fold on the current tree node."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        uri = self._tree.flat[self._tree.cursor].uri
+        line = self._tree.flat[self._tree.cursor]
+        if uri == _OWL_SECTION_URI:
+            return
+        if uri == SECTION_PROPERTIES:
+            self._toggle_fold_uri(uri)
+            return
+        if self._node_has_children(uri, line):
+            self._toggle_fold_uri(uri)
+
+    def _owl_node_has_children(self, uri: str) -> bool:
+        """True when an OWL class/individual node has child nodes in the tree."""
+        return any(uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()) or any(
+            uri in ind.types for ind in self.taxonomy.owl_individuals.values()
+        )
+
+    def _unattached_ind_node_has_children(self) -> bool:
+        """True when there are individuals without any known OWL class type."""
+        return any(
+            not any(t in self.taxonomy.owl_classes for t in ind.types)
+            for ind in self.taxonomy.owl_individuals.values()
+        )
+
+    def _node_has_children(self, uri: str, line: object) -> bool:
+        """Return True when the tree node at *uri* has foldable children."""
+        if getattr(line, "is_file", False):
+            return True
+        if getattr(line, "is_scheme", False):
+            s = self.taxonomy.schemes.get(uri)
+            return bool(s and s.top_concepts)
+        if uri == _UNATTACHED_INDS_URI:
+            return self._unattached_ind_node_has_children()
+        is_owl_mode = self._tree.view_mode == "ontology" or (
+            self._tree.view_mode == "mixed" and getattr(line, "node_type", "") == "class"
+        )
+        if is_owl_mode:
+            return self._owl_node_has_children(uri)
+        c = self.taxonomy.concepts.get(uri)
+        return bool(c and c.narrower)
+
+    def _on_tree_plus(self, n: int) -> None:
+        """Handle + — create narrower concept / new subclass from current tree row."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        line = self._tree.flat[self._tree.cursor]
+        if line.is_scheme:
+            self._detail_uri = line.uri
+            self._detail_fields = self._bsf(line.uri)
+            self._trigger_action("add_top_concept")
+        elif line.node_type == "class":
+            self._detail_uri = line.uri
+            self._detail_fields = self._bcdf(line.uri)
+            self._trigger_action("new_subclass")
+        elif not line.is_file and not line.is_action:
+            self._detail_uri = line.uri
+            self._detail_fields = self._bdf(line.uri)
+            self._trigger_action("add_narrower")
+
+    def _on_tree_left(self, n: int) -> None:
+        """Handle ← — jump to parent node or open global overview."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        depth = self._tree.flat[self._tree.cursor].depth
+        if depth > 0:
+            for i in range(self._tree.cursor - 1, -1, -1):
+                if self._tree.flat[i].depth == depth - 1:
+                    self._tree.cursor = i
+                    break
+        else:
+            self._detail_uri = _GLOBAL_URI
+            self._detail_fields = self._bgf()
+            self._field_cursor = 0
+
+    def _on_tree(self, key: int, rows: int) -> bool:
         list_h = rows - 2
 
-        # ── search: typing mode — delegate to search_update() ─────────────────
-        if self._tree.search.active:
-            if key == 27:  # Esc — restore fold state before clearing search
-                if self._search_saved_folded is not None:
-                    self._tree.folded = self._search_saved_folded
-                    self._search_saved_folded = None
-                    self._rebuild()
-                new_ts = search_update(self._tree, key)
-                self._tree = new_ts
-                return False
-            if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-                # Commit: deactivate search, keep expanded state, open detail
-                self._search_saved_folded = None
-                new_ts = search_update(self._tree, key)
-                self._tree = new_ts
-                self._open_detail()
-                return False
-            prev_query = self._tree.search.query
-            new_ts = search_update(self._tree, key)
-            self._tree = new_ts
-            if new_ts.search.query != prev_query:
-                # Query changed — recompute matches
-                self._update_search()
+        if self._on_tree_search_active(key):
             return False
 
-        # ── search: results-visible, navigate matches ─────────────────────────
-        if self._tree.search.matches:
-            if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
-                self._search_jump(+1)
-                return False
-            if key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev match
-                self._search_jump(-1)
-                return False
-            if key == ord("n"):
-                self._search_jump(+1)
-                return False
-            if key == ord("N"):
-                self._search_jump(-1)
-                return False
-            if key == 27:  # Esc — clear results
-                self._tree.search.matches = []
-                self._tree.search.pattern = None
-                self._tree.search.query = ""
-                return False
+        if self._on_tree_search_results(key):
+            return False
 
         # ── view mode cycle (Tab when not navigating search results) ─────────
         if key == 9 and not self._tree.search.matches:  # Tab
@@ -1708,114 +1852,7 @@ class TaxonomyViewer:
             return False
 
         # ── unhandled by navigate_tree — action keys ──────────────────────────
-        if key == ord(" "):
-            if 0 <= self._tree.cursor < n:
-                uri = self._tree.flat[self._tree.cursor].uri
-                line = self._tree.flat[self._tree.cursor]
-                if uri == _OWL_SECTION_URI:
-                    return False  # synthetic header, not foldable
-                if uri == SECTION_PROPERTIES:
-                    if uri in self._tree.folded:
-                        self._tree.folded.discard(uri)
-                    else:
-                        self._tree.folded.add(uri)
-                    self._rebuild()
-                    for i, tl in enumerate(self._tree.flat):
-                        if tl.uri == uri:
-                            self._tree.cursor = i
-                            break
-                    self._update_tree_preview()
-                    return False
-                has_children = False
-                if uri == _UNATTACHED_INDS_URI:
-                    has_children = any(
-                        not any(t in self.taxonomy.owl_classes for t in ind.types)
-                        for ind in self.taxonomy.owl_individuals.values()
-                    )
-                elif line.is_file:
-                    has_children = True  # file nodes are always foldable
-                elif line.is_scheme:
-                    s = self.taxonomy.schemes.get(uri)
-                    has_children = bool(s and s.top_concepts)
-                elif self._tree.view_mode == "ontology" or (
-                    self._tree.view_mode == "mixed" and line.node_type == "class"
-                ):
-                    has_children = any(
-                        uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()
-                    ) or any(uri in ind.types for ind in self.taxonomy.owl_individuals.values())
-                else:
-                    c = self.taxonomy.concepts.get(uri)
-                    has_children = bool(c and c.narrower)
-                if has_children:
-                    if uri in self._tree.folded:
-                        self._tree.folded.discard(uri)
-                    else:
-                        self._tree.folded.add(uri)
-                    self._rebuild()
-                    # Keep cursor on the same URI after rebuild
-                    for i, tl in enumerate(self._tree.flat):
-                        if tl.uri == uri:
-                            self._tree.cursor = i
-                            break
-                    self._update_tree_preview()
-
-        elif key == ord("+"):
-            # + on scheme row → add top concept; on concept row → add narrower concept
-            if 0 <= self._tree.cursor < n:
-                line = self._tree.flat[self._tree.cursor]
-                if line.is_scheme:
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bsf(line.uri)
-                    self._trigger_action("add_top_concept")
-                elif line.node_type == "class":
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bcdf(line.uri)
-                    self._trigger_action("new_subclass")
-                elif not line.is_file and not line.is_action:
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bdf(line.uri)
-                    self._trigger_action("add_narrower")
-
-        elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
-            if 0 <= self._tree.cursor < n:
-                line = self._tree.flat[self._tree.cursor]
-                if line.uri == _ACTION_ADD_PROPERTY:
-                    self._trigger_add_global_property()
-                    return False
-            self._open_detail()
-
-        elif key in (curses.KEY_LEFT, ord("h")):
-            if 0 <= self._tree.cursor < n:
-                depth = self._tree.flat[self._tree.cursor].depth
-                if depth > 0:
-                    for i in range(self._tree.cursor - 1, -1, -1):
-                        if self._tree.flat[i].depth == depth - 1:
-                            self._tree.cursor = i
-                            break
-                else:
-                    self._detail_uri = _GLOBAL_URI
-                    self._detail_fields = self._bgf()
-                    self._field_cursor = 0
-
-        elif key == ord("G"):
-            from .. import viz_vowl as _viz
-
-            try:
-                out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
-                self._status = f"Graph opened in browser — {out}"
-            except Exception as exc:
-                self._status = f"Error opening graph: {exc}"
-
-        elif key == ord("S"):
-            self._trigger_action("open_query")
-
-        elif key == ord("?"):
-            self._state = WelcomeState()
-
-        elif key in (ord("q"), ord("Q"), 27):
-            return True
-
-        return False
+        return self._on_tree_action(key, rows)
 
     # ─────────────────────────── DETAIL drawing ──────────────────────────────
 
@@ -3152,7 +3189,96 @@ class TaxonomyViewer:
 
     # ─────────────────────────── action dispatch ─────────────────────────────
 
-    def _trigger_action(self, action: str, meta: dict | None = None) -> None:
+    def _action_add_label(
+        self, action: str, meta: dict | None, ftype_map: dict[str, tuple[str, str]]
+    ) -> None:
+        """Shared handler: open an edit prompt for any 'add label/comment/def' action."""
+        lang = (meta or {}).get("lang", self.lang)
+        ftype, display_name = ftype_map[action]
+        synthetic = DetailField(
+            f"add:{ftype}:{lang}",
+            f"{display_name} [{lang}]",
+            "",
+            editable=True,
+            meta={"type": ftype, "lang": lang},
+        )
+        self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
+
+    def _action_add_schema_media(self, action: str, meta: dict | None) -> None:
+        """Open an edit prompt for add_schema_image/video/url."""
+        kind = action[len("add_schema_") :]
+        label_map = {
+            "image": "schema:image URL (photo)",
+            "video": "schema:video URL (YouTube / Vimeo)",
+            "url": "schema:url (external link)",
+        }
+        ftype = f"schema_{kind}_input"
+        synthetic = DetailField(
+            f"add:{ftype}",
+            label_map.get(kind, kind),
+            "https://",
+            editable=True,
+            meta={"type": ftype},
+        )
+        self._state = EditState(
+            buffer="https://", pos=len("https://"), field=synthetic, return_to=None
+        )
+
+    def _action_view_ontology_graph(self, meta: dict | None) -> None:  # noqa: ARG002
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        try:
+            out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
+            self._status = self._graph_opened_status(out)
+        except Exception as exc:
+            self._status = f"Error opening graph: {exc}"
+
+    def _action_view_focused_graph(self, meta: dict | None) -> None:
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        class_uri = (meta or {}).get("uri", "")
+        if class_uri:
+            try:
+                out = _viz.open_focused_in_browser(self.taxonomy, class_uri, self.file_path)
+                self._status = f"Focused graph opened — {out}"
+            except Exception as exc:
+                self._status = f"Error opening focused graph: {exc}"
+
+    def _action_open_query(self, meta: dict | None) -> None:  # noqa: ARG002
+        from .. import sparql_query as _sq  # noqa: PLC0415
+
+        buf = self._last_query_buffer
+        file_paths = list(self._workspace.taxonomies.keys())
+        if not buf:
+            buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
+        if file_paths:
+            try:
+                _sq._trace(
+                    f"open_query: calling build_uri_index_cached synchronously paths={[p.name for p in file_paths]}"
+                )
+                _sq.build_uri_index_cached(file_paths)
+                _sq._trace("open_query: build_uri_index_cached returned")
+            except Exception:
+                pass
+        self._state = QueryState(file_paths=file_paths, query_buffer=buf, query_pos=len(buf))
+
+    def _action_edit_server_field(self, action: str, meta: dict | None) -> None:  # noqa: ARG002
+        from ..api_server import load_server_config  # noqa: PLC0415
+
+        current_url, current_port = load_server_config()
+        if action == "edit_server_url":
+            buf, ftype = current_url, "server_url"
+            synthetic = DetailField(
+                "edit:server_url", "server URL", buf, editable=True, meta={"type": ftype}
+            )
+        else:
+            buf, ftype = str(current_port), "server_port"
+            synthetic = DetailField(
+                "edit:server_port", "port", buf, editable=True, meta={"type": ftype}
+            )
+        self._state = EditState(buffer=buf, pos=len(buf), field=synthetic, return_to=None)
+
+    def _trigger_action(self, action: str, meta: dict | None = None) -> None:  # noqa: C901
         _came_from_tree = isinstance(self._state, (TreeState, WelcomeState))
         if action in ("add_narrower", "add_top_concept"):
             # add_narrower: parent is the current concept.
@@ -3208,17 +3334,14 @@ class TaxonomyViewer:
                 )
 
         elif action in ("add_rdf_label", "add_rdf_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "rdf_label" if action == "add_rdf_label" else "rdf_comment"
-            display = "rdfs:label" if action == "add_rdf_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_rdf_label": ("rdf_label", "rdfs:label"),
+                    "add_rdf_comment": ("rdf_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "link_superclass":
             if self._detail_uri:
@@ -3313,17 +3436,14 @@ class TaxonomyViewer:
                     self._do_individual_to_class(uri)
 
         elif action in ("add_ind_label", "add_ind_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "ind_label" if action == "add_ind_label" else "ind_comment"
-            display = "rdfs:label" if action == "add_ind_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_ind_label": ("ind_label", "rdfs:label"),
+                    "add_ind_comment": ("ind_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "delete_individual":
             self._on_delete_individual_action()
@@ -3431,17 +3551,14 @@ class TaxonomyViewer:
                 )
 
         elif action in ("add_prop_label", "add_prop_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "prop_label" if action == "add_prop_label" else "prop_comment"
-            display = "rdfs:label" if action == "add_prop_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_prop_label": ("prop_label", "rdfs:label"),
+                    "add_prop_comment": ("prop_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action in ("add_prop_domain", "add_prop_range"):
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
@@ -3512,23 +3629,7 @@ class TaxonomyViewer:
                 self._trigger_create_individual(self._detail_uri)
 
         elif action in ("add_schema_image", "add_schema_video", "add_schema_url"):
-            kind = action[len("add_schema_") :]  # "image" | "video" | "url"
-            label_map = {
-                "image": "schema:image URL (photo)",
-                "video": "schema:video URL (YouTube / Vimeo)",
-                "url": "schema:url (external link)",
-            }
-            ftype = f"schema_{kind}_input"
-            synthetic = DetailField(
-                f"add:{ftype}",
-                label_map.get(kind, kind),
-                "https://",
-                editable=True,
-                meta={"type": ftype},
-            )
-            self._state = EditState(
-                buffer="https://", pos=len("https://"), field=synthetic, return_to=None
-            )
+            self._action_add_schema_media(action, meta)
 
         elif action in ("remove_schema_image", "remove_schema_video", "remove_schema_url"):
             self._remove_schema_media(action[len("remove_schema_") :], (meta or {}).get("url", ""))
@@ -3537,24 +3638,10 @@ class TaxonomyViewer:
             self._open_ontology_identity_editor(action)
 
         elif action == "view_ontology_graph":
-            from .. import viz_vowl as _viz
-
-            try:
-                out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
-                self._status = f"Graph opened in browser — {out}"
-            except Exception as exc:
-                self._status = f"Error opening graph: {exc}"
+            self._action_view_ontology_graph(meta)
 
         elif action == "view_focused_graph":
-            from .. import viz_vowl as _viz
-
-            class_uri = (meta or {}).get("uri", "")
-            if class_uri:
-                try:
-                    out = _viz.open_focused_in_browser(self.taxonomy, class_uri, self.file_path)
-                    self._status = f"Focused graph opened — {out}"
-                except Exception as exc:
-                    self._status = f"Error opening focused graph: {exc}"
+            self._action_view_focused_graph(meta)
 
         elif action == "toggle_class_fold":
             uri = (meta or {}).get("uri", "")
@@ -3573,22 +3660,16 @@ class TaxonomyViewer:
                     )
 
         elif action in ("add_pref_label", "add_alt_label", "add_def", "add_scope_note"):
-            lang = (meta or {}).get("lang", self.lang)
-            _FTYPE = {
-                "add_pref_label": ("pref", "pref"),
-                "add_alt_label": ("alt", "alt"),
-                "add_def": ("def", "def"),
-                "add_scope_note": ("scope_note", "scopeNote"),
-            }
-            ftype, display_name = _FTYPE[action]
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display_name} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_pref_label": ("pref", "pref"),
+                    "add_alt_label": ("alt", "alt"),
+                    "add_def": ("def", "def"),
+                    "add_scope_note": ("scope_note", "scopeNote"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "add_related":
             if self._detail_uri:
@@ -3634,28 +3715,7 @@ class TaxonomyViewer:
             self._state = LangPickState(options=options, cursor=cursor, scroll=0)
 
         elif action in ("edit_server_url", "edit_server_port"):
-            from ..api_server import load_server_config  # noqa: PLC0415
-
-            current_url, current_port = load_server_config()
-            if action == "edit_server_url":
-                buf = current_url
-                synthetic = DetailField(
-                    "edit:server_url",
-                    "server URL",
-                    buf,
-                    editable=True,
-                    meta={"type": "server_url"},
-                )
-            else:
-                buf = str(current_port)
-                synthetic = DetailField(
-                    "edit:server_port",
-                    "port",
-                    buf,
-                    editable=True,
-                    meta={"type": "server_port"},
-                )
-            self._state = EditState(buffer=buf, pos=len(buf), field=synthetic, return_to=None)
+            self._action_edit_server_field(action, meta)
 
         elif action == "show_bearer_token":
             self._show_bearer_token = not self._show_bearer_token
@@ -3671,29 +3731,7 @@ class TaxonomyViewer:
             self._pending_open_config = True
 
         elif action == "open_query":
-            from .. import sparql_query as _sq  # noqa: PLC0415
-
-            buf = self._last_query_buffer
-            file_paths = list(self._workspace.taxonomies.keys())
-            if not buf:
-                buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
-            # Build URI index synchronously so the first ':' keypress always
-            # finds the index ready — avoids the race where background thread
-            # hasn't stored the result yet when the user types ':'.
-            if file_paths:
-                try:
-                    _sq._trace(
-                        f"open_query: calling build_uri_index_cached synchronously paths={[p.name for p in file_paths]}"
-                    )
-                    _sq.build_uri_index_cached(file_paths)
-                    _sq._trace("open_query: build_uri_index_cached returned")
-                except Exception:
-                    pass
-            self._state = QueryState(
-                file_paths=file_paths,
-                query_buffer=buf,
-                query_pos=len(buf),
-            )
+            self._action_open_query(meta)
 
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …

@@ -78,7 +78,8 @@ def test_label_custom_max():
 
 
 def test_ontology_title_label():
-    tax = Taxonomy(ontology_label="My Ontology", ontology_uri="https://example.org/onto")
+    tax = Taxonomy(ontology_uri="https://example.org/onto")
+    tax.ontology_label = "My Ontology"  # property over the annotation store
     assert _ontology_title(tax, None) == "My Ontology"
 
 

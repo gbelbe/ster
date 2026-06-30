@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import html as _html
 import http.server
 import json
 import re
 import socket
 import threading
+import time
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -741,11 +743,12 @@ def _build_query_result_html(
         else ""
     )
     html = (
-        _HTML_TEMPLATE.replace("__TITLE__", title)
+        _HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _cytoscape_script_tag())
         .replace("__STER_DATA_SCRIPT__", _data_script(graph, meta, ""))
         .replace("__STER_APP_JS__", _app_js())
         .replace("__SHOW_ALL_BTN__", show_all_btn)
+        .replace("__OFFLINE_BANNER__", _offline_banner(""))
     )
     return graph, html
 
@@ -850,6 +853,31 @@ def _data_script(graph: dict, meta: dict, api_token: str) -> str:
     return "<script>window.__STER_GRAPH__=" + json.dumps(payload, ensure_ascii=False) + ";</script>"
 
 
+def _offline_banner(api_token: str) -> str:
+    """Return an in-page notice shown only when no live server backs the page.
+
+    The explore / extend-relations hover actions are driven by the live API
+    server (keyed off the page token). Without it — ``ster[api]`` not installed,
+    or the configured port is busy — the page is a static snapshot and those
+    actions are unavailable. The banner says so, so the degraded mode is never
+    silent. When a real token is present (live server) nothing is shown.
+    """
+    if api_token:
+        return ""
+    return (
+        '<div id="offline-banner"><span>⚠ Live server not running — showing a '
+        "static snapshot; explore / extend relations is unavailable. Install the "
+        "<code>ster[api]</code> extra (and free the configured port) for the "
+        "interactive graph.</span>"
+        '<button id="offline-banner-close" title="Dismiss">×</button></div>'
+    )
+
+
+def is_live_server() -> bool:
+    """True when the live FastAPI server backs the graph (vs a static snapshot)."""
+    return _api_app is not None
+
+
 API_PORT: int = 8765
 
 _out_path: Path | None = None
@@ -864,6 +892,37 @@ _api_app: Any = None
 _api_broadcaster: Any = None
 _api_loop: Any = None
 _api_running: bool = False
+
+
+def _await_uvicorn_started(
+    holder: dict[str, Any],
+    *,
+    timeout: float = 10.0,
+    poll: float = 0.05,
+    sleep: Any = None,
+    monotonic: Any = None,
+) -> bool:
+    """Block until *our* uvicorn server reports it has bound and is serving.
+
+    *holder* is the dict the server thread fills in: ``server`` (the
+    ``uvicorn.Server`` once constructed), ``error`` (a startup exception, e.g. a
+    bind failure), and ``done`` (set once ``serve()`` returns). Returns True only
+    when ``server.started`` flips True — so a stale server squatting the
+    configured port can never be mistaken for ours. Returns False on a startup
+    error, when ``serve()`` finished without starting, or on timeout.
+    """
+    sleep = sleep or time.sleep
+    monotonic = monotonic or time.monotonic
+    deadline = monotonic() + timeout
+    while True:
+        server = holder.get("server")
+        if server is not None and getattr(server, "started", False):
+            return True
+        if holder.get("error") is not None or holder.get("done"):
+            return False
+        if monotonic() >= deadline:
+            return False
+        sleep(poll)
 
 
 def _start_api_server(
@@ -925,6 +984,7 @@ def _start_api_server(
     _api_broadcaster = broadcaster
 
     loop_captured: threading.Event = threading.Event()
+    holder: dict[str, Any] = {}
 
     def _run() -> None:
         global _api_loop
@@ -932,37 +992,54 @@ def _start_api_server(
         async def _serve() -> None:
             global _api_loop
             _api_loop = asyncio.get_running_loop()
+            server = uvicorn.Server(
+                uvicorn.Config(app, host=_server_host, port=_server_port, log_level="warning")
+            )
+            holder["server"] = server
             loop_captured.set()
-            cfg = uvicorn.Config(app, host=_server_host, port=_server_port, log_level="warning")
-            await uvicorn.Server(cfg).serve()
+            try:
+                await server.serve()
+            except BaseException as exc:  # noqa: BLE001  (bind failure must not crash the thread)
+                holder["error"] = exc
 
         asyncio.run(_serve())
+        holder["done"] = True
 
     threading.Thread(target=_run, daemon=True, name="ster-api-server").start()
     loop_captured.wait(timeout=10)
-    if _api_loop is None:
+    # Report success only once *our* uvicorn has actually bound the socket. A
+    # bare "is the port open?" probe accepts a stale static server squatting the
+    # configured port — callers then open `/` against it and get a cache
+    # directory listing instead of the graph.
+    if _api_loop is None or not _await_uvicorn_started(holder):
         _api_app = _api_broadcaster = None
         _api_running = False
         return False
-
-    import time as _time  # noqa: PLC0415
-
-    for _ in range(100):  # up to 10 s — uvicorn binds socket after loop starts
-        try:
-            with socket.socket() as _s:
-                if _s.connect_ex((_server_host, _server_port)) == 0:
-                    break
-        except OSError:
-            pass
-        _time.sleep(0.1)
+    _api_running = True
     return True
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    """SimpleHTTPRequestHandler that suppresses access-log noise."""
+    """SimpleHTTPRequestHandler that suppresses access-log noise.
+
+    It also refuses directory listings: the server backs specific ``*_vowl.html``
+    files, so a request for a folder (most visibly ``/``) must 404 rather than
+    expose an index of the whole ``~/.cache/ster`` directory.
+    """
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass
+
+    def list_directory(self, path: str) -> None:  # type: ignore[override]
+        self.send_error(404, "Not found")
+        return None
+
+    def end_headers(self) -> None:
+        # The graph page inlines its JS, so a browser-cached page kept serving an
+        # old build until a manual hard-reload. Forbid caching so a plain reload
+        # (or reopening from ster) always gets the current page.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        super().end_headers()
 
 
 def _ensure_server(directory: Path) -> int:
@@ -1024,11 +1101,12 @@ def render_vowl_html(
         graph = build_vowl_graph(taxonomy)
     meta = _taxonomy_meta(taxonomy, file_path)
     return (
-        _HTML_TEMPLATE.replace("__TITLE__", title)
+        _HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _cytoscape_script_tag())
         .replace("__STER_DATA_SCRIPT__", _data_script(graph, meta, api_token))
         .replace("__STER_APP_JS__", _app_js())
         .replace("__SHOW_ALL_BTN__", "")
+        .replace("__OFFLINE_BANNER__", _offline_banner(api_token))
     )
 
 
@@ -1196,9 +1274,14 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 #search-count{font-size:11px;color:#64748b;white-space:nowrap;min-width:52px}
 #search-clear{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;display:none}
 #search-clear:hover{color:#475569}
+#offline-banner{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:35;display:flex;align-items:center;gap:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:8px;padding:6px 12px;font-size:12px;line-height:1.4;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:80vw}
+#offline-banner code{background:#fde68a;padding:0 4px;border-radius:3px;font-size:11px}
+#offline-banner-close{flex-shrink:0;background:none;border:none;color:#92400e;cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
+#offline-banner-close:hover{color:#451a03}
 </style>
 </head>
 <body>
+__OFFLINE_BANNER__
 <div id="cy"></div>
 <div id="detail-panel"></div>
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>

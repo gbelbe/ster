@@ -193,21 +193,27 @@ def create_app(
 
     # ── Endpoints ─────────────────────────────────────────────────────────────
 
+    def _graph_html_response(root_uri: str | None) -> HTMLResponse:
+        # no-store: the page inlines its JS, so caching it served stale builds
+        # until a manual hard-reload.
+        if html_fn is None:
+            raise HTTPException(status_code=501, detail="No HTML renderer configured")
+        return HTMLResponse(
+            html_fn(root_uri),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def root(
         root_uri: str | None = Query(default=None, alias="root"),
     ) -> HTMLResponse:
-        if html_fn is None:
-            raise HTTPException(status_code=501, detail="No HTML renderer configured")
-        return HTMLResponse(html_fn(root_uri))
+        return _graph_html_response(root_uri)
 
     @app.get("/viz", response_class=HTMLResponse, include_in_schema=False)
     def viz(
         root_uri: str | None = Query(default=None, alias="root"),
     ) -> HTMLResponse:
-        if html_fn is None:
-            raise HTTPException(status_code=501, detail="No HTML renderer configured")
-        return HTMLResponse(html_fn(root_uri))
+        return _graph_html_response(root_uri)
 
     @app.get("/onto", response_class=Response, include_in_schema=False)
     def serve_ontology(request: Request) -> Response:

@@ -4,13 +4,13 @@ __pycache__/
 dist/
 build/
 .venv/
-.venv-ci-*/
 venv/
 .ci-passed
 .pytest_cache/
 .coverage
 coverage.xml
 htmlcov/
+snapshot_report.html
 *.egg
 RELEASE_NOTES.md
 .DS_Store

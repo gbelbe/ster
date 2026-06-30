@@ -290,12 +290,19 @@ function togglePanel(show){
   panelVisible=show!==undefined?show:!panelVisible;
   if(panelVisible===was)return;
   panelEl.style.display=panelVisible?'':'none';
-  document.getElementById('panel-close').style.display=panelVisible?'':'none';
+  // Keep the button visible always and flip it into a reopen toggle when the
+  // panel is closed — otherwise closing the panel hides its only control and
+  // strands it shut (no visible way back).
+  const _pc=document.getElementById('panel-close');
+  _pc.textContent=panelVisible?'×':'‹';
+  _pc.title=panelVisible?'Close panel (Esc)':'Show details (Esc)';
   W=window.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:0);
   document.getElementById('stats').style.left=(W/2)+'px';
   cy.resize();
 }
 document.getElementById('panel-close').addEventListener('click',()=>togglePanel());
+const _offBannerClose=document.getElementById('offline-banner-close');
+if(_offBannerClose)_offBannerClose.addEventListener('click',()=>{const b=document.getElementById('offline-banner');if(b)b.remove();});
 document.getElementById('zoom-in').addEventListener('click',()=>zoomBy(1.3));
 document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();});
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
@@ -563,7 +570,7 @@ function toggleSuperclasses(){
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
+  if(e.key==='Escape'){if(!panelVisible){togglePanel(true);return;}const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
   if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(0.77);}

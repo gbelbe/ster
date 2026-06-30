@@ -19,8 +19,8 @@ if [[ ! -f "$SENTINEL" ]]; then
 ║  PUSH BLOCKED — CI has not been run                         ║
 ║                                                              ║
 ║  Run the local CI gate first:                               ║
-║    bash scripts/ci.sh           (full: 3.11 / 3.12 / 3.13)  ║
-║    bash scripts/ci.sh --fast    (current Python only)        ║
+║    bash scripts/ci.sh           (full gate, current Python)  ║
+║    bash scripts/ci.sh --fast    (skip patch-coverage gate)   ║
 ╚══════════════════════════════════════════════════════════════╝
 MSG
     exit 1
@@ -39,8 +39,8 @@ if [[ "$AGE" -gt 3600 ]]; then
 ║  PUSH BLOCKED — CI result is stale (${MINS} min ago)
 ║                                                              ║
 ║  Re-run the CI gate before pushing:                         ║
-║    bash scripts/ci.sh           (full: 3.11 / 3.12 / 3.13)  ║
-║    bash scripts/ci.sh --fast    (current Python only)        ║
+║    bash scripts/ci.sh           (full gate, current Python)  ║
+║    bash scripts/ci.sh --fast    (skip patch-coverage gate)   ║
 ╚══════════════════════════════════════════════════════════════╝
 MSG
     exit 1

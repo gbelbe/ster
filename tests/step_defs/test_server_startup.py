@@ -51,9 +51,16 @@ def given_config_9333(ctx):
     _write_config(ctx, "http://127.0.0.1", 9333)
 
 
-@given('server config is set to URL "http://127.0.0.1" and port 19766')
-def given_config_19766(ctx):
-    _write_config(ctx, "http://127.0.0.1", 19766)
+@given("server config is set to a free port")
+def given_config_free_port(ctx):
+    # An OS-assigned free port: real servers leak a daemon for the session, so a
+    # fixed port collides with a leftover/TIME_WAIT socket across CI's 3 runs.
+    import socket as _socket
+
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    _write_config(ctx, "http://127.0.0.1", port)
 
 
 def _write_config(ctx, url: str, port: int) -> None:
@@ -193,11 +200,11 @@ def then_run_port_9444(ctx):
     assert ctx["uvicorn_run"]["port"] == 9444
 
 
-@then("GET /api/graph on port 19766 returns HTTP 200")
+@then("GET /api/graph on the configured port returns HTTP 200")
 def then_real_server_200(ctx):
     assert ctx["server_started"] is True
     req = urllib.request.Request(
-        "http://127.0.0.1:19766/api/graph",
+        f"http://127.0.0.1:{ctx['port']}/api/graph",
         headers={"Authorization": "Bearer test-token"},
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
