@@ -76,7 +76,10 @@ def test_dispatch_routes_to_registered_presenters_else_legacy() -> None:
     tax = store.load(DEMO)
     ctx = _ctx(tax)
     assert isinstance(detail._presenter_for(ctx, detail.OVERVIEW_URI), OntologyOverviewPresenter)
+    from ster.tui.presenters.property_ import PropertyPresenter
+
     assert isinstance(detail._presenter_for(ctx, ZOO + "Cat"), ClassPresenter)
+    assert isinstance(detail._presenter_for(ctx, ZOO + "hasAge"), PropertyPresenter)
     assert isinstance(detail._presenter_for(ctx, detail.TAXONOMY_URI), LegacyPresenter)
     assert isinstance(detail._presenter_for(ctx, ZOO + "Rex"), LegacyPresenter)  # individual
 
@@ -138,6 +141,33 @@ def test_class_presenter_omits_health_when_clean() -> None:
     )
     tax.owl_individuals[ZOO + "t1"] = OWLIndividual(uri=ZOO + "t1", types=[uri])
     fields = ClassPresenter(_ctx(tax), uri).render()
+    assert "Health & Issues" not in [
+        f.display for f in fields if f.meta.get("type", "").startswith("separator")
+    ]
+
+
+# ── P3: PropertyPresenter Health section ──────────────────────────────────────
+
+
+def test_property_presenter_surfaces_missing_domain_range() -> None:
+    """A property detail leads with Health & Issues naming its missing domain/range."""
+    from ster.tui.presenters.property_ import PropertyPresenter
+
+    tax = store.load(DEMO)
+    fields = PropertyPresenter(_ctx(tax), ZOO + "hasAge").render()  # has domain, no range
+    seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
+    assert seps[0] == "Identity" and seps[1] == "Health & Issues"
+    keys = {f.key for f in fields}
+    assert "prop:gap_range" in keys  # hasAge has no rdfs:range
+    assert "prop:gap_domain" not in keys  # …but it has a domain
+
+
+def test_property_presenter_omits_health_when_complete() -> None:
+    """A fully-specified property (label + domain + range) shows no Health section."""
+    from ster.tui.presenters.property_ import PropertyPresenter
+
+    tax = store.load(DEMO)
+    fields = PropertyPresenter(_ctx(tax), ZOO + "hasOwner").render()  # domain + range + label
     assert "Health & Issues" not in [
         f.display for f in fields if f.meta.get("type", "").startswith("separator")
     ]
