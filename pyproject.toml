@@ -32,8 +32,10 @@ dependencies = [
     "watchfiles>=0.21",           # file-change watcher for live push
     "pylode>=3.0",                # HTML export
     "llm>=0.19",                  # AI assist
-    "msgpack>=1.2.1",
-    "pydantic-settings>=2.14.2",
+    "msgpack>=1.2.1",             # pin away from GHSA-6v7p-g79w-8964
+    "pydantic-settings>=2.14.2",  # pin away from GHSA-4xgf-cpjx-pc3j
+    "starlette>=1.3.1",
+    "python-multipart>=0.0.31",
 ]
 
 # ── Optional dependency groups ────────────────────────────────────────────────
@@ -57,12 +59,12 @@ dev = [
     "coverage[toml]>=7.0",
     "httpx>=0.27",            # FastAPI TestClient transport
     "pytest-asyncio>=0.23",   # async SSE broadcaster tests
+    "pytest-xdist>=3.5",      # parallel test execution (-n auto)
     # Linting & formatting
     "ruff>=0.4",
     # Type checking
     "mypy>=1.10",
-    # Security
-    "bandit[toml]>=1.7",
+    # Security — CVE scanning
     "pip-audit>=2.7",
     # Complexity ratchet (scripts/check_complexity_ratchet.py)
     "radon>=6.0",
@@ -133,6 +135,8 @@ select = [
     "B",   # flake8-bugbear (likely bugs / design issues)
     "C4",  # flake8-comprehensions (cleaner list/dict/set comprehensions)
     "SIM", # flake8-simplify
+    "S",   # flake8-bandit (security SAST — replaces standalone bandit)
+    "C90", # mccabe complexity (C901 hard ceiling; diff-aware ratchet via scripts/)
 ]
 ignore = [
     "E501",   # line too long — enforced by formatter, not linter
@@ -145,12 +149,27 @@ ignore = [
     "SIM105", # use contextlib.suppress — intentional try/except/pass in curses rendering
     "SIM108", # ternary operator — sometimes less readable
     "UP042",  # use StrEnum — (str, Enum) kept for broader Python compatibility
+    # S — security (ruff-bandit): project-specific false positives mirroring old bandit skips
+    "S101",   # assert — used for type-narrowing, not security-critical (mirrors bandit B101)
+    "S110",   # try/except/pass — intentional fallback pattern (curses, optional deps)
+    "S310",   # urllib.urlopen — URL is constructed internally, not from user input
+    "S603",   # subprocess without shell=True — called with controlled, non-user-supplied args
+    "S607",   # subprocess partial path — pip/pylode/git are trusted system tools
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = [
-    "S101",  # assert is fine in tests
+    "S105",  # hardcoded passwords in test fixtures (token strings are not real secrets)
+    "S106",  # hardcoded password as argument — same as S105
+    "S108",  # /tmp paths in tests are intentional; no sensitive data involved
 ]
+
+[tool.ruff.lint.mccabe]
+# Safety-net ceiling: C901 only fires on functions that are truly extreme
+# (essentially unreviewable). Day-to-day enforcement — ≤10 target, ≤25
+# hard ceiling on touched functions — is handled by the diff-aware ratchet
+# in scripts/check_complexity_ratchet.py (HARD_CEILING = 25).
+max-complexity = 200
 
 # ── Mypy (type checker) ───────────────────────────────────────────────────────
 # Docs: https://mypy.readthedocs.io/
@@ -161,22 +180,6 @@ ignore_missing_imports = true   # external libs without stubs (rdflib, pylode…
 warn_return_any       = false   # too noisy for progressive adoption
 warn_unused_ignores   = false   # some ignores are version-dependent
 pretty                = true
-
-# ── Bandit (security SAST) ────────────────────────────────────────────────────
-# Docs: https://bandit.readthedocs.io/
-
-[tool.bandit]
-exclude_dirs = ["tests"]
-skips        = [
-    "B101",  # assert — used for type-narrowing, not security-critical
-    "B110",  # try/except/pass — intentional fallback pattern (curses, optional deps)
-    "B310",  # urllib.urlopen — URL is constructed internally, not from user input
-    "B324",  # MD5 — used only for non-security temp-file naming (usedforsecurity=False)
-    "B404",  # subprocess import — used for git/pip with controlled args
-    "B603",  # subprocess without shell — called with controlled, non-user-supplied args
-    "B607",  # subprocess partial path — pip/pylode/git are trusted system tools
-    "B107",  # hardcoded_password_default — false positive on api_token: str = "" (not a secret)
-]
 
 # ── Import contracts (import-linter) — dependency isolation ───────────────────
 # Each heavy third-party library may be imported by exactly one adapter module,

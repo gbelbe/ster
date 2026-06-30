@@ -1392,7 +1392,7 @@ def test_search_provider_fuzzy_matches() -> None:
 def test_launch_constructs_and_runs_the_app() -> None:
     from unittest.mock import patch
 
-    import ster.tui as tui
+    from ster import tui
 
     with patch.object(OntologyApp, "run", autospec=True) as run:
         tui.launch(store.load(DEMO), source="demo.ttl")

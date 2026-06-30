@@ -11,6 +11,21 @@ from ster.model import Concept, ConceptScheme, Definition, Label, Taxonomy
 
 BASE = "https://example.org/test/"
 
+
+@pytest.fixture(autouse=True)
+def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
+    """Redirect the on-disk analysis cache to a per-test tmp dir.
+
+    Without this, tests read/write the developer's real
+    ~/.cache/ster/analysis_cache.json: every viewer-save test re-serialised the
+    whole accumulated blob (~900ms once it grew to thousands of dead pytest
+    tmp-path entries) and polluted it further. Isolating it keeps the suite fast
+    and side-effect-free. See tests/unit/test_analysis_cache_isolation.py.
+    """
+    cache = tmp_path_factory.mktemp("ster-analysis-cache") / "analysis_cache.json"
+    monkeypatch.setattr("ster.analysis_cache._cache_path", lambda: cache)
+
+
 MINIMAL_TURTLE = """\
 @prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .

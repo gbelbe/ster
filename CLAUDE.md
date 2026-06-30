@@ -2,28 +2,33 @@
 
 ## Code quality gate (mandatory before every commit)
 
-Use the `/ci` skill — it runs the exact same pipeline as GitHub Actions:
+Use the `/ci` skill — it runs the local gate. Static checks are driven by
+**prek** (`.pre-commit-config.yaml`), the same hooks GitHub's `checks` job runs,
+so local and CI can't drift.
 
 ```
-/ci          # full run: lint + types + security + tests on Python 3.11/3.12/3.13
-/ci --fast   # current Python only, for quick iteration during development
-/ci --fix    # auto-fix lint/format, then run the full gate
+/ci          # full local gate: prek checks + eslint + pip-audit + tests + diff-cover
+/ci --fast   # current Python, skips the patch-coverage gate (quick iteration)
+/ci --fix    # let prek auto-fix (ruff lint/format), then re-run to verify
 ```
 
 Or invoke the script directly: `bash scripts/ci.sh`
 
-The git pre-push hook (`scripts/pre-push.sh`, installed via `bash scripts/install-hooks.sh`)
-blocks any `git push` that does not have a fresh CI pass within the last 60 minutes.
+**Tests run on the current Python only locally** (fast feedback). GitHub Actions
+still runs the **full 3.11 / 3.12 / 3.13 matrix** on every PR — three-version
+support is not dropped, just enforced on the PR rather than locally. After
+pushing, check `gh pr checks` to confirm every version is green.
+
+The git pre-push hook (prek runs `scripts/pre-push.sh`, installed via
+`bash scripts/install-hooks.sh`) blocks any `git push` that does not have a
+fresh local-gate pass within the last 60 minutes.
 
 **Never push while CI is red. Fix every failure before marking a feature done.**
 
-Individual commands (same as ci.yml):
+Run the static checks directly with prek:
 ```bash
-uv sync --extra dev   # runtime deps are core; dev adds test/lint tools
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy ster/
-uv run bandit -r ster/ -c pyproject.toml
+uv sync --extra dev          # runtime deps are core; dev adds test/lint tools
+prek run --all-files         # ruff · format · mypy · bandit · import-linter · ratchet · hygiene
 uv run pip-audit --skip-editable
 uv run pytest tests/ -q --cov=ster --cov-report=term-missing
 ```

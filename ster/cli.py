@@ -1741,6 +1741,11 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
     try:
         out = _viz.open_in_browser(taxonomy, taxonomy_file)
         console.print(f"  [green]✓[/green]  {out}")
+        if not _viz.is_live_server():
+            console.print(
+                "  [yellow]![/yellow]  Live server not running (ster[api] missing "
+                "or port busy) — static snapshot; explore-relations is disabled."
+            )
     except Exception as exc:
         err.print(f"[red]Graph error: {exc}[/red]")
 

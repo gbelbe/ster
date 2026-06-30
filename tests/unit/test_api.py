@@ -360,3 +360,24 @@ def test_root_without_root_param_calls_html_fn_with_none():
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=html_fn)
     TestClient(app).get("/")
     html_fn.assert_called_once_with(None)
+
+
+# ── graph page caching ─────────────────────────────────────────────────────────
+
+
+def test_root_graph_page_is_not_cached():
+    """The live server's graph page must send no-store so reloads pick up new JS."""
+    tax = make_taxonomy()
+    bc = SSEBroadcaster()
+    app = create_app(tax, TOKEN, bc, lambda t: None, html_fn=lambda root=None: "<html>g</html>")
+    client = TestClient(app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "")
+
+
+def test_root_without_html_fn_returns_501():
+    """GET / must return 501 when no HTML renderer is configured."""
+    app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=None)
+    r = TestClient(app).get("/")
+    assert r.status_code == 501

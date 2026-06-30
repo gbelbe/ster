@@ -375,6 +375,20 @@ class TaxonomyViewer:
             modes.append("ontology")
         return modes or ["mixed"]
 
+    @staticmethod
+    def _graph_opened_status(out: str) -> str:
+        """Status line after opening the graph, flagging the static fallback.
+
+        Without the live server the page is a static snapshot whose
+        explore/extend-relations actions are disabled, so the status says so
+        rather than implying the full interactive graph opened.
+        """
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        if _viz.is_live_server():
+            return f"Graph opened in browser — {out}"
+        return f"Graph opened (static snapshot — no live server, explore disabled) — {out}"
+
     def _rebuild(self) -> None:
         if self._tree.view_mode == "ontology":
             self._tree.flat = flatten_ontology_tree(self._workspace, folded=self._tree.folded)
@@ -1204,13 +1218,7 @@ class TaxonomyViewer:
                 self._on_map_concept_pick(key, rows)
 
             elif isinstance(self._state, QueryState):
-                if self._state.ai_generating:
-                    self._run_generate(
-                        stdscr,
-                        self._generate_sparql_query,
-                        lambda r=rows, c=cols: self._draw_query(stdscr, r, c),
-                    )
-                elif self._state.running:
+                if self._state.running:
                     self._run_generate(
                         stdscr,
                         self._execute_sparql_query,
@@ -1623,54 +1631,184 @@ class TaxonomyViewer:
 
     # ─────────────────────────── TREE events ─────────────────────────────────
 
-    def _on_tree(self, key: int, rows: int) -> bool:
+    def _on_tree_search_active(self, key: int) -> bool:
+        """Handle keypresses while the inline search bar is active. Returns True if handled."""
+        if not self._tree.search.active:
+            return False
+        if key == 27:  # Esc — restore fold state before clearing search
+            if self._search_saved_folded is not None:
+                self._tree.folded = self._search_saved_folded
+                self._search_saved_folded = None
+                self._rebuild()
+            self._tree = search_update(self._tree, key)
+            return True
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            self._search_saved_folded = None
+            self._tree = search_update(self._tree, key)
+            self._open_detail()
+            return True
+        prev_query = self._tree.search.query
+        self._tree = search_update(self._tree, key)
+        if self._tree.search.query != prev_query:
+            self._update_search()
+        return True
+
+    def _on_tree_search_results(self, key: int) -> bool:
+        """Handle navigation through visible search results. Returns True if handled."""
+        if not self._tree.search.matches:
+            return False
+        if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
+            self._search_jump(+1)
+            return True
+        if key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev match
+            self._search_jump(-1)
+            return True
+        if key == ord("n"):
+            self._search_jump(+1)
+            return True
+        if key == ord("N"):
+            self._search_jump(-1)
+            return True
+        if key == 27:  # Esc — clear results
+            self._tree.search.matches = []
+            self._tree.search.pattern = None
+            self._tree.search.query = ""
+            return True
+        return False
+
+    def _on_tree_enter(self, n: int) -> None:
+        """Handle Enter/→ — open property add or enter the focused node's detail."""
+        if 0 <= self._tree.cursor < n:
+            line = self._tree.flat[self._tree.cursor]
+            if line.uri == _ACTION_ADD_PROPERTY:
+                self._trigger_add_global_property()
+                return
+        self._open_detail()
+
+    def _on_tree_action(self, key: int, rows: int) -> bool:
+        """Handle action keys in the tree (space/+/enter/graph/query/quit).
+
+        Called only after navigation and search have already been checked.
+        Returns True when the viewer should quit.
+        """
         n = len(self._tree.flat)
+
+        if key == ord(" "):
+            self._on_tree_space(n)
+        elif key == ord("+"):
+            self._on_tree_plus(n)
+        elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
+            self._on_tree_enter(n)
+        elif key in (curses.KEY_LEFT, ord("h")):
+            self._on_tree_left(n)
+        elif key == ord("G"):
+            self._action_view_ontology_graph(None)
+        elif key == ord("S"):
+            self._trigger_action("open_query")
+        elif key == ord("?"):
+            self._state = WelcomeState()
+        elif key in (ord("q"), ord("Q"), 27):
+            return True
+        return False
+
+    def _toggle_fold_uri(self, uri: str) -> None:
+        """Toggle the fold state of *uri* and re-position the cursor on it."""
+        if uri in self._tree.folded:
+            self._tree.folded.discard(uri)
+        else:
+            self._tree.folded.add(uri)
+        self._rebuild()
+        for i, tl in enumerate(self._tree.flat):
+            if tl.uri == uri:
+                self._tree.cursor = i
+                break
+        self._update_tree_preview()
+
+    def _on_tree_space(self, n: int) -> None:
+        """Handle Space — toggle fold on the current tree node."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        uri = self._tree.flat[self._tree.cursor].uri
+        line = self._tree.flat[self._tree.cursor]
+        if uri == _OWL_SECTION_URI:
+            return
+        if uri == SECTION_PROPERTIES:
+            self._toggle_fold_uri(uri)
+            return
+        if self._node_has_children(uri, line):
+            self._toggle_fold_uri(uri)
+
+    def _owl_node_has_children(self, uri: str) -> bool:
+        """True when an OWL class/individual node has child nodes in the tree."""
+        return any(uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()) or any(
+            uri in ind.types for ind in self.taxonomy.owl_individuals.values()
+        )
+
+    def _unattached_ind_node_has_children(self) -> bool:
+        """True when there are individuals without any known OWL class type."""
+        return any(
+            not any(t in self.taxonomy.owl_classes for t in ind.types)
+            for ind in self.taxonomy.owl_individuals.values()
+        )
+
+    def _node_has_children(self, uri: str, line: object) -> bool:
+        """Return True when the tree node at *uri* has foldable children."""
+        if getattr(line, "is_file", False):
+            return True
+        if getattr(line, "is_scheme", False):
+            s = self.taxonomy.schemes.get(uri)
+            return bool(s and s.top_concepts)
+        if uri == _UNATTACHED_INDS_URI:
+            return self._unattached_ind_node_has_children()
+        is_owl_mode = self._tree.view_mode == "ontology" or (
+            self._tree.view_mode == "mixed" and getattr(line, "node_type", "") == "class"
+        )
+        if is_owl_mode:
+            return self._owl_node_has_children(uri)
+        c = self.taxonomy.concepts.get(uri)
+        return bool(c and c.narrower)
+
+    def _on_tree_plus(self, n: int) -> None:
+        """Handle + — create narrower concept / new subclass from current tree row."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        line = self._tree.flat[self._tree.cursor]
+        if line.is_scheme:
+            self._detail_uri = line.uri
+            self._detail_fields = self._bsf(line.uri)
+            self._trigger_action("add_top_concept")
+        elif line.node_type == "class":
+            self._detail_uri = line.uri
+            self._detail_fields = self._bcdf(line.uri)
+            self._trigger_action("new_subclass")
+        elif not line.is_file and not line.is_action:
+            self._detail_uri = line.uri
+            self._detail_fields = self._bdf(line.uri)
+            self._trigger_action("add_narrower")
+
+    def _on_tree_left(self, n: int) -> None:
+        """Handle ← — jump to parent node or open global overview."""
+        if not (0 <= self._tree.cursor < n):
+            return
+        depth = self._tree.flat[self._tree.cursor].depth
+        if depth > 0:
+            for i in range(self._tree.cursor - 1, -1, -1):
+                if self._tree.flat[i].depth == depth - 1:
+                    self._tree.cursor = i
+                    break
+        else:
+            self._detail_uri = _GLOBAL_URI
+            self._detail_fields = self._bgf()
+            self._field_cursor = 0
+
+    def _on_tree(self, key: int, rows: int) -> bool:
         list_h = rows - 2
 
-        # ── search: typing mode — delegate to search_update() ─────────────────
-        if self._tree.search.active:
-            if key == 27:  # Esc — restore fold state before clearing search
-                if self._search_saved_folded is not None:
-                    self._tree.folded = self._search_saved_folded
-                    self._search_saved_folded = None
-                    self._rebuild()
-                new_ts = search_update(self._tree, key)
-                self._tree = new_ts
-                return False
-            if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-                # Commit: deactivate search, keep expanded state, open detail
-                self._search_saved_folded = None
-                new_ts = search_update(self._tree, key)
-                self._tree = new_ts
-                self._open_detail()
-                return False
-            prev_query = self._tree.search.query
-            new_ts = search_update(self._tree, key)
-            self._tree = new_ts
-            if new_ts.search.query != prev_query:
-                # Query changed — recompute matches
-                self._update_search()
+        if self._on_tree_search_active(key):
             return False
 
-        # ── search: results-visible, navigate matches ─────────────────────────
-        if self._tree.search.matches:
-            if key in (9, curses.KEY_DOWN):  # Tab / ↓ — next match
-                self._search_jump(+1)
-                return False
-            if key in (curses.KEY_BTAB, curses.KEY_UP):  # Shift+Tab / ↑ — prev match
-                self._search_jump(-1)
-                return False
-            if key == ord("n"):
-                self._search_jump(+1)
-                return False
-            if key == ord("N"):
-                self._search_jump(-1)
-                return False
-            if key == 27:  # Esc — clear results
-                self._tree.search.matches = []
-                self._tree.search.pattern = None
-                self._tree.search.query = ""
-                return False
+        if self._on_tree_search_results(key):
+            return False
 
         # ── view mode cycle (Tab when not navigating search results) ─────────
         if key == 9 and not self._tree.search.matches:  # Tab
@@ -1708,114 +1846,7 @@ class TaxonomyViewer:
             return False
 
         # ── unhandled by navigate_tree — action keys ──────────────────────────
-        if key == ord(" "):
-            if 0 <= self._tree.cursor < n:
-                uri = self._tree.flat[self._tree.cursor].uri
-                line = self._tree.flat[self._tree.cursor]
-                if uri == _OWL_SECTION_URI:
-                    return False  # synthetic header, not foldable
-                if uri == SECTION_PROPERTIES:
-                    if uri in self._tree.folded:
-                        self._tree.folded.discard(uri)
-                    else:
-                        self._tree.folded.add(uri)
-                    self._rebuild()
-                    for i, tl in enumerate(self._tree.flat):
-                        if tl.uri == uri:
-                            self._tree.cursor = i
-                            break
-                    self._update_tree_preview()
-                    return False
-                has_children = False
-                if uri == _UNATTACHED_INDS_URI:
-                    has_children = any(
-                        not any(t in self.taxonomy.owl_classes for t in ind.types)
-                        for ind in self.taxonomy.owl_individuals.values()
-                    )
-                elif line.is_file:
-                    has_children = True  # file nodes are always foldable
-                elif line.is_scheme:
-                    s = self.taxonomy.schemes.get(uri)
-                    has_children = bool(s and s.top_concepts)
-                elif self._tree.view_mode == "ontology" or (
-                    self._tree.view_mode == "mixed" and line.node_type == "class"
-                ):
-                    has_children = any(
-                        uri in cls.sub_class_of for cls in self.taxonomy.owl_classes.values()
-                    ) or any(uri in ind.types for ind in self.taxonomy.owl_individuals.values())
-                else:
-                    c = self.taxonomy.concepts.get(uri)
-                    has_children = bool(c and c.narrower)
-                if has_children:
-                    if uri in self._tree.folded:
-                        self._tree.folded.discard(uri)
-                    else:
-                        self._tree.folded.add(uri)
-                    self._rebuild()
-                    # Keep cursor on the same URI after rebuild
-                    for i, tl in enumerate(self._tree.flat):
-                        if tl.uri == uri:
-                            self._tree.cursor = i
-                            break
-                    self._update_tree_preview()
-
-        elif key == ord("+"):
-            # + on scheme row → add top concept; on concept row → add narrower concept
-            if 0 <= self._tree.cursor < n:
-                line = self._tree.flat[self._tree.cursor]
-                if line.is_scheme:
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bsf(line.uri)
-                    self._trigger_action("add_top_concept")
-                elif line.node_type == "class":
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bcdf(line.uri)
-                    self._trigger_action("new_subclass")
-                elif not line.is_file and not line.is_action:
-                    self._detail_uri = line.uri
-                    self._detail_fields = self._bdf(line.uri)
-                    self._trigger_action("add_narrower")
-
-        elif key in (curses.KEY_RIGHT, curses.KEY_ENTER, ord("\n"), ord("\r"), ord("l")):
-            if 0 <= self._tree.cursor < n:
-                line = self._tree.flat[self._tree.cursor]
-                if line.uri == _ACTION_ADD_PROPERTY:
-                    self._trigger_add_global_property()
-                    return False
-            self._open_detail()
-
-        elif key in (curses.KEY_LEFT, ord("h")):
-            if 0 <= self._tree.cursor < n:
-                depth = self._tree.flat[self._tree.cursor].depth
-                if depth > 0:
-                    for i in range(self._tree.cursor - 1, -1, -1):
-                        if self._tree.flat[i].depth == depth - 1:
-                            self._tree.cursor = i
-                            break
-                else:
-                    self._detail_uri = _GLOBAL_URI
-                    self._detail_fields = self._bgf()
-                    self._field_cursor = 0
-
-        elif key == ord("G"):
-            from .. import viz_vowl as _viz
-
-            try:
-                out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
-                self._status = f"Graph opened in browser — {out}"
-            except Exception as exc:
-                self._status = f"Error opening graph: {exc}"
-
-        elif key == ord("S"):
-            self._trigger_action("open_query")
-
-        elif key == ord("?"):
-            self._state = WelcomeState()
-
-        elif key in (ord("q"), ord("Q"), 27):
-            return True
-
-        return False
+        return self._on_tree_action(key, rows)
 
     # ─────────────────────────── DETAIL drawing ──────────────────────────────
 
@@ -3152,7 +3183,96 @@ class TaxonomyViewer:
 
     # ─────────────────────────── action dispatch ─────────────────────────────
 
-    def _trigger_action(self, action: str, meta: dict | None = None) -> None:
+    def _action_add_label(
+        self, action: str, meta: dict | None, ftype_map: dict[str, tuple[str, str]]
+    ) -> None:
+        """Shared handler: open an edit prompt for any 'add label/comment/def' action."""
+        lang = (meta or {}).get("lang", self.lang)
+        ftype, display_name = ftype_map[action]
+        synthetic = DetailField(
+            f"add:{ftype}:{lang}",
+            f"{display_name} [{lang}]",
+            "",
+            editable=True,
+            meta={"type": ftype, "lang": lang},
+        )
+        self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
+
+    def _action_add_schema_media(self, action: str, meta: dict | None) -> None:
+        """Open an edit prompt for add_schema_image/video/url."""
+        kind = action[len("add_schema_") :]
+        label_map = {
+            "image": "schema:image URL (photo)",
+            "video": "schema:video URL (YouTube / Vimeo)",
+            "url": "schema:url (external link)",
+        }
+        ftype = f"schema_{kind}_input"
+        synthetic = DetailField(
+            f"add:{ftype}",
+            label_map.get(kind, kind),
+            "https://",
+            editable=True,
+            meta={"type": ftype},
+        )
+        self._state = EditState(
+            buffer="https://", pos=len("https://"), field=synthetic, return_to=None
+        )
+
+    def _action_view_ontology_graph(self, meta: dict | None) -> None:  # noqa: ARG002
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        try:
+            out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
+            self._status = self._graph_opened_status(out)
+        except Exception as exc:
+            self._status = f"Error opening graph: {exc}"
+
+    def _action_view_focused_graph(self, meta: dict | None) -> None:
+        from .. import viz_vowl as _viz  # noqa: PLC0415
+
+        class_uri = (meta or {}).get("uri", "")
+        if class_uri:
+            try:
+                out = _viz.open_focused_in_browser(self.taxonomy, class_uri, self.file_path)
+                self._status = f"Focused graph opened — {out}"
+            except Exception as exc:
+                self._status = f"Error opening focused graph: {exc}"
+
+    def _action_open_query(self, meta: dict | None) -> None:  # noqa: ARG002
+        from .. import sparql_query as _sq  # noqa: PLC0415
+
+        buf = self._last_query_buffer
+        file_paths = list(self._workspace.taxonomies.keys())
+        if not buf:
+            buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
+        if file_paths:
+            try:
+                _sq._trace(
+                    f"open_query: calling build_uri_index_cached synchronously paths={[p.name for p in file_paths]}"
+                )
+                _sq.build_uri_index_cached(file_paths)
+                _sq._trace("open_query: build_uri_index_cached returned")
+            except Exception:
+                pass
+        self._state = QueryState(file_paths=file_paths, query_buffer=buf, query_pos=len(buf))
+
+    def _action_edit_server_field(self, action: str, meta: dict | None) -> None:  # noqa: ARG002
+        from ..api_server import load_server_config  # noqa: PLC0415
+
+        current_url, current_port = load_server_config()
+        if action == "edit_server_url":
+            buf, ftype = current_url, "server_url"
+            synthetic = DetailField(
+                "edit:server_url", "server URL", buf, editable=True, meta={"type": ftype}
+            )
+        else:
+            buf, ftype = str(current_port), "server_port"
+            synthetic = DetailField(
+                "edit:server_port", "port", buf, editable=True, meta={"type": ftype}
+            )
+        self._state = EditState(buffer=buf, pos=len(buf), field=synthetic, return_to=None)
+
+    def _trigger_action(self, action: str, meta: dict | None = None) -> None:  # noqa: C901
         _came_from_tree = isinstance(self._state, (TreeState, WelcomeState))
         if action in ("add_narrower", "add_top_concept"):
             # add_narrower: parent is the current concept.
@@ -3208,17 +3328,14 @@ class TaxonomyViewer:
                 )
 
         elif action in ("add_rdf_label", "add_rdf_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "rdf_label" if action == "add_rdf_label" else "rdf_comment"
-            display = "rdfs:label" if action == "add_rdf_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_rdf_label": ("rdf_label", "rdfs:label"),
+                    "add_rdf_comment": ("rdf_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "link_superclass":
             if self._detail_uri:
@@ -3313,17 +3430,14 @@ class TaxonomyViewer:
                     self._do_individual_to_class(uri)
 
         elif action in ("add_ind_label", "add_ind_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "ind_label" if action == "add_ind_label" else "ind_comment"
-            display = "rdfs:label" if action == "add_ind_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_ind_label": ("ind_label", "rdfs:label"),
+                    "add_ind_comment": ("ind_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "delete_individual":
             self._on_delete_individual_action()
@@ -3431,17 +3545,14 @@ class TaxonomyViewer:
                 )
 
         elif action in ("add_prop_label", "add_prop_comment"):
-            lang = (meta or {}).get("lang", self.lang)
-            ftype = "prop_label" if action == "add_prop_label" else "prop_comment"
-            display = "rdfs:label" if action == "add_prop_label" else "rdfs:comment"
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_prop_label": ("prop_label", "rdfs:label"),
+                    "add_prop_comment": ("prop_comment", "rdfs:comment"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action in ("add_prop_domain", "add_prop_range"):
             if self._detail_uri and self._detail_uri in self.taxonomy.owl_properties:
@@ -3512,23 +3623,7 @@ class TaxonomyViewer:
                 self._trigger_create_individual(self._detail_uri)
 
         elif action in ("add_schema_image", "add_schema_video", "add_schema_url"):
-            kind = action[len("add_schema_") :]  # "image" | "video" | "url"
-            label_map = {
-                "image": "schema:image URL (photo)",
-                "video": "schema:video URL (YouTube / Vimeo)",
-                "url": "schema:url (external link)",
-            }
-            ftype = f"schema_{kind}_input"
-            synthetic = DetailField(
-                f"add:{ftype}",
-                label_map.get(kind, kind),
-                "https://",
-                editable=True,
-                meta={"type": ftype},
-            )
-            self._state = EditState(
-                buffer="https://", pos=len("https://"), field=synthetic, return_to=None
-            )
+            self._action_add_schema_media(action, meta)
 
         elif action in ("remove_schema_image", "remove_schema_video", "remove_schema_url"):
             self._remove_schema_media(action[len("remove_schema_") :], (meta or {}).get("url", ""))
@@ -3537,24 +3632,10 @@ class TaxonomyViewer:
             self._open_ontology_identity_editor(action)
 
         elif action == "view_ontology_graph":
-            from .. import viz_vowl as _viz
-
-            try:
-                out = _viz.open_in_browser(self.taxonomy, self.file_path, self._rebuild)
-                self._status = f"Graph opened in browser — {out}"
-            except Exception as exc:
-                self._status = f"Error opening graph: {exc}"
+            self._action_view_ontology_graph(meta)
 
         elif action == "view_focused_graph":
-            from .. import viz_vowl as _viz
-
-            class_uri = (meta or {}).get("uri", "")
-            if class_uri:
-                try:
-                    out = _viz.open_focused_in_browser(self.taxonomy, class_uri, self.file_path)
-                    self._status = f"Focused graph opened — {out}"
-                except Exception as exc:
-                    self._status = f"Error opening focused graph: {exc}"
+            self._action_view_focused_graph(meta)
 
         elif action == "toggle_class_fold":
             uri = (meta or {}).get("uri", "")
@@ -3573,22 +3654,16 @@ class TaxonomyViewer:
                     )
 
         elif action in ("add_pref_label", "add_alt_label", "add_def", "add_scope_note"):
-            lang = (meta or {}).get("lang", self.lang)
-            _FTYPE = {
-                "add_pref_label": ("pref", "pref"),
-                "add_alt_label": ("alt", "alt"),
-                "add_def": ("def", "def"),
-                "add_scope_note": ("scope_note", "scopeNote"),
-            }
-            ftype, display_name = _FTYPE[action]
-            synthetic = DetailField(
-                f"add:{ftype}:{lang}",
-                f"{display_name} [{lang}]",
-                "",
-                editable=True,
-                meta={"type": ftype, "lang": lang},
+            self._action_add_label(
+                action,
+                meta,
+                {
+                    "add_pref_label": ("pref", "pref"),
+                    "add_alt_label": ("alt", "alt"),
+                    "add_def": ("def", "def"),
+                    "add_scope_note": ("scope_note", "scopeNote"),
+                },
             )
-            self._state = EditState(buffer="", pos=0, field=synthetic, return_to=None)
 
         elif action == "add_related":
             if self._detail_uri:
@@ -3634,28 +3709,7 @@ class TaxonomyViewer:
             self._state = LangPickState(options=options, cursor=cursor, scroll=0)
 
         elif action in ("edit_server_url", "edit_server_port"):
-            from ..api_server import load_server_config  # noqa: PLC0415
-
-            current_url, current_port = load_server_config()
-            if action == "edit_server_url":
-                buf = current_url
-                synthetic = DetailField(
-                    "edit:server_url",
-                    "server URL",
-                    buf,
-                    editable=True,
-                    meta={"type": "server_url"},
-                )
-            else:
-                buf = str(current_port)
-                synthetic = DetailField(
-                    "edit:server_port",
-                    "port",
-                    buf,
-                    editable=True,
-                    meta={"type": "server_port"},
-                )
-            self._state = EditState(buffer=buf, pos=len(buf), field=synthetic, return_to=None)
+            self._action_edit_server_field(action, meta)
 
         elif action == "show_bearer_token":
             self._show_bearer_token = not self._show_bearer_token
@@ -3671,29 +3725,7 @@ class TaxonomyViewer:
             self._pending_open_config = True
 
         elif action == "open_query":
-            from .. import sparql_query as _sq  # noqa: PLC0415
-
-            buf = self._last_query_buffer
-            file_paths = list(self._workspace.taxonomies.keys())
-            if not buf:
-                buf = _sq.build_prefix_header(self.taxonomy.namespace_bindings)
-            # Build URI index synchronously so the first ':' keypress always
-            # finds the index ready — avoids the race where background thread
-            # hasn't stored the result yet when the user types ':'.
-            if file_paths:
-                try:
-                    _sq._trace(
-                        f"open_query: calling build_uri_index_cached synchronously paths={[p.name for p in file_paths]}"
-                    )
-                    _sq.build_uri_index_cached(file_paths)
-                    _sq._trace("open_query: build_uri_index_cached returned")
-                except Exception:
-                    pass
-            self._state = QueryState(
-                file_paths=file_paths,
-                query_buffer=buf,
-                query_pos=len(buf),
-            )
+            self._action_open_query(meta)
 
         elif action.startswith("map:"):
             mapping_type = action[4:]  # "broadMatch", "narrowMatch", …
@@ -3922,13 +3954,8 @@ class TaxonomyViewer:
                 st.error = msg
                 st.ai_generating = False
             elif isinstance(st, QueryState):
-                if st.ai_generating:
-                    st.ai_generating = False
-                    st.ai_step = ""
-                    st.result_error = msg
-                else:
-                    st.result_error = msg
-                    st.running = False
+                st.result_error = msg
+                st.running = False
 
     def _create_ai_generate(self) -> None:
         """Called from main loop when CreateState.ai_generating is True."""
@@ -8677,19 +8704,11 @@ class TaxonomyViewer:
         # Draw the tree first so it's visible through the modal border.
         self._draw_tree(stdscr, rows, cols)
 
-        # AI sub-flow screens take over the full modal
+        # Centred modal box for the query editor.
         modal_h = int((rows - 4) * 0.8)
         modal_w = int((cols - 8) * 0.8)
         modal_y = (rows - modal_h) // 2
         modal_x = (cols - modal_w) // 2
-
-        if qs.ai_step == "prompt_review" or qs.ai_generating:
-            try:
-                win = stdscr.derwin(modal_h, modal_w, modal_y, modal_x)
-            except curses.error:
-                win, modal_h, modal_w = stdscr, rows, cols
-            self._draw_query_ai_prompt_review(win, modal_h, modal_w, qs)
-            return
 
         # ── Modal border ──────────────────────────────────────────────────────
         border_attr = curses.color_pair(_C_FIELD_LABEL)
@@ -8911,10 +8930,6 @@ class TaxonomyViewer:
         if qs.show_presets:
             self._draw_query_presets(win, rows, cols, qs)
 
-        # ── AI ask overlay (drawn on top of everything) ───────────────────────
-        if qs.ai_step == "ask":
-            self._draw_query_ai_ask(win, rows, cols, qs)
-
         # ── @ autocomplete overlay ────────────────────────────────────────────
         if qs.ac_active and qs.panel == "editor":
             self._draw_query_ac(win, rows, cols, qs)
@@ -8955,8 +8970,6 @@ class TaxonomyViewer:
         # ── Footer ────────────────────────────────────────────────────────────
         if qs.show_presets:
             hint_text = "  ↑↓: navigate   Enter: load preset   Ctrl+L/Esc: close  "
-        elif qs.ai_step == "ask":
-            hint_text = ""
         elif qs.ac_active:
             if qs.ac_level == 1:
                 hint_text = "  ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel  "
@@ -8967,9 +8980,9 @@ class TaxonomyViewer:
         elif qs.var_active:
             hint_text = "  ↑↓: navigate   Tab/Enter: insert variable   Esc: cancel  "
         elif qs.panel == "editor":
-            hint_text = "  Ctrl+R/F5: run   Ctrl+G: AI   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: close  "
+            hint_text = "  Ctrl+R/F5: run   @: URI   ?: var   Tab: complete/results   Ctrl+L: presets   Ctrl+V: viz   Esc: close  "
         else:
-            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   A: AI   Ctrl+L: presets   Esc: close  "
+            hint_text = "  Tab: editor   Enter: go to concept   Ctrl+V: viz   Ctrl+L: presets   Esc: close  "
         _draw_bar(win, rows - 1, 0, cols, hint_text, dim=True)
 
     def _draw_query_presets(
@@ -9349,14 +9362,6 @@ class TaxonomyViewer:
         if not isinstance(qs, QueryState):
             return False
 
-        # ── AI sub-flow ───────────────────────────────────────────────────────
-        if qs.ai_step == "ask":
-            self._on_query_ai_ask(key, rows, cols, qs)
-            return False
-        if qs.ai_step == "prompt_review":
-            self._on_query_ai_prompt_review(key, qs)
-            return False
-
         # ── Presets overlay is open ───────────────────────────────────────────
         if qs.show_presets:
             from .. import sparql_query as _sq
@@ -9667,10 +9672,6 @@ class TaxonomyViewer:
                     from .. import sparql_query as _sq_tr
 
                     _sq_tr._trace("KEY Ctrl+R pressed — qs.running = True")
-            elif key == 7:  # Ctrl+G → AI generate
-                qs.ai_step = "ask"
-                qs.ai_question = ""
-                qs.ai_question_pos = 0
             elif key == 22:  # Ctrl+V → visualize results
                 self._open_query_result_viz(qs)
             elif key == 9:  # Tab → results (no kw popup active)
@@ -9703,7 +9704,6 @@ class TaxonomyViewer:
                 # Trigger @ autocomplete when '@' is typed
                 if key == ord("@"):
                     qs.ac_active = True
-                    qs.ac_context = "editor"
                     qs.ac_trigger_pos = qs.query_pos  # pos is now right after '@'
                     qs.ac_cursor = 0
                     qs.ac_scroll = 0
@@ -9812,10 +9812,6 @@ class TaxonomyViewer:
                 qs.show_presets = True
             elif key == 22:  # Ctrl+V → visualize results
                 self._open_query_result_viz(qs)
-            elif key in (ord("a"), ord("A"), 7):  # A or Ctrl+G → AI generate
-                qs.ai_step = "ask"
-                qs.ai_question = ""
-                qs.ai_question_pos = 0
             elif key == 27:  # Esc → back to editor first
                 qs.panel = "editor"
 
@@ -9919,279 +9915,6 @@ class TaxonomyViewer:
 
             threading.Thread(target=_update_viz, daemon=True, name="ster-viz-update").start()
 
-    def _generate_sparql_query(self) -> None:
-        """Background worker: call the LLM to generate a SPARQL query.
-
-        Reads ``qs.ai_prompt_buffer`` (possibly user-edited), calls
-        ``ai.generate_sparql_from_prompt``, and places the resulting SPARQL
-        into ``qs.query_buffer`` so the user can inspect/run/edit it.
-        """
-        from .. import ai as _ai
-
-        qs = self._state
-        if not isinstance(qs, QueryState):
-            return
-        sparql = _ai.generate_sparql_from_prompt(qs.ai_prompt_buffer)
-        qs.query_buffer = sparql
-        qs.query_pos = len(sparql)
-        qs.query_scroll = 0
-        qs.ai_generating = False
-        qs.ai_step = ""
-        qs.panel = "editor"
-
-    def _draw_query_ai_ask(
-        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
-    ) -> None:
-        """Overlay: single-line natural language question input."""
-        box_h = 5
-        box_w = min(cols - 4, 70)
-        by = (rows - box_h) // 2
-        bx = (cols - box_w) // 2
-
-        for y in range(box_h):
-            try:
-                stdscr.addstr(by + y, bx, " " * box_w, curses.color_pair(_C_FIELD_VAL))
-            except curses.error:
-                pass
-
-        title = " ✦ Ask AI — describe what you want to query "
-        try:
-            stdscr.addstr(
-                by, bx, title.center(box_w)[:box_w], curses.color_pair(_C_EDIT_BAR) | curses.A_BOLD
-            )
-        except curses.error:
-            pass
-
-        buf = qs.ai_question
-        pos = qs.ai_question_pos
-        visible_w = box_w - 2
-        start = max(0, pos - visible_w + 1)
-        visible = buf[start : start + visible_w]
-        cursor_col = pos - start
-        display = visible[:cursor_col] + "▌" + visible[cursor_col:]
-        try:
-            stdscr.addstr(
-                by + 2,
-                bx + 1,
-                display[:visible_w].ljust(visible_w)[:visible_w],
-                curses.color_pair(_C_EDIT_BAR),
-            )
-        except curses.error:
-            pass
-
-        if qs.ac_active:
-            if qs.ac_level == 1:
-                hint = " ↑↓: navigate   Tab/Enter: select scheme   Esc: cancel "
-            else:
-                hint = (
-                    f" In {qs.ac_scheme_label} — ↑↓: navigate   Tab/Enter: insert URI   Esc: back "
-                )
-        else:
-            hint = " Enter: review prompt   @: autocomplete   Esc: cancel "
-        try:
-            stdscr.addstr(by + 4, bx, hint.center(box_w)[:box_w], curses.color_pair(_C_DIM))
-        except curses.error:
-            pass
-
-        # AC popup anchored just below the dialog box
-        if qs.ac_active:
-            self._draw_query_ac(stdscr, rows, cols, qs, anchor_y=by + box_h, anchor_x=bx + 1)
-
-    def _draw_query_ai_prompt_review(
-        self, stdscr: curses.window, rows: int, cols: int, qs: QueryState
-    ) -> None:
-        """Full-screen: editable AI prompt before submission."""
-        _draw_bar(
-            stdscr,
-            0,
-            0,
-            cols,
-            " ✦ AI SPARQL — review & edit prompt — Enter: generate   Esc: back ",
-            dim=False,
-        )
-
-        if qs.ai_generating:
-            sp = self._SPINNER[self._install_spinner % 4]
-            try:
-                stdscr.addstr(
-                    rows // 2,
-                    2,
-                    f"{sp}  Generating SPARQL query…",
-                    curses.color_pair(_C_DIM),
-                )
-            except curses.error:
-                pass
-            _draw_bar(stdscr, rows - 1, 0, cols, "", dim=True)
-            return
-
-        buf = qs.ai_prompt_buffer
-        pos = qs.ai_prompt_pos
-        text_with_cursor = buf[:pos] + "▌" + buf[pos:]
-        raw_lines = text_with_cursor.splitlines() or ["▌"]
-        display_lines: list[str] = []
-        for raw in raw_lines:
-            while len(raw) > cols:
-                display_lines.append(raw[:cols])
-                raw = raw[cols:]
-            display_lines.append(raw)
-
-        list_h = rows - 2
-        cursor_line = len((buf[:pos] + "▌").splitlines()) - 1
-        if qs.ai_prompt_scroll > cursor_line:
-            qs.ai_prompt_scroll = cursor_line
-        if cursor_line >= qs.ai_prompt_scroll + list_h:
-            qs.ai_prompt_scroll = cursor_line - list_h + 1
-
-        for i in range(list_h):
-            idx = qs.ai_prompt_scroll + i
-            line = display_lines[idx] if idx < len(display_lines) else ""
-            try:
-                stdscr.addstr(1 + i, 0, line[:cols])
-            except curses.error:
-                pass
-
-        _draw_bar(
-            stdscr,
-            rows - 1,
-            0,
-            cols,
-            "  ↑↓: scroll   type to edit   Enter: generate   Esc: back  ",
-            dim=True,
-        )
-
-    def _on_query_ai_ask(self, key: int, rows: int, cols: int, qs: QueryState) -> None:
-        """Handle keypresses in the AI question input overlay."""
-        from .. import ai as _ai
-
-        # ── @ autocomplete intercept ──────────────────────────────────────────
-        if qs.ac_active:
-            candidates = self._query_ac_candidates(
-                qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos],
-                qs.ac_level,
-                qs.ac_scheme_uri,
-            )
-            if key == 27:  # Esc
-                if qs.ac_level == 2:
-                    # Back to scheme selection (don't cancel the ask dialog)
-                    self._query_ac_clear_filter(qs)
-                    qs.ac_level = 1
-                    qs.ac_scheme_uri = ""
-                    qs.ac_scheme_label = ""
-                    qs.ac_cursor = 0
-                    qs.ac_scroll = 0
-                else:
-                    # Remove @ and filter text, but keep the ask dialog open
-                    self._query_ac_cancel(qs)
-                return
-            if key in (9, curses.KEY_ENTER, ord("\n"), ord("\r")):  # Tab/Enter
-                if qs.ac_level == 1:
-                    if candidates:
-                        s_label, s_uri, _k, _sl = candidates[qs.ac_cursor]
-                        self._query_ac_clear_filter(qs)
-                        qs.ac_level = 2
-                        qs.ac_scheme_uri = s_uri
-                        qs.ac_scheme_label = s_label
-                        qs.ac_cursor = 0
-                        qs.ac_scroll = 0
-                    else:
-                        qs.ac_active = False
-                else:
-                    if candidates:
-                        self._query_ac_insert(qs, candidates[qs.ac_cursor])
-                    else:
-                        qs.ac_active = False
-                return
-            if key == curses.KEY_UP:
-                qs.ac_cursor = max(0, qs.ac_cursor - 1)
-                return
-            if key == curses.KEY_DOWN:
-                qs.ac_cursor = min(max(0, len(candidates) - 1), qs.ac_cursor + 1)
-                return
-            # Pass other keys through to the input, then re-check AC state
-            qs.ai_question, qs.ai_question_pos = _apply_line_edit(
-                qs.ai_question, qs.ai_question_pos, key
-            )
-            if qs.ai_question_pos < qs.ac_trigger_pos or (
-                qs.ac_trigger_pos > 0
-                and qs.ai_question[qs.ac_trigger_pos - 1 : qs.ac_trigger_pos] != "@"
-            ):
-                qs.ac_active = False
-                qs.ac_cursor = 0
-                qs.ac_scroll = 0
-                qs.ac_level = 1
-                qs.ac_scheme_uri = ""
-                qs.ac_scheme_label = ""
-            else:
-                qs.ac_cursor = 0
-            return
-
-        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            if not qs.ai_question.strip():
-                return
-            if not _ai.is_configured():
-                qs.result_error = "AI not configured. Press ⚙ from the main menu."
-                qs.ai_step = ""
-                return
-            # Build taxonomy context from current taxonomy
-            scheme = self.taxonomy.primary_scheme()
-            taxonomy_name = scheme.title(self.lang) if scheme else self.file_path.stem
-            taxonomy_description = ""
-            if scheme and scheme.descriptions:
-                for d in scheme.descriptions:
-                    if d.lang == self.lang:
-                        taxonomy_description = d.value
-                        break
-                if not taxonomy_description and scheme.descriptions:
-                    taxonomy_description = scheme.descriptions[0].value
-            scheme_uris = list(self.taxonomy.schemes.keys())
-            prompt = _ai.render_generate_sparql_prompt(
-                taxonomy_name, taxonomy_description, scheme_uris, qs.ai_question
-            )
-            qs.ai_prompt_buffer = prompt
-            qs.ai_prompt_pos = len(prompt)
-            qs.ai_prompt_scroll = 0
-            qs.ai_step = "prompt_review"
-        elif key == 27:
-            qs.ai_step = ""
-        else:
-            qs.ai_question, qs.ai_question_pos = _apply_line_edit(
-                qs.ai_question, qs.ai_question_pos, key
-            )
-            # Trigger @ autocomplete when '@' is typed
-            if key == ord("@"):
-                qs.ac_active = True
-                qs.ac_context = "ai_ask"
-                qs.ac_trigger_pos = qs.ai_question_pos  # pos is now right after '@'
-                qs.ac_cursor = 0
-                qs.ac_scroll = 0
-                qs.ac_level = 1
-                qs.ac_scheme_uri = ""
-                qs.ac_scheme_label = ""
-
-    def _on_query_ai_prompt_review(self, key: int, qs: QueryState) -> None:
-        """Handle keypresses in the AI prompt review screen."""
-        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            qs.ai_generating = True
-        elif key == 27:
-            qs.ai_step = "ask"
-        elif key == curses.KEY_UP:
-            qs.ai_prompt_pos = _query_pos_up(qs.ai_prompt_buffer, qs.ai_prompt_pos)
-        elif key == curses.KEY_DOWN:
-            qs.ai_prompt_pos = _query_pos_down(qs.ai_prompt_buffer, qs.ai_prompt_pos)
-        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
-            qs.ai_prompt_buffer = (
-                qs.ai_prompt_buffer[: qs.ai_prompt_pos]
-                + "\n"
-                + qs.ai_prompt_buffer[qs.ai_prompt_pos :]
-            )
-            qs.ai_prompt_pos += 1
-        else:
-            qs.ai_prompt_buffer, qs.ai_prompt_pos = _apply_line_edit(
-                qs.ai_prompt_buffer, qs.ai_prompt_pos, key
-            )
-
-    # ── @ autocomplete ────────────────────────────────────────────────────────
-
     def _query_ac_candidates(
         self, ac_query: str, level: int = 1, scheme_uri: str = ""
     ) -> list[tuple[str, str, str, str]]:
@@ -10244,14 +9967,9 @@ class TaxonomyViewer:
         _label, uri, _kind, _scheme = candidate
         start = qs.ac_trigger_pos - 1  # include the '@' itself
         replacement = f"<{uri}>"
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + replacement + qs.ai_question[end:]
-            qs.ai_question_pos = start + len(replacement)
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + replacement + qs.query_buffer[end:]
-            qs.query_pos = start + len(replacement)
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + replacement + qs.query_buffer[end:]
+        qs.query_pos = start + len(replacement)
         qs.ac_active = False
         qs.ac_cursor = 0
         qs.ac_scroll = 0
@@ -10262,26 +9980,16 @@ class TaxonomyViewer:
     def _query_ac_clear_filter(self, qs: QueryState) -> None:
         """Remove filter text typed after '@' (used when transitioning AC levels)."""
         start = qs.ac_trigger_pos
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
-            qs.ai_question_pos = start
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
-            qs.query_pos = start
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+        qs.query_pos = start
 
     def _query_ac_cancel(self, qs: QueryState) -> None:
         """Remove the '@' trigger character and any filter text, then close AC."""
         start = qs.ac_trigger_pos - 1  # include the '@' itself
-        if qs.ac_context == "ai_ask":
-            end = qs.ai_question_pos
-            qs.ai_question = qs.ai_question[:start] + qs.ai_question[end:]
-            qs.ai_question_pos = start
-        else:
-            end = qs.query_pos
-            qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
-            qs.query_pos = start
+        end = qs.query_pos
+        qs.query_buffer = qs.query_buffer[:start] + qs.query_buffer[end:]
+        qs.query_pos = start
         qs.ac_active = False
         qs.ac_cursor = 0
         qs.ac_scroll = 0
@@ -10300,14 +10008,10 @@ class TaxonomyViewer:
     ) -> None:
         """Draw the @ autocomplete popup.
 
-        When *anchor_y* is given the popup is anchored at that screen row (used
-        by the AI-ask overlay). Otherwise the popup is positioned below the
-        cursor line in the editor area.
+        When *anchor_y* is given the popup is anchored at that screen row;
+        otherwise it is positioned below the cursor line in the editor area.
         """
-        if qs.ac_context == "ai_ask":
-            ac_q = qs.ai_question[qs.ac_trigger_pos : qs.ai_question_pos]
-        else:
-            ac_q = qs.query_buffer[qs.ac_trigger_pos : qs.query_pos]
+        ac_q = qs.query_buffer[qs.ac_trigger_pos : qs.query_pos]
         candidates = self._query_ac_candidates(ac_q, qs.ac_level, qs.ac_scheme_uri)
 
         n_cands = len(candidates)

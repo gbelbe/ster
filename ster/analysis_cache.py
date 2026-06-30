@@ -47,8 +47,39 @@ def get_file_hash(path: Path) -> str:
 # ── Cache I/O ─────────────────────────────────────────────────────────────────
 
 
+# Upper bound on cached files. The cache holds one entry per analysed file;
+# a user realistically opens dozens, not thousands. Capping keeps the single
+# JSON small so the full-blob rewrite on each save stays cheap.
+_MAX_ENTRIES = 100
+
+
 def _cache_path() -> Path:
     return Path.home() / ".cache" / "ster" / "analysis_cache.json"
+
+
+def _prune(raw: dict) -> dict:
+    """Bound the cache: drop entries for files that no longer exist, then keep
+    only the ``_MAX_ENTRIES`` most-recently-written entries.
+
+    Without this the cache grew unbounded — stale paths (deleted/moved files,
+    old temp files) lingered forever and every save re-serialised the lot.
+    """
+    alive = {k: v for k, v in raw.items() if _path_exists(k)}
+    if len(alive) <= _MAX_ENTRIES:
+        return alive
+    newest = sorted(
+        alive.items(),
+        key=lambda kv: kv[1].get("timestamp", 0),
+        reverse=True,
+    )[:_MAX_ENTRIES]
+    return dict(newest)
+
+
+def _path_exists(path_str: str) -> bool:
+    try:
+        return Path(path_str).exists()
+    except OSError:
+        return False
 
 
 def _load_raw() -> dict:
@@ -105,7 +136,7 @@ def set_cached(
         "timestamp": time.time(),
         "by_scheme": {uri: scheme_analysis_to_dict(a) for uri, a in analysis.items()},
     }
-    _save_raw(raw)
+    _save_raw(_prune(raw))
 
 
 def invalidate(file_path: Path) -> None:

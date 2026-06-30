@@ -1,35 +1,39 @@
 # /ci — Run the full local CI gate
 
-Runs `scripts/ci.sh` which mirrors the GitHub Actions CI pipeline exactly
-(lint, format, mypy, bandit, pip-audit, pytest on Python 3.11 / 3.12 / 3.13).
+Runs `scripts/ci.sh`. The static checks are driven by **prek**
+(`.pre-commit-config.yaml`) — the same hooks the git pre-commit hook and the
+GitHub `checks` job run, so local and CI can never drift. Tests run on the
+**current Python only locally** (fast feedback); GitHub Actions still runs the
+**full 3.11 / 3.12 / 3.13 matrix** on every PR, so support for all three is
+enforced before merge.
 
 **This MUST be run and pass before every `git push`.** The git pre-push hook
-(`scripts/pre-push.sh`) blocks any push automatically if CI has not passed
-in the last 60 minutes. Install the hook once with: `bash scripts/install-hooks.sh`
+(installed via prek) runs `scripts/pre-push.sh`, which blocks any push unless
+this gate passed in the last 60 minutes. Install the hooks once with:
+`bash scripts/install-hooks.sh` (installs prek's pre-commit + pre-push hooks).
 
 ## Usage
 
 ```
-/ci          → full run across all three Python versions (required before push)
-/ci --fast   → current Python only (quick check during development)
-/ci --fix    → auto-fix lint/format issues, then run the full gate
+/ci          → full local gate: prek checks + eslint + pip-audit + tests + diff-cover
+/ci --fast   → current Python, skips the patch-coverage gate (quick dev check)
+/ci --fix    → let prek's hooks auto-fix (ruff lint/format), then re-run to verify
 ```
 
 Invoke directly as: `bash scripts/ci.sh [--fast|--fix]`
 
-## What it checks (mirrors ci.yml exactly)
+## What it checks
 
-| Step | Command |
+| Step | Driven by |
 |---|---|
-| Lint | `ruff check .` |
-| Format | `ruff format --check .` |
-| Types | `mypy ster/` |
-| Security SAST | `bandit -r ster/ -c pyproject.toml` |
+| Lint · format · types · SAST · imports · ratchet · hygiene | `prek run --all-files` |
+| JS lint + syntax | `eslint .` + `node --check` |
 | CVE scan | `pip-audit --skip-editable` |
-| Tests + coverage | `pytest --cov=ster` on Python 3.11, 3.12, 3.13 |
+| Tests + coverage | `pytest --cov=ster` (current Python) |
+| Patch coverage | `diff-cover` vs `origin/main` (full mode) |
 
 On success, writes `.ci-passed` (gitignored sentinel, expires 60 min).
-The git pre-push hook reads this file and blocks any `git push` that
+The prek pre-push hook reads this file and blocks any `git push` that
 would bypass the gate — this works for all developers, not just Claude.
 
 ## Failure handling rules
@@ -40,7 +44,8 @@ would bypass the gate — this works for all developers, not just Claude.
   why in a comment on the same line.
 - If a new CVE appears in `pip-audit`, upgrade the package first. Only add
   `--ignore-vuln` for CVEs that affect pip itself, not ster's dependencies.
-- After fixing, re-run `/ci` in full (not `--fast`) to confirm all three
-  Python versions pass before pushing.
+- After fixing, re-run `/ci` in full (not `--fast`) before pushing. Local runs
+  the current Python only — the full 3.11 / 3.12 / 3.13 matrix runs on the PR,
+  so check `gh pr checks` after pushing to confirm every version is green.
 
 $ARGUMENTS
