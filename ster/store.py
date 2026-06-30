@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
@@ -276,6 +277,82 @@ def _load_ontology_node(g: Graph, taxonomy: Taxonomy) -> None:
         break
 
 
+# ── per-entity parsing (dispatch tables keep each helper ≤ complexity 10) ─────
+
+
+def _lang_label(o: object, label_type: LabelType = LabelType.PREF) -> Label:
+    return Label(lang=getattr(o, "language", None) or "", value=str(o), type=label_type)
+
+
+def _lang_def(o: object) -> Definition:
+    return Definition(lang=getattr(o, "language", None) or "", value=str(o))
+
+
+def _append_uri_ref(target: list[str], o: object, *, skip_builtin: bool = False) -> None:
+    """Append ``str(o)`` to *target* when *o* is a URIRef (optionally skipping builtins)."""
+    if isinstance(o, URIRef):
+        s = str(o)
+        if not (skip_builtin and is_builtin_uri(s)):
+            target.append(s)
+
+
+def _set_note(entity: object, o: object) -> None:
+    if isinstance(o, Literal):
+        entity.note = str(o)  # type: ignore[attr-defined]
+
+
+def _dispatch_predicates(
+    g: Graph,
+    subject_uri: str,
+    handlers: dict[str, Callable[[object], None]],
+    default: Callable[[str, object], None] | None = None,
+) -> None:
+    """Apply ``handlers[predicate](object)`` over a subject's triples; a predicate with
+    no handler is passed to *default*(predicate, object) when given — the generic
+    catch-all that captures every other predicate into a model's annotation bucket."""
+    for _, p, o in g.triples((URIRef(subject_uri), None, None)):
+        ps = str(p)
+        handler = handlers.get(ps)
+        if handler is not None:
+            handler(o)
+        elif default is not None:
+            default(ps, o)
+
+
+def _parse_class(g: Graph, uri: str) -> RDFClass:
+    """Build an :class:`RDFClass` from its triples (structured fields only)."""
+    cls = RDFClass(uri=uri)
+    handlers: dict[str, Callable[[object], None]] = {
+        str(RDFS.label): lambda o: cls.labels.append(_lang_label(o)),
+        str(RDFS.comment): lambda o: cls.comments.append(_lang_def(o)),
+        str(RDFS.subClassOf): lambda o: _append_uri_ref(cls.sub_class_of, o, skip_builtin=True),
+        str(OWL.equivalentClass): lambda o: _append_uri_ref(cls.equivalent_class, o),
+        str(OWL.disjointWith): lambda o: _append_uri_ref(cls.disjoint_with, o),
+        str(SCHEMA.image): lambda o: cls.schema_images.append(str(o)),
+        str(SCHEMA.video): lambda o: cls.schema_videos.append(str(o)),
+        str(SCHEMA.url): lambda o: cls.schema_urls.append(str(o)),
+        NOTE_PROPERTY_URI: lambda o: _set_note(cls, o),
+    }
+    _dispatch_predicates(g, uri, handlers)
+    return cls
+
+
+def _parse_property(g: Graph, uri: str, prop_type_name: str) -> OWLProperty:
+    """Build an :class:`OWLProperty` from its triples (structured fields only)."""
+    prop = OWLProperty(uri=uri, prop_type=prop_type_name)
+    handlers: dict[str, Callable[[object], None]] = {
+        str(RDFS.label): lambda o: prop.labels.append(_lang_label(o)),
+        str(RDFS.comment): lambda o: prop.comments.append(_lang_def(o)),
+        str(RDFS.domain): lambda o: _append_uri_ref(prop.domains, o),
+        str(RDFS.range): lambda o: _append_uri_ref(prop.ranges, o),
+        str(RDFS.subPropertyOf): lambda o: _append_uri_ref(prop.sub_property_of, o),
+        str(OWL.inverseOf): lambda o: _append_uri_ref(prop.inverse_of, o),
+        NOTE_PROPERTY_URI: lambda o: _set_note(prop, o),
+    }
+    _dispatch_predicates(g, uri, handlers)
+    return prop
+
+
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
     taxonomy = Taxonomy()
 
@@ -394,35 +471,7 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
 
     # Load graph properties for every class URI in one pass.
     for uri in all_class_uris:
-        c_ref = URIRef(uri)
-        rdf_class = RDFClass(uri=uri)
-        for _, p, o in g.triples((c_ref, None, None)):
-            ps = str(p)
-            if ps == str(RDFS.label):
-                rdf_class.labels.append(
-                    Label(lang=getattr(o, "language", None) or "", value=str(o))
-                )
-            elif ps == str(RDFS.comment):
-                rdf_class.comments.append(
-                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
-                )
-            elif ps == str(RDFS.subClassOf) and isinstance(o, URIRef):
-                parent = str(o)
-                if not is_builtin_uri(parent):
-                    rdf_class.sub_class_of.append(parent)
-            elif ps == str(OWL.equivalentClass) and isinstance(o, URIRef):
-                rdf_class.equivalent_class.append(str(o))
-            elif ps == str(OWL.disjointWith) and isinstance(o, URIRef):
-                rdf_class.disjoint_with.append(str(o))
-            elif ps == str(SCHEMA.image):
-                rdf_class.schema_images.append(str(o))
-            elif ps == str(SCHEMA.video):
-                rdf_class.schema_videos.append(str(o))
-            elif ps == str(SCHEMA.url):
-                rdf_class.schema_urls.append(str(o))
-            elif ps == NOTE_PROPERTY_URI and isinstance(o, Literal):
-                rdf_class.note = str(o)
-        taxonomy.owl_classes[uri] = rdf_class
+        taxonomy.owl_classes[uri] = _parse_class(g, uri)
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
     _load_ontology_node(g, taxonomy)
@@ -442,27 +491,7 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
                 if not is_builtin_uri(uri) and uri not in prop_uris:
                     prop_uris[uri] = prop_type_name
     for uri, prop_type_name in prop_uris.items():
-        p_ref = URIRef(uri)
-        prop = OWLProperty(uri=uri, prop_type=prop_type_name)
-        for _, p, o in g.triples((p_ref, None, None)):
-            ps = str(p)
-            if ps == str(RDFS.label):
-                prop.labels.append(Label(lang=getattr(o, "language", None) or "", value=str(o)))
-            elif ps == str(RDFS.comment):
-                prop.comments.append(
-                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
-                )
-            elif ps == str(RDFS.domain) and isinstance(o, URIRef):
-                prop.domains.append(str(o))
-            elif ps == str(RDFS.range) and isinstance(o, URIRef):
-                prop.ranges.append(str(o))
-            elif ps == str(RDFS.subPropertyOf) and isinstance(o, URIRef):
-                prop.sub_property_of.append(str(o))
-            elif ps == str(OWL.inverseOf) and isinstance(o, URIRef):
-                prop.inverse_of.append(str(o))
-            elif ps == NOTE_PROPERTY_URI and isinstance(o, Literal):
-                prop.note = str(o)
-        taxonomy.owl_properties[uri] = prop
+        taxonomy.owl_properties[uri] = _parse_property(g, uri, prop_type_name)
 
     # ── OWL Individuals ───────────────────────────────────────────────────────
     individual_uris: set[str] = set()
@@ -538,6 +567,68 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
             taxonomy.namespace_bindings[p] = n  # type: ignore[index]
 
     return taxonomy
+
+
+# ── per-entity serialization (kept small so taxonomy_to_graph stays under the ratchet) ──
+
+
+def _serialize_schema_media(g: Graph, ref: URIRef, entity: object) -> None:
+    """Emit schema.org image / video / url triples shared by classes, individuals, concepts."""
+    for u in entity.schema_images:  # type: ignore[attr-defined]
+        g.add((ref, SCHEMA.image, URIRef(u)))
+    for u in entity.schema_videos:  # type: ignore[attr-defined]
+        g.add((ref, SCHEMA.video, URIRef(u)))
+    for u in entity.schema_urls:  # type: ignore[attr-defined]
+        g.add((ref, SCHEMA.url, URIRef(u)))
+
+
+def _serialize_labels_comments(
+    g: Graph, ref: URIRef, labels: list[Label], comments: list[Definition]
+) -> None:
+    """Emit rdfs:label / rdfs:comment triples shared by classes and properties."""
+    for lbl in labels:
+        g.add((ref, RDFS.label, Literal(lbl.value, lang=lbl.lang or None)))
+    for cmt in comments:
+        g.add((ref, RDFS.comment, Literal(cmt.value, lang=cmt.lang or None)))
+
+
+def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass) -> None:
+    ref = URIRef(uri)
+    g.add((ref, RDF.type, OWL.Class))
+    _serialize_labels_comments(g, ref, rdf_class.labels, rdf_class.comments)
+    for parent_uri in rdf_class.sub_class_of:
+        g.add((ref, RDFS.subClassOf, URIRef(parent_uri)))
+    for eq_uri in rdf_class.equivalent_class:
+        g.add((ref, OWL.equivalentClass, URIRef(eq_uri)))
+    for dj_uri in rdf_class.disjoint_with:
+        g.add((ref, OWL.disjointWith, URIRef(dj_uri)))
+    _serialize_schema_media(g, ref, rdf_class)
+    if rdf_class.note:
+        g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(rdf_class.note)))
+
+
+_OWL_PROP_TYPE: dict[str, URIRef] = {
+    "ObjectProperty": OWL.ObjectProperty,
+    "DatatypeProperty": OWL.DatatypeProperty,
+    "AnnotationProperty": OWL.AnnotationProperty,
+    "Property": RDF.Property,
+}
+
+
+def _serialize_property(g: Graph, uri: str, prop: OWLProperty) -> None:
+    ref = URIRef(uri)
+    g.add((ref, RDF.type, _OWL_PROP_TYPE.get(prop.prop_type, OWL.ObjectProperty)))
+    _serialize_labels_comments(g, ref, prop.labels, prop.comments)
+    for dom in prop.domains:
+        g.add((ref, RDFS.domain, URIRef(dom)))
+    for rng in prop.ranges:
+        g.add((ref, RDFS.range, URIRef(rng)))
+    for sup in prop.sub_property_of:
+        g.add((ref, RDFS.subPropertyOf, URIRef(sup)))
+    for inv in prop.inverse_of:
+        g.add((ref, OWL.inverseOf, URIRef(inv)))
+    if prop.note:
+        g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(prop.note)))
 
 
 def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
@@ -633,26 +724,7 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 
     # ── OWL/RDFS Classes ─────────────────────────────────────────────────────
     for uri, rdf_class in taxonomy.owl_classes.items():
-        ref = URIRef(uri)
-        g.add((ref, RDF.type, OWL.Class))
-        for lbl in rdf_class.labels:
-            g.add((ref, RDFS.label, Literal(lbl.value, lang=lbl.lang or None)))
-        for comment in rdf_class.comments:
-            g.add((ref, RDFS.comment, Literal(comment.value, lang=comment.lang or None)))
-        for parent_uri in rdf_class.sub_class_of:
-            g.add((ref, RDFS.subClassOf, URIRef(parent_uri)))
-        for eq_uri in rdf_class.equivalent_class:
-            g.add((ref, OWL.equivalentClass, URIRef(eq_uri)))
-        for dj_uri in rdf_class.disjoint_with:
-            g.add((ref, OWL.disjointWith, URIRef(dj_uri)))
-        for u in rdf_class.schema_images:
-            g.add((ref, SCHEMA.image, URIRef(u)))
-        for u in rdf_class.schema_videos:
-            g.add((ref, SCHEMA.video, URIRef(u)))
-        for u in rdf_class.schema_urls:
-            g.add((ref, SCHEMA.url, URIRef(u)))
-        if rdf_class.note:
-            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(rdf_class.note)))
+        _serialize_class(g, uri, rdf_class)
 
     # ── OWL Individuals ───────────────────────────────────────────────────────
     for uri, individual in taxonomy.owl_individuals.items():
@@ -684,30 +756,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
             g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(individual.note)))
 
     # ── OWL Properties ────────────────────────────────────────────────────────
-    _OWL_PROP_TYPE = {
-        "ObjectProperty": OWL.ObjectProperty,
-        "DatatypeProperty": OWL.DatatypeProperty,
-        "AnnotationProperty": OWL.AnnotationProperty,
-        "Property": RDF.Property,
-    }
     for uri, prop in taxonomy.owl_properties.items():
-        ref = URIRef(uri)
-        rdf_type = _OWL_PROP_TYPE.get(prop.prop_type, OWL.ObjectProperty)
-        g.add((ref, RDF.type, rdf_type))
-        for lbl in prop.labels:
-            g.add((ref, RDFS.label, Literal(lbl.value, lang=lbl.lang or None)))
-        for cmt in prop.comments:
-            g.add((ref, RDFS.comment, Literal(cmt.value, lang=cmt.lang or None)))
-        for dom in prop.domains:
-            g.add((ref, RDFS.domain, URIRef(dom)))
-        for rng in prop.ranges:
-            g.add((ref, RDFS.range, URIRef(rng)))
-        for sup in prop.sub_property_of:
-            g.add((ref, RDFS.subPropertyOf, URIRef(sup)))
-        for inv in prop.inverse_of:
-            g.add((ref, OWL.inverseOf, URIRef(inv)))
-        if prop.note:
-            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(prop.note)))
+        _serialize_property(g, uri, prop)
 
     # ── owl:Ontology ──────────────────────────────────────────────────────────
     if taxonomy.ontology_uri:
