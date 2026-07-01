@@ -45,9 +45,6 @@ from .uri_modal import UriModal
 _ACTION_PREFIX = "__action:"
 _ACTION_SUFFIX = "__"
 
-# Quality colour name (red/orange/green) → a Rich colour for the tree's ■ tags.
-_RICH_QUALITY = {"red": "red", "orange": "dark_orange", "green": "green"}
-
 
 def _action_uri(action: str, extra: str = "") -> str:
     return f"{_ACTION_PREFIX}{action}:{extra}{_ACTION_SUFFIX}"
@@ -529,27 +526,29 @@ class OntologyApp(App):
             or self.tax.concepts.get(uri)
         )
 
-    def _coverage_square(self, langs: list[str], covered: set[str]) -> str:
-        """A ■ coloured by how many of *langs* appear in *covered* (red/orange/green)."""
+    def _coverage_is_red(self, langs: list[str], covered: set[str]) -> bool:
+        """True when *covered* misses enough of *langs* to score red (< 50%) on the
+        overview's quality threshold."""
         from ster.analysis_base import pct as _pct
         from ster.nav.logic import _quality_color
 
-        colour = _RICH_QUALITY[
-            _quality_color(_pct(sum(1 for c in langs if c in covered), len(langs)))
-        ]
-        return f"[{colour}]■[/]"
+        return _quality_color(_pct(sum(1 for c in langs if c in covered), len(langs))) == "red"
 
     def _quality_squares(self, uri: str, doc_attr: str) -> str:
-        """A ' lab ■ doc ■' tag coloured by this entity's per-configured-language label
-        / documentation coverage — same red/orange/green thresholds as the overview's
-        completeness (green = covered in all configured languages, red = none)."""
+        """A compact warning suffix flagging low coverage: 'lbl ■' when this entity is
+        under-labelled and/or 'doc ■' when under-documented — each a red square, shown
+        only when that dimension's per-configured-language coverage is red (< 50%). Both
+        red → both flags; one red → that flag; neither → empty (no clutter on good rows)."""
         entity = self._entity_for(uri)
         if entity is None:
             return ""
         langs = self.configured_langs or [self.lang]
-        lab = self._coverage_square(langs, {lbl.lang for lbl in entity.labels})  # type: ignore[attr-defined]
-        doc = self._coverage_square(langs, {d.lang for d in getattr(entity, doc_attr, [])})
-        return f"  [dim]lab[/dim] {lab} [dim]doc[/dim] {doc}"
+        parts = []
+        if self._coverage_is_red(langs, {lbl.lang for lbl in entity.labels}):  # type: ignore[attr-defined]
+            parts.append("lbl [red]■[/]")
+        if self._coverage_is_red(langs, {d.lang for d in getattr(entity, doc_attr, [])}):
+            parts.append("doc [red]■[/]")
+        return f"  {' '.join(parts)}" if parts else ""
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{data.ICON.get(kind, '')} {data.label_of(self.tax, uri, self.lang)}{suffix}"
