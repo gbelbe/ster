@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ster.metadata_coverage import MetaProp, normalise_criticity
+
 # ── lang persistence ──────────────────────────────────────────────────────────
 
 
@@ -80,14 +82,19 @@ def save_configured_langs(file_path: Path, langs: list[str]) -> None:
 # shape, so a single load/save helper backs both.
 
 
-def _load_props_catalog(path: Path) -> list[tuple[str, str]] | None:
-    """Read a ``(predicate, label)`` catalog from *path*, or ``None`` if unset."""
+def _load_props_catalog(path: Path) -> list[MetaProp] | None:
+    """Read a catalog of :class:`MetaProp` from *path*, or ``None`` if unset. A legacy
+    entry with no ``criticity`` field loads as ``optional``."""
     if path.exists():
         try:
             data = json.loads(path.read_text())
             if isinstance(data, list):
                 return [
-                    (str(e["predicate"]), str(e.get("label", "")))
+                    MetaProp(
+                        str(e["predicate"]),
+                        str(e.get("label", "")),
+                        normalise_criticity(e.get("criticity")),
+                    )
                     for e in data
                     if isinstance(e, dict) and e.get("predicate")
                 ]
@@ -96,11 +103,15 @@ def _load_props_catalog(path: Path) -> list[tuple[str, str]] | None:
     return None
 
 
-def _save_props_catalog(path: Path, props: list[tuple[str, str]]) -> None:
-    """Persist a ``(predicate, label)`` catalog to *path* (best-effort)."""
+def _save_props_catalog(path: Path, props: list[MetaProp]) -> None:
+    """Persist a :class:`MetaProp` catalog to *path* (best-effort), criticity included."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps([{"predicate": pr, "label": lb} for pr, lb in props], indent=2))
+        entries = [
+            {"predicate": mp.predicate, "label": mp.label, "criticity": mp.criticity}
+            for mp in props
+        ]
+        path.write_text(json.dumps(entries, indent=2))
     except Exception:
         pass
 
@@ -109,13 +120,13 @@ def _metadata_props_path() -> Path:
     return Path.home() / ".config" / "ster" / "metadata_props.json"
 
 
-def load_metadata_props() -> list[tuple[str, str]] | None:
+def load_metadata_props() -> list[MetaProp] | None:
     """The configured ontology-metadata predicates as ``(predicate, label)`` pairs,
     or ``None`` when never configured (callers fall back to the built-in defaults)."""
     return _load_props_catalog(_metadata_props_path())
 
 
-def save_metadata_props(props: list[tuple[str, str]]) -> None:
+def save_metadata_props(props: list[MetaProp]) -> None:
     """Persist the ontology-metadata predicate catalog (global, tool-wide)."""
     _save_props_catalog(_metadata_props_path(), props)
 
@@ -124,13 +135,13 @@ def _entity_metadata_props_path() -> Path:
     return Path.home() / ".config" / "ster" / "entity_metadata_props.json"
 
 
-def load_entity_metadata_props() -> list[tuple[str, str]] | None:
+def load_entity_metadata_props() -> list[MetaProp] | None:
     """The configured entity-metadata predicates (offered on classes / properties /
     individuals) as ``(predicate, label)`` pairs, or ``None`` when never configured."""
     return _load_props_catalog(_entity_metadata_props_path())
 
 
-def save_entity_metadata_props(props: list[tuple[str, str]]) -> None:
+def save_entity_metadata_props(props: list[MetaProp]) -> None:
     """Persist the entity-metadata predicate catalog (global, tool-wide)."""
     _save_props_catalog(_entity_metadata_props_path(), props)
 

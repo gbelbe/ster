@@ -25,6 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
+from ster.metadata_coverage import MetaProp
 from ster.model import LabelType, Taxonomy
 from ster.nav.logic import DetailField
 
@@ -331,7 +332,7 @@ class OntologyApp(App):
         self._row_menu_delete: DetailField | None = None
         self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
 
-    def _load_metadata_props(self) -> list[tuple[str, str]]:
+    def _load_metadata_props(self) -> list[MetaProp]:
         """The configured ontology-metadata predicate catalog (built-in defaults
         when the user has never customised it)."""
         from ster.nav.logic import default_annotation_catalog
@@ -339,7 +340,7 @@ class OntologyApp(App):
 
         return load_metadata_props() or default_annotation_catalog()
 
-    def _load_entity_metadata_props(self) -> list[tuple[str, str]]:
+    def _load_entity_metadata_props(self) -> list[MetaProp]:
         """The configured entity-metadata predicate catalog (built-in defaults when
         the user has never customised it)."""
         from ster.nav.logic import default_entity_annotation_catalog
@@ -434,10 +435,10 @@ class OntologyApp(App):
 
         _save_prefs({"theme": self.theme})  # theme is a global preference
         if "metadata_props" in result:  # the configurable "Add metadata" catalog (global)
-            self.metadata_props = [tuple(p) for p in result["metadata_props"]]
+            self.metadata_props = list(result["metadata_props"])
             save_metadata_props(self.metadata_props)
         if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
-            self.entity_metadata_props = [tuple(p) for p in result["entity_metadata_props"]]
+            self.entity_metadata_props = list(result["entity_metadata_props"])
             save_entity_metadata_props(self.entity_metadata_props)
         if self._path is not None:
             _save_lang_pref(self._path, new_lang)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
+from ..metadata_coverage import MetaProp
 from ..metadata_coverage import is_labelled as _is_labelled
 from ..model import LabelType, OntologyAnnotation, Taxonomy
 from ..owl_analysis import (
@@ -2928,10 +2929,10 @@ def _annotation_display(predicate: str) -> str:
     return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
-def default_annotation_catalog() -> list[tuple[str, str]]:
-    """The built-in ontology-metadata predicate catalog — ``(predicate, label)``
-    pairs. Used as the default when no user catalog is configured."""
-    return list(_ANNOTATION_CATALOG)
+def default_annotation_catalog() -> list[MetaProp]:
+    """The built-in ontology-metadata predicate catalog. Used as the default when no
+    user catalog is configured (every entry defaults to ``optional`` criticity)."""
+    return [MetaProp(pred, label) for pred, label in _ANNOTATION_CATALOG]
 
 
 # ── Entity-metadata catalog (classes / properties / individuals) ──────────────
@@ -2947,14 +2948,14 @@ _ENTITY_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
 )
 
 
-def default_entity_annotation_catalog() -> list[tuple[str, str]]:
-    """The built-in entity-metadata predicate catalog — ``(predicate, label)``
-    pairs offered on classes / properties / individuals when none is configured."""
-    return list(_ENTITY_ANNOTATION_CATALOG)
+def default_entity_annotation_catalog() -> list[MetaProp]:
+    """The built-in entity-metadata predicate catalog offered on classes / properties /
+    individuals when none is configured (every entry defaults to ``optional``)."""
+    return [MetaProp(pred, label) for pred, label in _ENTITY_ANNOTATION_CATALOG]
 
 
 def annotation_catalog_options(
-    taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None = None
+    taxonomy: Taxonomy, catalog: list[MetaProp] | None = None
 ) -> list[tuple[str, str]]:
     """Return ``(predicate_uri, display_label)`` pairs available for "Add metadata".
 
@@ -2962,9 +2963,9 @@ def annotation_catalog_options(
     predicates already present in ``taxonomy.ontology_annotations`` are filtered out
     so the picker only shows what can still be added.
     """
-    cat = catalog if catalog is not None else list(_ANNOTATION_CATALOG)
+    cat = catalog if catalog is not None else default_annotation_catalog()
     present = {a.predicate for a in taxonomy.ontology_annotations}
-    return [(pred, label) for pred, label in cat if pred not in present]
+    return [(mp.predicate, mp.label) for mp in cat if mp.predicate not in present]
 
 
 def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:

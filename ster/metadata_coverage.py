@@ -12,7 +12,33 @@ predicate counts as present wherever it actually appears.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .model import Taxonomy
+
+# A configured annotation-property catalog entry. ``criticity`` grades how badly a
+# missing value should be surfaced later (warnings/alerts): mandatory > important >
+# optional. Absent / unknown criticity is treated as ``optional`` (the safe default,
+# so an existing catalog raises no new alerts until a property is deliberately
+# promoted).
+CRITICITIES: tuple[str, ...] = ("mandatory", "important", "optional")
+DEFAULT_CRITICITY = "optional"
+
+
+def normalise_criticity(value: str | None) -> str:
+    """Coerce *value* to a known criticity, defaulting unknown/None to optional."""
+    return value if value in CRITICITIES else DEFAULT_CRITICITY
+
+
+@dataclass(frozen=True)
+class MetaProp:
+    """One catalogued annotation predicate: its URI, a display label, and its
+    criticity (defaults to ``optional``)."""
+
+    predicate: str
+    label: str = ""
+    criticity: str = DEFAULT_CRITICITY
+
 
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 RDFS_COMMENT = "http://www.w3.org/2000/01/rdf-schema#comment"
@@ -64,11 +90,11 @@ def is_labelled(entity: object) -> bool:
     )
 
 
-def _catalog_predicates(catalog: list[tuple[str, str]] | None) -> set[str]:
-    return {predicate for predicate, _label in (catalog or [])}
+def _catalog_predicates(catalog: list[MetaProp] | None) -> set[str]:
+    return {mp.predicate for mp in (catalog or [])}
 
 
-def ontology_metadata_pct(taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None) -> int | None:
+def ontology_metadata_pct(taxonomy: Taxonomy, catalog: list[MetaProp] | None) -> int | None:
     """Percent of the configured ontology-metadata predicates present on the header,
     or None when nothing is configured."""
     configured = _catalog_predicates(catalog)
@@ -82,7 +108,7 @@ def _entity_fill(entity: object, configured: set[str]) -> float:
     return len(entity_predicates(entity) & configured) / len(configured)
 
 
-def entity_metadata_pct(taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None) -> int | None:
+def entity_metadata_pct(taxonomy: Taxonomy, catalog: list[MetaProp] | None) -> int | None:
     """Average per-entity fill of the configured entity-metadata predicates across all
     classes, properties and individuals, or None when nothing is configured / present."""
     configured = _catalog_predicates(catalog)
@@ -98,8 +124,8 @@ def entity_metadata_pct(taxonomy: Taxonomy, catalog: list[tuple[str, str]] | Non
 
 def overview_coverage(
     taxonomy: Taxonomy,
-    ontology_catalog: list[tuple[str, str]] | None,
-    entity_catalog: list[tuple[str, str]] | None,
+    ontology_catalog: list[MetaProp] | None,
+    entity_catalog: list[MetaProp] | None,
 ) -> dict[str, int | None]:
     """The two overview coverage percentages (``None`` when not computable)."""
     return {

@@ -29,6 +29,8 @@ from textual.widgets import (
 )
 from textual.widgets._collapsible import CollapsibleTitle
 
+from ster.metadata_coverage import CRITICITIES, DEFAULT_CRITICITY, MetaProp, normalise_criticity
+
 from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup
 from .llm_group import LlmSetup
@@ -80,6 +82,58 @@ class _MetaCheckbox(Checkbox):
         self.label_text = label or suggest_label(predicate)
         super().__init__(self.label_text, value=True, classes="cfg-mp-box")
         self.predicate = predicate
+
+
+class _CritOption(Static):
+    """One clickable criticity choice (mandatory / important / optional) inside a
+    property row's radio group. Clicking it selects that level for the row."""
+
+    def __init__(self, level: str, *, selected: bool) -> None:
+        super().__init__(classes="cfg-crit-opt")
+        self.level = level
+        self.set_selected(selected)
+
+    def set_selected(self, on: bool) -> None:
+        self.set_class(on, "crit-on")
+        self.update(f"{'●' if on else '○'} {self.level}")
+
+    def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
+        event.stop()
+        if isinstance(self.parent, _MetaPropRow):
+            self.parent.set_criticity(self.level)
+
+
+class _MetaPropRow(Horizontal):
+    """One catalog entry: its include checkbox plus a 3-option criticity radio
+    (mandatory / important / optional). ``criticity`` defaults to optional."""
+
+    def __init__(self, predicate: str, label: str, criticity: str = DEFAULT_CRITICITY) -> None:
+        super().__init__(classes="cfg-mp-row")
+        self._predicate = predicate
+        self._label = label
+        self.criticity = normalise_criticity(criticity)
+
+    def compose(self) -> ComposeResult:
+        yield _MetaCheckbox(self._predicate, self._label)
+        with Horizontal(classes="cfg-crit"):
+            for level in CRITICITIES:
+                yield _CritOption(level, selected=level == self.criticity)
+
+    @property
+    def checkbox(self) -> _MetaCheckbox:
+        return self.query_one(_MetaCheckbox)
+
+    def set_criticity(self, level: str) -> None:
+        """Select *level*, updating the radio marks, and auto-save the catalog."""
+        self.criticity = level
+        for opt in self.query(_CritOption):
+            opt.set_selected(opt.level == level)
+        self.post_message(_MetaCatalog.Changed())
+
+    def cycle_criticity(self) -> None:
+        """Advance to the next criticity (mandatory → important → optional → …)."""
+        nxt = CRITICITIES[(CRITICITIES.index(self.criticity) + 1) % len(CRITICITIES)]
+        self.set_criticity(nxt)
 
 
 class _SecretInput(Input):
@@ -150,7 +204,7 @@ class _MetaCatalog(FocusGroup):
 
     def __init__(  # type: ignore[no-untyped-def]
         self,
-        props: list[tuple[str, str]],
+        props: list[MetaProp],
         *,
         prev_target: str = "Tabs",
         next_target: str = "Tabs",
@@ -169,8 +223,8 @@ class _MetaCatalog(FocusGroup):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="cfg-mprops"):
-            for pred, label in self._initial:
-                yield _MetaCheckbox(pred, label)
+            for mp in self._initial:
+                yield _MetaPropRow(mp.predicate, mp.label, mp.criticity)
         with Horizontal(classes="cfg-mp-add-row"):
             yield Input(placeholder="predicate URI — http://…", classes="cfg-mp-uri")
             yield Input(placeholder="label (optional)", classes="cfg-mp-label")
@@ -178,18 +232,24 @@ class _MetaCatalog(FocusGroup):
         if self._can_declare and self._base_uri:
             yield Button("Add local annotation property", classes="cfg-mp-new")
 
-    def props(self) -> list[tuple[str, str]]:
-        """The ticked predicates as ``(predicate, label)`` pairs."""
-        return [(cb.predicate, cb.label_text) for cb in self.query(_MetaCheckbox) if cb.value]
+    def props(self) -> list[MetaProp]:
+        """The ticked predicates as :class:`MetaProp` entries (predicate, label,
+        criticity)."""
+        return [
+            MetaProp(row.checkbox.predicate, row.checkbox.label_text, row.criticity)
+            for row in self.query(_MetaPropRow)
+            if row.checkbox.value
+        ]
 
     async def add_typed(self) -> None:
-        """Mount a checkbox for the typed predicate (deduped); clear the fields."""
+        """Mount a row for the typed predicate (deduped, optional criticity); clear the
+        fields."""
         uri = self.query_one(".cfg-mp-uri", Input).value.strip()
         label = self.query_one(".cfg-mp-label", Input).value.strip()
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
         self.query_one(".cfg-mp-uri", Input).value = ""
         self.query_one(".cfg-mp-label", Input).value = ""
         self.post_message(self.Changed())  # ask the modal to auto-save
@@ -226,7 +286,7 @@ class _MetaCatalog(FocusGroup):
         if not name or uri in present:
             return
         label = label.strip() or name
-        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
         self.post_message(self.Changed())  # auto-save the catalog
         self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
 
@@ -296,7 +356,7 @@ class _MetaCatalog(FocusGroup):
         elif key == "left":
             self._to_header()
         elif key == "right":
-            pass  # entering the list is driven from the header; ignore here
+            self._cycle_criticity()  # →: cycle the current row's criticity radio
         elif not self._extra_key(event):  # space / enter toggle the current checkbox
             return  # not one of ours — let it propagate normally
         event.stop()
@@ -354,6 +414,12 @@ class _MetaCatalog(FocusGroup):
             item.value = not item.value
             return True
         return False
+
+    def _cycle_criticity(self) -> None:
+        """→ on a property row advances its criticity (mandatory → important → optional)."""
+        item = self.current_item()
+        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
+            item.parent.cycle_criticity()
 
     def _clear(self) -> None:
         for box in self.query(_MetaCheckbox):
@@ -415,8 +481,14 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
     .cfg-mprops { height: auto; max-height: 12; }
-    .cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
+    /* One catalog entry: the include checkbox on the left, its criticity radio on the
+       right (mandatory / important / optional). */
+    .cfg-mp-row { height: auto; margin-bottom: 1; }
+    .cfg-mprops .cfg-mp-box { width: 1fr; height: auto; border: none; background: transparent; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
+    .cfg-crit { width: auto; height: 1; }
+    .cfg-crit-opt { width: auto; height: 1; margin-left: 2; color: $foreground 45%; }
+    .cfg-crit-opt.crit-on { color: $primary; text-style: bold; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
     .cfg-mp-uri { width: 2fr; border: round $primary; }
     .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
@@ -466,8 +538,8 @@ class ConfigModal(ModalBase[None]):
         available_langs: list[str],
         themes: list[str] | None = None,
         current_theme: str = "ster",
-        metadata_props: list[tuple[str, str]] | None = None,
-        entity_metadata_props: list[tuple[str, str]] | None = None,
+        metadata_props: list[MetaProp] | None = None,
+        entity_metadata_props: list[MetaProp] | None = None,
         annotation_verifier=None,  # Callable[[str], bool] | None — URI is an annotation property?
         can_declare: bool = False,  # may a confirmed unknown predicate be declared locally?
         base_uri: str = "",  # ontology base IRI — fixed prefix for new local properties
