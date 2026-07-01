@@ -374,6 +374,9 @@ class ConfigModal(ModalBase[None]):
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
     #cfg-box .cfg-label { color: $text-muted; }
     #cfg-box .cfg-hint { color: $text-muted; }
+    .cfg-sl-thresh { height: auto; }
+    .cfg-sl-label { width: 1fr; content-align: left middle; }
+    .cfg-sl-input { width: 14; }
     /* Narrow dropdowns with clean rounded borders (override the dashed `tall`). */
     #cfg-theme { width: 24; margin-bottom: 1; }
     #cfg-display { width: 16; margin-bottom: 1; }
@@ -501,6 +504,11 @@ class ConfigModal(ModalBase[None]):
                     yield from self._props_tab()
                 with TabPane("Plugins", id="cfg-tab-plugins"):
                     yield from self._plugins_tab()
+                from ster import plugins
+
+                if plugins.is_enabled("semanticlint"):
+                    with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
+                        yield from self._semanticlint_widgets()
             yield Static(
                 "arrows  move     esc  close     (changes save automatically)",
                 classes="modal-footer",
@@ -516,6 +524,54 @@ class ConfigModal(ModalBase[None]):
         for spec in plugins.all_plugins():
             yield Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}")
             yield Static(spec.description, classes="cfg-hint")
+
+    #: feature toggles surfaced in the Semantic Lint tab (id suffix → label).
+    _SL_FEATURES = (
+        ("icons", "Colour entity icons by issue severity"),
+        ("detail", "Annotate issues in the detail panel"),
+        ("quality_block", "Show the Quality & Coverage block"),
+    )
+    #: numeric coverage thresholds (0.0–1.0) offered in the Semantic Lint tab.
+    _SL_THRESHOLDS = (
+        ("min_label_coverage", "Concept prefLabel coverage (QUA001)"),
+        ("min_definition_coverage", "Concept definition coverage (QUA002)"),
+        ("min_class_label_coverage", "Class label coverage (QUA004)"),
+        ("min_property_label_coverage", "Property label coverage (QUA005)"),
+    )
+
+    def _semanticlint_widgets(self):  # type: ignore[no-untyped-def]
+        """Widgets for the Semantic Lint tab: install status, feature toggles, and the
+        global quality thresholds (persisted to ~/.config/ster/quality.json)."""
+        from ster.plugins.semanticlint import config, deps
+
+        cfg = config.load_config()
+        if not deps.is_installed():
+            yield Static(
+                "[yellow]semanticlint is not installed.[/] Run: pip install 'ster[semanticlint]'",
+                classes="cfg-hint",
+            )
+        yield Static("Features", classes="cfg-label")
+        for name, label in self._SL_FEATURES:
+            yield Checkbox(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
+        yield Static("Quality thresholds (0.0–1.0)", classes="cfg-label")
+        for name, label in self._SL_THRESHOLDS:
+            # Build the row explicitly (no `with` block) so this generator also works
+            # standalone when the tab is added dynamically via TabbedContent.add_pane.
+            yield Horizontal(
+                Static(label, classes="cfg-sl-label"),
+                Input(
+                    value=str(cfg["quality"].get(name, "")),
+                    id=f"cfg-slthr-{name}",
+                    classes="cfg-sl-input",
+                ),
+                classes="cfg-sl-thresh",
+            )
+        yield Static("Required prefLabel languages (comma-separated, QUA003)", classes="cfg-label")
+        yield Input(
+            value=", ".join(cfg["quality"].get("languages", [])),
+            id="cfg-sllangs",
+            classes="cfg-sl-input",
+        )
 
     def _general_tab(self) -> ComposeResult:
         yield Static("Display language", classes="cfg-label")
@@ -594,7 +650,9 @@ class ConfigModal(ModalBase[None]):
                 base_uri=self._base_uri,
             )
 
-    _TAB_ORDER = ("cfg-tab-general", "cfg-tab-props", "cfg-tab-plugins")
+    def _tab_ids(self) -> list[str]:
+        """The ids of the currently-mounted tabs, in order (plugin tabs are dynamic)."""
+        return [pane.id for pane in self.query(TabPane) if pane.id]
 
     def on_mount(self) -> None:
         self.query_one("#cfg-box").border_title = "Configuration"
@@ -619,10 +677,9 @@ class ConfigModal(ModalBase[None]):
     def _tabbar_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "space":
             tabs = self.query_one(TabbedContent)
-            if tabs.active in self._TAB_ORDER:
-                tabs.active = self._TAB_ORDER[
-                    (self._TAB_ORDER.index(tabs.active) + 1) % len(self._TAB_ORDER)
-                ]
+            order = self._tab_ids()
+            if tabs.active in order:
+                tabs.active = order[(order.index(tabs.active) + 1) % len(order)]
                 event.stop()
         elif event.key == "down":
             self.focus_next()  # tab bar → first item of the active tab
@@ -671,7 +728,7 @@ class ConfigModal(ModalBase[None]):
         ]
         from ster import plugins
 
-        return {
+        result = {
             "display": str(self.query_one("#cfg-display", Select).value),
             "theme": str(self.query_one("#cfg-theme", Select).value),
             "configured": configured,
@@ -682,6 +739,26 @@ class ConfigModal(ModalBase[None]):
                 for spec in plugins.all_plugins()
             },
         }
+        if self.query("#cfg-tab-semanticlint"):  # the plugin's tab is mounted
+            result["semanticlint"] = self._semanticlint_result()
+        return result
+
+    def _semanticlint_result(self) -> dict:
+        """The Semantic Lint tab's config (features + thresholds) for persistence."""
+        features = {
+            name: self.query_one(f"#cfg-slfeat-{name}", Checkbox).value
+            for name, _ in self._SL_FEATURES
+        }
+        quality: dict = {}
+        for name, _ in self._SL_THRESHOLDS:
+            raw = self.query_one(f"#cfg-slthr-{name}", Input).value.strip()
+            try:
+                quality[name] = float(raw)
+            except ValueError:
+                pass  # leave unset → keeps the stored/default value
+        langs = self.query_one("#cfg-sllangs", Input).value
+        quality["languages"] = [c.strip() for c in langs.split(",") if c.strip()]
+        return {"features": features, "quality": quality}
 
     def _save(self) -> None:
         if self._ready:
@@ -694,6 +771,23 @@ class ConfigModal(ModalBase[None]):
     @on(Checkbox.Changed)
     def _on_checkbox(self, event: Checkbox.Changed) -> None:
         self._save()
+
+    @on(Checkbox.Changed, "#cfg-plugin-semanticlint")
+    async def _on_semanticlint_toggle(self, event: Checkbox.Changed) -> None:
+        """Add / remove the Semantic Lint tab live when the plugin is toggled."""
+        tabbed = self.query_one(TabbedContent)
+        mounted = bool(self.query("#cfg-tab-semanticlint"))
+        if event.value and not mounted:
+            pane = TabPane(
+                "Semantic Lint", *self._semanticlint_widgets(), id="cfg-tab-semanticlint"
+            )
+            await tabbed.add_pane(pane)
+        elif not event.value and mounted:
+            await tabbed.remove_pane("cfg-tab-semanticlint")
+
+    @on(Input.Changed, ".cfg-sl-input")
+    def _on_semanticlint_input(self, event: Input.Changed) -> None:
+        self._save()  # thresholds / languages changed → persist to quality.json
 
     @on(Input.Changed, "#cfg-server-url")
     @on(Input.Changed, "#cfg-server-port")

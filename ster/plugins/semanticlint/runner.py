@@ -64,9 +64,14 @@ def lint_overview(path: Path) -> tuple[dict[str, int], list[dict[str, str]]]:
     *issues* is a list of ``{severity, check_id, message, subject}`` dicts. Pure
     Python types only, so callers (the TUI) never depend on the semanticlint
     ``Violation`` type — keeping the library behind this adapter (see CLAUDE.md).
+
+    Uses the plugin's global quality config (``~/.config/ster/quality.json``), not the
+    repo's ``onto-ci.yml`` — the TUI's live view is driven by the user's global
+    thresholds; the commit hook / CI keep using ``onto-ci.yml``.
     """
-    cfg, _ = load_config(path.parent)
-    violations = lint_files([path], cfg)
+    from . import config
+
+    violations = lint_files([path], config.build_check_config())
     counts = {sev.value: 0 for sev in Severity}
     for v in violations:
         counts[v.severity.value] += 1

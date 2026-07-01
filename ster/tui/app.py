@@ -324,9 +324,12 @@ class OntologyApp(App):
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
         self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
         self._activity_computed = False
-        # Lazily-computed semanticlint result (per session): (counts, issues).
+        # Semanticlint result (counts, issues) + a uri→worst-severity index for O(1)
+        # per-entity lookups (icon colours, detail annotations). Recomputed in the
+        # background after edits when the plugin is active.
         self._lint_cache: tuple[dict, list] | None = None
         self._lint_computed = False
+        self._lint_index: dict[str, str] = {}
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -419,7 +422,10 @@ class OntologyApp(App):
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
             self._rebuild_tree()
-        if display_changed or langs_changed or plugins_changed or entity_meta_changed:
+        if "semanticlint" in result:  # thresholds / feature toggles changed → re-lint
+            self._invalidate_lint()
+            self._refresh_lint_async()
+        elif display_changed or langs_changed or plugins_changed or entity_meta_changed:
             self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
         for lang in removed:
             self._maybe_purge_language(lang)
@@ -436,8 +442,7 @@ class OntologyApp(App):
                 plugins.set_enabled(plugin_id, bool(enabled))
                 changed = True
         if changed:
-            self._lint_computed = False  # force a recompute with the new active state
-            self._lint_cache = None
+            self._invalidate_lint()  # force a recompute with the new active state
         return changed
 
     def _apply_theme(self, result: dict) -> None:
@@ -471,6 +476,10 @@ class OntologyApp(App):
         if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
             self.entity_metadata_props = list(result["entity_metadata_props"])
             save_entity_metadata_props(self.entity_metadata_props)
+        if "semanticlint" in result:  # the plugin's global quality config
+            from ster.plugins.semanticlint import config
+
+            config.save_config(result["semanticlint"])
         if self._path is not None:
             _save_lang_pref(self._path, new_lang)
             save_configured_langs(self._path, self.configured_langs)
@@ -697,14 +706,49 @@ class OntologyApp(App):
         if self._path is None or not semanticlint.is_active():
             return None
         if not self._lint_computed:
-            from ster.plugins.semanticlint.runner import lint_overview
-
-            try:
-                self._lint_cache = lint_overview(self._path)
-            except Exception:  # noqa: BLE001 — a lint failure must never break the view
-                self._lint_cache = None
-            self._lint_computed = True
+            self._set_lint(self._compute_lint())
         return self._lint_cache
+
+    def _compute_lint(self) -> tuple[dict, list] | None:
+        """Run semanticlint on the file (blocking). ``None`` on any failure — a lint
+        error must never break the view."""
+        from ster.plugins.semanticlint.runner import lint_overview
+
+        try:
+            return lint_overview(self._path)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _set_lint(self, result: tuple[dict, list] | None) -> None:
+        """Store a fresh lint result + rebuild the uri→worst-severity index."""
+        from ster.plugins.semanticlint import report
+
+        self._lint_cache = result
+        self._lint_computed = True
+        self._lint_index = report.worst_by_subject(result[1]) if result else {}
+
+    def _refresh_lint_async(self) -> None:
+        """Recompute lint off the UI thread (when the plugin is active), then recolour
+        the tree and refresh the open detail. No-op otherwise."""
+        from ster.plugins import semanticlint
+
+        if self._path is None or not semanticlint.is_active():
+            self._set_lint(None)
+            return
+        self.run_worker(
+            self._lint_worker, thread=True, exclusive=True, group="lint", name="ster-lint"
+        )
+
+    def _lint_worker(self) -> None:
+        result = self._compute_lint()
+        self.call_from_thread(self._on_lint_ready, result)
+
+    def _on_lint_ready(self, result: tuple[dict, list] | None) -> None:
+        """Apply a background lint result on the UI thread: recolour + refresh."""
+        self._set_lint(result)
+        self._rebuild_tree()
+        if self._detail_uri:
+            self._show(self._detail_uri)
 
     def _detail_title(self, uri: str | None) -> str:
         """The detail pane's border title — the current entity, or a generic label.
@@ -745,11 +789,19 @@ class OntologyApp(App):
         # The service swapped a fresh authority taxonomy into the workspace.
         self.tax = self._workspace.taxonomies[self._path]
         self.search_rows = data.search_rows(self.tax, self.lang)
+        self._invalidate_lint()  # the edit may fix/introduce issues
         self._rebuild_tree()
         self._show(self._detail_uri)
+        self._refresh_lint_async()  # recompute in the background → recolour when ready
         # The mutation rebuilt the detail rows, destroying the row that had focus —
         # restore it (next refresh) so the keyboard keeps working after a modal.
         self.call_after_refresh(self._restore_focus)
+
+    def _invalidate_lint(self) -> None:
+        """Drop the cached lint so the next access (or the async worker) recomputes."""
+        self._lint_cache = None
+        self._lint_computed = False
+        self._lint_index = {}
 
     def _restore_focus(self) -> None:
         """Land focus on a usable widget after a mutation rebuilt the panes."""

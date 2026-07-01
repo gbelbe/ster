@@ -33,6 +33,9 @@ def _isolate_prefs(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", tmp_path / "server_config.json")
     monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
+    from ster.plugins.semanticlint import config as sl_config
+
+    monkeypatch.setattr(sl_config, "_config_path", lambda: tmp_path / "quality.json")
 
 
 def _run(coro_factory) -> None:  # noqa: ANN001
@@ -865,5 +868,62 @@ def test_add_local_button_absent_without_an_open_file(tmp_path) -> None:
             await host.push_screen(modal)
             await pilot.pause()
             assert not modal.query(".cfg-mp-new")  # no create button anywhere
+
+    _run(scenario)
+
+
+# ── Semantic Lint plugin tab ────────────────────────────────────────────────────
+
+
+def test_semanticlint_tab_appears_only_when_the_plugin_is_enabled(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster import plugins
+
+        plugins.set_enabled("semanticlint", True)  # prefs are isolated by the fixture
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert modal.query("#cfg-tab-semanticlint")  # tab present
+            assert modal.query("#cfg-slfeat-icons")  # feature toggle present
+
+    _run(scenario)
+
+
+def test_toggling_the_plugin_adds_and_removes_its_tab(tmp_path) -> None:
+    async def scenario() -> None:
+        from textual.widgets import Checkbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert not modal.query("#cfg-tab-semanticlint")  # off by default
+            modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = True
+            await pilot.pause()
+            assert modal.query("#cfg-tab-semanticlint")  # appeared live
+            modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = False
+            await pilot.pause()
+            assert not modal.query("#cfg-tab-semanticlint")  # removed live
+
+    _run(scenario)
+
+
+def test_semanticlint_thresholds_and_features_persist_to_quality_json(tmp_path) -> None:
+    async def scenario() -> None:
+        from textual.widgets import Checkbox, Input
+
+        from ster import plugins
+        from ster.plugins.semanticlint import config
+
+        plugins.set_enabled("semanticlint", True)
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            modal.query_one("#cfg-slfeat-icons", Checkbox).value = False
+            modal.query_one("#cfg-slthr-min_label_coverage", Input).value = "0.5"
+            for _ in range(3):
+                await pilot.pause()
+        saved = config.load_config()
+        assert saved["features"]["icons"] is False
+        assert saved["quality"]["min_label_coverage"] == 0.5
 
     _run(scenario)
