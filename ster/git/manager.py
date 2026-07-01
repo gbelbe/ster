@@ -26,8 +26,14 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
+
+if TYPE_CHECKING:  # types only — semanticlint is an optional plugin dependency
+    from semanticlint.checks.base import Severity, Violation
+
+    _LintState = tuple[list[Violation], Severity]
 
 console = Console()
 err = Console(stderr=True)
@@ -415,6 +421,43 @@ class GitManager:
         main = self._cfg.get("main_branch", "main")
         self._push_direct(repo, main)
 
+    def _run_commit_lint(self, repo: Path) -> _LintState | None:
+        """Run semanticlint over the file when the plugin is active, returning
+        ``(violations, fail_on)``. ``None`` when the plugin is disabled / not installed,
+        so the whole quality gate is skipped."""
+        from ster.plugins import semanticlint
+
+        if not semanticlint.is_active():
+            return None
+        from ..plugins.semanticlint.runner import lint_files, load_config
+
+        cfg, fail_on = load_config(repo)
+        return lint_files([self.taxonomy_path], cfg), fail_on
+
+    def _lint_blocks_commit(self, lint: _LintState | None) -> bool:
+        """Prompt when the lint introduces blocking issues; True to *cancel* the commit.
+        A no-op returning False when *lint* is None (plugin disabled)."""
+        from rich.prompt import Confirm
+
+        from ..plugins.semanticlint.runner import display_violations, has_blocking_violations
+
+        if lint is None or not has_blocking_violations(*lint):
+            return False
+        display_violations(*lint)
+        if Confirm.ask("Issues found. Commit anyway?", default=False, console=console):
+            return False
+        console.print("[dim]Commit cancelled.[/dim]")
+        return True
+
+    def _display_lint(self, lint: _LintState | None, *, only_when_clean: bool = False) -> None:
+        """Print the lint results (after commit/push); no-op when *lint* is None. With
+        *only_when_clean*, print only when there are no blocking issues (already shown)."""
+        from ..plugins.semanticlint.runner import display_violations, has_blocking_violations
+
+        if lint is None or (only_when_clean and has_blocking_violations(*lint)):
+            return
+        display_violations(*lint)
+
     def commit_and_push(self) -> None:
         """Interactive post-edit flow: commit message → commit → push/PR."""
         if not self.is_configured():
@@ -423,14 +466,7 @@ class GitManager:
             console.print("[dim]No staged changes — nothing to commit.[/dim]")
             return
 
-        from rich.prompt import Confirm, Prompt
-
-        from ..lint_runner import (
-            display_violations,
-            has_blocking_violations,
-            lint_files,
-            load_config,
-        )
+        from rich.prompt import Prompt
 
         repo = self._repo()
         if repo is None:
@@ -438,15 +474,11 @@ class GitManager:
         main = self._cfg.get("main_branch", "main")
         strat = self._cfg.get("branch_strategy", "direct")
 
-        # Run lint now so we can block if needed; results are displayed after push.
-        cfg, fail_on = load_config(repo)
-        violations = lint_files([self.taxonomy_path], cfg)
-
-        if has_blocking_violations(violations, fail_on):
-            display_violations(violations, fail_on)
-            if not Confirm.ask("Issues found. Commit anyway?", default=False, console=console):
-                console.print("[dim]Commit cancelled.[/dim]")
-                return
+        # Semanticlint quality gate (only when the plugin is active). ``lint`` is None
+        # when disabled, so every use below is skipped and ster behaves as standard.
+        lint = self._run_commit_lint(repo)
+        if self._lint_blocks_commit(lint):
+            return
 
         # ── commit message ────────────────────────────────────────────────────
         default_msg = f"Update {self.taxonomy_path.name}"
@@ -469,7 +501,7 @@ class GitManager:
         self._refresh_dev_artifacts()
 
         if not self._cfg.get("remote_url"):
-            display_violations(violations, fail_on)
+            self._display_lint(lint)
             console.print("[dim]No remote configured — changes committed locally.[/dim]")
             return
 
@@ -498,8 +530,7 @@ class GitManager:
             self._persist()
 
         # Show lint results after push so they are the last thing visible.
-        if not has_blocking_violations(violations, fail_on):
-            display_violations(violations, fail_on)
+        self._display_lint(lint, only_when_clean=True)
 
     def _refresh_dev_artifacts(self) -> None:
         """Best-effort: rebuild ontology/dev/ so it mirrors the just-committed file.

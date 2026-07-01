@@ -40,6 +40,17 @@ def _run(scenario: Callable[..., Awaitable[None]]) -> None:
     asyncio.run(scenario())
 
 
+@pytest.fixture
+def semanticlint_enabled(tmp_path, monkeypatch):
+    """Enable the semanticlint plugin against isolated prefs so lint UI is active
+    (semanticlint is installed in the test env)."""
+    from ster import plugins
+    from ster.nav import prefs
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    plugins.set_enabled("semanticlint", True)
+
+
 def _app() -> OntologyApp:
     return OntologyApp(store.load(DEMO), source="demo.ttl")
 
@@ -789,6 +800,37 @@ ex:C1 a skos:Concept ;
 """
 
 
+def test_lint_is_gated_off_when_the_plugin_is_disabled(tmp_path) -> None:
+    """With the semanticlint plugin off (default), no lint runs — _ontology_lint is None."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app._ontology_lint() is None  # plugin disabled ⇒ no lint data
+
+    _run(scenario)
+
+
+def test_lint_runs_when_the_plugin_is_enabled(tmp_path, semanticlint_enabled) -> None:
+    """Enabling the plugin activates lint: _ontology_lint returns counts + issues."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # duplicate prefLabel ⇒ SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            result = app._ontology_lint()
+            assert result is not None
+            counts, issues = result
+            assert counts.get("error", 0) >= 1 and any(i["check_id"] == "SKO001" for i in issues)
+
+    _run(scenario)
+
+
 def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     """The overview's 'Errors'/'Warnings' count row for *severity*."""
     from ster.tui.detail_view import DetailRow
@@ -801,7 +843,7 @@ def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     )
 
 
-def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
+def test_warnings_row_opens_a_warnings_only_modal(tmp_path, semanticlint_enabled) -> None:
     """Activating the overview's 'Warnings' count row opens a LintModal scoped to
     warnings (errors are excluded)."""
 
@@ -826,7 +868,7 @@ def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
     _run(scenario)
 
 
-def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path) -> None:
+def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path, semanticlint_enabled) -> None:
     """Pressing enter on a missing-label warning navigates to that concept."""
 
     async def scenario() -> None:

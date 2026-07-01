@@ -6,7 +6,7 @@ from rdflib import RDF, Graph, URIRef
 from rdflib.namespace import OWL, RDFS
 from semanticlint.checks.base import CheckConfig, Severity
 
-from ster.ster_checks import FileSchemeURICheck, NonHTTPSchemeURICheck
+from ster.plugins.semanticlint.checks import FileSchemeURICheck, NonHTTPSchemeURICheck
 
 BASE = "https://example.org/onto#"
 FILE = "file:///Users/me/onto.owl#"

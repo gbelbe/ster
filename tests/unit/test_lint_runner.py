@@ -1,4 +1,4 @@
-"""Unit tests for ster.lint_runner."""
+"""Unit tests for ster.plugins.semanticlint.runner."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ from pathlib import Path
 
 from semanticlint.checks.base import Severity
 
-from ster.lint_runner import has_blocking_violations, lint_files, lint_overview, load_config
+from ster.plugins.semanticlint.runner import (
+    has_blocking_violations,
+    lint_files,
+    lint_overview,
+    load_config,
+)
 
 _VALID_SKOS = """\
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .

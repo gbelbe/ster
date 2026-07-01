@@ -11,7 +11,7 @@ from semanticlint.checks.lint.syntax import lint_syntax
 from semanticlint.checks.registry import CheckRegistry
 from semanticlint.detect import detect_vocab_type
 
-import ster.ster_checks  # noqa: F401 — registers ster-specific checks
+from ster.plugins.semanticlint import checks as _checks  # noqa: F401 — registers ster checks
 
 _SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
 
@@ -88,43 +88,51 @@ def has_blocking_violations(violations: list[Violation], fail_on: Severity) -> b
     return any(_SEVERITY_ORDER[v.severity] >= threshold for v in violations)
 
 
+def _violation_line(v: Violation) -> str:
+    """One rendered detail line for a single violation."""
+    style = _SEVERITY_STYLE[v.severity]
+    label = f"[{style}]{v.severity.value.upper():7}[/{style}]"
+    subj = f" {str(v.subject).split('/')[-1].split('#')[-1]}" if v.subject else ""
+    return f"  {label} [{v.check_id}]{subj}: {v.message}"
+
+
+_SUMMARY_STYLES = (
+    (Severity.ERROR, "[bold red]", "error"),
+    (Severity.WARNING, "[yellow]", "warning"),
+    (Severity.INFO, "[blue]", "info"),
+)
+
+
+def _summary_line(violations: list[Violation], fail_on: Severity) -> str:
+    """The final count summary line (icon + per-severity counts + fail-on note)."""
+    from collections import Counter
+
+    n = Counter(v.severity for v in violations)
+    parts = [
+        f"{colour}{n[sev]} {name}{'' if n[sev] == 1 else 's'}[/]"
+        for sev, colour, name in _SUMMARY_STYLES
+        if n[sev]
+    ]
+    icon = "[bold red]✗[/]" if has_blocking_violations(violations, fail_on) else "[yellow]⚠[/]"
+    return f"  {icon}  {', '.join(parts)}  [dim](fail-on: {fail_on.value})[/dim]"
+
+
 def display_violations(violations: list[Violation], fail_on: Severity) -> None:
     """Print violation details and summary using Rich."""
     from rich.console import Console
     from rich.rule import Rule
 
     out = Console()
-
     out.print()
     out.print(Rule("[bold]semanticlint[/bold]", style="dim"))
-
     if not violations:
         out.print("  [green]✓[/green] No issues found.")
         out.print()
         return
-
     for v in violations:
-        style = _SEVERITY_STYLE[v.severity]
-        label = f"[{style}]{v.severity.value.upper():7}[/{style}]"
-        subj = f" {str(v.subject).split('/')[-1].split('#')[-1]}" if v.subject else ""
-        out.print(f"  {label} [{v.check_id}]{subj}: {v.message}")
-
+        out.print(_violation_line(v))
     out.print()
-    errors = sum(1 for v in violations if v.severity == Severity.ERROR)
-    warnings = sum(1 for v in violations if v.severity == Severity.WARNING)
-    infos = sum(1 for v in violations if v.severity == Severity.INFO)
-
-    parts = []
-    if errors:
-        parts.append(f"[bold red]{errors} error{'s' if errors != 1 else ''}[/]")
-    if warnings:
-        parts.append(f"[yellow]{warnings} warning{'s' if warnings != 1 else ''}[/]")
-    if infos:
-        parts.append(f"[blue]{infos} info[/]")
-
-    blocking = has_blocking_violations(violations, fail_on)
-    icon = "[bold red]✗[/]" if blocking else "[yellow]⚠[/]"
-    out.print(f"  {icon}  {', '.join(parts)}  [dim](fail-on: {fail_on.value})[/dim]")
+    out.print(_summary_line(violations, fail_on))
     out.print()
 
 

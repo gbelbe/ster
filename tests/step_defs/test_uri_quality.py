@@ -86,7 +86,7 @@ def given_two_https_classes(ctx):
 
 @when("I run the URI quality checks")
 def when_run_checks(ctx):
-    from ster.ster_checks import FileSchemeURICheck, NonHTTPSchemeURICheck
+    from ster.plugins.semanticlint.checks import FileSchemeURICheck, NonHTTPSchemeURICheck
 
     cfg = CheckConfig()
     violations = FileSchemeURICheck().run(ctx["graph"], cfg)

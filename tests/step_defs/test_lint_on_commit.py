@@ -7,7 +7,7 @@ from pathlib import Path
 from pytest_bdd import given, scenarios, then, when
 from semanticlint.checks.base import Severity
 
-from ster.lint_runner import lint_files, load_config, run_pre_commit_lint
+from ster.plugins.semanticlint.runner import lint_files, load_config, run_pre_commit_lint
 
 scenarios("../features/ci/lint_on_commit.feature")
 
@@ -90,7 +90,7 @@ def run_check(taxonomy_path: Path, repo_dir: Path):
     cfg, fail_on = load_config(repo_dir)
     violations = lint_files([taxonomy_path], cfg)
     blocked = False
-    from ster.lint_runner import has_blocking_violations
+    from ster.plugins.semanticlint.runner import has_blocking_violations
 
     blocked = has_blocking_violations(violations, fail_on)
     return {"violations": violations, "blocked": blocked, "proceeded": not blocked}

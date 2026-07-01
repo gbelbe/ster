@@ -26,7 +26,6 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "textual>=0.80",              # modern TUI (New-TUI tree browser; future primary UI)
-    "semanticlint>=0.2",
     "idna>=3.15",
     "fastapi[standard]>=0.110",   # includes uvicorn[standard]
     "watchfiles>=0.21",           # file-change watcher for live push
@@ -77,9 +76,17 @@ dev = [
     "types-PyYAML>=6.0",
     # TUI snapshot testing (textual itself is a core dependency)
     "pytest-textual-snapshot>=1.0",
+    # The Semantic Lint plugin is optional at runtime, but its checks are tested.
+    "semanticlint>=0.2",
+]
+# Optional: the Semantic Lint plugin's dependency. Owned by the plugin, not core —
+# install with `ster[semanticlint]` (or activate the plugin in-app to install it).
+semanticlint = [
+    "semanticlint>=0.2",
 ]
 all = [
     "ster[dev]",
+    "ster[semanticlint]",
 ]
 
 # ── Entry points ──────────────────────────────────────────────────────────────
@@ -203,6 +210,19 @@ type = "forbidden"
 source_modules = ["ster"]
 forbidden_modules = ["llm"]
 ignore_imports = ["ster.ai -> llm"]
+
+[[tool.importlinter.contracts]]
+name = "semanticlint only via the semanticlint plugin"
+type = "forbidden"
+source_modules = ["ster"]
+forbidden_modules = ["semanticlint"]
+# The plugin's runner/checks are the sole runtime gateway; git.manager's edge is a
+# TYPE_CHECKING-only import of Severity/Violation (no runtime dependency).
+ignore_imports = [
+    "ster.plugins.semanticlint.runner -> semanticlint",
+    "ster.plugins.semanticlint.checks -> semanticlint",
+    "ster.git.manager -> semanticlint",
+]
 
 [[tool.importlinter.contracts]]
 name = "fastapi only via ster.api"

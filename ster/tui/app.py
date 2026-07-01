@@ -701,11 +701,16 @@ class OntologyApp(App):
         return self._activity_cache
 
     def _ontology_lint(self) -> tuple[dict, list] | None:
-        """semanticlint result for the file (computed once per session, cached)."""
-        if self._path is None:
+        """semanticlint result for the file (computed once per session, cached).
+
+        ``None`` when the semanticlint plugin is disabled / not installed, so no lint
+        colours, rows or modal appear — ster behaves as standard."""
+        from ster.plugins import semanticlint
+
+        if self._path is None or not semanticlint.is_active():
             return None
         if not self._lint_computed:
-            from ster.lint_runner import lint_overview
+            from ster.plugins.semanticlint.runner import lint_overview
 
             try:
                 self._lint_cache = lint_overview(self._path)
