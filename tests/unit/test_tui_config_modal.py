@@ -452,7 +452,10 @@ def test_opens_on_tab_bar_and_space_switches_tabs(tmp_path) -> None:
             await pilot.press("space")  # space cycles to the next tab
             await pilot.pause()
             assert modal.query_one(TabbedContent).active == "cfg-tab-props"
-            await pilot.press("space")  # …and back
+            await pilot.press("space")  # → Plugins tab
+            await pilot.pause()
+            assert modal.query_one(TabbedContent).active == "cfg-tab-plugins"
+            await pilot.press("space")  # …and wrap back to General
             await pilot.pause()
             assert modal.query_one(TabbedContent).active == "cfg-tab-general"
             await pilot.press("down")  # arrow enters the tab's items
@@ -996,5 +999,42 @@ def test_left_on_the_checkbox_returns_to_the_header(tmp_path) -> None:
             await pilot.press("left")  # on the checkbox → back to the header
             await pilot.pause()
             assert app.focused is _headers(modal)[0]
+
+    _run(scenario)
+
+
+# ── Plugins tab ────────────────────────────────────────────────────────────────
+
+
+def test_plugins_tab_lists_plugins_disabled_by_default(tmp_path) -> None:
+    async def scenario() -> None:
+        from textual.widgets import Checkbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            cb = modal.query_one("#cfg-plugin-semanticlint", Checkbox)
+            assert cb.value is False  # plugins are opt-in
+
+    _run(scenario)
+
+
+def test_enabling_the_semanticlint_plugin_activates_lint(tmp_path) -> None:
+    """Ticking the plugin persists the flag and turns lint on live (it was None)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Checkbox
+
+        from ster import plugins
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert app._ontology_lint() is None  # off ⇒ no lint
+            modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = True
+            for _ in range(4):
+                await pilot.pause()
+            assert plugins.is_enabled("semanticlint") is True
+            assert app._ontology_lint() is not None  # now active
 
     _run(scenario)

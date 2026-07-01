@@ -409,6 +409,7 @@ class OntologyApp(App):
         # The entity-metadata criticities drive the tree icon colours, so a catalog edit
         # must recolour the tree just like a display-language change relabels it.
         entity_meta_changed = self._entity_meta_changed(result)
+        plugins_changed = self._apply_plugins(result)  # persists + invalidates lint cache
         self.configured_langs = result["configured"]  # exact selection (may be empty)
         self.lang = new_lang
         self._update_lang_indicator()
@@ -419,10 +420,26 @@ class OntologyApp(App):
             self.search_rows = data.search_rows(self.tax, self.lang)
         if display_changed or entity_meta_changed:
             self._rebuild_tree()
-        if display_changed or langs_changed:
-            self._show(self._detail_uri)  # reflect the new configured-language rows
+        if display_changed or langs_changed or plugins_changed:
+            self._show(self._detail_uri)  # reflect configured-language rows / lint UI
         for lang in removed:
             self._maybe_purge_language(lang)
+
+    def _apply_plugins(self, result: dict) -> bool:
+        """Persist plugin enable-states from the config result. Returns True when any
+        changed — a signal to invalidate the lint cache and re-render the detail (lint
+        rows appear/disappear)."""
+        from ster import plugins
+
+        changed = False
+        for plugin_id, enabled in result.get("plugins", {}).items():
+            if plugins.is_enabled(plugin_id) != bool(enabled):
+                plugins.set_enabled(plugin_id, bool(enabled))
+                changed = True
+        if changed:
+            self._lint_computed = False  # force a recompute with the new active state
+            self._lint_cache = None
+        return changed
 
     def _apply_theme(self, result: dict) -> None:
         """Live-preview the chosen theme when it is one we know."""

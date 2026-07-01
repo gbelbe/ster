@@ -606,10 +606,23 @@ class ConfigModal(ModalBase[None]):
                     yield from self._general_tab()
                 with TabPane("Annotation properties", id="cfg-tab-props"):
                     yield from self._props_tab()
+                with TabPane("Plugins", id="cfg-tab-plugins"):
+                    yield from self._plugins_tab()
             yield Static(
                 "arrows  move     esc  close     (changes save automatically)",
                 classes="modal-footer",
             )
+
+    def _plugins_tab(self) -> ComposeResult:
+        from ster import plugins
+
+        yield Static(
+            "Enable optional in-tree plugins. Each adds its own features (and config).",
+            classes="cfg-hint",
+        )
+        for spec in plugins.all_plugins():
+            yield Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}")
+            yield Static(spec.description, classes="cfg-hint")
 
     def _general_tab(self) -> ComposeResult:
         yield Static("Display language", classes="cfg-label")
@@ -688,7 +701,7 @@ class ConfigModal(ModalBase[None]):
                 base_uri=self._base_uri,
             )
 
-    _TAB_ORDER = ("cfg-tab-general", "cfg-tab-props")
+    _TAB_ORDER = ("cfg-tab-general", "cfg-tab-props", "cfg-tab-plugins")
 
     def on_mount(self) -> None:
         self.query_one("#cfg-box").border_title = "Configuration"
@@ -763,12 +776,18 @@ class ConfigModal(ModalBase[None]):
             for box in self.query("#cfg-boxes Checkbox").results(Checkbox)
             if box.value
         ]
+        from ster import plugins
+
         return {
             "display": str(self.query_one("#cfg-display", Select).value),
             "theme": str(self.query_one("#cfg-theme", Select).value),
             "configured": configured,
             "metadata_props": self.query_one("#cfg-ont-meta", _MetaCatalog).props(),
             "entity_metadata_props": self.query_one("#cfg-entity-meta", _MetaCatalog).props(),
+            "plugins": {
+                spec.id: self.query_one(f"#cfg-plugin-{spec.id}", Checkbox).value
+                for spec in plugins.all_plugins()
+            },
         }
 
     def _save(self) -> None:
