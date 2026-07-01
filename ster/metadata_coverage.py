@@ -16,28 +16,13 @@ from dataclasses import dataclass
 
 from .model import Taxonomy
 
-# A configured annotation-property catalog entry. ``criticity`` grades how badly a
-# missing value should be surfaced later (warnings/alerts): mandatory > important >
-# optional. Absent / unknown criticity is treated as ``optional`` (the safe default,
-# so an existing catalog raises no new alerts until a property is deliberately
-# promoted).
-CRITICITIES: tuple[str, ...] = ("mandatory", "important", "optional")
-DEFAULT_CRITICITY = "optional"
-
-
-def normalise_criticity(value: str | None) -> str:
-    """Coerce *value* to a known criticity, defaulting unknown/None to optional."""
-    return value if value in CRITICITIES else DEFAULT_CRITICITY
-
 
 @dataclass(frozen=True)
 class MetaProp:
-    """One catalogued annotation predicate: its URI, a display label, and its
-    criticity (defaults to ``optional``)."""
+    """One catalogued annotation predicate: its URI and a display label."""
 
     predicate: str
     label: str = ""
-    criticity: str = DEFAULT_CRITICITY
 
 
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"

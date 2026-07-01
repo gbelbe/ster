@@ -25,7 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from ster.metadata_coverage import MetaProp, entity_predicates
+from ster.metadata_coverage import MetaProp
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
@@ -406,8 +406,8 @@ class OntologyApp(App):
         display_changed = new_lang != self.lang
         removed = sorted(set(self.configured_langs) - set(result["configured"]))
         langs_changed = set(self.configured_langs) != set(result["configured"])
-        # The entity-metadata criticities drive the tree icon colours, so a catalog edit
-        # must recolour the tree just like a display-language change relabels it.
+        # An entity-metadata catalog edit changes the overview's coverage %, so refresh
+        # the detail (but not the tree — icons don't depend on the catalog).
         entity_meta_changed = self._entity_meta_changed(result)
         plugins_changed = self._apply_plugins(result)  # persists + invalidates lint cache
         self.configured_langs = result["configured"]  # exact selection (may be empty)
@@ -418,10 +418,9 @@ class OntologyApp(App):
 
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
-        if display_changed or entity_meta_changed:
             self._rebuild_tree()
-        if display_changed or langs_changed or plugins_changed:
-            self._show(self._detail_uri)  # reflect configured-language rows / lint UI
+        if display_changed or langs_changed or plugins_changed or entity_meta_changed:
+            self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
         for lang in removed:
             self._maybe_purge_language(lang)
 
@@ -449,7 +448,7 @@ class OntologyApp(App):
 
     def _entity_meta_changed(self, result: dict) -> bool:
         """True when the config result carries an entity-metadata catalog that differs
-        from the current one (predicate, label or criticity) — a signal to recolour."""
+        from the current one — a signal to refresh the overview's coverage rows."""
         return "entity_metadata_props" in result and (
             list(result["entity_metadata_props"]) != self.entity_metadata_props
         )
@@ -551,39 +550,10 @@ class OntologyApp(App):
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
-    def _entity_by_kind(self, uri: str, kind: str) -> object | None:
-        """The class / individual / property / concept behind *uri* for its node *kind*."""
-        attr = {
-            "class": "owl_classes",
-            "individual": "owl_individuals",
-            "property": "owl_properties",
-            "concept": "concepts",
-        }.get(kind)
-        return getattr(self.tax, attr).get(uri) if attr else None
-
-    def _entity_criticity_colour(self, uri: str, kind: str) -> str:
-        """The entity's tree-icon colour from its entity-metadata coverage: red if a
-        configured *mandatory* predicate is unfilled, orange if an *important* one is,
-        else green. With the default (all-optional) catalog nothing is flagged → green."""
-        entity = self._entity_by_kind(uri, kind)
-        if entity is None:
-            return "green"
-        present = entity_predicates(entity)
-        unfilled = {
-            mp.criticity for mp in self.entity_metadata_props if mp.predicate not in present
-        }
-        if "mandatory" in unfilled:
-            return "red"
-        if "important" in unfilled:
-            return "dark_orange"
-        return "green"
-
     def _node_icon(self, uri: str, kind: str) -> str:
-        """The node's glyph, coloured red / orange / green by whether a mandatory or
-        important configured metadata property is unfilled on the entity."""
-        icon = data.ICON.get(kind, "")
-        colour = self._entity_criticity_colour(uri, kind)
-        return f"[{colour}]{icon}[/{colour}]"
+        """The node's leading glyph for its *kind* (plain; the semanticlint plugin adds
+        severity colour once its icon-colouring feature lands)."""
+        return data.ICON.get(kind, "")
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"

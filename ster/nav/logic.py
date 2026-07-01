@@ -2931,7 +2931,7 @@ def _annotation_display(predicate: str) -> str:
 
 def default_annotation_catalog() -> list[MetaProp]:
     """The built-in ontology-metadata predicate catalog. Used as the default when no
-    user catalog is configured (every entry defaults to ``optional`` criticity)."""
+    user catalog is configured."""
     return [MetaProp(pred, label) for pred, label in _ANNOTATION_CATALOG]
 
 
@@ -2950,7 +2950,7 @@ _ENTITY_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
 
 def default_entity_annotation_catalog() -> list[MetaProp]:
     """The built-in entity-metadata predicate catalog offered on classes / properties /
-    individuals when none is configured (every entry defaults to ``optional``)."""
+    individuals when none is configured (none is configured)."""
     return [MetaProp(pred, label) for pred, label in _ENTITY_ANNOTATION_CATALOG]
 
 

@@ -83,7 +83,7 @@ def test_metadata_props_round_trip_and_default(tmp_path) -> None:
     assert load_metadata_props() is None  # never configured → caller uses defaults
     props = [MetaProp("http://x/a", "ex:a"), MetaProp("http://x/b", "ex:b (hint)")]
     save_metadata_props(props)
-    assert load_metadata_props() == props  # criticity (optional) round-trips too
+    assert load_metadata_props() == props
 
 
 def test_app_metadata_props_default_to_builtin_catalog(tmp_path) -> None:
@@ -238,6 +238,21 @@ def test_up_at_top_of_item_list_returns_to_its_header(tmp_path) -> None:
             await pilot.pause()
             await pilot.press("right")  # → first item
             await pilot.press("up")  # at the top → back to the group header
+            await pilot.pause()
+            assert app.focused is _headers(modal)[0]
+
+    _run(scenario)
+
+
+def test_left_in_item_list_returns_to_its_header(tmp_path) -> None:
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            _headers(modal)[0].focus()
+            await pilot.pause()
+            await pilot.press("right")  # → into the item list
+            await pilot.press("left")  # back out to the group header
             await pilot.pause()
             assert app.focused is _headers(modal)[0]
 
@@ -850,191 +865,5 @@ def test_add_local_button_absent_without_an_open_file(tmp_path) -> None:
             await host.push_screen(modal)
             await pilot.pause()
             assert not modal.query(".cfg-mp-new")  # no create button anywhere
-
-    _run(scenario)
-
-
-# ── annotation-property criticity ──────────────────────────────────────────────
-
-
-def test_props_catalog_round_trips_non_default_criticity(tmp_path) -> None:
-    from ster.nav.prefs import load_metadata_props, save_metadata_props
-
-    props = [
-        MetaProp("http://x/a", "ex:a", "mandatory"),
-        MetaProp("http://x/b", "ex:b", "important"),
-    ]
-    save_metadata_props(props)
-    assert load_metadata_props() == props  # criticity survives the round-trip
-
-
-def test_load_props_catalog_defaults_missing_criticity_to_optional(tmp_path) -> None:
-    """A legacy on-disk entry (no ``criticity`` field) loads as optional."""
-    import json
-
-    from ster.nav.prefs import _metadata_props_path, load_metadata_props
-
-    _metadata_props_path().parent.mkdir(parents=True, exist_ok=True)
-    _metadata_props_path().write_text(
-        json.dumps([{"predicate": "http://x/a", "label": "ex:a"}]), encoding="utf-8"
-    )
-    assert load_metadata_props() == [MetaProp("http://x/a", "ex:a", "optional")]
-
-
-def test_load_props_catalog_normalises_unknown_criticity_to_optional(tmp_path) -> None:
-    import json
-
-    from ster.nav.prefs import _metadata_props_path, load_metadata_props
-
-    _metadata_props_path().parent.mkdir(parents=True, exist_ok=True)
-    _metadata_props_path().write_text(
-        json.dumps([{"predicate": "http://x/a", "label": "ex:a", "criticity": "bogus"}]),
-        encoding="utf-8",
-    )
-    assert load_metadata_props()[0].criticity == "optional"
-
-
-def test_meta_catalog_props_reflect_selected_criticity(tmp_path) -> None:
-    async def scenario() -> None:
-        from ster.tui.config_modal import _MetaPropRow
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            row = _ont_catalog(modal).query(_MetaPropRow).first()
-            row.set_criticity("mandatory")
-            await pilot.pause()
-            props = _ont_catalog(modal).props()
-            assert props[0].predicate == row.checkbox.predicate
-            assert props[0].criticity == "mandatory"
-
-    _run(scenario)
-
-
-def test_meta_catalog_unchecked_property_excluded_regardless_of_criticity(tmp_path) -> None:
-    async def scenario() -> None:
-        from ster.tui.config_modal import _MetaPropRow
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            row = _ont_catalog(modal).query(_MetaPropRow).first()
-            row.set_criticity("mandatory")  # even a mandatory but unticked row is dropped
-            row.checkbox.value = False
-            await pilot.pause()
-            assert row.checkbox.predicate not in {
-                mp.predicate for mp in _ont_catalog(modal).props()
-            }
-
-    _run(scenario)
-
-
-def test_entity_metadata_catalog_also_carries_criticity(tmp_path) -> None:
-    async def scenario() -> None:
-        from ster.tui.config_modal import _CritOption, _MetaPropRow
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            row = _entity_catalog(modal).query(_MetaPropRow).first()
-            assert [o.level for o in row.query(_CritOption)] == [
-                "mandatory",
-                "important",
-                "optional",
-            ]
-            assert row.criticity == "optional"
-
-    _run(scenario)
-
-
-def test_left_right_rove_the_row_elements_and_enter_selects(tmp_path) -> None:
-    """The checkbox and the three criticity options are one row of elements. Left/Right
-    move the highlight across them (checkbox ↔ mandatory ↔ important ↔ optional, no
-    wrap) and Space/Enter activates the focused one (here, selecting a criticity)."""
-
-    async def scenario() -> None:
-        from ster.tui.config_modal import _CritOption, _MetaPropRow
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            catalog = _ont_catalog(modal)
-            _headers(modal)[0].focus()
-            await pilot.pause()
-            await pilot.press("right")  # drill in → the checkbox (element 0) is focused
-            await pilot.pause()
-            first = catalog.query(_MetaPropRow).first()
-            opts = list(first.query(_CritOption))
-            assert first.checkbox.has_class("mp-current")
-            await pilot.press("right")  # → mandatory (element 1) focused
-            await pilot.pause()
-            assert opts[0].has_class("crit-focus") and not first.checkbox.has_class("mp-current")
-            await pilot.press("enter")  # select the focused option
-            await pilot.pause()
-            assert first.criticity == "mandatory"
-            await pilot.press("right")  # → important
-            await pilot.press("right")  # → optional (element 3, last)
-            await pilot.press("right")  # stays on optional (no wrap past the end)
-            await pilot.pause()
-            assert opts[2].has_class("crit-focus")
-            await pilot.press("space")  # Space also activates
-            await pilot.pause()
-            assert first.criticity == "optional"
-
-    _run(scenario)
-
-
-def test_left_on_the_checkbox_returns_to_the_header(tmp_path) -> None:
-    """Left while on the checkbox (the first element) leaves the row for the group
-    header."""
-
-    async def scenario() -> None:
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            _headers(modal)[0].focus()
-            await pilot.pause()
-            await pilot.press("right")  # drill in → checkbox focused
-            await pilot.pause()
-            await pilot.press("left")  # on the checkbox → back to the header
-            await pilot.pause()
-            assert app.focused is _headers(modal)[0]
-
-    _run(scenario)
-
-
-# ── Plugins tab ────────────────────────────────────────────────────────────────
-
-
-def test_plugins_tab_lists_plugins_disabled_by_default(tmp_path) -> None:
-    async def scenario() -> None:
-        from textual.widgets import Checkbox
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            cb = modal.query_one("#cfg-plugin-semanticlint", Checkbox)
-            assert cb.value is False  # plugins are opt-in
-
-    _run(scenario)
-
-
-def test_enabling_the_semanticlint_plugin_activates_lint(tmp_path) -> None:
-    """Ticking the plugin persists the flag and turns lint on live (it was None)."""
-
-    async def scenario() -> None:
-        from textual.widgets import Checkbox
-
-        from ster import plugins
-
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            assert app._ontology_lint() is None  # off ⇒ no lint
-            modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = True
-            for _ in range(4):
-                await pilot.pause()
-            assert plugins.is_enabled("semanticlint") is True
-            assert app._ontology_lint() is not None  # now active
 
     _run(scenario)

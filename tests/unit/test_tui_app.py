@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 import pytest
 
 from ster import store
-from ster.metadata_coverage import MetaProp
 from ster.tui.app import EntitySearch, OntologyApp
 
 from .test_tui_data import DEMO, ZOO
@@ -1504,88 +1503,5 @@ def test_bottom_bar_shows_the_selected_language() -> None:
             assert "selected language: fr" in str(ind.render())
             # sits at the bottom-right corner
             assert ind.region.right == 120 and ind.region.bottom == 40
-
-    _run(scenario)
-
-
-_SEE_ALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"  # absent on every demo entity
-_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"  # present on every demo entity
-
-
-def _icon_colours(app, uri: str) -> list[str]:
-    return [str(s.style) for s in app._uri_nodes[ZOO + uri].label.spans]
-
-
-def test_tree_icon_green_with_default_all_optional_catalog() -> None:
-    """With the default (all-optional) entity catalog nothing is mandatory/important, so
-    every entity icon is green — never red or orange."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            for uri in ("Animal", "Rex", "hasOwner"):
-                colours = _icon_colours(app, uri)
-                assert any("green" in c for c in colours)
-                assert not any(("red" in c) or ("orange" in c.lower()) for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_icon_red_when_a_mandatory_property_is_unfilled() -> None:
-    """An entity missing a configured mandatory property gets a red icon."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "mandatory")]  # gap
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            assert any("red" in c for c in _icon_colours(app, "Animal"))
-
-    _run(scenario)
-
-
-def test_tree_icon_orange_when_an_important_property_is_unfilled() -> None:
-    """A missing *important* (not mandatory) property yields an orange icon."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "important")]  # gap
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            colours = _icon_colours(app, "Animal")
-            assert any("orange" in c.lower() for c in colours)  # dark_orange
-            assert not any("red" in c for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_icon_green_when_the_mandatory_property_is_filled() -> None:
-    """A satisfied mandatory property (rdfs:label, present on every demo class) → green."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_RDFS_LABEL, "label", "mandatory")]
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            colours = _icon_colours(app, "Animal")
-            assert any("green" in c for c in colours)
-            assert not any("red" in c for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_recolours_when_the_criticity_catalog_changes() -> None:
-    """Rebuilding the tree after a criticity change re-evaluates the icon colours."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            assert not any("red" in c for c in _icon_colours(app, "Animal"))  # default green
-            app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "mandatory")]
-            app._rebuild_tree()
-            await pilot.pause()
-            assert any("red" in c for c in _icon_colours(app, "Animal"))  # now flagged red
 
     _run(scenario)

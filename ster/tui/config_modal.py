@@ -29,7 +29,7 @@ from textual.widgets import (
 )
 from textual.widgets._collapsible import CollapsibleTitle
 
-from ster.metadata_coverage import CRITICITIES, DEFAULT_CRITICITY, MetaProp, normalise_criticity
+from ster.metadata_coverage import MetaProp
 
 from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup
@@ -82,77 +82,6 @@ class _MetaCheckbox(Checkbox):
         self.label_text = label or suggest_label(predicate)
         super().__init__(self.label_text, value=True, classes="cfg-mp-box")
         self.predicate = predicate
-
-
-class _CritOption(Static):
-    """One clickable criticity choice (mandatory / important / optional) inside a
-    property row's radio group. Clicking it selects that level for the row."""
-
-    def __init__(self, level: str, *, selected: bool) -> None:
-        super().__init__(classes="cfg-crit-opt")
-        self.level = level
-        self.set_selected(selected)
-
-    def set_selected(self, on: bool) -> None:
-        self.set_class(on, "crit-on")
-        self.update(f"{'●' if on else '○'} {self.level}")
-
-    def set_focused(self, on: bool) -> None:
-        """Highlight this option as the keyboard cursor's current element."""
-        self.set_class(on, "crit-focus")
-
-    def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
-        event.stop()
-        if isinstance(self.parent, _MetaPropRow):
-            self.parent.set_criticity(self.level)
-
-
-class _MetaPropRow(Horizontal):
-    """One catalog entry on a single line: its include checkbox plus a 3-option
-    criticity radio (mandatory / important / optional). The four are navigable as a row
-    of elements — column 0 is the checkbox, columns 1-3 the options. ``criticity``
-    defaults to optional."""
-
-    #: element columns: the checkbox (0) + one per criticity option.
-    COLS = 1 + len(CRITICITIES)
-
-    def __init__(self, predicate: str, label: str, criticity: str = DEFAULT_CRITICITY) -> None:
-        super().__init__(classes="cfg-mp-row")
-        self._predicate = predicate
-        self._label = label
-        self.criticity = normalise_criticity(criticity)
-
-    def compose(self) -> ComposeResult:
-        yield _MetaCheckbox(self._predicate, self._label)
-        with Horizontal(classes="cfg-crit"):
-            for level in CRITICITIES:
-                yield _CritOption(level, selected=level == self.criticity)
-
-    @property
-    def checkbox(self) -> _MetaCheckbox:
-        return self.query_one(_MetaCheckbox)
-
-    def set_criticity(self, level: str) -> None:
-        """Select *level*, updating the radio marks, and auto-save the catalog."""
-        self.criticity = level
-        for opt in self.query(_CritOption):
-            opt.set_selected(opt.level == level)
-        self.post_message(_MetaCatalog.Changed())
-
-    def focus_element(self, col: int) -> None:
-        """Highlight the *col*-th element (0 = checkbox, 1-3 = criticity options). A
-        column outside ``0..COLS-1`` clears every highlight on this row."""
-        self.checkbox.set_class(col == 0, "mp-current")
-        for i, opt in enumerate(self.query(_CritOption), start=1):
-            opt.set_focused(i == col)
-
-    def activate(self, col: int) -> None:
-        """Space/Enter on the *col*-th element: toggle the checkbox (0) or pick the
-        criticity for that option (1-3)."""
-        if col == 0:
-            self.checkbox.value = not self.checkbox.value  # bubbles Checkbox.Changed → autosave
-        else:
-            self.set_criticity(CRITICITIES[col - 1])
 
 
 class _SecretInput(Input):
@@ -239,12 +168,11 @@ class _MetaCatalog(FocusGroup):
         self._verifier = verifier
         self._can_declare = can_declare
         self._base_uri = base_uri
-        self._col = 0  # current element within the current row (0 = checkbox, 1-3 = radio)
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="cfg-mprops"):
             for mp in self._initial:
-                yield _MetaPropRow(mp.predicate, mp.label, mp.criticity)
+                yield _MetaCheckbox(mp.predicate, mp.label)
         with Horizontal(classes="cfg-mp-add-row"):
             yield Input(placeholder="predicate URI — http://…", classes="cfg-mp-uri")
             yield Input(placeholder="label (optional)", classes="cfg-mp-label")
@@ -253,23 +181,19 @@ class _MetaCatalog(FocusGroup):
             yield Button("Add local annotation property", classes="cfg-mp-new")
 
     def props(self) -> list[MetaProp]:
-        """The ticked predicates as :class:`MetaProp` entries (predicate, label,
-        criticity)."""
+        """The ticked predicates as ``(predicate, label)`` :class:`MetaProp` entries."""
         return [
-            MetaProp(row.checkbox.predicate, row.checkbox.label_text, row.criticity)
-            for row in self.query(_MetaPropRow)
-            if row.checkbox.value
+            MetaProp(cb.predicate, cb.label_text) for cb in self.query(_MetaCheckbox) if cb.value
         ]
 
     async def add_typed(self) -> None:
-        """Mount a row for the typed predicate (deduped, optional criticity); clear the
-        fields."""
+        """Mount a checkbox for the typed predicate (deduped); clear the fields."""
         uri = self.query_one(".cfg-mp-uri", Input).value.strip()
         label = self.query_one(".cfg-mp-label", Input).value.strip()
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
         self.query_one(".cfg-mp-uri", Input).value = ""
         self.query_one(".cfg-mp-label", Input).value = ""
         self.post_message(self.Changed())  # ask the modal to auto-save
@@ -306,7 +230,7 @@ class _MetaCatalog(FocusGroup):
         if not name or uri in present:
             return
         label = label.strip() or name
-        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
         self.post_message(self.Changed())  # auto-save the catalog
         self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
 
@@ -350,22 +274,18 @@ class _MetaCatalog(FocusGroup):
         ]
 
     def _focus_item(self, item) -> None:  # type: ignore[no-untyped-def]
-        for row in self.query(_MetaPropRow):
-            row.focus_element(-1)  # clear every row's element highlight
-        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
-            self._col = 0  # land on the checkbox; Right/Left rove the row's elements
-            item.parent.focus_element(0)
+        for box in self.query(_MetaCheckbox):
+            box.set_class(box is item, "mp-current")
+        if isinstance(item, _MetaCheckbox):
             item.scroll_visible()  # keep the current property in view while roving
-            self.focus()  # keep focus on the group so Space/arrows reach us
+            self.focus()  # keep focus on the group so space toggles
         else:
             item.focus()  # the add field / + button
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
-        """Inside the list: Up/Down rove the rows (Up past the top → group header, Down
-        past the ＋ button → next group). Left/Right move the element cursor across the
-        current row — checkbox ↔ mandatory ↔ important ↔ optional — and Left past the
-        checkbox returns to the group header. Space/Enter activate the current element
-        (toggle the checkbox, or select that criticity).
+        """Inside the list: Up/Down rove the items, Left (or Up past the top) returns
+        to the group header, and Down past the last item (the ＋ button) moves on to
+        the next group. Space/Enter toggle the current checkbox.
 
         We share the ``on_key`` handler name with :class:`FocusGroup`; Textual would
         otherwise dispatch *both* (its copy maps Left/Right to a move), so every
@@ -377,11 +297,10 @@ class _MetaCatalog(FocusGroup):
         elif key == "up":
             self._rove(-1)
         elif key == "left":
-            if not self._move_col(-1):  # already on the checkbox → back to the header
-                self._to_header()
+            self._to_header()
         elif key == "right":
-            self._move_col(1)  # → rove toward 'optional' (stops at the last element)
-        elif not self._extra_key(event):  # Space/Enter activate the current element
+            pass  # entering the list is driven from the header; ignore here
+        elif not self._extra_key(event):  # space / enter toggle the current checkbox
             return  # not one of ours — let it propagate normally
         event.stop()
         event.prevent_default()  # suppress FocusGroup.on_key (same handler name in the MRO)
@@ -430,36 +349,18 @@ class _MetaCatalog(FocusGroup):
             node.query_one(CollapsibleTitle).focus()
 
     def _extra_key(self, event) -> bool:  # type: ignore[no-untyped-def]
-        return event.key in ("space", "enter") and self._activate_current()
+        return event.key in ("space", "enter") and self._toggle_current()
 
-    def _current_row(self) -> _MetaPropRow | None:
-        """The property row the cursor is on, or ``None`` on an add-field / button."""
+    def _toggle_current(self) -> bool:
         item = self.current_item()
-        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
-            return item.parent
-        return None
-
-    def _move_col(self, delta: int) -> bool:
-        """Move the element cursor within the current row by *delta*. Returns ``True`` if
-        it moved, ``False`` when not on a row or already at a boundary."""
-        row = self._current_row()
-        target = self._col + delta
-        if row is not None and 0 <= target < _MetaPropRow.COLS:
-            self._col = target
-            row.focus_element(target)
-            return True
-        return False
-
-    def _activate_current(self) -> bool:
-        row = self._current_row()
-        if row is not None:
-            row.activate(self._col)
+        if isinstance(item, _MetaCheckbox):
+            item.value = not item.value
             return True
         return False
 
     def _clear(self) -> None:
-        for row in self.query(_MetaPropRow):
-            row.focus_element(-1)
+        for box in self.query(_MetaCheckbox):
+            box.remove_class("mp-current")
 
 
 class ConfigModal(ModalBase[None]):
@@ -517,16 +418,8 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
     .cfg-mprops { height: auto; max-height: 12; }
-    /* One catalog entry on a single line: the include checkbox on the left, its
-       criticity radio on the right (mandatory / important / optional). Left/Right rove
-       the four elements; the focused one is highlighted (mp-current / crit-focus). */
-    .cfg-mp-row { height: 1; margin-bottom: 1; }
-    .cfg-mprops .cfg-mp-box { width: 1fr; height: 1; border: none; background: transparent; }
+    .cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
-    .cfg-crit { width: auto; height: 1; }
-    .cfg-crit-opt { width: auto; height: 1; margin-left: 2; color: $foreground 45%; }
-    .cfg-crit-opt.crit-on { color: $primary; text-style: bold; }
-    .cfg-crit-opt.crit-focus { background: $secondary 30%; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
     .cfg-mp-uri { width: 2fr; border: round $primary; }
     .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
