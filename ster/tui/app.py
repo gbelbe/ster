@@ -330,6 +330,7 @@ class OntologyApp(App):
         self._lint_cache: tuple[dict, list] | None = None
         self._lint_computed = False
         self._lint_index: dict[str, str] = {}
+        self._lint_icons_on = False  # cached per tree build (plugin + 'icons' feature on)
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -535,6 +536,7 @@ class OntologyApp(App):
         for tree in self.query(Tree):
             tree.show_root = False
             tree.guide_depth = 3
+        self._sync_lint_features()  # cache icon-colour on/off before the first build
         self._build_main_tree(self.query_one("#tree", Tree))
         self._build_prop_tree(self.query_one("#prop-tree", Tree))
         self.query_one("#tree", Tree).border_title = "Ontology"
@@ -545,8 +547,15 @@ class OntologyApp(App):
         # prop-tree's lands on its data-less header → _show(None)), which would
         # clobber the detail pane. Show the overview after the refresh settles so
         # it is the last word; the Ontology node (first row) carries the URI.
-        self.call_after_refresh(self._show, detail.OVERVIEW_URI)
+        self.call_after_refresh(self._initial_show)
         self._update_lang_indicator()
+
+    def _initial_show(self) -> None:
+        """Show the overview (which computes the first lint result), then recolour the
+        tree once now that the uri→severity index is populated."""
+        self._show(detail.OVERVIEW_URI)
+        if self._lint_icons_on:
+            self._rebuild_tree()
 
     def _update_lang_indicator(self) -> None:
         """Refresh the bottom-right status with the current display language."""
@@ -560,9 +569,24 @@ class OntologyApp(App):
         self._uri_nodes.setdefault(uri, node)
 
     def _node_icon(self, uri: str, kind: str) -> str:
-        """The node's leading glyph for its *kind* (plain; the semanticlint plugin adds
-        severity colour once its icon-colouring feature lands)."""
-        return data.ICON.get(kind, "")
+        """The node's leading glyph, coloured red/orange/green by the worst semanticlint
+        severity affecting the entity — only when the plugin's icon feature is on, else
+        plain. The on/off flag is cached per tree build (not read per node)."""
+        icon = data.ICON.get(kind, "")
+        if not self._lint_icons_on:
+            return icon
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        colour = hooks.icon_colour(self._lint_index.get(uri))
+        return f"[{colour}]{icon}[/{colour}]"
+
+    def _sync_lint_features(self) -> None:
+        """Refresh cached lint-feature flags before a tree build (one config read,
+        rather than one per node)."""
+        from ster.plugins import semanticlint
+        from ster.plugins.semanticlint import config
+
+        self._lint_icons_on = semanticlint.is_active() and config.feature_enabled("icons")
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
@@ -769,6 +793,7 @@ class OntologyApp(App):
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
     def _rebuild_tree(self) -> None:
+        self._sync_lint_features()  # cache icon-colour on/off once for this build
         self._uri_nodes = {}
         main = self.query_one("#tree", Tree)
         main.root.remove_children()

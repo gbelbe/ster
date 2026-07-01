@@ -41,12 +41,14 @@ def _run(scenario: Callable[..., Awaitable[None]]) -> None:
 
 @pytest.fixture
 def semanticlint_enabled(tmp_path, monkeypatch):
-    """Enable the semanticlint plugin against isolated prefs so lint UI is active
-    (semanticlint is installed in the test env)."""
+    """Enable the semanticlint plugin against isolated prefs + quality.json so lint UI
+    is active (semanticlint is installed in the test env)."""
     from ster import plugins
     from ster.nav import prefs
+    from ster.plugins.semanticlint import config
 
     monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
     plugins.set_enabled("semanticlint", True)
 
 
@@ -826,6 +828,40 @@ def test_lint_runs_when_the_plugin_is_enabled(tmp_path, semanticlint_enabled) ->
             assert result is not None
             counts, issues = result
             assert counts.get("error", 0) >= 1 and any(i["check_id"] == "SKO001" for i in issues)
+
+    _run(scenario)
+
+
+def test_tree_icon_plain_when_the_plugin_is_disabled(tmp_path) -> None:
+    """With the plugin off, node icons carry no severity colour."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            label = app._uri_nodes["http://example.org/C1"].label
+            styles = " ".join(str(s.style) for s in label.spans)
+            assert not any(c in styles for c in ("red", "orange", "green"))
+
+    _run(scenario)
+
+
+def test_tree_icon_coloured_by_worst_severity_when_plugin_on(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """A concept with a duplicate prefLabel (SKO001 error) gets a red icon."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # ex:C1 → SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()  # let initial lint + recolour settle
+            label = app._uri_nodes["http://example.org/C1"].label
+            assert any("red" in str(s.style) for s in label.spans)  # error → red
 
     _run(scenario)
 

@@ -221,6 +221,7 @@ forbidden_modules = ["semanticlint"]
 ignore_imports = [
     "ster.plugins.semanticlint.runner -> semanticlint",
     "ster.plugins.semanticlint.checks -> semanticlint",
+    "ster.plugins.semanticlint.config -> semanticlint",
     "ster.git.manager -> semanticlint",
 ]
 
