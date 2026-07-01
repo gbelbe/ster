@@ -155,3 +155,17 @@ def test_warning_blocks_at_warning_threshold(tmp_path: Path):
 
 def test_no_violations_never_blocks():
     assert has_blocking_violations([], Severity.INFO) is False
+
+
+def test_ignore_and_select_filter_checks(tmp_path) -> None:
+    """ster enforces select/ignore (which semanticlint 0.3.0 parses but drops)."""
+    from semanticlint.checks.base import CheckConfig
+
+    from ster.plugins.semanticlint.runner import _check_included
+
+    assert _check_included("SKO001", CheckConfig(ignore=["SKO001"])) is False
+    assert _check_included("SKO001", CheckConfig(ignore=["SKO"])) is False  # prefix
+    assert _check_included("OWL001", CheckConfig(ignore=["SKO"])) is True
+    assert _check_included("QUA002", CheckConfig(select=["QUA"])) is True  # prefix select
+    assert _check_included("SKO001", CheckConfig(select=["QUA"])) is False  # not selected
+    assert _check_included("SKO001", CheckConfig()) is True  # no select/ignore → all

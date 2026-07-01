@@ -43,16 +43,28 @@ def load_config(search_dir: Path) -> tuple[CheckConfig, Severity]:
     return CheckConfig(), Severity.ERROR
 
 
+def _check_included(check_id: str, cfg: CheckConfig) -> bool:
+    """Apply the config's ``select`` / ``ignore`` (ids or prefixes). semanticlint 0.3.0
+    parses these keys but never applies them, so ster enforces them here."""
+    if any(check_id == entry or check_id.startswith(entry) for entry in cfg.ignore):
+        return False
+    if cfg.select:
+        return any(check_id == entry or check_id.startswith(entry) for entry in cfg.select)
+    return True
+
+
 def lint_files(paths: list[Path], cfg: CheckConfig) -> list[Violation]:
-    """Run all semanticlint checks on *paths*. Returns all violations."""
+    """Run the configured semanticlint checks on *paths*. Returns all violations,
+    filtered by the config's ``select`` / ``ignore``."""
     all_violations: list[Violation] = []
     for path in paths:
         graph, syntax_violations = lint_syntax(path)
-        violations: list[Violation] = list(syntax_violations)
+        violations = [v for v in syntax_violations if _check_included(v.check_id, cfg)]
         if graph is not None and len(graph) > 0:
             vtype = detect_vocab_type(graph)
             for check_cls in CheckRegistry.for_vocab(vtype):
-                violations.extend(check_cls().run(graph, cfg))
+                if _check_included(check_cls.id, cfg):
+                    violations.extend(check_cls().run(graph, cfg))
         all_violations.extend(violations)
     return all_violations
 
