@@ -25,8 +25,8 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from ster.metadata_coverage import MetaProp
-from ster.model import LabelType, Taxonomy
+from ster.metadata_coverage import MetaProp, entity_predicates
+from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
 from . import data, detail, edits, uri_edit
@@ -406,21 +406,36 @@ class OntologyApp(App):
         display_changed = new_lang != self.lang
         removed = sorted(set(self.configured_langs) - set(result["configured"]))
         langs_changed = set(self.configured_langs) != set(result["configured"])
+        # The entity-metadata criticities drive the tree icon colours, so a catalog edit
+        # must recolour the tree just like a display-language change relabels it.
+        entity_meta_changed = self._entity_meta_changed(result)
         self.configured_langs = result["configured"]  # exact selection (may be empty)
         self.lang = new_lang
         self._update_lang_indicator()
-        theme = result.get("theme")
-        if theme and theme in self.available_themes:
-            self.theme = theme  # live preview
+        self._apply_theme(result)
         self._persist_config(result, new_lang)
 
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
+        if display_changed or entity_meta_changed:
             self._rebuild_tree()
         if display_changed or langs_changed:
             self._show(self._detail_uri)  # reflect the new configured-language rows
         for lang in removed:
             self._maybe_purge_language(lang)
+
+    def _apply_theme(self, result: dict) -> None:
+        """Live-preview the chosen theme when it is one we know."""
+        theme = result.get("theme")
+        if theme and theme in self.available_themes:
+            self.theme = theme
+
+    def _entity_meta_changed(self, result: dict) -> bool:
+        """True when the config result carries an entity-metadata catalog that differs
+        from the current one (predicate, label or criticity) — a signal to recolour."""
+        return "entity_metadata_props" in result and (
+            list(result["entity_metadata_props"]) != self.entity_metadata_props
+        )
 
     def _persist_config(self, result: dict, new_lang: str) -> None:
         """Save the config modal's settings (theme + metadata catalog globally,
@@ -519,29 +534,39 @@ class OntologyApp(App):
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
-    def _label_missing_in_lang(self, uri: str, kind: str) -> bool:
-        """True when *uri* (of node *kind*) has no label in the **selected** language:
-        an rdfs:label for a class / individual / property, a skos:prefLabel for a
-        concept. Drives the red icon that flags an unlabelled entity."""
+    def _entity_by_kind(self, uri: str, kind: str) -> object | None:
+        """The class / individual / property / concept behind *uri* for its node *kind*."""
         attr = {
             "class": "owl_classes",
             "individual": "owl_individuals",
             "property": "owl_properties",
             "concept": "concepts",
         }.get(kind)
-        entity = getattr(self.tax, attr).get(uri) if attr else None
+        return getattr(self.tax, attr).get(uri) if attr else None
+
+    def _entity_criticity_colour(self, uri: str, kind: str) -> str:
+        """The entity's tree-icon colour from its entity-metadata coverage: red if a
+        configured *mandatory* predicate is unfilled, orange if an *important* one is,
+        else green. With the default (all-optional) catalog nothing is flagged → green."""
+        entity = self._entity_by_kind(uri, kind)
         if entity is None:
-            return False
-        if kind == "concept":
-            return not any(
-                lbl.lang == self.lang and lbl.type == LabelType.PREF for lbl in entity.labels
-            )
-        return not any(lbl.lang == self.lang for lbl in entity.labels)
+            return "green"
+        present = entity_predicates(entity)
+        unfilled = {
+            mp.criticity for mp in self.entity_metadata_props if mp.predicate not in present
+        }
+        if "mandatory" in unfilled:
+            return "red"
+        if "important" in unfilled:
+            return "dark_orange"
+        return "green"
 
     def _node_icon(self, uri: str, kind: str) -> str:
-        """The node's glyph, turned red when its selected-language label is missing."""
+        """The node's glyph, coloured red / orange / green by whether a mandatory or
+        important configured metadata property is unfilled on the entity."""
         icon = data.ICON.get(kind, "")
-        return f"[red]{icon}[/red]" if self._label_missing_in_lang(uri, kind) else icon
+        colour = self._entity_criticity_colour(uri, kind)
+        return f"[{colour}]{icon}[/{colour}]"
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"

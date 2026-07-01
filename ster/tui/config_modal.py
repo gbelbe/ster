@@ -468,7 +468,7 @@ class ConfigModal(ModalBase[None]):
     DEFAULT_CSS = """
     /* A fixed modal size so it doesn't resize when switching tabs. The tabs fill
        it; each pane scrolls if its content is taller than the box. */
-    #cfg-box { width: 72%; height: 90%; }
+    #cfg-box { width: 90%; height: 90%; }
     #cfg-box TabbedContent, #cfg-box ContentSwitcher { height: 1fr; }
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
     #cfg-box .cfg-label { color: $text-muted; }
