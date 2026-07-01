@@ -866,6 +866,42 @@ def test_tree_icon_coloured_by_worst_severity_when_plugin_on(
     _run(scenario)
 
 
+def test_detail_shows_a_quality_issues_row_for_the_entity(tmp_path, semanticlint_enabled) -> None:
+    """Viewing an entity with a lint issue shows a 'Quality issues' row (keyed lint:*)."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # ex:C1 → SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show("http://example.org/C1")
+            await pilot.pause()
+            keys = [r.field.key for r in app.query(DetailRow)]
+            assert any(k.startswith("lint:SKO001") for k in keys)  # the issue is annotated
+
+    _run(scenario)
+
+
+def test_detail_has_no_quality_issues_when_plugin_disabled(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show("http://example.org/C1")
+            await pilot.pause()
+            assert not any(r.field.key.startswith("lint:") for r in app.query(DetailRow))
+
+    _run(scenario)
+
+
 def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     """The overview's 'Errors'/'Warnings' count row for *severity*."""
     from ster.tui.detail_view import DetailRow

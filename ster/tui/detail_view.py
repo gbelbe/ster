@@ -20,9 +20,23 @@ from textual.widgets import Static
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
-from .detail import DetailSection, build_sections, field_markup
+from .detail import DetailSection, build_sections, field_markup, group_sections
 
 PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
+
+
+def _insert_issue_sections(
+    sections: list[DetailSection], issue_fields: list | None
+) -> list[DetailSection]:
+    """Splice the plugin's 'Quality issues' section(s) in just after Identity (the first
+    section), or at the top when there is none. No-op when there are no issue fields."""
+    if not issue_fields:
+        return sections
+    issue_sections = group_sections(issue_fields)
+    if not sections:
+        return issue_sections
+    return [sections[0], *issue_sections, *sections[1:]]
+
 
 # Hover help for action rows (mouse + keyboard discoverability). Anything not
 # listed falls back to a generic hint; editable rows say "Enter to edit".
@@ -280,12 +294,16 @@ class DetailView(VerticalScroll):
         lint: dict | None = None,
         configured_langs: list[str] | None = None,
         metadata: dict | None = None,
+        issue_fields: list | None = None,
     ) -> None:
-        """Rebuild the pane to show *uri* (or a placeholder when None)."""
+        """Rebuild the pane to show *uri* (or a placeholder when None). *issue_fields*
+        (the semanticlint plugin's per-entity 'Quality issues' rows) are inserted right
+        after the Identity section when present."""
         self.remove_children()
         if uri is None:
             self.mount(Static(PLACEHOLDER))
             return
         sections = build_sections(tax, uri, lang, activity, lint, configured_langs, metadata)
+        sections = _insert_issue_sections(sections, issue_fields)
         widgets = _grouped_widgets(sections)
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

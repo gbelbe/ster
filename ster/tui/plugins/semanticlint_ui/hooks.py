@@ -28,3 +28,26 @@ def detail_glyph(severity: str) -> str:
     """A coloured Rich-markup glyph for one issue of *severity* (detail panel)."""
     glyph, colour = _DETAIL_STYLE.get(severity, ("•", "green"))
     return f"[{colour}]{glyph}[/{colour}]"
+
+
+# Severity → whole-row quality colour (the detail panel's q-red/orange/green classes).
+_ROW_COLOUR = {"error": "red", "warning": "orange", "info": "green"}
+_ROW_GLYPH = {"error": "⊘", "warning": "⚠", "info": "ⓘ"}
+
+
+def issue_fields(issues: list[dict]) -> list:
+    """A 'Quality issues' section (list of :class:`DetailField`) for one entity — one
+    coloured row per lint issue (glyph + check id, message as the value). Empty when
+    there are no issues."""
+    from ster.nav.logic import DetailField, _colored, _sep, _stat
+
+    if not issues:
+        return []
+    fields: list[DetailField] = [_sep("Quality issues")]
+    for issue in issues:
+        severity = issue.get("severity", "info")
+        display = f"{_ROW_GLYPH.get(severity, '•')} {issue.get('check_id', '')}"
+        key = f"lint:{issue.get('check_id', '')}:{issue.get('subject', '')}"
+        row = _stat(key, display, issue.get("message", ""))
+        fields.append(_colored(row, _ROW_COLOUR.get(severity, "green")))
+    return fields

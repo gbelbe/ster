@@ -330,7 +330,8 @@ class OntologyApp(App):
         self._lint_cache: tuple[dict, list] | None = None
         self._lint_computed = False
         self._lint_index: dict[str, str] = {}
-        self._lint_icons_on = False  # cached per tree build (plugin + 'icons' feature on)
+        self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
+        self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -586,7 +587,20 @@ class OntologyApp(App):
         from ster.plugins import semanticlint
         from ster.plugins.semanticlint import config
 
-        self._lint_icons_on = semanticlint.is_active() and config.feature_enabled("icons")
+        active = semanticlint.is_active()
+        self._lint_icons_on = active and config.feature_enabled("icons")
+        self._lint_detail_on = active and config.feature_enabled("detail")
+
+    def _entity_issue_fields(self, uri: str | None) -> list[DetailField]:
+        """The 'Quality issues' detail rows for entity *uri* (empty unless the plugin's
+        detail feature is on and the entity has issues)."""
+        if not (self._lint_detail_on and uri and self._lint_cache):
+            return []
+        from ster.plugins.semanticlint import report
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        issues = report.issues_by_subject(self._lint_cache[1]).get(uri, [])
+        return hooks.issue_fields(issues)
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
@@ -695,11 +709,18 @@ class OntologyApp(App):
         )
         is_overview = uri == detail.OVERVIEW_URI
         activity = self._ontology_activity() if is_overview else None
-        lint = self._ontology_lint() if is_overview else None
+        lint = self._ontology_lint()  # whole-file lint (cached); None when plugin inactive
         metadata = self._metadata_coverage() if is_overview else None
         view = self.query_one("#detail", DetailView)
         view.update_entity(
-            self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs, metadata
+            self.tax,
+            uri,
+            self.lang,
+            activity,
+            (lint[0] if lint else None) if is_overview else None,  # counts only on the overview
+            clangs,
+            metadata,
+            issue_fields=self._entity_issue_fields(uri),
         )
         view.border_title = self._detail_title(uri)
 
