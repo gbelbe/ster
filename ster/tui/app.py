@@ -45,6 +45,9 @@ from .uri_modal import UriModal
 _ACTION_PREFIX = "__action:"
 _ACTION_SUFFIX = "__"
 
+# Quality colour name (red/orange/green) → a Rich colour for the tree's ■ tags.
+_RICH_QUALITY = {"red": "red", "orange": "dark_orange", "green": "green"}
+
 
 def _action_uri(action: str, extra: str = "") -> str:
     return f"{_ACTION_PREFIX}{action}:{extra}{_ACTION_SUFFIX}"
@@ -518,6 +521,36 @@ class OntologyApp(App):
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
+    def _entity_for(self, uri: str) -> object | None:
+        """The class / individual / concept behind *uri* (whichever holds it)."""
+        return (
+            self.tax.owl_classes.get(uri)
+            or self.tax.owl_individuals.get(uri)
+            or self.tax.concepts.get(uri)
+        )
+
+    def _coverage_square(self, langs: list[str], covered: set[str]) -> str:
+        """A ■ coloured by how many of *langs* appear in *covered* (red/orange/green)."""
+        from ster.analysis_base import pct as _pct
+        from ster.nav.logic import _quality_color
+
+        colour = _RICH_QUALITY[
+            _quality_color(_pct(sum(1 for c in langs if c in covered), len(langs)))
+        ]
+        return f"[{colour}]■[/]"
+
+    def _quality_squares(self, uri: str, doc_attr: str) -> str:
+        """A ' lab ■ doc ■' tag coloured by this entity's per-configured-language label
+        / documentation coverage — same red/orange/green thresholds as the overview's
+        completeness (green = covered in all configured languages, red = none)."""
+        entity = self._entity_for(uri)
+        if entity is None:
+            return ""
+        langs = self.configured_langs or [self.lang]
+        lab = self._coverage_square(langs, {lbl.lang for lbl in entity.labels})  # type: ignore[attr-defined]
+        doc = self._coverage_square(langs, {d.lang for d in getattr(entity, doc_attr, [])})
+        return f"  [dim]lab[/dim] {lab} [dim]doc[/dim] {doc}"
+
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{data.ICON.get(kind, '')} {data.label_of(self.tax, uri, self.lang)}{suffix}"
         node = parent.add_leaf(text, data=uri)
@@ -525,18 +558,20 @@ class OntologyApp(App):
         return node
 
     def _add_class(self, parent: TreeNode, uri: str) -> None:
+        label = data.label_of(self.tax, uri, self.lang)
         node = parent.add(
-            f"{data.ICON['class']} {data.label_of(self.tax, uri, self.lang)}", data=uri
+            f"{data.ICON['class']} {label}{self._quality_squares(uri, 'comments')}", data=uri
         )
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
             self._add_class(node, sub)
         for ind in data.individuals_of(self.tax, uri, self.lang):
-            self._leaf(node, ind, "individual")
+            self._leaf(node, ind, "individual", suffix=self._quality_squares(ind, "comments"))
 
     def _add_concept(self, parent: TreeNode, uri: str) -> None:
+        label = data.label_of(self.tax, uri, self.lang)
         node = parent.add(
-            f"{data.ICON['concept']} {data.label_of(self.tax, uri, self.lang)}", data=uri
+            f"{data.ICON['concept']} {label}{self._quality_squares(uri, 'definitions')}", data=uri
         )
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
@@ -563,7 +598,9 @@ class OntologyApp(App):
         if loose:
             ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
             for uri in loose:
-                self._leaf(ind_sec, uri, "individual")
+                self._leaf(
+                    ind_sec, uri, "individual", suffix=self._quality_squares(uri, "comments")
+                )
 
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
         tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)

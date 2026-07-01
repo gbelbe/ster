@@ -1463,3 +1463,22 @@ def test_bottom_bar_shows_the_selected_language() -> None:
             assert ind.region.right == 120 and ind.region.bottom == 40
 
     _run(scenario)
+
+
+def test_tree_nodes_show_lab_and_doc_quality_squares() -> None:
+    """Each class/individual node label carries 'lab ■' and 'doc ■' tags coloured by
+    the entity's per-language label / documentation coverage."""
+
+    async def scenario() -> None:
+        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            eagle = app._uri_nodes[ZOO + "Eagle"]  # labelled, no rdfs:comment
+            plain = str(eagle.label)
+            assert "lab" in plain and "doc" in plain and plain.count("■") == 2
+            # colour spans: label square green (labelled 'en'), doc square red (no comment)
+            colours = [str(s.style) for s in eagle.label.spans]
+            assert any("green" in c for c in colours)  # lab covered
+            assert any("red" in c for c in colours)  # doc missing
+
+    _run(scenario)
