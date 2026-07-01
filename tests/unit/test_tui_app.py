@@ -902,6 +902,37 @@ def test_detail_has_no_quality_issues_when_plugin_disabled(tmp_path) -> None:
     _run(scenario)
 
 
+def test_detail_shows_subtree_quality_block_for_a_class_or_concept(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """A parent concept's Quality (subtree) block counts an issue on its child."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:hasTopConcept ex:P .\n"
+            "ex:P a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme ;"
+            ' skos:prefLabel "P"@en .\n'
+            "ex:C a skos:Concept ; skos:inScheme ex:Scheme ; skos:broader ex:P ;"
+            ' skos:prefLabel "C"@en ; skos:prefLabel "C2"@en .\n'  # dup prefLabel → SKO001
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show("http://example.org/P")  # the parent
+            await pilot.pause()
+            rows = {r.field.key: r.field.value for r in app.query(DetailRow)}
+            assert rows.get("stq:error") == "1"  # child C's error counted in P's subtree
+
+    _run(scenario)
+
+
 def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     """The overview's 'Errors'/'Warnings' count row for *severity*."""
     from ster.tui.detail_view import DetailRow

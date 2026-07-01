@@ -67,3 +67,18 @@ def test_build_check_config_uses_thresholds() -> None:
     config.save_config({"quality": {"languages": ["en", "fr"]}})
     cc = config.build_check_config()
     assert cc.quality["languages"] == ["en", "fr"]
+
+
+def test_quality_summary_fields_counts_by_severity() -> None:
+    from ster.tui.plugins.semanticlint_ui import hooks
+
+    fields = hooks.quality_summary_fields({"error": 2, "warning": 1, "info": 0}, title="Q")
+    by_key = {f.key: f.value for f in fields}
+    assert by_key.get("stq:error") == "2" and by_key.get("stq:warning") == "1"
+
+
+def test_quality_summary_fields_clean_shows_no_issues_row() -> None:
+    from ster.tui.plugins.semanticlint_ui import hooks
+
+    fields = hooks.quality_summary_fields({}, title="Q")
+    assert any(f.key == "stq:clean" for f in fields)

@@ -51,3 +51,19 @@ def issue_fields(issues: list[dict]) -> list:
         row = _stat(key, display, issue.get("message", ""))
         fields.append(_colored(row, _ROW_COLOUR.get(severity, "green")))
     return fields
+
+
+def quality_summary_fields(counts: dict, *, title: str) -> list:
+    """A quality summary section: one coloured count row per severity. When everything
+    is clean a single green 'no issues' row is shown instead."""
+    from ster.nav.logic import DetailField, _colored, _sep, _stat
+
+    fields: list[DetailField] = [_sep(title)]
+    if not sum(counts.values()):
+        fields.append(_colored(_stat("stq:clean", "✓ no issues", ""), "green"))
+        return fields
+    for severity, colour in (("error", "red"), ("warning", "orange"), ("info", "green")):
+        count = counts.get(severity, 0)
+        row = _stat(f"stq:{severity}", f"{severity.capitalize()}s", str(count))
+        fields.append(_colored(row, colour if count else "green"))
+    return fields

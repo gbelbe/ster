@@ -332,6 +332,7 @@ class OntologyApp(App):
         self._lint_index: dict[str, str] = {}
         self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
         self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
+        self._lint_quality_on = False  # cached (plugin + 'quality_block' feature on)
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -590,6 +591,13 @@ class OntologyApp(App):
         active = semanticlint.is_active()
         self._lint_icons_on = active and config.feature_enabled("icons")
         self._lint_detail_on = active and config.feature_enabled("detail")
+        self._lint_quality_on = active and config.feature_enabled("quality_block")
+
+    def _entity_detail_fields(self, uri: str | None) -> list[DetailField]:
+        """The plugin's extra detail rows for entity *uri*: a subtree quality summary
+        (quality_block feature) followed by the per-entity issue list (detail feature),
+        both inserted after Identity. Empty when neither feature applies."""
+        return self._entity_quality_fields(uri) + self._entity_issue_fields(uri)
 
     def _entity_issue_fields(self, uri: str | None) -> list[DetailField]:
         """The 'Quality issues' detail rows for entity *uri* (empty unless the plugin's
@@ -601,6 +609,33 @@ class OntologyApp(App):
 
         issues = report.issues_by_subject(self._lint_cache[1]).get(uri, [])
         return hooks.issue_fields(issues)
+
+    def _entity_quality_fields(self, uri: str | None) -> list[DetailField]:
+        """A subtree-scoped quality summary for a class / concept / individual / property
+        (empty for the overview, or when the quality_block feature is off)."""
+        if not (self._lint_quality_on and uri and self._lint_cache):
+            return []
+        if uri in (detail.OVERVIEW_URI, detail.TAXONOMY_URI):
+            return []  # the overview already carries the global Errors/Warnings rows
+        from ster.plugins.semanticlint import report
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        by_subject = report.issues_by_subject(self._lint_cache[1])
+        counts: dict[str, int] = {}
+        for entity_uri in self._subtree_uris(uri):
+            for issue in by_subject.get(entity_uri, []):
+                counts[issue["severity"]] = counts.get(issue["severity"], 0) + 1
+        return hooks.quality_summary_fields(counts, title="Quality (subtree)")
+
+    def _subtree_uris(self, uri: str) -> set[str]:
+        """Every entity URI in *uri*'s subtree (class / concept hierarchy), else {uri}."""
+        from ster.nav.logic import _subtree_class_uris, _subtree_concept_uris
+
+        if uri in self.tax.owl_classes:
+            return set(_subtree_class_uris(self.tax, uri))
+        if uri in self.tax.concepts:
+            return set(_subtree_concept_uris(self.tax, uri))
+        return {uri}
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
@@ -720,7 +755,7 @@ class OntologyApp(App):
             (lint[0] if lint else None) if is_overview else None,  # counts only on the overview
             clangs,
             metadata,
-            issue_fields=self._entity_issue_fields(uri),
+            issue_fields=self._entity_detail_fields(uri),
         )
         view.border_title = self._detail_title(uri)
 
