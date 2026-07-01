@@ -25,7 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from ster.model import Taxonomy
+from ster.model import LabelType, Taxonomy
 from ster.nav.logic import DetailField
 
 from . import data, detail, edits, uri_edit
@@ -518,60 +518,48 @@ class OntologyApp(App):
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
-    def _entity_for(self, uri: str) -> object | None:
-        """The class / individual / concept behind *uri* (whichever holds it)."""
-        return (
-            self.tax.owl_classes.get(uri)
-            or self.tax.owl_individuals.get(uri)
-            or self.tax.concepts.get(uri)
-        )
-
-    def _coverage_is_red(self, langs: list[str], covered: set[str]) -> bool:
-        """True when *covered* misses enough of *langs* to score red (< 50%) on the
-        overview's quality threshold."""
-        from ster.analysis_base import pct as _pct
-        from ster.nav.logic import _quality_color
-
-        return _quality_color(_pct(sum(1 for c in langs if c in covered), len(langs))) == "red"
-
-    def _quality_squares(self, uri: str, doc_attr: str) -> str:
-        """A compact warning suffix flagging low coverage: 'lbl ■' when this entity is
-        under-labelled and/or 'doc ■' when under-documented — each a red square, shown
-        only when that dimension's per-configured-language coverage is red (< 50%). Both
-        red → both flags; one red → that flag; neither → empty (no clutter on good rows)."""
-        entity = self._entity_for(uri)
+    def _label_missing_in_lang(self, uri: str, kind: str) -> bool:
+        """True when *uri* (of node *kind*) has no label in the **selected** language:
+        an rdfs:label for a class / individual / property, a skos:prefLabel for a
+        concept. Drives the red icon that flags an unlabelled entity."""
+        attr = {
+            "class": "owl_classes",
+            "individual": "owl_individuals",
+            "property": "owl_properties",
+            "concept": "concepts",
+        }.get(kind)
+        entity = getattr(self.tax, attr).get(uri) if attr else None
         if entity is None:
-            return ""
-        langs = self.configured_langs or [self.lang]
-        parts = []
-        if self._coverage_is_red(langs, {lbl.lang for lbl in entity.labels}):  # type: ignore[attr-defined]
-            parts.append("lbl [red]■[/]")
-        if self._coverage_is_red(langs, {d.lang for d in getattr(entity, doc_attr, [])}):
-            parts.append("doc [red]■[/]")
-        return f"  {' '.join(parts)}" if parts else ""
+            return False
+        if kind == "concept":
+            return not any(
+                lbl.lang == self.lang and lbl.type == LabelType.PREF for lbl in entity.labels
+            )
+        return not any(lbl.lang == self.lang for lbl in entity.labels)
+
+    def _node_icon(self, uri: str, kind: str) -> str:
+        """The node's glyph, turned red when its selected-language label is missing."""
+        icon = data.ICON.get(kind, "")
+        return f"[red]{icon}[/red]" if self._label_missing_in_lang(uri, kind) else icon
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
-        text = f"{data.ICON.get(kind, '')} {data.label_of(self.tax, uri, self.lang)}{suffix}"
+        text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
         node = parent.add_leaf(text, data=uri)
         self._index(uri, node)
         return node
 
     def _add_class(self, parent: TreeNode, uri: str) -> None:
         label = data.label_of(self.tax, uri, self.lang)
-        node = parent.add(
-            f"{data.ICON['class']} {label}{self._quality_squares(uri, 'comments')}", data=uri
-        )
+        node = parent.add(f"{self._node_icon(uri, 'class')} {label}", data=uri)
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
             self._add_class(node, sub)
         for ind in data.individuals_of(self.tax, uri, self.lang):
-            self._leaf(node, ind, "individual", suffix=self._quality_squares(ind, "comments"))
+            self._leaf(node, ind, "individual")
 
     def _add_concept(self, parent: TreeNode, uri: str) -> None:
         label = data.label_of(self.tax, uri, self.lang)
-        node = parent.add(
-            f"{data.ICON['concept']} {label}{self._quality_squares(uri, 'definitions')}", data=uri
-        )
+        node = parent.add(f"{self._node_icon(uri, 'concept')} {label}", data=uri)
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)
@@ -597,9 +585,7 @@ class OntologyApp(App):
         if loose:
             ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
             for uri in loose:
-                self._leaf(
-                    ind_sec, uri, "individual", suffix=self._quality_squares(uri, "comments")
-                )
+                self._leaf(ind_sec, uri, "individual")
 
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
         tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)

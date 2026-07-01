@@ -1465,34 +1465,31 @@ def test_bottom_bar_shows_the_selected_language() -> None:
     _run(scenario)
 
 
-def test_tree_node_quality_squares_flag_only_red_coverage() -> None:
-    """A node gets a red 'lbl ■' / 'doc ■' warning square only for a dimension whose
-    per-configured-language coverage is red (< 50%); adequate dimensions show nothing."""
+def test_tree_icon_default_when_selected_language_label_present() -> None:
+    """Every demo entity is labelled in 'en', so no leading icon is coloured red."""
 
     async def scenario() -> None:
         app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            # Animal: labelled + documented in 'en' → no warning square at all.
-            assert "■" not in str(app._uri_nodes[ZOO + "Animal"].label)
-            # Eagle: labelled but has no rdfs:comment → 'doc ■' only (red), no 'lbl'.
-            eagle = app._uri_nodes[ZOO + "Eagle"].label
-            plain = str(eagle)
-            assert "doc" in plain and "lbl" not in plain and plain.count("■") == 1
-            assert any("red" in str(s.style) for s in eagle.spans)
+            for uri in ("Animal", "Rex", "hasOwner"):
+                label = app._uri_nodes[ZOO + uri].label
+                assert not any("red" in str(s.style) for s in label.spans)
 
     _run(scenario)
 
 
-def test_tree_node_quality_squares_flag_both_when_both_red() -> None:
-    """When neither the label nor the documentation covers the configured language,
-    both the 'lbl ■' and 'doc ■' red squares appear."""
+def test_tree_icon_turns_red_when_selected_language_label_missing() -> None:
+    """A class / individual / property whose label is missing in the selected language
+    gets its leading icon (glyph at column 0) coloured red — no German labels exist."""
 
     async def scenario() -> None:
         app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="de")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            plain = str(app._uri_nodes[ZOO + "Animal"].label)  # no 'de' label/comment
-            assert "lbl" in plain and "doc" in plain and plain.count("■") == 2
+            for uri in ("Animal", "Rex", "hasOwner"):
+                label = app._uri_nodes[ZOO + uri].label
+                reds = [s for s in label.spans if "red" in str(s.style)]
+                assert reds and reds[0].start == 0  # the leading glyph is flagged
 
     _run(scenario)
