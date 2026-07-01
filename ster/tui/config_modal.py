@@ -97,6 +97,10 @@ class _CritOption(Static):
         self.set_class(on, "crit-on")
         self.update(f"{'●' if on else '○'} {self.level}")
 
+    def set_focused(self, on: bool) -> None:
+        """Highlight this option as the keyboard cursor's current element."""
+        self.set_class(on, "crit-focus")
+
     def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
         event.stop()
         if isinstance(self.parent, _MetaPropRow):
@@ -104,8 +108,13 @@ class _CritOption(Static):
 
 
 class _MetaPropRow(Horizontal):
-    """One catalog entry: its include checkbox plus a 3-option criticity radio
-    (mandatory / important / optional). ``criticity`` defaults to optional."""
+    """One catalog entry on a single line: its include checkbox plus a 3-option
+    criticity radio (mandatory / important / optional). The four are navigable as a row
+    of elements — column 0 is the checkbox, columns 1-3 the options. ``criticity``
+    defaults to optional."""
+
+    #: element columns: the checkbox (0) + one per criticity option.
+    COLS = 1 + len(CRITICITIES)
 
     def __init__(self, predicate: str, label: str, criticity: str = DEFAULT_CRITICITY) -> None:
         super().__init__(classes="cfg-mp-row")
@@ -130,10 +139,20 @@ class _MetaPropRow(Horizontal):
             opt.set_selected(opt.level == level)
         self.post_message(_MetaCatalog.Changed())
 
-    def cycle_criticity(self) -> None:
-        """Advance to the next criticity (mandatory → important → optional → …)."""
-        nxt = CRITICITIES[(CRITICITIES.index(self.criticity) + 1) % len(CRITICITIES)]
-        self.set_criticity(nxt)
+    def focus_element(self, col: int) -> None:
+        """Highlight the *col*-th element (0 = checkbox, 1-3 = criticity options). A
+        column outside ``0..COLS-1`` clears every highlight on this row."""
+        self.checkbox.set_class(col == 0, "mp-current")
+        for i, opt in enumerate(self.query(_CritOption), start=1):
+            opt.set_focused(i == col)
+
+    def activate(self, col: int) -> None:
+        """Space/Enter on the *col*-th element: toggle the checkbox (0) or pick the
+        criticity for that option (1-3)."""
+        if col == 0:
+            self.checkbox.value = not self.checkbox.value  # bubbles Checkbox.Changed → autosave
+        else:
+            self.set_criticity(CRITICITIES[col - 1])
 
 
 class _SecretInput(Input):
@@ -220,6 +239,7 @@ class _MetaCatalog(FocusGroup):
         self._verifier = verifier
         self._can_declare = can_declare
         self._base_uri = base_uri
+        self._col = 0  # current element within the current row (0 = checkbox, 1-3 = radio)
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="cfg-mprops"):
@@ -330,19 +350,22 @@ class _MetaCatalog(FocusGroup):
         ]
 
     def _focus_item(self, item) -> None:  # type: ignore[no-untyped-def]
-        for box in self.query(_MetaCheckbox):
-            box.set_class(box is item, "mp-current")
-        if isinstance(item, _MetaCheckbox):
+        for row in self.query(_MetaPropRow):
+            row.focus_element(-1)  # clear every row's element highlight
+        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
+            self._col = 0  # land on the checkbox; Right/Left rove the row's elements
+            item.parent.focus_element(0)
             item.scroll_visible()  # keep the current property in view while roving
-            self.focus()  # keep focus on the group so space toggles
+            self.focus()  # keep focus on the group so Space/arrows reach us
         else:
             item.focus()  # the add field / + button
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
-        """Inside the list: Up/Down rove the items, Left (or Up past the top) returns
-        to the group header, and Down past the last item (the ＋ button) moves on to
-        the next group. Right is reserved for entering from the header, so it is a
-        no-op here. Space/Enter toggle the current checkbox.
+        """Inside the list: Up/Down rove the rows (Up past the top → group header, Down
+        past the ＋ button → next group). Left/Right move the element cursor across the
+        current row — checkbox ↔ mandatory ↔ important ↔ optional — and Left past the
+        checkbox returns to the group header. Space/Enter activate the current element
+        (toggle the checkbox, or select that criticity).
 
         We share the ``on_key`` handler name with :class:`FocusGroup`; Textual would
         otherwise dispatch *both* (its copy maps Left/Right to a move), so every
@@ -354,10 +377,11 @@ class _MetaCatalog(FocusGroup):
         elif key == "up":
             self._rove(-1)
         elif key == "left":
-            self._to_header()
+            if not self._move_col(-1):  # already on the checkbox → back to the header
+                self._to_header()
         elif key == "right":
-            self._cycle_criticity()  # →: cycle the current row's criticity radio
-        elif not self._extra_key(event):  # space / enter toggle the current checkbox
+            self._move_col(1)  # → rove toward 'optional' (stops at the last element)
+        elif not self._extra_key(event):  # Space/Enter activate the current element
             return  # not one of ours — let it propagate normally
         event.stop()
         event.prevent_default()  # suppress FocusGroup.on_key (same handler name in the MRO)
@@ -406,24 +430,36 @@ class _MetaCatalog(FocusGroup):
             node.query_one(CollapsibleTitle).focus()
 
     def _extra_key(self, event) -> bool:  # type: ignore[no-untyped-def]
-        return event.key in ("space", "enter") and self._toggle_current()
+        return event.key in ("space", "enter") and self._activate_current()
 
-    def _toggle_current(self) -> bool:
+    def _current_row(self) -> _MetaPropRow | None:
+        """The property row the cursor is on, or ``None`` on an add-field / button."""
         item = self.current_item()
-        if isinstance(item, _MetaCheckbox):
-            item.value = not item.value
+        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
+            return item.parent
+        return None
+
+    def _move_col(self, delta: int) -> bool:
+        """Move the element cursor within the current row by *delta*. Returns ``True`` if
+        it moved, ``False`` when not on a row or already at a boundary."""
+        row = self._current_row()
+        target = self._col + delta
+        if row is not None and 0 <= target < _MetaPropRow.COLS:
+            self._col = target
+            row.focus_element(target)
             return True
         return False
 
-    def _cycle_criticity(self) -> None:
-        """→ on a property row advances its criticity (mandatory → important → optional)."""
-        item = self.current_item()
-        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
-            item.parent.cycle_criticity()
+    def _activate_current(self) -> bool:
+        row = self._current_row()
+        if row is not None:
+            row.activate(self._col)
+            return True
+        return False
 
     def _clear(self) -> None:
-        for box in self.query(_MetaCheckbox):
-            box.remove_class("mp-current")
+        for row in self.query(_MetaPropRow):
+            row.focus_element(-1)
 
 
 class ConfigModal(ModalBase[None]):
@@ -481,14 +517,16 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
     .cfg-mprops { height: auto; max-height: 12; }
-    /* One catalog entry: the include checkbox on the left, its criticity radio on the
-       right (mandatory / important / optional). */
-    .cfg-mp-row { height: auto; margin-bottom: 1; }
-    .cfg-mprops .cfg-mp-box { width: 1fr; height: auto; border: none; background: transparent; }
+    /* One catalog entry on a single line: the include checkbox on the left, its
+       criticity radio on the right (mandatory / important / optional). Left/Right rove
+       the four elements; the focused one is highlighted (mp-current / crit-focus). */
+    .cfg-mp-row { height: 1; margin-bottom: 1; }
+    .cfg-mprops .cfg-mp-box { width: 1fr; height: 1; border: none; background: transparent; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
     .cfg-crit { width: auto; height: 1; }
     .cfg-crit-opt { width: auto; height: 1; margin-left: 2; color: $foreground 45%; }
     .cfg-crit-opt.crit-on { color: $primary; text-style: bold; }
+    .cfg-crit-opt.crit-focus { background: $secondary 30%; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
     .cfg-mp-uri { width: 2fr; border: round $primary; }
     .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }

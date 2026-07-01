@@ -417,22 +417,6 @@ def test_right_on_header_enters_the_item_list(tmp_path) -> None:
     _run(scenario)
 
 
-def test_left_in_item_list_returns_to_its_header(tmp_path) -> None:
-    async def scenario() -> None:
-        app, _src = _app(tmp_path)
-        async with app.run_test(size=(120, 48)) as pilot:
-            modal = await _open_app_config(pilot, app)
-            headers = _headers(modal)
-            headers[0].focus()
-            await pilot.pause()
-            await pilot.press("right")  # into the item list
-            await pilot.press("left")  # back out to the header
-            await pilot.pause()
-            assert app.focused is headers[0]
-
-    _run(scenario)
-
-
 def test_down_on_last_item_moves_to_the_next_group(tmp_path) -> None:
     """Down on the last item (the ＋ button) of a group moves to the next group's header."""
 
@@ -960,9 +944,13 @@ def test_entity_metadata_catalog_also_carries_criticity(tmp_path) -> None:
     _run(scenario)
 
 
-def test_right_arrow_cycles_the_current_rows_criticity(tmp_path) -> None:
+def test_left_right_rove_the_row_elements_and_enter_selects(tmp_path) -> None:
+    """The checkbox and the three criticity options are one row of elements. Left/Right
+    move the highlight across them (checkbox ↔ mandatory ↔ important ↔ optional, no
+    wrap) and Space/Enter activates the focused one (here, selecting a criticity)."""
+
     async def scenario() -> None:
-        from ster.tui.config_modal import _MetaPropRow
+        from ster.tui.config_modal import _CritOption, _MetaPropRow
 
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
@@ -970,12 +958,43 @@ def test_right_arrow_cycles_the_current_rows_criticity(tmp_path) -> None:
             catalog = _ont_catalog(modal)
             _headers(modal)[0].focus()
             await pilot.pause()
-            await pilot.press("right")  # drill into the list → first row current
+            await pilot.press("right")  # drill in → the checkbox (element 0) is focused
             await pilot.pause()
             first = catalog.query(_MetaPropRow).first()
-            assert first.criticity == "optional"
-            await pilot.press("right")  # → cycles optional → mandatory
+            opts = list(first.query(_CritOption))
+            assert first.checkbox.has_class("mp-current")
+            await pilot.press("right")  # → mandatory (element 1) focused
+            await pilot.pause()
+            assert opts[0].has_class("crit-focus") and not first.checkbox.has_class("mp-current")
+            await pilot.press("enter")  # select the focused option
             await pilot.pause()
             assert first.criticity == "mandatory"
+            await pilot.press("right")  # → important
+            await pilot.press("right")  # → optional (element 3, last)
+            await pilot.press("right")  # stays on optional (no wrap past the end)
+            await pilot.pause()
+            assert opts[2].has_class("crit-focus")
+            await pilot.press("space")  # Space also activates
+            await pilot.pause()
+            assert first.criticity == "optional"
+
+    _run(scenario)
+
+
+def test_left_on_the_checkbox_returns_to_the_header(tmp_path) -> None:
+    """Left while on the checkbox (the first element) leaves the row for the group
+    header."""
+
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            _headers(modal)[0].focus()
+            await pilot.pause()
+            await pilot.press("right")  # drill in → checkbox focused
+            await pilot.pause()
+            await pilot.press("left")  # on the checkbox → back to the header
+            await pilot.pause()
+            assert app.focused is _headers(modal)[0]
 
     _run(scenario)
