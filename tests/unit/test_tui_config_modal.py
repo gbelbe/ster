@@ -947,3 +947,30 @@ def test_write_onto_ci_button_exports_shared_config_to_the_repo(tmp_path) -> Non
         assert (tmp_path / "onto-ci.yml").exists()  # exported beside o.ttl
 
     _run(scenario)
+
+
+def test_form_group_roves_controls_with_arrows_and_space_toggles() -> None:
+    """The reusable FormGroup: arrows move the current control, space toggles a checkbox."""
+
+    async def scenario() -> None:
+        from ster.tui.focus_group import FormGroup
+
+        class _FGApp(App):
+            def compose(self):  # type: ignore[no-untyped-def]
+                yield FormGroup(Checkbox("a", id="fg-a"), Checkbox("b", id="fg-b"), id="fg")
+
+        app = _FGApp()
+        async with app.run_test() as pilot:
+            app.query_one("#fg", FormGroup).focus()
+            await pilot.pause()
+            await pilot.press("down")  # first arrow → first control
+            await pilot.pause()
+            assert app.query_one("#fg-a", Checkbox).has_class("fg-current")
+            await pilot.press("down")  # → second control
+            await pilot.pause()
+            assert app.query_one("#fg-b", Checkbox).has_class("fg-current")
+            await pilot.press("space")  # toggle the current checkbox
+            await pilot.pause()
+            assert app.query_one("#fg-b", Checkbox).value is True
+
+    _run(scenario)
