@@ -374,9 +374,27 @@ class ConfigModal(ModalBase[None]):
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
     #cfg-box .cfg-label { color: $text-muted; }
     #cfg-box .cfg-hint { color: $text-muted; }
+    /* Plugins tab: one bordered card per plugin (name + description), spaced out. */
+    .cfg-plugins-intro { color: $text-muted; margin: 0 0 1 0; }
+    .cfg-plugin-block {
+        height: auto;
+        border: round $foreground 40%;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    .cfg-plugin-block .cfg-plugin-desc { color: $text-muted; }
+    /* Semantic Lint tab: labelled, bordered sections. */
+    .cfg-sl-section {
+        height: auto;
+        border: round $foreground 40%;
+        border-title-color: $foreground 70%;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
     .cfg-sl-thresh { height: auto; }
     .cfg-sl-label { width: 1fr; content-align: left middle; }
-    .cfg-sl-input { width: 14; }
+    .cfg-sl-num { width: 14; }
+    .cfg-sl-text { width: 1fr; }
     /* Narrow dropdowns with clean rounded borders (override the dashed `tall`). */
     #cfg-theme { width: 24; margin-bottom: 1; }
     #cfg-display { width: 16; margin-bottom: 1; }
@@ -521,16 +539,18 @@ class ConfigModal(ModalBase[None]):
         from ster import plugins
 
         yield Static(
-            "Enable optional in-tree plugins. Each adds its own features (and config).",
-            classes="cfg-hint",
+            "Enable optional in-tree plugins. Each adds its own features (and config tab).",
+            classes="cfg-plugins-intro",
         )
-        rows: list = []
-        for spec in plugins.all_plugins():
-            rows.append(
-                Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}")
+        blocks = [
+            Vertical(
+                Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}"),
+                Static(spec.description, classes="cfg-plugin-desc"),
+                classes="cfg-plugin-block",
             )
-            rows.append(Static(spec.description, classes="cfg-hint"))
-        yield FormGroup(*rows, id="cfg-plugins-group")  # one Tab stop, arrows rove
+            for spec in plugins.all_plugins()
+        ]
+        yield FormGroup(*blocks, id="cfg-plugins-group")  # one Tab stop, arrows rove the cards
 
     #: feature toggles surfaced in the Semantic Lint tab (id suffix → label).
     _SL_FEATURES = (
@@ -546,60 +566,88 @@ class ConfigModal(ModalBase[None]):
         ("min_property_label_coverage", "Property label coverage (QUA005)"),
     )
 
+    @staticmethod
+    def _sl_section(title: str, *widgets):  # type: ignore[no-untyped-def]
+        """A titled, bordered section for the Semantic Lint tab."""
+        section = Vertical(*widgets, classes="cfg-sl-section")
+        section.border_title = title
+        return section
+
+    def _sl_thresholds(self, cfg: dict):  # type: ignore[no-untyped-def]
+        """The threshold rows + required-languages input (quality-coverage section)."""
+        for name, label in self._SL_THRESHOLDS:
+            yield Horizontal(
+                Static(label, classes="cfg-sl-label"),
+                Input(
+                    value=str(cfg["quality"].get(name, "")),
+                    id=f"cfg-slthr-{name}",
+                    classes="cfg-sl-input cfg-sl-num",
+                ),
+                classes="cfg-sl-thresh",
+            )
+        yield Static("Required prefLabel languages, comma-separated (QUA003)", classes="cfg-label")
+        yield Input(
+            value=", ".join(cfg["quality"].get("languages", [])),
+            id="cfg-sllangs",
+            classes="cfg-sl-input cfg-sl-text",
+        )
+
     def _semanticlint_widgets(self):  # type: ignore[no-untyped-def]
-        """The Semantic Lint tab body: install status, feature toggles and the global
-        quality thresholds (persisted to ~/.config/ster/quality.json), all inside a
-        FormGroup so the arrow keys rove them (one Tab stop, consistent styling).
+        """The Semantic Lint tab body: install status + titled bordered sections
+        (features, thresholds, check selection, CI export), all inside one FormGroup so
+        the arrow keys rove them (one Tab stop, consistent styling).
 
         Yields a single FormGroup so this also works standalone when the tab is added
         dynamically via TabbedContent.add_pane (no `with` compose-context needed)."""
         from ster.plugins.semanticlint import config, deps
 
         cfg = config.load_config()
-        controls: list = []
+        sections: list = []
         if not deps.is_installed():
-            controls.append(
+            sections.append(
                 Static(
                     "[yellow]semanticlint is not installed.[/] Run: pip install 'ster[semanticlint]'",
                     classes="cfg-hint",
                 )
             )
-        controls.append(Static("Features", classes="cfg-label"))
-        for name, label in self._SL_FEATURES:
-            controls.append(
-                Checkbox(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
+        sections.append(
+            self._sl_section(
+                "Features",
+                *(
+                    Checkbox(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
+                    for name, label in self._SL_FEATURES
+                ),
             )
-        controls.append(Static("Quality thresholds (0.0–1.0)", classes="cfg-label"))
-        for name, label in self._SL_THRESHOLDS:
-            controls.append(
-                Horizontal(
-                    Static(label, classes="cfg-sl-label"),
-                    Input(
-                        value=str(cfg["quality"].get(name, "")),
-                        id=f"cfg-slthr-{name}",
-                        classes="cfg-sl-input",
-                    ),
-                    classes="cfg-sl-thresh",
-                )
+        )
+        sections.append(self._sl_section("Quality thresholds (0.0–1.0)", *self._sl_thresholds(cfg)))
+        sections.append(
+            self._sl_section(
+                "Check selection",
+                Static("Run only these checks (ids/prefixes)", classes="cfg-label"),
+                Input(
+                    value=", ".join(cfg["select"]),
+                    id="cfg-slselect",
+                    classes="cfg-sl-input cfg-sl-text",
+                ),
+                Static("Ignore these checks (ids/prefixes)", classes="cfg-label"),
+                Input(
+                    value=", ".join(cfg["ignore"]),
+                    id="cfg-slignore",
+                    classes="cfg-sl-input cfg-sl-text",
+                ),
             )
-        controls += [
-            Static("Required prefLabel languages (comma-separated, QUA003)", classes="cfg-label"),
-            Input(
-                value=", ".join(cfg["quality"].get("languages", [])),
-                id="cfg-sllangs",
-                classes="cfg-sl-input",
-            ),
-            Static("Run only these checks (ids/prefixes, comma-separated)", classes="cfg-label"),
-            Input(value=", ".join(cfg["select"]), id="cfg-slselect", classes="cfg-sl-input"),
-            Static("Ignore these checks (ids/prefixes, comma-separated)", classes="cfg-label"),
-            Input(value=", ".join(cfg["ignore"]), id="cfg-slignore", classes="cfg-sl-input"),
-            Static(
-                "onto-ci.yml (GitHub CI) is separate — export the above to it to align them:",
-                classes="cfg-hint",
-            ),
-            Button("Write onto-ci.yml", id="cfg-sl-export", classes="cfg-mp-new"),
-        ]
-        yield FormGroup(*controls, id="cfg-sl-group")
+        )
+        sections.append(
+            self._sl_section(
+                "GitHub Actions CI",
+                Static(
+                    "onto-ci.yml drives GitHub CI — export the above to align it:",
+                    classes="cfg-hint",
+                ),
+                Button("Write onto-ci.yml", id="cfg-sl-export", classes="cfg-mp-new"),
+            )
+        )
+        yield FormGroup(*sections, id="cfg-sl-group")
 
     def _general_tab(self) -> ComposeResult:
         yield Static("Display language", classes="cfg-label")
