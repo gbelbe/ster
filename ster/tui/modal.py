@@ -20,7 +20,6 @@ from __future__ import annotations
 from typing import TypeVar
 
 from textual import events, on
-from textual.containers import Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
@@ -55,15 +54,22 @@ class ModalBase(ModalScreen[_R]):
         background: $background;
         border: round $primary;
         border-title-color: $primary;
+        layers: base overlay;   /* the ✕ floats on 'overlay' so it costs no content row */
     }
     ModalBase .modal-box.-danger {
         border: round $error;
         border-title-color: $error;
     }
-    /* Top-right ✕ — a 1-row header docked to the top of the box, its ✕ right-aligned
-       so only the ✕ itself is clickable (the rest of the row is empty). */
-    ModalBase .modal-header { dock: top; height: 1; align: right top; }
-    ModalBase .modal-close { width: auto; padding: 0 1; color: $text-muted; }
+    /* Top-right ✕ — on the 'overlay' layer (so it takes no content row) docked to the
+       box's right edge at the top; only the ✕ glyph is clickable. */
+    ModalBase .modal-close {
+        layer: overlay;
+        dock: right;
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
     ModalBase .modal-close:hover { color: $error; text-style: bold; }
     ModalBase .modal-footer { color: $text-muted; margin-top: 1; }
     ModalBase Button {
@@ -83,7 +89,7 @@ class ModalBase(ModalScreen[_R]):
         subclass, regardless of their own on_mount)."""
         boxes = self.query(".modal-box")
         if boxes and not self.query(".modal-close"):
-            boxes.first().mount(Horizontal(_ModalClose(), classes="modal-header"))
+            boxes.first().mount(_ModalClose())
 
     @on(events.Click)
     def _dismiss_on_click_away(self, event: events.Click) -> None:
