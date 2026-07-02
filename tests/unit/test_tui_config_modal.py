@@ -927,3 +927,23 @@ def test_semanticlint_thresholds_and_features_persist_to_quality_json(tmp_path) 
         assert saved["quality"]["min_label_coverage"] == 0.5
 
     _run(scenario)
+
+
+def test_write_onto_ci_button_exports_shared_config_to_the_repo(tmp_path) -> None:
+    """The Semantic Lint tab's export button writes onto-ci.yml next to the open file."""
+
+    async def scenario() -> None:
+        from textual.widgets import Button
+
+        from ster import plugins
+
+        plugins.set_enabled("semanticlint", True)
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            modal.query_one("#cfg-sl-export", Button).press()
+            for _ in range(3):
+                await pilot.pause()
+        assert (tmp_path / "onto-ci.yml").exists()  # exported beside o.ttl
+
+    _run(scenario)

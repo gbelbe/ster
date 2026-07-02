@@ -465,6 +465,9 @@ class ConfigModal(ModalBase[None]):
             super().__init__()
             self.result = result
 
+    class WriteOntoCi(Message):
+        """Ask the app to export the plugin's quality config to the repo's onto-ci.yml."""
+
     def __init__(
         self,
         display_lang: str,
@@ -572,6 +575,15 @@ class ConfigModal(ModalBase[None]):
             id="cfg-sllangs",
             classes="cfg-sl-input",
         )
+        yield Static("Run only these checks (ids/prefixes, comma-separated)", classes="cfg-label")
+        yield Input(value=", ".join(cfg["select"]), id="cfg-slselect", classes="cfg-sl-input")
+        yield Static("Ignore these checks (ids/prefixes, comma-separated)", classes="cfg-label")
+        yield Input(value=", ".join(cfg["ignore"]), id="cfg-slignore", classes="cfg-sl-input")
+        yield Static(
+            "onto-ci.yml (GitHub CI) is separate — export the above to it to align them:",
+            classes="cfg-hint",
+        )
+        yield Button("Write onto-ci.yml", id="cfg-sl-export", classes="cfg-mp-new")
 
     def _general_tab(self) -> ComposeResult:
         yield Static("Display language", classes="cfg-label")
@@ -758,7 +770,16 @@ class ConfigModal(ModalBase[None]):
                 pass  # leave unset → keeps the stored/default value
         langs = self.query_one("#cfg-sllangs", Input).value
         quality["languages"] = [c.strip() for c in langs.split(",") if c.strip()]
-        return {"features": features, "quality": quality}
+        return {
+            "features": features,
+            "quality": quality,
+            "select": self._csv("#cfg-slselect"),
+            "ignore": self._csv("#cfg-slignore"),
+        }
+
+    def _csv(self, selector: str) -> list[str]:
+        """A comma-separated Input's non-empty, stripped entries."""
+        return [c.strip() for c in self.query_one(selector, Input).value.split(",") if c.strip()]
 
     def _save(self) -> None:
         if self._ready:
@@ -787,7 +808,13 @@ class ConfigModal(ModalBase[None]):
 
     @on(Input.Changed, ".cfg-sl-input")
     def _on_semanticlint_input(self, event: Input.Changed) -> None:
-        self._save()  # thresholds / languages changed → persist to quality.json
+        self._save()  # thresholds / languages / select / ignore changed → persist
+
+    @on(Button.Pressed, "#cfg-sl-export")
+    def _on_semanticlint_export(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._save()  # ensure quality.json reflects the current inputs first
+        self.post_message(self.WriteOntoCi())
 
     @on(Input.Changed, "#cfg-server-url")
     @on(Input.Changed, "#cfg-server-port")

@@ -82,3 +82,41 @@ def test_quality_summary_fields_clean_shows_no_issues_row() -> None:
 
     fields = hooks.quality_summary_fields({}, title="Q")
     assert any(f.key == "stq:clean" for f in fields)
+
+
+# ── quality.json ↔ onto-ci.yml alignment ────────────────────────────────────────
+
+
+def test_build_check_config_includes_select_and_ignore() -> None:
+    config.save_config({"select": ["SKO", "OWL"], "ignore": ["QUA002"]})
+    cc = config.build_check_config()
+    assert cc.select == ["SKO", "OWL"] and cc.ignore == ["QUA002"]
+
+
+def test_fail_on_severity_maps_and_defaults() -> None:
+    from semanticlint.checks.base import Severity
+
+    config.save_config({"fail_on": "warning"})
+    assert config.fail_on_severity() == Severity.WARNING
+    config.save_config({"fail_on": "bogus"})
+    assert config.fail_on_severity() == Severity.ERROR  # unknown → error
+
+
+def test_write_onto_ci_exports_shared_keys_only(tmp_path) -> None:
+    import yaml
+
+    config.save_config(
+        {
+            "fail_on": "warning",
+            "select": ["SKO"],
+            "ignore": ["QUA002"],
+            "quality": {"min_label_coverage": 0.5, "languages": ["en", "fr"]},
+        }
+    )
+    path = config.write_onto_ci(tmp_path)
+    assert path == tmp_path / "onto-ci.yml"
+    data = yaml.safe_load(path.read_text())
+    assert data["fail_on"] == "warning"
+    assert data["select"] == ["SKO"] and data["ignore"] == ["QUA002"]
+    assert data["quality"]["min_label_coverage"] == 0.5
+    assert "features" not in data  # UI-only block is not exported to CI

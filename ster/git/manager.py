@@ -423,16 +423,19 @@ class GitManager:
 
     def _run_commit_lint(self, repo: Path) -> _LintState | None:
         """Run semanticlint over the file when the plugin is active, returning
-        ``(violations, fail_on)``. ``None`` when the plugin is disabled / not installed,
-        so the whole quality gate is skipped."""
+        ``(violations, fail_on)``. Uses the plugin's global ``quality.json`` — the same
+        config the TUI live view uses — so the commit gate matches what you saw editing.
+        ``None`` when the plugin is disabled / not installed (gate skipped)."""
         from ster.plugins import semanticlint
 
         if not semanticlint.is_active():
             return None
-        from ..plugins.semanticlint.runner import lint_files, load_config
+        from ..plugins.semanticlint import config
+        from ..plugins.semanticlint.runner import lint_files
 
-        cfg, fail_on = load_config(repo)
-        return lint_files([self.taxonomy_path], cfg), fail_on
+        return lint_files(
+            [self.taxonomy_path], config.build_check_config()
+        ), config.fail_on_severity()
 
     def _lint_blocks_commit(self, lint: _LintState | None) -> bool:
         """Prompt when the lint introduces blocking issues; True to *cancel* the commit.

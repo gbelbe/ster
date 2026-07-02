@@ -389,6 +389,16 @@ class OntologyApp(App):
         """A setting changed in the config modal → apply it live and persist."""
         self._apply_config(message.result)
 
+    def on_config_modal_write_onto_ci(self, message) -> None:  # type: ignore[no-untyped-def]
+        """Export the plugin's quality config to the repo's onto-ci.yml (aligns CI)."""
+        if self._path is None:
+            self.notify("No file open — can't locate the repo.", severity="warning")
+            return
+        from ster.plugins.semanticlint import config
+
+        path = config.write_onto_ci(self._path.parent)
+        self.notify(f"Wrote {path.name} (aligned with quality.json).")
+
     def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]
         """A config-modal predicate was confirmed despite not being a known annotation
         property → declare it locally as an ``owl:AnnotationProperty`` (skip if it is
