@@ -175,7 +175,7 @@ def test_add_metadata_catalog_excludes_already_present_predicates() -> None:
     options = annotation_catalog_options(t)
     predicate_uris = {pred for pred, _label in options}
     assert DCT + "title" not in predicate_uris  # already present → excluded
-    assert DCT + "creator" in predicate_uris  # not present → included
+    assert DCT + "publisher" in predicate_uris  # not present → included
 
 
 def test_add_metadata_catalog_uses_prefixed_labels() -> None:
@@ -183,7 +183,7 @@ def test_add_metadata_catalog_uses_prefixed_labels() -> None:
 
     options = annotation_catalog_options(_tax())
     labels = [label for _pred, label in options]
-    assert any("dcterms:creator" in lbl for lbl in labels)
+    assert any("dcterms:publisher" in lbl for lbl in labels)
     assert any("dcterms:license" in lbl for lbl in labels)
     assert any("vann:" in lbl for lbl in labels)
 

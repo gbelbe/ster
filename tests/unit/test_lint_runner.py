@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from semanticlint.checks.base import Severity
+
+
+@pytest.fixture(autouse=True)
+def _isolate_quality(tmp_path, monkeypatch):
+    """lint_overview reads the global quality.json — redirect it to a temp path so the
+    tests use default thresholds, independent of the developer's real config."""
+    from ster.plugins.semanticlint import config
+
+    monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
 
 from ster.plugins.semanticlint.runner import (
     has_blocking_violations,

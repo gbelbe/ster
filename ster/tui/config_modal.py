@@ -173,12 +173,37 @@ class _MetaCatalog(FocusGroup):
         with VerticalScroll(classes="cfg-mprops"):
             for mp in self._initial:
                 yield _MetaCheckbox(mp.predicate, mp.label)
+        yield Button("🔍 Search library…", classes="cfg-mp-search")
+        yield Static("or add by URI:", classes="cfg-hint")
         with Horizontal(classes="cfg-mp-add-row"):
             yield Input(placeholder="predicate URI — http://…", classes="cfg-mp-uri")
             yield Input(placeholder="label (optional)", classes="cfg-mp-label")
             yield Button("+", classes="cfg-mp-add")
         if self._can_declare and self._base_uri:
             yield Button("Add local annotation property", classes="cfg-mp-new")
+
+    async def add_predicate(self, predicate: str, label: str) -> None:
+        """Mount a checkbox for *predicate* (deduped) and auto-save. Shared by the
+        library picker and the typed-URI add."""
+        if not predicate or predicate in {cb.predicate for cb in self.query(_MetaCheckbox)}:
+            return
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(predicate, label))
+        self.post_message(self.Changed())
+
+    @on(Button.Pressed, ".cfg-mp-search")
+    def _on_search(self, event: Button.Pressed) -> None:
+        event.stop()
+        from .annotation_library_modal import AnnotationLibraryModal
+
+        self.app.push_screen(AnnotationLibraryModal(), self._on_library_pick)
+
+    async def _on_library_pick(self, predicate: str | None) -> None:
+        """A property was chosen from the library — add it to this catalog."""
+        from . import annotation_library
+
+        prop = annotation_library.get(predicate) if predicate else None
+        if prop is not None:
+            await self.add_predicate(prop.predicate, prop.label)
 
     def props(self) -> list[MetaProp]:
         """The ticked predicates as ``(predicate, label)`` :class:`MetaProp` entries."""
@@ -267,6 +292,7 @@ class _MetaCatalog(FocusGroup):
     def _items(self) -> list:  # type: ignore[type-arg]
         return [
             *self.query(_MetaCheckbox),
+            *self.query(".cfg-mp-search"),
             *self.query(".cfg-mp-uri"),
             *self.query(".cfg-mp-label"),
             *self.query(".cfg-mp-add"),
@@ -451,6 +477,7 @@ class ConfigModal(ModalBase[None]):
     .cfg-mp-add { width: auto; min-width: 5; margin-left: 1; }
     /* Opens the (separate) create-local-annotation-property modal. */
     .cfg-mp-new { width: auto; min-width: 8; margin-top: 1; }
+    .cfg-mp-search { width: auto; min-width: 8; margin-top: 1; margin-bottom: 1; }
     /* Local server (ster serve) block: URL / port / bearer token, one Tab stop. */
     #cfg-server {
         height: auto;
