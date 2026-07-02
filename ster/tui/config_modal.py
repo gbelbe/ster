@@ -374,8 +374,9 @@ class ConfigModal(ModalBase[None]):
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
     #cfg-box .cfg-label { color: $text-muted; }
     #cfg-box .cfg-hint { color: $text-muted; }
+    /* A tab's leading description line, spaced from the content below it. */
+    .cfg-tab-intro { color: $text-muted; margin: 0 0 1 0; }
     /* Plugins tab: one bordered card per plugin (name + description), spaced out. */
-    .cfg-plugins-intro { color: $text-muted; margin: 0 0 1 0; }
     .cfg-plugin-block {
         height: auto;
         border: round $foreground 40%;
@@ -540,7 +541,7 @@ class ConfigModal(ModalBase[None]):
 
         yield Static(
             "Enable optional in-tree plugins. Each adds its own features (and config tab).",
-            classes="cfg-plugins-intro",
+            classes="cfg-tab-intro",
         )
         blocks = [
             Vertical(
@@ -698,6 +699,11 @@ class ConfigModal(ModalBase[None]):
         yield LlmSetup(id="cfg-llm")
 
     def _props_tab(self) -> ComposeResult:
+        yield Static(
+            "Set up ster's pre-configured menu options — the annotation properties offered "
+            "in the “Add metadata” menus for the ontology and for entities.",
+            classes="cfg-tab-intro",
+        )
         with Collapsible(title="Ontology Metadata", collapsed=False, id="cfg-ont-meta-group"):
             yield Static(
                 "Offered when adding metadata to the ontology overview.", classes="cfg-hint"
