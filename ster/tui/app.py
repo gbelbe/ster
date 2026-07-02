@@ -431,17 +431,32 @@ class OntologyApp(App):
         self._update_lang_indicator()
         self._apply_theme(result)
         self._persist_config(result, new_lang)
+        self._refresh_after_config(
+            result, display_changed, langs_changed, plugins_changed, entity_meta_changed
+        )
+        for lang in removed:
+            self._maybe_purge_language(lang)
 
+    def _refresh_after_config(
+        self,
+        result: dict,
+        display_changed: bool,
+        langs_changed: bool,
+        plugins_changed: bool,
+        entity_meta_changed: bool,
+    ) -> None:
+        """Repaint tree / detail / lint to reflect an applied config change."""
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
+        if display_changed or plugins_changed:
+            # A plugin toggle flips the lint-feature flags — rebuild so icon colours
+            # (and their absence) repaint instead of lingering from the last build.
             self._rebuild_tree()
         if "semanticlint" in result:  # thresholds / feature toggles changed → re-lint
             self._invalidate_lint()
             self._refresh_lint_async()
         elif display_changed or langs_changed or plugins_changed or entity_meta_changed:
             self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
-        for lang in removed:
-            self._maybe_purge_language(lang)
 
     def _apply_plugins(self, result: dict) -> bool:
         """Persist plugin enable-states from the config result. Returns True when any

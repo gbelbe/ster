@@ -866,6 +866,37 @@ def test_tree_icon_coloured_by_worst_severity_when_plugin_on(
     _run(scenario)
 
 
+def test_deactivating_plugin_clears_tree_icon_colours(tmp_path, semanticlint_enabled) -> None:
+    """Regression: disabling the plugin via the config modal must repaint the tree with
+    plain icons — the colours must not linger. Root cause: _apply_config re-showed the
+    detail but never rebuilt the tree on a plugin-only toggle, so _lint_icons_on and the
+    coloured glyphs stayed. The config modal removes the Semantic Lint tab on toggle-off,
+    so the applied result carries no 'semanticlint' key (only plugins)."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # ex:C1 → SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()  # initial lint + recolour
+            label = app._uri_nodes["http://example.org/C1"].label
+            assert any("red" in str(s.style) for s in label.spans)  # coloured while on
+
+            # Disable the plugin exactly as the modal submits it (tab already removed).
+            app._apply_config(
+                {"display": "en", "configured": ["en"], "plugins": {"semanticlint": False}}
+            )
+            for _ in range(4):
+                await pilot.pause()
+            assert app._lint_icons_on is False
+            label = app._uri_nodes["http://example.org/C1"].label
+            styles = " ".join(str(s.style) for s in label.spans)
+            assert not any(c in styles for c in ("red", "orange", "green"))
+
+    _run(scenario)
+
+
 def test_detail_shows_a_quality_issues_row_for_the_entity(tmp_path, semanticlint_enabled) -> None:
     """Viewing an entity with a lint issue shows a 'Quality issues' row (keyed lint:*)."""
 
