@@ -31,7 +31,6 @@ Feature: New-TUI — the Textual ontology browser
     When I select the class "Dog"
     Then the detail panel shows the parent "Mammal"
     And the detail panel shows the comment "Loyal domestic companion."
-    And the detail panel shows "instances: 1"
 
   Scenario: Arrow keys move between the tree and the detail rows (no Tab needed)
     When I step right into the detail panel, down a row, then left back to the tree

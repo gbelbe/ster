@@ -34,40 +34,21 @@ def _field_keys(fields) -> list[str]:
 # ── detail panel structure ────────────────────────────────────────────────────
 
 
-def test_detail_shows_subclasses_separator():
-    t = _taxonomy("Animal", "Dog")
-    add_subclass_of(t, BASE + "Dog", BASE + "Animal")
-    fields = build_rdf_class_detail(t, BASE + "Animal", "en")
-    assert "Subclasses" in _sep_labels(fields)
-
-
-def test_detail_shows_child_row():
-    t = _taxonomy("Animal", "Dog")
-    add_subclass_of(t, BASE + "Dog", BASE + "Animal")
-    fields = build_rdf_class_detail(t, BASE + "Animal", "en")
-    assert f"subclass:{BASE}Dog" in _field_keys(fields)
-
-
-def test_detail_child_row_label_is_class_label():
-    t = _taxonomy("Animal", "Dog")
-    add_subclass_of(t, BASE + "Dog", BASE + "Animal")
-    fields = build_rdf_class_detail(t, BASE + "Animal", "en")
-    child_field = next(f for f in fields if f.key == f"subclass:{BASE}Dog")
-    assert child_field.value == "Dog"
-
-
 def test_detail_shows_new_subclass_action():
+    # The subclass list is no longer shown in the panel (it's navigable in the tree),
+    # but the create action remains among the class's hierarchy actions.
     t = _taxonomy("Animal")
     fields = build_rdf_class_detail(t, BASE + "Animal", "en")
     assert "new_subclass" in _actions(fields)
 
 
-def test_detail_no_children_shows_empty_subclasses_section():
-    t = _taxonomy("Animal")
+def test_detail_does_not_list_subclasses_or_instances():
+    t = _taxonomy("Animal", "Dog")
+    add_subclass_of(t, BASE + "Dog", BASE + "Animal")
     fields = build_rdf_class_detail(t, BASE + "Animal", "en")
-    assert "Subclasses" in _sep_labels(fields)
-    child_keys = [f.key for f in fields if f.key.startswith("subclass:")]
-    assert child_keys == []
+    assert "Subclasses" not in _sep_labels(fields)
+    assert "Instances" not in _sep_labels(fields)
+    assert not [f for f in fields if f.key.startswith("subclass:")]  # no child rows
 
 
 def test_old_link_subclass_action_removed():

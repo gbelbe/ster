@@ -2065,34 +2065,12 @@ def build_rdf_class_detail(
                 "action:move_class", "↷ Move under different superclass", "move_class"
             )
         )
-
-    # ── Subclasses — direct children of this class ───────────────────────────
-    fields.append(_sep("Subclasses"))
-    for child_uri, child_cls in taxonomy.owl_classes.items():
-        if uri not in child_cls.sub_class_of:
-            continue
-        child_label = child_cls.label(lang) or child_uri
-        fields.append(
-            DetailField(
-                f"subclass:{child_uri}",
-                "↓ subclass",
-                child_label,
-                editable=False,
-                meta={"type": "rdf_relation", "uri": child_uri, "nav": True},
-            )
-        )
+    # The subclass list + instance count are not repeated here (they are navigable in the
+    # tree); only the create actions remain, alongside the other hierarchy actions.
     fields.append(_add_action_add_field("action:new_subclass", "↓ New subclass", "new_subclass"))
-
-    # ── Instances ────────────────────────────────────────────────────────────
-    fields.append(_sep("Instances"))
-    n_direct = sum(1 for ind in taxonomy.owl_individuals.values() if uri in ind.types)
-    if n_direct:
-        fields.append(_stat("inst:count", "instances", str(n_direct)))
     fields.append(
         _add_action_add_field(
-            "action:add_individual",
-            "+ New individual of this class",
-            "add_individual",
+            "action:add_individual", "+ New individual of this class", "add_individual"
         )
     )
 
