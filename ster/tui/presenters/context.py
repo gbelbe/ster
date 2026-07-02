@@ -21,3 +21,4 @@ class PresenterContext:
     activity: dict | None = None  # git edit activity (overview)
     lint: dict | None = None  # semanticlint severity counts (overview)
     metadata: dict | None = None  # metadata-coverage percentages (overview)
+    quality_block: bool = True  # show the overview's Quality & Coverage group (plugin feature)

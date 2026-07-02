@@ -333,6 +333,7 @@ class OntologyApp(App):
         self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
         self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
         self._lint_quality_on = False  # cached (plugin + 'quality_block' feature on)
+        self._overview_quality_on = True  # overview Quality & Coverage group visible
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -617,6 +618,10 @@ class OntologyApp(App):
         self._lint_icons_on = active and config.feature_enabled("icons")
         self._lint_detail_on = active and config.feature_enabled("detail")
         self._lint_quality_on = active and config.feature_enabled("quality_block")
+        # The overview's Quality & Coverage group carries non-lint coverage too, so it
+        # stays visible when the plugin is off (unreachable toggle → default on); the
+        # feature only hides it while the plugin is active and the user turns it off.
+        self._overview_quality_on = (not active) or config.feature_enabled("quality_block")
 
     def _entity_detail_fields(self, uri: str | None) -> list[DetailField]:
         """The plugin's extra detail rows for entity *uri*: a subtree quality summary
@@ -781,6 +786,7 @@ class OntologyApp(App):
             clangs,
             metadata,
             issue_fields=self._entity_detail_fields(uri),
+            quality_block=self._overview_quality_on,
         )
         view.border_title = self._detail_title(uri)
 

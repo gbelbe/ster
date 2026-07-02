@@ -46,14 +46,18 @@ class OntologyOverviewPresenter(EntityPresenter):
     the bordered Quality & Coverage group."""
 
     def render(self) -> list[DetailField]:
-        return [
+        fields = [
             *self.identity(),  # 1. URI
             *self.metadata(),  # 2. Metadata (editable annotations)
             *self.actions(),  # 3. Activity
             *self.relations(),  # 4. Structure
-            *self.health(),  # 5. Quality & Coverage box: Health …
-            *self.completeness(),  # … Completeness / Metadata coverage / Languages
         ]
+        if self.ctx.quality_block:  # 5. Quality & Coverage box (plugin feature toggle)
+            fields += [
+                *self.health(),  # Health & Issues …
+                *self.completeness(),  # … Completeness / Metadata coverage / Languages
+            ]
+        return fields
 
     def identity(self) -> list[DetailField]:
         fields = [_sep("Identity")]

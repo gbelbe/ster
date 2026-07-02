@@ -897,6 +897,49 @@ def test_deactivating_plugin_clears_tree_icon_colours(tmp_path, semanticlint_ena
     _run(scenario)
 
 
+def test_toggling_quality_block_feature_hides_overview_block(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """Regression: unchecking 'Show the Quality & Coverage block' must remove the
+    overview's Quality & Coverage group. Root cause: the overview presenter always
+    rendered it — the feature only gated the per-entity subtree block."""
+    from ster.tui import detail as det
+    from ster.tui.detail_view import DetailRow
+
+    def _has_group(app) -> bool:  # noqa: ANN001
+        # The 'Errors' row is produced by health(), inside the Quality & Coverage group.
+        return any(str(r.field.display) == "Errors" for r in app.query(DetailRow))
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show(det.OVERVIEW_URI)
+            await pilot.pause()
+            assert app._overview_quality_on is True
+            assert _has_group(app)  # shown while the feature is on
+
+            # Turn the feature off exactly as the modal submits it.
+            app._apply_config(
+                {
+                    "display": "en",
+                    "configured": ["en"],
+                    "semanticlint": {
+                        "features": {"icons": True, "detail": True, "quality_block": False}
+                    },
+                }
+            )
+            for _ in range(4):
+                await pilot.pause()
+            assert app._overview_quality_on is False
+            assert not _has_group(app)  # the whole group is gone
+
+    _run(scenario)
+
+
 def test_detail_shows_a_quality_issues_row_for_the_entity(tmp_path, semanticlint_enabled) -> None:
     """Viewing an entity with a lint issue shows a 'Quality issues' row (keyed lint:*)."""
 
