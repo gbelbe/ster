@@ -77,12 +77,12 @@ dev = [
     # TUI snapshot testing (textual itself is a core dependency)
     "pytest-textual-snapshot>=1.0",
     # The Semantic Lint plugin is optional at runtime, but its checks are tested.
-    "semanticlint>=0.2",
+    "semanticlint>=0.5.0",
 ]
 # Optional: the Semantic Lint plugin's dependency. Owned by the plugin, not core —
 # install with `ster[semanticlint]` (or activate the plugin in-app to install it).
 semanticlint = [
-    "semanticlint>=0.2",
+    "semanticlint>=0.5.0",
 ]
 all = [
     "ster[dev]",

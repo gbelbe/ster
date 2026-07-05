@@ -10,10 +10,18 @@ from semanticlint.checks.base import CheckConfig, Severity, Violation
 from semanticlint.checks.lint.syntax import lint_syntax
 from semanticlint.checks.registry import CheckRegistry
 from semanticlint.detect import detect_vocab_type
+from semanticlint.shacl.discovery import discover_shapes_files, load_shapes
+from semanticlint.shacl.runner import run_shapes
 
 from ster.plugins.semanticlint import checks as _checks  # noqa: F401 — registers ster checks
 
 _SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
+
+# Checks ster suppresses by default: RDF006 (BaseURIConsistency) flags the common,
+# valid SKOS layout where concepts are siblings of — not nested under — their scheme
+# URI, so it is noise for most vocabularies. (Reported upstream; re-enable via config
+# when semanticlint tightens it.)
+_DEFAULT_IGNORE = ("RDF006",)
 
 _SEVERITY_STYLE = {
     Severity.ERROR: "bold red",
@@ -44,27 +52,42 @@ def load_config(search_dir: Path) -> tuple[CheckConfig, Severity]:
 
 
 def _check_included(check_id: str, cfg: CheckConfig) -> bool:
-    """Apply the config's ``select`` / ``ignore`` (ids or prefixes). semanticlint 0.3.0
-    parses these keys but never applies them, so ster enforces them here."""
-    if any(check_id == entry or check_id.startswith(entry) for entry in cfg.ignore):
+    """Apply ster's default ignores + the config's ``select`` / ``ignore`` (ids or
+    prefixes). Enforced here because ster runs both the SHACL pass and the registry."""
+    ignore = (*_DEFAULT_IGNORE, *cfg.ignore)
+    if any(check_id == entry or check_id.startswith(entry) for entry in ignore):
         return False
     if cfg.select:
         return any(check_id == entry or check_id.startswith(entry) for entry in cfg.select)
     return True
 
 
+def _graph_violations(graph, cfg: CheckConfig, path: Path) -> list[Violation]:  # type: ignore[no-untyped-def]
+    """Violations for one parsed *graph*: the SHACL pass (built-in shapes since
+    semanticlint 0.5 + any sibling ``*.shapes.ttl`` business rules) plus the registered
+    Python checks, each filtered by select/ignore."""
+    vtype = detect_vocab_type(graph)
+    local_shapes = load_shapes(discover_shapes_files(path))  # project-owned rules next to the file
+    out: list[Violation] = [
+        v
+        for v in run_shapes(graph, cfg, vtype, extra_shapes=local_shapes)
+        if _check_included(v.check_id, cfg)
+    ]
+    for check_cls in CheckRegistry.for_vocab(vtype):
+        if _check_included(check_cls.id, cfg):
+            out.extend(check_cls().run(graph, cfg))
+    return out
+
+
 def lint_files(paths: list[Path], cfg: CheckConfig) -> list[Violation]:
-    """Run the configured semanticlint checks on *paths*. Returns all violations,
-    filtered by the config's ``select`` / ``ignore``."""
+    """Run the configured semanticlint checks on *paths* — SHACL shapes (built-in +
+    discovered local rules) and Python checks — filtered by select/ignore."""
     all_violations: list[Violation] = []
     for path in paths:
         graph, syntax_violations = lint_syntax(path)
         violations = [v for v in syntax_violations if _check_included(v.check_id, cfg)]
         if graph is not None and len(graph) > 0:
-            vtype = detect_vocab_type(graph)
-            for check_cls in CheckRegistry.for_vocab(vtype):
-                if _check_included(check_cls.id, cfg):
-                    violations.extend(check_cls().run(graph, cfg))
+            violations.extend(_graph_violations(graph, cfg, path))
         all_violations.extend(violations)
     return all_violations
 
