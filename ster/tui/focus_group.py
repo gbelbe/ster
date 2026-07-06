@@ -18,6 +18,7 @@ from __future__ import annotations
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widget import Widget
+from textual.widgets import Checkbox
 
 
 class FocusGroup(Vertical):
@@ -33,8 +34,10 @@ class FocusGroup(Vertical):
         Binding("shift+tab", "exit_prev", show=False),
     ]
 
-    def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(**kwargs)
+    def __init__(self, *children, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(
+            *children, **kwargs
+        )  # forward mounted children (e.g. FormGroup(*controls))
         self._cursor = 0
         self._active = False  # True once the arrows have entered the items
 
@@ -95,3 +98,53 @@ class FocusGroup(Vertical):
 
     def action_exit_prev(self) -> None:
         self._exit(self.exit_prev)
+
+
+class FormGroup(FocusGroup):
+    """A ready-to-use :class:`FocusGroup` for a form: wrap any mix of controls
+    (checkboxes, inputs, buttons, selects) and it *auto-discovers* the focusable ones
+    for arrow-key roving — no subclassing or ``_items`` needed. Up/Down move between
+    controls (Left/Right too, except a focused ``Input`` keeps them for editing);
+    Space/Enter toggles the current checkbox. Its ``DEFAULT_CSS`` also gives modal form
+    controls consistent, borderless rendering, so any new modal reusing ``FormGroup``
+    looks and behaves like the rest without extra styling.
+
+    Set ``exit_next`` / ``exit_prev`` for where Tab / Shift+Tab leave to (both default
+    to the tab bar, ``Tabs``)."""
+
+    exit_next = "Tabs"
+    exit_prev = "Tabs"
+
+    DEFAULT_CSS = """
+    FormGroup { height: auto; }
+    /* Default checkbox chrome (a heavy box) reads badly stacked in a modal — flatten
+       it and mark the roved-to one instead, like the language / catalog groups. */
+    FormGroup Checkbox { border: none; background: transparent; height: auto; padding: 0 1; }
+    FormGroup Checkbox.fg-current { background: $secondary 30%; text-style: bold; }
+    FormGroup Input { border: round $primary; }
+    FormGroup Input:focus { border: round $primary; }
+    """
+
+    def _items(self) -> list[Widget]:
+        # Every focusable descendant, in DOM (visual) order — no per-group list needed.
+        return [w for w in self.query(Widget) if w.can_focus]
+
+    def _focus_item(self, item: Widget) -> None:
+        for box in self.query(Checkbox):
+            box.set_class(box is item, "fg-current")
+        if isinstance(item, Checkbox):
+            item.scroll_visible()
+            self.focus()  # keep focus on the group so Space toggles + arrows always rove
+        else:
+            item.focus()  # inputs / buttons / selects take focus directly
+
+    def _extra_key(self, event) -> bool:  # type: ignore[no-untyped-def]
+        item = self.current_item()
+        if event.key in ("space", "enter") and isinstance(item, Checkbox):
+            item.value = not item.value
+            return True
+        return False
+
+    def _clear(self) -> None:
+        for box in self.query(Checkbox):
+            box.remove_class("fg-current")

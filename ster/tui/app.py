@@ -25,7 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from ster.metadata_coverage import MetaProp, entity_predicates
+from ster.metadata_coverage import MetaProp
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
@@ -324,9 +324,15 @@ class OntologyApp(App):
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
         self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
         self._activity_computed = False
-        # Lazily-computed semanticlint result (per session): (counts, issues).
+        # Semanticlint result (counts, issues) + a uri→worst-severity index for O(1)
+        # per-entity lookups (icon colours, detail annotations). Recomputed in the
+        # background after edits when the plugin is active.
         self._lint_cache: tuple[dict, list] | None = None
         self._lint_computed = False
+        self._lint_index: dict[str, str] = {}
+        self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
+        self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
+        self._lint_quality_on = False  # cached (plugin + 'quality_block' feature on)
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -383,6 +389,16 @@ class OntologyApp(App):
         """A setting changed in the config modal → apply it live and persist."""
         self._apply_config(message.result)
 
+    def on_config_modal_write_onto_ci(self, message) -> None:  # type: ignore[no-untyped-def]
+        """Export the plugin's quality config to the repo's onto-ci.yml (aligns CI)."""
+        if self._path is None:
+            self.notify("No file open — can't locate the repo.", severity="warning")
+            return
+        from ster.plugins.semanticlint import config
+
+        path = config.write_onto_ci(self._path.parent)
+        self.notify(f"Wrote {path.name} (aligned with quality.json).")
+
     def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]
         """A config-modal predicate was confirmed despite not being a known annotation
         property → declare it locally as an ``owl:AnnotationProperty`` (skip if it is
@@ -406,9 +422,10 @@ class OntologyApp(App):
         display_changed = new_lang != self.lang
         removed = sorted(set(self.configured_langs) - set(result["configured"]))
         langs_changed = set(self.configured_langs) != set(result["configured"])
-        # The entity-metadata criticities drive the tree icon colours, so a catalog edit
-        # must recolour the tree just like a display-language change relabels it.
+        # An entity-metadata catalog edit changes the overview's coverage %, so refresh
+        # the detail (but not the tree — icons don't depend on the catalog).
         entity_meta_changed = self._entity_meta_changed(result)
+        plugins_changed = self._apply_plugins(result)  # persists + invalidates lint cache
         self.configured_langs = result["configured"]  # exact selection (may be empty)
         self.lang = new_lang
         self._update_lang_indicator()
@@ -417,12 +434,29 @@ class OntologyApp(App):
 
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
-        if display_changed or entity_meta_changed:
             self._rebuild_tree()
-        if display_changed or langs_changed:
-            self._show(self._detail_uri)  # reflect the new configured-language rows
+        if "semanticlint" in result:  # thresholds / feature toggles changed → re-lint
+            self._invalidate_lint()
+            self._refresh_lint_async()
+        elif display_changed or langs_changed or plugins_changed or entity_meta_changed:
+            self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
         for lang in removed:
             self._maybe_purge_language(lang)
+
+    def _apply_plugins(self, result: dict) -> bool:
+        """Persist plugin enable-states from the config result. Returns True when any
+        changed — a signal to invalidate the lint cache and re-render the detail (lint
+        rows appear/disappear)."""
+        from ster import plugins
+
+        changed = False
+        for plugin_id, enabled in result.get("plugins", {}).items():
+            if plugins.is_enabled(plugin_id) != bool(enabled):
+                plugins.set_enabled(plugin_id, bool(enabled))
+                changed = True
+        if changed:
+            self._invalidate_lint()  # force a recompute with the new active state
+        return changed
 
     def _apply_theme(self, result: dict) -> None:
         """Live-preview the chosen theme when it is one we know."""
@@ -432,7 +466,7 @@ class OntologyApp(App):
 
     def _entity_meta_changed(self, result: dict) -> bool:
         """True when the config result carries an entity-metadata catalog that differs
-        from the current one (predicate, label or criticity) — a signal to recolour."""
+        from the current one — a signal to refresh the overview's coverage rows."""
         return "entity_metadata_props" in result and (
             list(result["entity_metadata_props"]) != self.entity_metadata_props
         )
@@ -455,6 +489,10 @@ class OntologyApp(App):
         if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
             self.entity_metadata_props = list(result["entity_metadata_props"])
             save_entity_metadata_props(self.entity_metadata_props)
+        if "semanticlint" in result:  # the plugin's global quality config
+            from ster.plugins.semanticlint import config
+
+            config.save_config(result["semanticlint"])
         if self._path is not None:
             _save_lang_pref(self._path, new_lang)
             save_configured_langs(self._path, self.configured_langs)
@@ -510,6 +548,7 @@ class OntologyApp(App):
         for tree in self.query(Tree):
             tree.show_root = False
             tree.guide_depth = 3
+        self._sync_lint_features()  # cache icon-colour on/off before the first build
         self._build_main_tree(self.query_one("#tree", Tree))
         self._build_prop_tree(self.query_one("#prop-tree", Tree))
         self.query_one("#tree", Tree).border_title = "Ontology"
@@ -520,8 +559,15 @@ class OntologyApp(App):
         # prop-tree's lands on its data-less header → _show(None)), which would
         # clobber the detail pane. Show the overview after the refresh settles so
         # it is the last word; the Ontology node (first row) carries the URI.
-        self.call_after_refresh(self._show, detail.OVERVIEW_URI)
+        self.call_after_refresh(self._initial_show)
         self._update_lang_indicator()
+
+    def _initial_show(self) -> None:
+        """Show the overview (which computes the first lint result), then recolour the
+        tree once now that the uri→severity index is populated."""
+        self._show(detail.OVERVIEW_URI)
+        if self._lint_icons_on:
+            self._rebuild_tree()
 
     def _update_lang_indicator(self) -> None:
         """Refresh the bottom-right status with the current display language."""
@@ -534,39 +580,72 @@ class OntologyApp(App):
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
-    def _entity_by_kind(self, uri: str, kind: str) -> object | None:
-        """The class / individual / property / concept behind *uri* for its node *kind*."""
-        attr = {
-            "class": "owl_classes",
-            "individual": "owl_individuals",
-            "property": "owl_properties",
-            "concept": "concepts",
-        }.get(kind)
-        return getattr(self.tax, attr).get(uri) if attr else None
-
-    def _entity_criticity_colour(self, uri: str, kind: str) -> str:
-        """The entity's tree-icon colour from its entity-metadata coverage: red if a
-        configured *mandatory* predicate is unfilled, orange if an *important* one is,
-        else green. With the default (all-optional) catalog nothing is flagged → green."""
-        entity = self._entity_by_kind(uri, kind)
-        if entity is None:
-            return "green"
-        present = entity_predicates(entity)
-        unfilled = {
-            mp.criticity for mp in self.entity_metadata_props if mp.predicate not in present
-        }
-        if "mandatory" in unfilled:
-            return "red"
-        if "important" in unfilled:
-            return "dark_orange"
-        return "green"
-
     def _node_icon(self, uri: str, kind: str) -> str:
-        """The node's glyph, coloured red / orange / green by whether a mandatory or
-        important configured metadata property is unfilled on the entity."""
+        """The node's leading glyph, coloured red/orange/green by the worst semanticlint
+        severity affecting the entity — only when the plugin's icon feature is on, else
+        plain. The on/off flag is cached per tree build (not read per node)."""
         icon = data.ICON.get(kind, "")
-        colour = self._entity_criticity_colour(uri, kind)
+        if not self._lint_icons_on:
+            return icon
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        colour = hooks.icon_colour(self._lint_index.get(uri))
         return f"[{colour}]{icon}[/{colour}]"
+
+    def _sync_lint_features(self) -> None:
+        """Refresh cached lint-feature flags before a tree build (one config read,
+        rather than one per node)."""
+        from ster.plugins import semanticlint
+        from ster.plugins.semanticlint import config
+
+        active = semanticlint.is_active()
+        self._lint_icons_on = active and config.feature_enabled("icons")
+        self._lint_detail_on = active and config.feature_enabled("detail")
+        self._lint_quality_on = active and config.feature_enabled("quality_block")
+
+    def _entity_detail_fields(self, uri: str | None) -> list[DetailField]:
+        """The plugin's extra detail rows for entity *uri*: a subtree quality summary
+        (quality_block feature) followed by the per-entity issue list (detail feature),
+        both inserted after Identity. Empty when neither feature applies."""
+        return self._entity_quality_fields(uri) + self._entity_issue_fields(uri)
+
+    def _entity_issue_fields(self, uri: str | None) -> list[DetailField]:
+        """The 'Quality issues' detail rows for entity *uri* (empty unless the plugin's
+        detail feature is on and the entity has issues)."""
+        if not (self._lint_detail_on and uri and self._lint_cache):
+            return []
+        from ster.plugins.semanticlint import report
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        issues = report.issues_by_subject(self._lint_cache[1]).get(uri, [])
+        return hooks.issue_fields(issues)
+
+    def _entity_quality_fields(self, uri: str | None) -> list[DetailField]:
+        """A subtree-scoped quality summary for a class / concept / individual / property
+        (empty for the overview, or when the quality_block feature is off)."""
+        if not (self._lint_quality_on and uri and self._lint_cache):
+            return []
+        if uri in (detail.OVERVIEW_URI, detail.TAXONOMY_URI):
+            return []  # the overview already carries the global Errors/Warnings rows
+        from ster.plugins.semanticlint import report
+        from ster.tui.plugins.semanticlint_ui import hooks
+
+        by_subject = report.issues_by_subject(self._lint_cache[1])
+        counts: dict[str, int] = {}
+        for entity_uri in self._subtree_uris(uri):
+            for issue in by_subject.get(entity_uri, []):
+                counts[issue["severity"]] = counts.get(issue["severity"], 0) + 1
+        return hooks.quality_summary_fields(counts, title="Quality (subtree)")
+
+    def _subtree_uris(self, uri: str) -> set[str]:
+        """Every entity URI in *uri*'s subtree (class / concept hierarchy), else {uri}."""
+        from ster.nav.logic import _subtree_class_uris, _subtree_concept_uris
+
+        if uri in self.tax.owl_classes:
+            return set(_subtree_class_uris(self.tax, uri))
+        if uri in self.tax.concepts:
+            return set(_subtree_concept_uris(self.tax, uri))
+        return {uri}
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
         text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
@@ -675,11 +754,18 @@ class OntologyApp(App):
         )
         is_overview = uri == detail.OVERVIEW_URI
         activity = self._ontology_activity() if is_overview else None
-        lint = self._ontology_lint() if is_overview else None
+        lint = self._ontology_lint()  # whole-file lint (cached); None when plugin inactive
         metadata = self._metadata_coverage() if is_overview else None
         view = self.query_one("#detail", DetailView)
         view.update_entity(
-            self.tax, uri, self.lang, activity, lint[0] if lint else None, clangs, metadata
+            self.tax,
+            uri,
+            self.lang,
+            activity,
+            (lint[0] if lint else None) if is_overview else None,  # counts only on the overview
+            clangs,
+            metadata,
+            issue_fields=self._entity_detail_fields(uri),
         )
         view.border_title = self._detail_title(uri)
 
@@ -701,18 +787,58 @@ class OntologyApp(App):
         return self._activity_cache
 
     def _ontology_lint(self) -> tuple[dict, list] | None:
-        """semanticlint result for the file (computed once per session, cached)."""
-        if self._path is None:
+        """semanticlint result for the file (computed once per session, cached).
+
+        ``None`` when the semanticlint plugin is disabled / not installed, so no lint
+        colours, rows or modal appear — ster behaves as standard."""
+        from ster.plugins import semanticlint
+
+        if self._path is None or not semanticlint.is_active():
             return None
         if not self._lint_computed:
-            from ster.lint_runner import lint_overview
-
-            try:
-                self._lint_cache = lint_overview(self._path)
-            except Exception:  # noqa: BLE001 — a lint failure must never break the view
-                self._lint_cache = None
-            self._lint_computed = True
+            self._set_lint(self._compute_lint())
         return self._lint_cache
+
+    def _compute_lint(self) -> tuple[dict, list] | None:
+        """Run semanticlint on the file (blocking). ``None`` on any failure — a lint
+        error must never break the view."""
+        from ster.plugins.semanticlint.runner import lint_overview
+
+        try:
+            return lint_overview(self._path)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _set_lint(self, result: tuple[dict, list] | None) -> None:
+        """Store a fresh lint result + rebuild the uri→worst-severity index."""
+        from ster.plugins.semanticlint import report
+
+        self._lint_cache = result
+        self._lint_computed = True
+        self._lint_index = report.worst_by_subject(result[1]) if result else {}
+
+    def _refresh_lint_async(self) -> None:
+        """Recompute lint off the UI thread (when the plugin is active), then recolour
+        the tree and refresh the open detail. No-op otherwise."""
+        from ster.plugins import semanticlint
+
+        if self._path is None or not semanticlint.is_active():
+            self._set_lint(None)
+            return
+        self.run_worker(
+            self._lint_worker, thread=True, exclusive=True, group="lint", name="ster-lint"
+        )
+
+    def _lint_worker(self) -> None:
+        result = self._compute_lint()
+        self.call_from_thread(self._on_lint_ready, result)
+
+    def _on_lint_ready(self, result: tuple[dict, list] | None) -> None:
+        """Apply a background lint result on the UI thread: recolour + refresh."""
+        self._set_lint(result)
+        self._rebuild_tree()
+        if self._detail_uri:
+            self._show(self._detail_uri)
 
     def _detail_title(self, uri: str | None) -> str:
         """The detail pane's border title — the current entity, or a generic label.
@@ -733,6 +859,7 @@ class OntologyApp(App):
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
     def _rebuild_tree(self) -> None:
+        self._sync_lint_features()  # cache icon-colour on/off once for this build
         self._uri_nodes = {}
         main = self.query_one("#tree", Tree)
         main.root.remove_children()
@@ -753,11 +880,19 @@ class OntologyApp(App):
         # The service swapped a fresh authority taxonomy into the workspace.
         self.tax = self._workspace.taxonomies[self._path]
         self.search_rows = data.search_rows(self.tax, self.lang)
+        self._invalidate_lint()  # the edit may fix/introduce issues
         self._rebuild_tree()
         self._show(self._detail_uri)
+        self._refresh_lint_async()  # recompute in the background → recolour when ready
         # The mutation rebuilt the detail rows, destroying the row that had focus —
         # restore it (next refresh) so the keyboard keeps working after a modal.
         self.call_after_refresh(self._restore_focus)
+
+    def _invalidate_lint(self) -> None:
+        """Drop the cached lint so the next access (or the async worker) recomputes."""
+        self._lint_cache = None
+        self._lint_computed = False
+        self._lint_index = {}
 
     def _restore_focus(self) -> None:
         """Land focus on a usable widget after a mutation rebuilt the panes."""

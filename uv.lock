@@ -2351,7 +2351,6 @@ dependencies = [
     { name = "python-multipart" },
     { name = "rdflib" },
     { name = "rich" },
-    { name = "semanticlint" },
     { name = "starlette" },
     { name = "textual" },
     { name = "typer" },
@@ -2375,6 +2374,7 @@ all = [
     { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
+    { name = "semanticlint" },
     { name = "types-pyyaml" },
 ]
 dev = [
@@ -2393,7 +2393,11 @@ dev = [
     { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
+    { name = "semanticlint" },
     { name = "types-pyyaml" },
+]
+semanticlint = [
+    { name = "semanticlint" },
 ]
 
 [package.metadata]
@@ -2422,15 +2426,17 @@ requires-dist = [
     { name = "rdflib", specifier = ">=7.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "semanticlint", specifier = ">=0.2" },
+    { name = "semanticlint", marker = "extra == 'dev'", specifier = ">=0.2" },
+    { name = "semanticlint", marker = "extra == 'semanticlint'", specifier = ">=0.2" },
     { name = "starlette", specifier = ">=1.3.1" },
     { name = "ster", extras = ["dev"], marker = "extra == 'all'" },
+    { name = "ster", extras = ["semanticlint"], marker = "extra == 'all'" },
     { name = "textual", specifier = ">=0.80" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
-provides-extras = ["dev", "all"]
+provides-extras = ["dev", "semanticlint", "all"]
 
 [[package]]
 name = "syrupy"

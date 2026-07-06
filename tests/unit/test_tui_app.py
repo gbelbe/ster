@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 import pytest
 
 from ster import store
-from ster.metadata_coverage import MetaProp
 from ster.tui.app import EntitySearch, OntologyApp
 
 from .test_tui_data import DEMO, ZOO
@@ -38,6 +37,19 @@ def _isolate_prefs(tmp_path, monkeypatch):
 def _run(scenario: Callable[..., Awaitable[None]]) -> None:
     """Run an async Pilot scenario in a fresh loop (no pytest-asyncio needed)."""
     asyncio.run(scenario())
+
+
+@pytest.fixture
+def semanticlint_enabled(tmp_path, monkeypatch):
+    """Enable the semanticlint plugin against isolated prefs + quality.json so lint UI
+    is active (semanticlint is installed in the test env)."""
+    from ster import plugins
+    from ster.nav import prefs
+    from ster.plugins.semanticlint import config
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
+    plugins.set_enabled("semanticlint", True)
 
 
 def _app() -> OntologyApp:
@@ -789,6 +801,138 @@ ex:C1 a skos:Concept ;
 """
 
 
+def test_lint_is_gated_off_when_the_plugin_is_disabled(tmp_path) -> None:
+    """With the semanticlint plugin off (default), no lint runs — _ontology_lint is None."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app._ontology_lint() is None  # plugin disabled ⇒ no lint data
+
+    _run(scenario)
+
+
+def test_lint_runs_when_the_plugin_is_enabled(tmp_path, semanticlint_enabled) -> None:
+    """Enabling the plugin activates lint: _ontology_lint returns counts + issues."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # duplicate prefLabel ⇒ SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            result = app._ontology_lint()
+            assert result is not None
+            counts, issues = result
+            assert counts.get("error", 0) >= 1 and any(i["check_id"] == "SKO001" for i in issues)
+
+    _run(scenario)
+
+
+def test_tree_icon_plain_when_the_plugin_is_disabled(tmp_path) -> None:
+    """With the plugin off, node icons carry no severity colour."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            label = app._uri_nodes["http://example.org/C1"].label
+            styles = " ".join(str(s.style) for s in label.spans)
+            assert not any(c in styles for c in ("red", "orange", "green"))
+
+    _run(scenario)
+
+
+def test_tree_icon_coloured_by_worst_severity_when_plugin_on(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """A concept with a duplicate prefLabel (SKO001 error) gets a red icon."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # ex:C1 → SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()  # let initial lint + recolour settle
+            label = app._uri_nodes["http://example.org/C1"].label
+            assert any("red" in str(s.style) for s in label.spans)  # error → red
+
+    _run(scenario)
+
+
+def test_detail_shows_a_quality_issues_row_for_the_entity(tmp_path, semanticlint_enabled) -> None:
+    """Viewing an entity with a lint issue shows a 'Quality issues' row (keyed lint:*)."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")  # ex:C1 → SKO001 error
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show("http://example.org/C1")
+            await pilot.pause()
+            keys = [r.field.key for r in app.query(DetailRow)]
+            assert any(k.startswith("lint:SKO001") for k in keys)  # the issue is annotated
+
+    _run(scenario)
+
+
+def test_detail_has_no_quality_issues_when_plugin_disabled(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_SKOS_DUP, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show("http://example.org/C1")
+            await pilot.pause()
+            assert not any(r.field.key.startswith("lint:") for r in app.query(DetailRow))
+
+    _run(scenario)
+
+
+def test_detail_shows_subtree_quality_block_for_a_class_or_concept(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """A parent concept's Quality (subtree) block counts an issue on its child."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        ttl = (
+            "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Scheme a skos:ConceptScheme ; skos:hasTopConcept ex:P .\n"
+            "ex:P a skos:Concept ; skos:inScheme ex:Scheme ; skos:topConceptOf ex:Scheme ;"
+            ' skos:prefLabel "P"@en .\n'
+            "ex:C a skos:Concept ; skos:inScheme ex:Scheme ; skos:broader ex:P ;"
+            ' skos:prefLabel "C"@en ; skos:prefLabel "C2"@en .\n'  # dup prefLabel → SKO001
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show("http://example.org/P")  # the parent
+            await pilot.pause()
+            rows = {r.field.key: r.field.value for r in app.query(DetailRow)}
+            assert rows.get("stq:error") == "1"  # child C's error counted in P's subtree
+
+    _run(scenario)
+
+
 def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     """The overview's 'Errors'/'Warnings' count row for *severity*."""
     from ster.tui.detail_view import DetailRow
@@ -801,7 +945,7 @@ def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     )
 
 
-def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
+def test_warnings_row_opens_a_warnings_only_modal(tmp_path, semanticlint_enabled) -> None:
     """Activating the overview's 'Warnings' count row opens a LintModal scoped to
     warnings (errors are excluded)."""
 
@@ -826,7 +970,7 @@ def test_warnings_row_opens_a_warnings_only_modal(tmp_path) -> None:
     _run(scenario)
 
 
-def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path) -> None:
+def test_selecting_a_lint_issue_jumps_to_its_entity(tmp_path, semanticlint_enabled) -> None:
     """Pressing enter on a missing-label warning navigates to that concept."""
 
     async def scenario() -> None:
@@ -1462,88 +1606,5 @@ def test_bottom_bar_shows_the_selected_language() -> None:
             assert "selected language: fr" in str(ind.render())
             # sits at the bottom-right corner
             assert ind.region.right == 120 and ind.region.bottom == 40
-
-    _run(scenario)
-
-
-_SEE_ALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"  # absent on every demo entity
-_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"  # present on every demo entity
-
-
-def _icon_colours(app, uri: str) -> list[str]:
-    return [str(s.style) for s in app._uri_nodes[ZOO + uri].label.spans]
-
-
-def test_tree_icon_green_with_default_all_optional_catalog() -> None:
-    """With the default (all-optional) entity catalog nothing is mandatory/important, so
-    every entity icon is green — never red or orange."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            for uri in ("Animal", "Rex", "hasOwner"):
-                colours = _icon_colours(app, uri)
-                assert any("green" in c for c in colours)
-                assert not any(("red" in c) or ("orange" in c.lower()) for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_icon_red_when_a_mandatory_property_is_unfilled() -> None:
-    """An entity missing a configured mandatory property gets a red icon."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "mandatory")]  # gap
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            assert any("red" in c for c in _icon_colours(app, "Animal"))
-
-    _run(scenario)
-
-
-def test_tree_icon_orange_when_an_important_property_is_unfilled() -> None:
-    """A missing *important* (not mandatory) property yields an orange icon."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "important")]  # gap
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            colours = _icon_colours(app, "Animal")
-            assert any("orange" in c.lower() for c in colours)  # dark_orange
-            assert not any("red" in c for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_icon_green_when_the_mandatory_property_is_filled() -> None:
-    """A satisfied mandatory property (rdfs:label, present on every demo class) → green."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        app.entity_metadata_props = [MetaProp(_RDFS_LABEL, "label", "mandatory")]
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            colours = _icon_colours(app, "Animal")
-            assert any("green" in c for c in colours)
-            assert not any("red" in c for c in colours)
-
-    _run(scenario)
-
-
-def test_tree_recolours_when_the_criticity_catalog_changes() -> None:
-    """Rebuilding the tree after a criticity change re-evaluates the icon colours."""
-
-    async def scenario() -> None:
-        app = OntologyApp(store.load(DEMO), source="demo.ttl", lang="en")
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            assert not any("red" in c for c in _icon_colours(app, "Animal"))  # default green
-            app.entity_metadata_props = [MetaProp(_SEE_ALSO, "seeAlso", "mandatory")]
-            app._rebuild_tree()
-            await pilot.pause()
-            assert any("red" in c for c in _icon_colours(app, "Animal"))  # now flagged red
 
     _run(scenario)

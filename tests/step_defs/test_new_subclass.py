@@ -79,23 +79,7 @@ def confirm_new_subclass(uri: str, parent: str, ctx: dict[str, Any]) -> None:
 # ── Thens ─────────────────────────────────────────────────────────────────────
 
 
-@then(parsers.parse('the detail panel contains a "{label}" separator'))
-def has_separator(label: str, ctx: dict[str, Any]) -> None:
-    sep_labels = [f.display for f in ctx["fields"] if f.meta.get("type") == "separator"]
-    assert label in sep_labels, f"No '{label}' separator. Found: {sep_labels}"
-
-
-@then(parsers.parse('the detail panel shows "{name}" as a child row with key "{key}"'))
-def has_child_row(name: str, key: str, ctx: dict[str, Any]) -> None:
-    keys = [f.key for f in ctx["fields"]]
-    assert key in keys, f"Key '{key}' not found. Found: {keys}"
-
-
-@then(
-    parsers.parse(
-        'the detail panel contains a "New subclass" action after the Subclasses separator'
-    )
-)
+@then(parsers.parse('the detail panel contains a "New subclass" action'))
 def has_new_subclass_action(ctx: dict[str, Any]) -> None:
     actions = [f.meta.get("action", "") for f in ctx["fields"] if f.meta.get("action")]
     assert "new_subclass" in actions, f"new_subclass action not found. Actions: {actions}"

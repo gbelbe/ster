@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ster.metadata_coverage import MetaProp, normalise_criticity
+from ster.metadata_coverage import MetaProp
 
 # ── lang persistence ──────────────────────────────────────────────────────────
 
@@ -83,18 +83,14 @@ def save_configured_langs(file_path: Path, langs: list[str]) -> None:
 
 
 def _load_props_catalog(path: Path) -> list[MetaProp] | None:
-    """Read a catalog of :class:`MetaProp` from *path*, or ``None`` if unset. A legacy
-    entry with no ``criticity`` field loads as ``optional``."""
+    """Read a ``(predicate, label)`` catalog of :class:`MetaProp` from *path*, or
+    ``None`` if unset. A stray ``criticity`` field on a legacy entry is ignored."""
     if path.exists():
         try:
             data = json.loads(path.read_text())
             if isinstance(data, list):
                 return [
-                    MetaProp(
-                        str(e["predicate"]),
-                        str(e.get("label", "")),
-                        normalise_criticity(e.get("criticity")),
-                    )
+                    MetaProp(str(e["predicate"]), str(e.get("label", "")))
                     for e in data
                     if isinstance(e, dict) and e.get("predicate")
                 ]
@@ -104,13 +100,10 @@ def _load_props_catalog(path: Path) -> list[MetaProp] | None:
 
 
 def _save_props_catalog(path: Path, props: list[MetaProp]) -> None:
-    """Persist a :class:`MetaProp` catalog to *path* (best-effort), criticity included."""
+    """Persist a ``(predicate, label)`` :class:`MetaProp` catalog to *path* (best-effort)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        entries = [
-            {"predicate": mp.predicate, "label": mp.label, "criticity": mp.criticity}
-            for mp in props
-        ]
+        entries = [{"predicate": mp.predicate, "label": mp.label} for mp in props]
         path.write_text(json.dumps(entries, indent=2))
     except Exception:
         pass

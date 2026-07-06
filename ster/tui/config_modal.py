@@ -29,10 +29,10 @@ from textual.widgets import (
 )
 from textual.widgets._collapsible import CollapsibleTitle
 
-from ster.metadata_coverage import CRITICITIES, DEFAULT_CRITICITY, MetaProp, normalise_criticity
+from ster.metadata_coverage import MetaProp
 
 from .choice_modal import ChoiceModal
-from .focus_group import FocusGroup
+from .focus_group import FocusGroup, FormGroup
 from .llm_group import LlmSetup
 from .local_property_modal import LocalPropertyModal
 from .modal import ModalBase
@@ -82,77 +82,6 @@ class _MetaCheckbox(Checkbox):
         self.label_text = label or suggest_label(predicate)
         super().__init__(self.label_text, value=True, classes="cfg-mp-box")
         self.predicate = predicate
-
-
-class _CritOption(Static):
-    """One clickable criticity choice (mandatory / important / optional) inside a
-    property row's radio group. Clicking it selects that level for the row."""
-
-    def __init__(self, level: str, *, selected: bool) -> None:
-        super().__init__(classes="cfg-crit-opt")
-        self.level = level
-        self.set_selected(selected)
-
-    def set_selected(self, on: bool) -> None:
-        self.set_class(on, "crit-on")
-        self.update(f"{'●' if on else '○'} {self.level}")
-
-    def set_focused(self, on: bool) -> None:
-        """Highlight this option as the keyboard cursor's current element."""
-        self.set_class(on, "crit-focus")
-
-    def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
-        event.stop()
-        if isinstance(self.parent, _MetaPropRow):
-            self.parent.set_criticity(self.level)
-
-
-class _MetaPropRow(Horizontal):
-    """One catalog entry on a single line: its include checkbox plus a 3-option
-    criticity radio (mandatory / important / optional). The four are navigable as a row
-    of elements — column 0 is the checkbox, columns 1-3 the options. ``criticity``
-    defaults to optional."""
-
-    #: element columns: the checkbox (0) + one per criticity option.
-    COLS = 1 + len(CRITICITIES)
-
-    def __init__(self, predicate: str, label: str, criticity: str = DEFAULT_CRITICITY) -> None:
-        super().__init__(classes="cfg-mp-row")
-        self._predicate = predicate
-        self._label = label
-        self.criticity = normalise_criticity(criticity)
-
-    def compose(self) -> ComposeResult:
-        yield _MetaCheckbox(self._predicate, self._label)
-        with Horizontal(classes="cfg-crit"):
-            for level in CRITICITIES:
-                yield _CritOption(level, selected=level == self.criticity)
-
-    @property
-    def checkbox(self) -> _MetaCheckbox:
-        return self.query_one(_MetaCheckbox)
-
-    def set_criticity(self, level: str) -> None:
-        """Select *level*, updating the radio marks, and auto-save the catalog."""
-        self.criticity = level
-        for opt in self.query(_CritOption):
-            opt.set_selected(opt.level == level)
-        self.post_message(_MetaCatalog.Changed())
-
-    def focus_element(self, col: int) -> None:
-        """Highlight the *col*-th element (0 = checkbox, 1-3 = criticity options). A
-        column outside ``0..COLS-1`` clears every highlight on this row."""
-        self.checkbox.set_class(col == 0, "mp-current")
-        for i, opt in enumerate(self.query(_CritOption), start=1):
-            opt.set_focused(i == col)
-
-    def activate(self, col: int) -> None:
-        """Space/Enter on the *col*-th element: toggle the checkbox (0) or pick the
-        criticity for that option (1-3)."""
-        if col == 0:
-            self.checkbox.value = not self.checkbox.value  # bubbles Checkbox.Changed → autosave
-        else:
-            self.set_criticity(CRITICITIES[col - 1])
 
 
 class _SecretInput(Input):
@@ -239,12 +168,11 @@ class _MetaCatalog(FocusGroup):
         self._verifier = verifier
         self._can_declare = can_declare
         self._base_uri = base_uri
-        self._col = 0  # current element within the current row (0 = checkbox, 1-3 = radio)
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="cfg-mprops"):
             for mp in self._initial:
-                yield _MetaPropRow(mp.predicate, mp.label, mp.criticity)
+                yield _MetaCheckbox(mp.predicate, mp.label)
         with Horizontal(classes="cfg-mp-add-row"):
             yield Input(placeholder="predicate URI — http://…", classes="cfg-mp-uri")
             yield Input(placeholder="label (optional)", classes="cfg-mp-label")
@@ -253,23 +181,19 @@ class _MetaCatalog(FocusGroup):
             yield Button("Add local annotation property", classes="cfg-mp-new")
 
     def props(self) -> list[MetaProp]:
-        """The ticked predicates as :class:`MetaProp` entries (predicate, label,
-        criticity)."""
+        """The ticked predicates as ``(predicate, label)`` :class:`MetaProp` entries."""
         return [
-            MetaProp(row.checkbox.predicate, row.checkbox.label_text, row.criticity)
-            for row in self.query(_MetaPropRow)
-            if row.checkbox.value
+            MetaProp(cb.predicate, cb.label_text) for cb in self.query(_MetaCheckbox) if cb.value
         ]
 
     async def add_typed(self) -> None:
-        """Mount a row for the typed predicate (deduped, optional criticity); clear the
-        fields."""
+        """Mount a checkbox for the typed predicate (deduped); clear the fields."""
         uri = self.query_one(".cfg-mp-uri", Input).value.strip()
         label = self.query_one(".cfg-mp-label", Input).value.strip()
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
         self.query_one(".cfg-mp-uri", Input).value = ""
         self.query_one(".cfg-mp-label", Input).value = ""
         self.post_message(self.Changed())  # ask the modal to auto-save
@@ -306,7 +230,7 @@ class _MetaCatalog(FocusGroup):
         if not name or uri in present:
             return
         label = label.strip() or name
-        await self.query_one(".cfg-mprops").mount(_MetaPropRow(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
         self.post_message(self.Changed())  # auto-save the catalog
         self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
 
@@ -350,22 +274,18 @@ class _MetaCatalog(FocusGroup):
         ]
 
     def _focus_item(self, item) -> None:  # type: ignore[no-untyped-def]
-        for row in self.query(_MetaPropRow):
-            row.focus_element(-1)  # clear every row's element highlight
-        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
-            self._col = 0  # land on the checkbox; Right/Left rove the row's elements
-            item.parent.focus_element(0)
+        for box in self.query(_MetaCheckbox):
+            box.set_class(box is item, "mp-current")
+        if isinstance(item, _MetaCheckbox):
             item.scroll_visible()  # keep the current property in view while roving
-            self.focus()  # keep focus on the group so Space/arrows reach us
+            self.focus()  # keep focus on the group so space toggles
         else:
             item.focus()  # the add field / + button
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
-        """Inside the list: Up/Down rove the rows (Up past the top → group header, Down
-        past the ＋ button → next group). Left/Right move the element cursor across the
-        current row — checkbox ↔ mandatory ↔ important ↔ optional — and Left past the
-        checkbox returns to the group header. Space/Enter activate the current element
-        (toggle the checkbox, or select that criticity).
+        """Inside the list: Up/Down rove the items, Left (or Up past the top) returns
+        to the group header, and Down past the last item (the ＋ button) moves on to
+        the next group. Space/Enter toggle the current checkbox.
 
         We share the ``on_key`` handler name with :class:`FocusGroup`; Textual would
         otherwise dispatch *both* (its copy maps Left/Right to a move), so every
@@ -377,11 +297,10 @@ class _MetaCatalog(FocusGroup):
         elif key == "up":
             self._rove(-1)
         elif key == "left":
-            if not self._move_col(-1):  # already on the checkbox → back to the header
-                self._to_header()
+            self._to_header()
         elif key == "right":
-            self._move_col(1)  # → rove toward 'optional' (stops at the last element)
-        elif not self._extra_key(event):  # Space/Enter activate the current element
+            pass  # entering the list is driven from the header; ignore here
+        elif not self._extra_key(event):  # space / enter toggle the current checkbox
             return  # not one of ours — let it propagate normally
         event.stop()
         event.prevent_default()  # suppress FocusGroup.on_key (same handler name in the MRO)
@@ -430,36 +349,18 @@ class _MetaCatalog(FocusGroup):
             node.query_one(CollapsibleTitle).focus()
 
     def _extra_key(self, event) -> bool:  # type: ignore[no-untyped-def]
-        return event.key in ("space", "enter") and self._activate_current()
+        return event.key in ("space", "enter") and self._toggle_current()
 
-    def _current_row(self) -> _MetaPropRow | None:
-        """The property row the cursor is on, or ``None`` on an add-field / button."""
+    def _toggle_current(self) -> bool:
         item = self.current_item()
-        if isinstance(item, _MetaCheckbox) and isinstance(item.parent, _MetaPropRow):
-            return item.parent
-        return None
-
-    def _move_col(self, delta: int) -> bool:
-        """Move the element cursor within the current row by *delta*. Returns ``True`` if
-        it moved, ``False`` when not on a row or already at a boundary."""
-        row = self._current_row()
-        target = self._col + delta
-        if row is not None and 0 <= target < _MetaPropRow.COLS:
-            self._col = target
-            row.focus_element(target)
-            return True
-        return False
-
-    def _activate_current(self) -> bool:
-        row = self._current_row()
-        if row is not None:
-            row.activate(self._col)
+        if isinstance(item, _MetaCheckbox):
+            item.value = not item.value
             return True
         return False
 
     def _clear(self) -> None:
-        for row in self.query(_MetaPropRow):
-            row.focus_element(-1)
+        for box in self.query(_MetaCheckbox):
+            box.remove_class("mp-current")
 
 
 class ConfigModal(ModalBase[None]):
@@ -473,6 +374,28 @@ class ConfigModal(ModalBase[None]):
     #cfg-box TabPane { height: 1fr; overflow-y: auto; }
     #cfg-box .cfg-label { color: $text-muted; }
     #cfg-box .cfg-hint { color: $text-muted; }
+    /* A tab's leading description line, spaced from the content below it. */
+    .cfg-tab-intro { color: $text-muted; margin: 0 0 1 0; }
+    /* Plugins tab: one bordered card per plugin (name + description), spaced out. */
+    .cfg-plugin-block {
+        height: auto;
+        border: round $foreground 40%;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    .cfg-plugin-block .cfg-plugin-desc { color: $text-muted; }
+    /* Semantic Lint tab: labelled, bordered sections. */
+    .cfg-sl-section {
+        height: auto;
+        border: round $foreground 40%;
+        border-title-color: $foreground 70%;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    .cfg-sl-thresh { height: auto; }
+    .cfg-sl-label { width: 1fr; content-align: left middle; }
+    .cfg-sl-num { width: 14; }
+    .cfg-sl-text { width: 1fr; }
     /* Narrow dropdowns with clean rounded borders (override the dashed `tall`). */
     #cfg-theme { width: 24; margin-bottom: 1; }
     #cfg-display { width: 16; margin-bottom: 1; }
@@ -517,16 +440,8 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
     .cfg-mprops { height: auto; max-height: 12; }
-    /* One catalog entry on a single line: the include checkbox on the left, its
-       criticity radio on the right (mandatory / important / optional). Left/Right rove
-       the four elements; the focused one is highlighted (mp-current / crit-focus). */
-    .cfg-mp-row { height: 1; margin-bottom: 1; }
-    .cfg-mprops .cfg-mp-box { width: 1fr; height: 1; border: none; background: transparent; }
+    .cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
-    .cfg-crit { width: auto; height: 1; }
-    .cfg-crit-opt { width: auto; height: 1; margin-left: 2; color: $foreground 45%; }
-    .cfg-crit-opt.crit-on { color: $primary; text-style: bold; }
-    .cfg-crit-opt.crit-focus { background: $secondary 30%; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
     .cfg-mp-uri { width: 2fr; border: round $primary; }
     .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
@@ -569,6 +484,9 @@ class ConfigModal(ModalBase[None]):
             super().__init__()
             self.result = result
 
+    class WriteOntoCi(Message):
+        """Ask the app to export the plugin's quality config to the repo's onto-ci.yml."""
+
     def __init__(
         self,
         display_lang: str,
@@ -606,10 +524,131 @@ class ConfigModal(ModalBase[None]):
                     yield from self._general_tab()
                 with TabPane("Annotation properties", id="cfg-tab-props"):
                     yield from self._props_tab()
+                with TabPane("Plugins", id="cfg-tab-plugins"):
+                    yield from self._plugins_tab()
+                from ster import plugins
+
+                if plugins.is_enabled("semanticlint"):
+                    with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
+                        yield from self._semanticlint_widgets()
             yield Static(
                 "arrows  move     esc  close     (changes save automatically)",
                 classes="modal-footer",
             )
+
+    def _plugins_tab(self) -> ComposeResult:
+        from ster import plugins
+
+        yield Static(
+            "Enable optional in-tree plugins. Each adds its own features (and config tab).",
+            classes="cfg-tab-intro",
+        )
+        blocks = [
+            Vertical(
+                Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}"),
+                Static(spec.description, classes="cfg-plugin-desc"),
+                classes="cfg-plugin-block",
+            )
+            for spec in plugins.all_plugins()
+        ]
+        yield FormGroup(*blocks, id="cfg-plugins-group")  # one Tab stop, arrows rove the cards
+
+    #: feature toggles surfaced in the Semantic Lint tab (id suffix → label).
+    _SL_FEATURES = (
+        ("icons", "Colour entity icons by issue severity"),
+        ("detail", "Annotate issues in the detail panel"),
+        ("quality_block", "Show the Quality & Coverage block"),
+    )
+    #: numeric coverage thresholds (0.0–1.0) offered in the Semantic Lint tab.
+    _SL_THRESHOLDS = (
+        ("min_label_coverage", "Concept prefLabel coverage (QUA001)"),
+        ("min_definition_coverage", "Concept definition coverage (QUA002)"),
+        ("min_class_label_coverage", "Class label coverage (QUA004)"),
+        ("min_property_label_coverage", "Property label coverage (QUA005)"),
+    )
+
+    @staticmethod
+    def _sl_section(title: str, *widgets):  # type: ignore[no-untyped-def]
+        """A titled, bordered section for the Semantic Lint tab."""
+        section = Vertical(*widgets, classes="cfg-sl-section")
+        section.border_title = title
+        return section
+
+    def _sl_thresholds(self, cfg: dict):  # type: ignore[no-untyped-def]
+        """The threshold rows + required-languages input (quality-coverage section)."""
+        for name, label in self._SL_THRESHOLDS:
+            yield Horizontal(
+                Static(label, classes="cfg-sl-label"),
+                Input(
+                    value=str(cfg["quality"].get(name, "")),
+                    id=f"cfg-slthr-{name}",
+                    classes="cfg-sl-input cfg-sl-num",
+                ),
+                classes="cfg-sl-thresh",
+            )
+        yield Static("Required prefLabel languages, comma-separated (QUA003)", classes="cfg-label")
+        yield Input(
+            value=", ".join(cfg["quality"].get("languages", [])),
+            id="cfg-sllangs",
+            classes="cfg-sl-input cfg-sl-text",
+        )
+
+    def _semanticlint_widgets(self):  # type: ignore[no-untyped-def]
+        """The Semantic Lint tab body: install status + titled bordered sections
+        (features, thresholds, check selection, CI export), all inside one FormGroup so
+        the arrow keys rove them (one Tab stop, consistent styling).
+
+        Yields a single FormGroup so this also works standalone when the tab is added
+        dynamically via TabbedContent.add_pane (no `with` compose-context needed)."""
+        from ster.plugins.semanticlint import config, deps
+
+        cfg = config.load_config()
+        sections: list = []
+        if not deps.is_installed():
+            sections.append(
+                Static(
+                    "[yellow]semanticlint is not installed.[/] Run: pip install 'ster[semanticlint]'",
+                    classes="cfg-hint",
+                )
+            )
+        sections.append(
+            self._sl_section(
+                "Features",
+                *(
+                    Checkbox(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
+                    for name, label in self._SL_FEATURES
+                ),
+            )
+        )
+        sections.append(self._sl_section("Quality thresholds (0.0–1.0)", *self._sl_thresholds(cfg)))
+        sections.append(
+            self._sl_section(
+                "Check selection",
+                Static("Run only these checks (ids/prefixes)", classes="cfg-label"),
+                Input(
+                    value=", ".join(cfg["select"]),
+                    id="cfg-slselect",
+                    classes="cfg-sl-input cfg-sl-text",
+                ),
+                Static("Ignore these checks (ids/prefixes)", classes="cfg-label"),
+                Input(
+                    value=", ".join(cfg["ignore"]),
+                    id="cfg-slignore",
+                    classes="cfg-sl-input cfg-sl-text",
+                ),
+            )
+        )
+        sections.append(
+            self._sl_section(
+                "GitHub Actions CI",
+                Static(
+                    "onto-ci.yml drives GitHub CI — export the above to align it:",
+                    classes="cfg-hint",
+                ),
+                Button("Write onto-ci.yml", id="cfg-sl-export", classes="cfg-mp-new"),
+            )
+        )
+        yield FormGroup(*sections, id="cfg-sl-group")
 
     def _general_tab(self) -> ComposeResult:
         yield Static("Display language", classes="cfg-label")
@@ -660,6 +699,11 @@ class ConfigModal(ModalBase[None]):
         yield LlmSetup(id="cfg-llm")
 
     def _props_tab(self) -> ComposeResult:
+        yield Static(
+            "Set up ster's pre-configured menu options — the annotation properties offered "
+            "in the “Add metadata” menus for the ontology and for entities.",
+            classes="cfg-tab-intro",
+        )
         with Collapsible(title="Ontology Metadata", collapsed=False, id="cfg-ont-meta-group"):
             yield Static(
                 "Offered when adding metadata to the ontology overview.", classes="cfg-hint"
@@ -688,7 +732,9 @@ class ConfigModal(ModalBase[None]):
                 base_uri=self._base_uri,
             )
 
-    _TAB_ORDER = ("cfg-tab-general", "cfg-tab-props")
+    def _tab_ids(self) -> list[str]:
+        """The ids of the currently-mounted tabs, in order (plugin tabs are dynamic)."""
+        return [pane.id for pane in self.query(TabPane) if pane.id]
 
     def on_mount(self) -> None:
         self.query_one("#cfg-box").border_title = "Configuration"
@@ -713,10 +759,9 @@ class ConfigModal(ModalBase[None]):
     def _tabbar_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "space":
             tabs = self.query_one(TabbedContent)
-            if tabs.active in self._TAB_ORDER:
-                tabs.active = self._TAB_ORDER[
-                    (self._TAB_ORDER.index(tabs.active) + 1) % len(self._TAB_ORDER)
-                ]
+            order = self._tab_ids()
+            if tabs.active in order:
+                tabs.active = order[(order.index(tabs.active) + 1) % len(order)]
                 event.stop()
         elif event.key == "down":
             self.focus_next()  # tab bar → first item of the active tab
@@ -763,13 +808,48 @@ class ConfigModal(ModalBase[None]):
             for box in self.query("#cfg-boxes Checkbox").results(Checkbox)
             if box.value
         ]
-        return {
+        from ster import plugins
+
+        result = {
             "display": str(self.query_one("#cfg-display", Select).value),
             "theme": str(self.query_one("#cfg-theme", Select).value),
             "configured": configured,
             "metadata_props": self.query_one("#cfg-ont-meta", _MetaCatalog).props(),
             "entity_metadata_props": self.query_one("#cfg-entity-meta", _MetaCatalog).props(),
+            "plugins": {
+                spec.id: self.query_one(f"#cfg-plugin-{spec.id}", Checkbox).value
+                for spec in plugins.all_plugins()
+            },
         }
+        if self.query("#cfg-tab-semanticlint"):  # the plugin's tab is mounted
+            result["semanticlint"] = self._semanticlint_result()
+        return result
+
+    def _semanticlint_result(self) -> dict:
+        """The Semantic Lint tab's config (features + thresholds) for persistence."""
+        features = {
+            name: self.query_one(f"#cfg-slfeat-{name}", Checkbox).value
+            for name, _ in self._SL_FEATURES
+        }
+        quality: dict = {}
+        for name, _ in self._SL_THRESHOLDS:
+            raw = self.query_one(f"#cfg-slthr-{name}", Input).value.strip()
+            try:
+                quality[name] = float(raw)
+            except ValueError:
+                pass  # leave unset → keeps the stored/default value
+        langs = self.query_one("#cfg-sllangs", Input).value
+        quality["languages"] = [c.strip() for c in langs.split(",") if c.strip()]
+        return {
+            "features": features,
+            "quality": quality,
+            "select": self._csv("#cfg-slselect"),
+            "ignore": self._csv("#cfg-slignore"),
+        }
+
+    def _csv(self, selector: str) -> list[str]:
+        """A comma-separated Input's non-empty, stripped entries."""
+        return [c.strip() for c in self.query_one(selector, Input).value.split(",") if c.strip()]
 
     def _save(self) -> None:
         if self._ready:
@@ -782,6 +862,29 @@ class ConfigModal(ModalBase[None]):
     @on(Checkbox.Changed)
     def _on_checkbox(self, event: Checkbox.Changed) -> None:
         self._save()
+
+    @on(Checkbox.Changed, "#cfg-plugin-semanticlint")
+    async def _on_semanticlint_toggle(self, event: Checkbox.Changed) -> None:
+        """Add / remove the Semantic Lint tab live when the plugin is toggled."""
+        tabbed = self.query_one(TabbedContent)
+        mounted = bool(self.query("#cfg-tab-semanticlint"))
+        if event.value and not mounted:
+            pane = TabPane(
+                "Semantic Lint", *self._semanticlint_widgets(), id="cfg-tab-semanticlint"
+            )
+            await tabbed.add_pane(pane)
+        elif not event.value and mounted:
+            await tabbed.remove_pane("cfg-tab-semanticlint")
+
+    @on(Input.Changed, ".cfg-sl-input")
+    def _on_semanticlint_input(self, event: Input.Changed) -> None:
+        self._save()  # thresholds / languages / select / ignore changed → persist
+
+    @on(Button.Pressed, "#cfg-sl-export")
+    def _on_semanticlint_export(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._save()  # ensure quality.json reflects the current inputs first
+        self.post_message(self.WriteOntoCi())
 
     @on(Input.Changed, "#cfg-server-url")
     @on(Input.Changed, "#cfg-server-port")

@@ -3,16 +3,10 @@ Feature: Create a new subclass from the class detail panel
   I want to create a new OWL class that is a subclass of the current class
   So that I can grow a class hierarchy without leaving the detail view
 
-  Scenario: Detail panel shows a Subclasses section with direct children
-    Given a taxonomy with class "Animal" that has a subclass "Dog"
-    When I build the detail fields for "Animal"
-    Then the detail panel contains a "Subclasses" separator
-    And the detail panel shows "Dog" as a child row with key "subclass:https://example.org/Dog"
-
-  Scenario: Detail panel shows New subclass action in the Subclasses section
+  Scenario: Detail panel offers a New subclass action
     Given a taxonomy with class "Animal"
     When I build the detail fields for "Animal"
-    Then the detail panel contains a "New subclass" action after the Subclasses separator
+    Then the detail panel contains a "New subclass" action
 
   Scenario: Detail panel no longer contains the old link_subclass picker action
     Given a taxonomy with class "Animal"
