@@ -2027,6 +2027,19 @@ def _enforce_field():  # type: ignore[no-untyped-def]
     return _action_field("enforce_shacl")
 
 
+def test_context_menu_hides_shacl_actions_when_enforce_feature_off() -> None:
+    """The property context menu's Enforce/Remove SHACL items are gated on semanticlint's
+    opt-in 'enforce' feature — filtered out when it's off (the default)."""
+    app = _app()  # plugin/feature off (prefs isolated)
+    items = [
+        ("◆ Enforce with SHACL rule", "enforce_shacl"),
+        ("◇ Remove SHACL rule", "unenforce_shacl"),
+        ("✎ Rename URI…", "rename"),
+    ]
+    filtered = app._filter_plugin_actions(items)
+    assert [a for _, a in filtered] == ["rename"]  # SHACL actions dropped, others kept
+
+
 def test_enforce_shacl_writes_a_mandatory_rule_to_the_sibling_shapes_file(tmp_path) -> None:
     """The property context action writes a mandatory SHACL rule (targeting the domain)
     to <stem>.shapes.ttl, with a dated comment."""

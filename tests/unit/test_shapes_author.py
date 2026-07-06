@@ -1,4 +1,4 @@
-"""Unit tests for ster.shacl — the SHACL business-rule writer.
+"""Unit tests for ster.plugins.semanticlint.shapes_author — the SHACL business-rule writer.
 
 Pure engine (turtle text + sibling shapes.ttl I/O), isolating all SHACL authoring
 behind one adapter so semanticlint stays the only SHACL *reader*.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster import shacl
+from ster.plugins.semanticlint import shapes_author as shacl
 
 ZOO = "https://example.org/zoo/"
 

@@ -1,10 +1,10 @@
-"""SHACL business-rule writer.
+"""SHACL business-rule writer — the *write* counterpart to ``runner.py``'s *read*.
 
-ster authors SHACL rules into a sibling ``<stem>.shapes.ttl`` file that the
-semanticlint plugin already auto-discovers and enforces (``*.shapes.ttl`` next to
-the ontology). This module is the single place that *writes* SHACL — turtle text
-plus idempotent file append — so semanticlint stays the only SHACL *reader* and a
-library change touches one file.
+The semanticlint plugin already discovers and runs the sibling ``<stem>.shapes.ttl``
+business rules (``runner.discover_shapes_files``); this module authors them. It is
+the single place that *writes* SHACL — turtle text plus idempotent file append /
+removal — so the plugin owns the project's shapes end to end (read *and* write) and
+a library change touches one file. Gated by the plugin's ``enforce`` feature toggle.
 
 Every rule is preceded by a dated comment explaining what it enforces, so the
 generated file stays readable and auditable.

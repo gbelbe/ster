@@ -132,15 +132,22 @@ class _EnforceButton(Button):
 
 
 class _MetaRow(Horizontal):
-    """One catalog row: the offered-checkbox next to its Enforce/Delete SHACL button."""
+    """One catalog row: the offered-checkbox, plus its Enforce/Delete SHACL button when
+    semanticlint's opt-in ``enforce`` feature is active (else just the checkbox)."""
 
     def __init__(self, predicate: str, label: str, enforce: bool = False) -> None:
         super().__init__(classes="cfg-mp-row")
         self._predicate, self._label, self._enforce = predicate, label, enforce
+        from ster.plugins import semanticlint
+
+        self._show_enforce = semanticlint.enforce_active()
+        if self._show_enforce:
+            self.add_class("has-enforce")  # taller row + centred checkbox to match the button
 
     def compose(self) -> ComposeResult:
         yield _MetaCheckbox(self._predicate, self._label)
-        yield _EnforceButton(self._predicate, self._enforce)
+        if self._show_enforce:
+            yield _EnforceButton(self._predicate, self._enforce)
 
 
 class _SecretInput(Input):
@@ -564,8 +571,10 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
     .cfg-mprops { height: auto; max-height: 18; }
-    .cfg-mp-row { height: 3; width: 1fr; }
-    .cfg-mprops .cfg-mp-box { height: 3; width: 1fr; content-align: left middle; border: none; background: transparent; }
+    .cfg-mp-row { height: 1; width: 1fr; }
+    .cfg-mp-row.has-enforce { height: 3; }  /* room for the button (Textual buttons are 3 tall) */
+    .cfg-mprops .cfg-mp-box { height: 1; width: 1fr; border: none; background: transparent; }
+    .cfg-mp-row.has-enforce .cfg-mp-box { height: 3; content-align: left middle; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
     .cfg-mp-enforce { width: auto; min-width: 24; margin-left: 1; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
@@ -685,6 +694,7 @@ class ConfigModal(ModalBase[None]):
         ("icons", "Colour entity icons by issue severity"),
         ("detail", "Annotate issues in the detail panel"),
         ("quality_block", "Show the Quality & Coverage block"),
+        ("enforce", "Enforce properties with SHACL rules (author shapes.ttl)"),
     )
     #: numeric coverage thresholds (0.0–1.0) offered in the Semantic Lint tab.
     _SL_THRESHOLDS = (

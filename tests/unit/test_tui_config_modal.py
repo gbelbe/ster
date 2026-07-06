@@ -209,7 +209,7 @@ def test_item_list_roves_with_arrows_and_space_toggles(tmp_path) -> None:
     toggles the highlighted one."""
 
     async def scenario() -> None:
-        from ster.tui.config_modal import _EnforceButton, _MetaCheckbox
+        from ster.tui.config_modal import _MetaCheckbox
 
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
@@ -225,10 +225,9 @@ def test_item_list_roves_with_arrows_and_space_toggles(tmp_path) -> None:
             await pilot.press("space")  # toggle it off
             await pilot.pause()
             assert first.value is False
-            await pilot.press("down")  # rove onto this row's Enforce (SHACL) button
-            await pilot.pause()
-            assert app.focused is catalog.query(_EnforceButton).first()
-            await pilot.press("down")  # rove to the next property's checkbox
+            # Enforce feature off by default → rows are plain checkboxes, so Down goes
+            # straight to the next property.
+            await pilot.press("down")
             await pilot.pause()
             assert list(catalog.query(_MetaCheckbox))[1].has_class("mp-current")
 
@@ -1055,7 +1054,32 @@ def test_enforce_button_toggles_its_label() -> None:
     assert "Enforce" in str(button.label) and button.variant == "success"
 
 
-def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path) -> None:
+@pytest.fixture
+def enforce_enabled(tmp_path, monkeypatch):
+    """Enable semanticlint + its opt-in 'enforce' feature so the SHACL authoring UI
+    (catalog buttons, context-menu items) is active."""
+    from ster import plugins
+    from ster.plugins.semanticlint import config as sl_config
+
+    plugins.set_enabled("semanticlint", True)
+    sl_config.set_feature("enforce", True)
+
+
+def test_enforce_buttons_hidden_when_feature_off(tmp_path) -> None:
+    """With the enforce feature off (default), catalog rows carry no Enforce button."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _EnforceButton
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert not list(_entity_catalog(modal).query(_EnforceButton))  # none rendered
+
+    _run(scenario)
+
+
+def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path, enforce_enabled) -> None:
     """Pressing a catalog row's Enforce button writes a SHACL rule (message reaches the
     app) and relabels the button to Delete; pressing again removes the rule."""
 

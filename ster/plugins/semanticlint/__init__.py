@@ -20,4 +20,15 @@ def is_active() -> bool:
     return _plugins.is_enabled(PLUGIN_ID) and deps.is_installed()
 
 
-__all__ = ["PLUGIN_ID", "deps", "is_active"]
+def enforce_active() -> bool:
+    """True when SHACL-rule authoring (the write side) is available: the plugin is
+    active *and* its opt-in ``enforce`` feature is on. Every enforce entry point
+    (property context menu, config catalog buttons) gates on this."""
+    if not is_active():
+        return False
+    from . import config
+
+    return config.feature_enabled("enforce")
+
+
+__all__ = ["PLUGIN_ID", "deps", "enforce_active", "is_active"]

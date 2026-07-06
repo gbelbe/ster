@@ -26,8 +26,14 @@ DEFAULT_THRESHOLDS: dict = {
     "languages": ["en"],
 }
 
-# The plugin's UI features, each independently toggleable (all on by default).
-DEFAULT_FEATURES: dict = {"icons": True, "detail": True, "quality_block": True}
+# The plugin's UI features, each independently toggleable. Read-side features default
+# on; "enforce" (authoring/mutating shapes.ttl — the write side) defaults off (opt-in).
+DEFAULT_FEATURES: dict = {
+    "icons": True,
+    "detail": True,
+    "quality_block": True,
+    "enforce": False,
+}
 
 DEFAULT_FAIL_ON = "error"
 

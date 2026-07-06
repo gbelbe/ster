@@ -440,7 +440,7 @@ class OntologyApp(App):
         making an annotation property mandatory, then re-lint."""
         import datetime
 
-        from ster import shacl
+        from ster.plugins.semanticlint import shapes_author as shacl
 
         if self._path is None:
             self.notify("Read-only session — open the ontology first.", severity="warning")
@@ -478,7 +478,7 @@ class OntologyApp(App):
     ):  # type: ignore[no-untyped-def]
         """Build the mandatory rule for *predicate* on *target* — a node rule for the
         ontology, else a class rule."""
-        from ster import shacl
+        from ster.plugins.semanticlint import shapes_author as shacl
 
         if target == self.tax.ontology_uri:
             return shacl.mandatory_on_node_rule(
@@ -1129,12 +1129,24 @@ class OntologyApp(App):
         quick actions. *anchor* is the cursor position; the menu pops up there
         (centred when None).
         """
-        items = edits.context_actions(data.kind_of(self.tax, uri))
+        items = self._filter_plugin_actions(edits.context_actions(data.kind_of(self.tax, uri)))
         if not items:
             return
         self._show(uri)  # select it, so the actions target this entity
         label = data.label_of(self.tax, uri, self.lang)
         self.query_one("#ctx-menu", ContextMenu).show(label, items, anchor)
+
+    #: context-menu actions that belong to an opt-in plugin feature (SHACL enforce).
+    _ENFORCE_ACTIONS = frozenset({"enforce_shacl", "unenforce_shacl"})
+
+    def _filter_plugin_actions(self, items: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Hide plugin-gated actions when their feature is off — the SHACL enforce/remove
+        items only appear when semanticlint's ``enforce`` feature is active."""
+        from ster.plugins import semanticlint
+
+        if semanticlint.enforce_active():
+            return items
+        return [(lbl, act) for lbl, act in items if act not in self._ENFORCE_ACTIONS]
 
     def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
         """A context-menu action was picked → run it against the selected entity."""
@@ -1850,7 +1862,7 @@ class OntologyApp(App):
         rule is enforced live. Warns when the property has no domain to attach it to."""
         import datetime
 
-        from ster import shacl
+        from ster.plugins.semanticlint import shapes_author as shacl
 
         prop = self.tax.owl_properties.get(prop_uri)
         if prop is None:
@@ -1885,7 +1897,7 @@ class OntologyApp(App):
     def _unenforce_shacl(self, prop_uri: str, path: Path) -> None:
         """Remove the SHACL rule(s) that make *prop_uri* mandatory (one per domain) from
         the sibling ``<stem>.shapes.ttl``, then refresh the lint."""
-        from ster import shacl
+        from ster.plugins.semanticlint import shapes_author as shacl
 
         prop = self.tax.owl_properties.get(prop_uri)
         if prop is None:

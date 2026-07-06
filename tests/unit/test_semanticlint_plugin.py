@@ -44,7 +44,12 @@ def test_load_config_fills_defaults() -> None:
     cfg = config.load_config()
     assert cfg["fail_on"] == "error"
     assert cfg["quality"]["min_label_coverage"] == 1.0
-    assert cfg["features"] == {"icons": True, "detail": True, "quality_block": True}
+    assert cfg["features"] == {
+        "icons": True,
+        "detail": True,
+        "quality_block": True,
+        "enforce": False,  # write-side authoring, opt-in
+    }
 
 
 def test_save_config_merges_and_round_trips() -> None:
