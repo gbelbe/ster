@@ -974,3 +974,64 @@ def test_form_group_roves_controls_with_arrows_and_space_toggles() -> None:
             assert app.query_one("#fg-b", Checkbox).value is True
 
     _run(scenario)
+
+
+# ── annotation-property library search ──────────────────────────────────────────
+
+
+def test_search_library_button_opens_the_picker(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.annotation_library_modal import AnnotationLibraryModal
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            _ont_catalog(modal).query_one(".cfg-mp-search", Button).press()
+            await pilot.pause()
+            assert isinstance(app.screen, AnnotationLibraryModal)
+
+    _run(scenario)
+
+
+def test_picking_from_the_library_adds_it_to_the_catalog(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.config_modal import _MetaCheckbox
+
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            cat = _ont_catalog(modal)
+            await cat._on_library_pick("https://schema.org/image")  # picker result
+            await pilot.pause()
+            preds = {cb.predicate for cb in cat.query(_MetaCheckbox)}
+            assert "https://schema.org/image" in preds
+
+    _run(scenario)
+
+
+def test_library_modal_searches_by_intent_and_returns_the_predicate(tmp_path) -> None:
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.annotation_library_modal import AnnotationLibraryModal
+
+        app, _src = _app(tmp_path)
+        results: list = []
+        async with app.run_test(size=(120, 48)) as pilot:
+            app.push_screen(AnnotationLibraryModal(), results.append)
+            await pilot.pause()
+            app.screen.query_one("#annlib-filter", Input).value = "image"
+            await pilot.pause()
+            await pilot.press("enter")  # select the highlighted result
+            await pilot.pause()
+        assert results == ["https://schema.org/image"]
+
+    _run(scenario)
+
+
+def test_default_catalog_no_longer_offers_change_provenance(tmp_path) -> None:
+    from ster.nav.logic import default_annotation_catalog
+
+    preds = {mp.predicate for mp in default_annotation_catalog()}
+    for gone in ("creator", "contributor", "created", "modified"):
+        assert f"http://purl.org/dc/terms/{gone}" not in preds

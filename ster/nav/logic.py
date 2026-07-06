@@ -2874,11 +2874,10 @@ def build_ontology_overview_fields(
 # When building the picker, already-present predicates are filtered out.
 
 _ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
-    ("http://purl.org/dc/terms/creator", "dcterms:creator  (author / creator)"),
-    ("http://purl.org/dc/terms/contributor", "dcterms:contributor"),
+    # dcterms:creator / contributor / created / modified are intentionally omitted:
+    # change-tracking provenance (who/what/when of edits) is deferred to a future PROV-O
+    # layer that auto-annotates each change, rather than being added by hand here.
     ("http://purl.org/dc/terms/publisher", "dcterms:publisher"),
-    ("http://purl.org/dc/terms/created", "dcterms:created  (xsd:date)"),
-    ("http://purl.org/dc/terms/modified", "dcterms:modified  (xsd:date)"),
     ("http://purl.org/dc/terms/license", "dcterms:license  (IRI)"),
     ("http://purl.org/dc/terms/language", "dcterms:language"),
     ("http://www.w3.org/2002/07/owl#imports", "owl:imports  (IRI)"),
@@ -2894,8 +2893,16 @@ _ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
     ("http://www.w3.org/2000/01/rdf-schema#label", "rdfs:label"),
 )
 
-# Predicates whose display label is used in the overview panel header.
-_PREDICATE_DISPLAY: dict[str, str] = dict(_ANNOTATION_CATALOG)
+# Predicates whose display label is used in the overview panel header. Includes the
+# change-tracking provenance predicates that are no longer offered for manual *add*
+# (above), so existing annotations still render with a friendly prefixed label.
+_PREDICATE_DISPLAY: dict[str, str] = {
+    **dict(_ANNOTATION_CATALOG),
+    "http://purl.org/dc/terms/creator": "dcterms:creator",
+    "http://purl.org/dc/terms/contributor": "dcterms:contributor",
+    "http://purl.org/dc/terms/created": "dcterms:created",
+    "http://purl.org/dc/terms/modified": "dcterms:modified",
+}
 
 
 def _annotation_display(predicate: str) -> str:
