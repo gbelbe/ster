@@ -12,14 +12,15 @@ See docs/architecture/textual-tui-refactor.md.
 from __future__ import annotations
 
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Static
 
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
-from .detail import build_sections, field_markup
+from .detail import DetailSection, build_sections, field_markup
 
 PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
 
@@ -217,6 +218,43 @@ class DetailRow(Static):
         self.action_activate()
 
 
+def _section_widgets(sec: DetailSection) -> list[Widget]:
+    """A section's header (if titled) followed by its focusable rows."""
+    out: list[Widget] = []
+    if sec.title:
+        out.append(SectionHeader(sec.title, danger=sec.danger))
+    out.extend(_rows_for(sec.fields))
+    return out
+
+
+def _collect_group_members(sections: list[DetailSection], start: int) -> tuple[list[Widget], int]:
+    """Widgets for the sections from *start* up to (not incl.) the group-end marker;
+    returns ``(widgets, index_after_the_end_marker)``."""
+    members: list[Widget] = []
+    i = start
+    while i < len(sections) and not sections[i].group_end:
+        members.extend(_section_widgets(sections[i]))
+        i += 1
+    return members, i + 1  # skip the group-end sentinel
+
+
+def _grouped_widgets(sections: list[DetailSection]) -> list[Widget]:
+    """Flatten sections to widgets, wrapping each group span in a bordered, titled box."""
+    widgets: list[Widget] = []
+    i = 0
+    while i < len(sections):
+        sec = sections[i]
+        if sec.group:
+            members, i = _collect_group_members(sections, i + 1)
+            box = Vertical(*members, classes="detail-group")
+            box.border_title = sec.title
+            widgets.append(box)
+        else:
+            widgets.extend(_section_widgets(sec))
+            i += 1
+    return widgets
+
+
 class DetailView(VerticalScroll):
     """Compose an entity's detail into section headers + focusable field rows."""
 
@@ -248,9 +286,6 @@ class DetailView(VerticalScroll):
         if uri is None:
             self.mount(Static(PLACEHOLDER))
             return
-        widgets: list[Static] = []
-        for sec in build_sections(tax, uri, lang, activity, lint, configured_langs, metadata):
-            if sec.title:
-                widgets.append(SectionHeader(sec.title, danger=sec.danger))
-            widgets.extend(_rows_for(sec.fields))
+        sections = build_sections(tax, uri, lang, activity, lint, configured_langs, metadata)
+        widgets = _grouped_widgets(sections)
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

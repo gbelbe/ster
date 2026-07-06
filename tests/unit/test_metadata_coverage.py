@@ -44,10 +44,10 @@ def test_ontology_metadata_pct_is_fraction_of_catalog_present() -> None:
         OntologyAnnotation("http://purl.org/dc/terms/creator", "c"),
     ]
     catalog = [
-        ("http://purl.org/dc/terms/title", "title"),
-        ("http://purl.org/dc/terms/creator", "creator"),
-        ("http://purl.org/dc/terms/license", "license"),
-        ("http://purl.org/dc/terms/modified", "modified"),
+        mc.MetaProp("http://purl.org/dc/terms/title", "title"),
+        mc.MetaProp("http://purl.org/dc/terms/creator", "creator"),
+        mc.MetaProp("http://purl.org/dc/terms/license", "license"),
+        mc.MetaProp("http://purl.org/dc/terms/modified", "modified"),
     ]
     assert mc.ontology_metadata_pct(tax, catalog) == 50  # 2 of 4 present
     assert mc.ontology_metadata_pct(tax, []) is None  # nothing configured
@@ -65,7 +65,7 @@ def test_entity_metadata_pct_is_average_per_entity_fill() -> None:
             OntologyAnnotation(_SOURCE, "s", is_iri=True),
         ],
     )  # 2 of 2 → 1.0
-    catalog = [(_SEE_ALSO, "seeAlso"), (_SOURCE, "source")]
+    catalog = [mc.MetaProp(_SEE_ALSO, "seeAlso"), mc.MetaProp(_SOURCE, "source")]
     assert mc.entity_metadata_pct(tax, catalog) == 75  # mean(0.5, 1.0) = 0.75
     assert mc.entity_metadata_pct(tax, []) is None  # nothing configured
     assert mc.entity_metadata_pct(Taxonomy(), catalog) is None  # no entities
@@ -74,5 +74,24 @@ def test_entity_metadata_pct_is_average_per_entity_fill() -> None:
 def test_overview_coverage_bundles_both_percentages() -> None:
     tax = Taxonomy()
     tax.owl_classes["a"] = RDFClass(uri="a", annotations=[OntologyAnnotation(_SOURCE, "s")])
-    cov = mc.overview_coverage(tax, [], [(_SOURCE, "source")])
+    cov = mc.overview_coverage(tax, [], [mc.MetaProp(_SOURCE, "source")])
     assert cov == {"ontology_pct": None, "entity_pct": 100}
+
+
+def test_coverage_uses_predicate_and_ignores_criticity() -> None:
+    """Criticity grades warnings, not coverage — the percentage depends only on which
+    predicates are present, not on their criticity level."""
+    tax = Taxonomy()
+    tax.ontology_annotations = [OntologyAnnotation("http://purl.org/dc/terms/title", "t")]
+    optional = [mc.MetaProp("http://purl.org/dc/terms/title", "title", "optional")]
+    mandatory = [mc.MetaProp("http://purl.org/dc/terms/title", "title", "mandatory")]
+    assert (
+        mc.ontology_metadata_pct(tax, optional) == mc.ontology_metadata_pct(tax, mandatory) == 100
+    )
+
+
+def test_default_catalogs_are_optional() -> None:
+    from ster.nav.logic import default_annotation_catalog, default_entity_annotation_catalog
+
+    assert all(mp.criticity == "optional" for mp in default_annotation_catalog())
+    assert all(mp.criticity == "optional" for mp in default_entity_annotation_catalog())

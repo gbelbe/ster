@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
+from ..metadata_coverage import MetaProp
 from ..metadata_coverage import is_labelled as _is_labelled
 from ..model import LabelType, OntologyAnnotation, Taxonomy
 from ..owl_analysis import (
@@ -413,6 +414,26 @@ def _sep(label: str) -> DetailField:
         "",
         editable=False,
         meta={"type": "separator"},
+    )
+
+
+def _sep_group(label: str) -> DetailField:
+    """Open a visual *group*: the sections up to the matching :func:`_sep_group_end`
+    are wrapped in one bordered, titled box (e.g. 'Quality & Coverage' over Health /
+    Completeness / Languages)."""
+    return DetailField(
+        f"sep_group:{label}",
+        label,
+        "",
+        editable=False,
+        meta={"type": "separator_group"},
+    )
+
+
+def _sep_group_end() -> DetailField:
+    """Close the visual group opened by the preceding :func:`_sep_group`."""
+    return DetailField(
+        "sep_group_end", "", "", editable=False, meta={"type": "separator_group_end"}
     )
 
 
@@ -2908,10 +2929,10 @@ def _annotation_display(predicate: str) -> str:
     return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
-def default_annotation_catalog() -> list[tuple[str, str]]:
-    """The built-in ontology-metadata predicate catalog — ``(predicate, label)``
-    pairs. Used as the default when no user catalog is configured."""
-    return list(_ANNOTATION_CATALOG)
+def default_annotation_catalog() -> list[MetaProp]:
+    """The built-in ontology-metadata predicate catalog. Used as the default when no
+    user catalog is configured (every entry defaults to ``optional`` criticity)."""
+    return [MetaProp(pred, label) for pred, label in _ANNOTATION_CATALOG]
 
 
 # ── Entity-metadata catalog (classes / properties / individuals) ──────────────
@@ -2927,14 +2948,14 @@ _ENTITY_ANNOTATION_CATALOG: tuple[tuple[str, str], ...] = (
 )
 
 
-def default_entity_annotation_catalog() -> list[tuple[str, str]]:
-    """The built-in entity-metadata predicate catalog — ``(predicate, label)``
-    pairs offered on classes / properties / individuals when none is configured."""
-    return list(_ENTITY_ANNOTATION_CATALOG)
+def default_entity_annotation_catalog() -> list[MetaProp]:
+    """The built-in entity-metadata predicate catalog offered on classes / properties /
+    individuals when none is configured (every entry defaults to ``optional``)."""
+    return [MetaProp(pred, label) for pred, label in _ENTITY_ANNOTATION_CATALOG]
 
 
 def annotation_catalog_options(
-    taxonomy: Taxonomy, catalog: list[tuple[str, str]] | None = None
+    taxonomy: Taxonomy, catalog: list[MetaProp] | None = None
 ) -> list[tuple[str, str]]:
     """Return ``(predicate_uri, display_label)`` pairs available for "Add metadata".
 
@@ -2942,9 +2963,9 @@ def annotation_catalog_options(
     predicates already present in ``taxonomy.ontology_annotations`` are filtered out
     so the picker only shows what can still be added.
     """
-    cat = catalog if catalog is not None else list(_ANNOTATION_CATALOG)
+    cat = catalog if catalog is not None else default_annotation_catalog()
     present = {a.predicate for a in taxonomy.ontology_annotations}
-    return [(pred, label) for pred, label in cat if pred not in present]
+    return [(mp.predicate, mp.label) for mp in cat if mp.predicate not in present]
 
 
 def _annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
@@ -3177,48 +3198,17 @@ def build_tui_ontology_overview_fields(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
 ) -> list[DetailField]:
-    """Detail panel for the ontology overview node — New-TUI only.
+    """The ontology overview's detail fields.
 
-    Shows: view-graph shortcut, identity (URI + edit actions), and every
-    annotation as an editable row with a remove sibling. No class/property
-    enumeration (they live in the tree) and no creation actions (they live in
-    the tree's action nodes).
+    Thin wrapper over :class:`OntologyOverviewPresenter` (the live render path);
+    kept so existing callers/tests reach the same presenter-produced fields.
+    Imported lazily to avoid a tui→logic import cycle.
     """
-    fields: list[DetailField] = []
+    from ster.tui.presenters.context import PresenterContext
+    from ster.tui.presenters.overview import OntologyOverviewPresenter
 
-    # ── Quick actions (top) ───────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-    fields.append(
-        _add_action_field(
-            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
-        )
-    )
-
-    # ── Identity ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Identity"))
-    if taxonomy.ontology_uri:
-        fields.extend(_tui_identity_rows(taxonomy))
-
-    # ── Descriptive metadata ──────────────────────────────────────────────────
-    fields.append(_sep("Metadata"))
-    for annotation in taxonomy.ontology_annotations:
-        fields.extend(_annotation_rows(annotation))
-    fields.append(
-        _add_action_field(
-            "action:add_ont_annotation",
-            "＋ Add metadata",
-            "add_ont_annotation",
-        )
-    )
-
-    # ── Errors & Warnings (right after metadata) ──────────────────────────────
-    fields.extend(_ontology_lint_fields(lint))
-
-    # ── Stats + Activity ──────────────────────────────────────────────────────
-    fields.extend(_ontology_stats_fields(taxonomy, configured_langs, metadata))
-    fields.extend(_ontology_activity_fields(activity))
-
-    return fields
+    ctx = PresenterContext(taxonomy, lang, configured_langs, activity, lint, metadata)
+    return OntologyOverviewPresenter(ctx, "").render()
 
 
 def build_tui_taxonomy_overview_fields(taxonomy: Taxonomy, lang: str) -> list[DetailField]:

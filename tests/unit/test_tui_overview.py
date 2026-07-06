@@ -325,14 +325,18 @@ def test_stats_coverage_languages_and_completeness() -> None:
     assert s["st:unused"] == "3"  # A, B, D
 
 
-def test_stats_grouped_into_subject_sections() -> None:
+def test_overview_section_order() -> None:
     titles = [
         f.display for f in _fields(_onto_with_hierarchy()) if f.meta.get("type") == "separator"
     ]
-    for section in ("Classes", "Properties", "Individuals", "Quality & Coverage", "Languages"):
+    for section in ("Identity", "Metadata", "Structure", "Health & Issues", "Completeness"):
         assert section in titles, section
-    # The stats subjects all come after Metadata.
-    assert titles.index("Classes") > titles.index("Metadata")
+    # Top-to-bottom: Identity → Metadata → Structure, then the Quality group.
+    assert titles.index("Identity") < titles.index("Metadata") < titles.index("Structure")
+    assert titles.index("Structure") < titles.index("Health & Issues")  # quality group last
+    assert (
+        titles.index("Health & Issues") < titles.index("Completeness") < titles.index("Languages")
+    )
 
 
 def test_stats_empty_ontology_has_no_depth_rows() -> None:
@@ -348,11 +352,11 @@ def _by_key(fields: list) -> dict:
     return {f.key: f for f in fields}
 
 
-def test_lint_section_shows_error_and_warning_counts() -> None:
+def test_health_section_shows_error_and_warning_counts() -> None:
     lint = {"error": 2, "warning": 3, "info": 1}
     fields = build_tui_ontology_overview_fields(_tax(), "en", None, lint)
     titles = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert "Errors and Warnings" in titles
+    assert "Health & Issues" in titles  # lint counts now live under Health
     by_key = _by_key(fields)
     assert by_key["st:lint_error"].value == "2"
     assert by_key["st:lint_warning"].value == "3"
@@ -380,15 +384,14 @@ def test_lint_zero_rows_are_not_actionable() -> None:
     assert by_key["st:lint_warning"].meta.get("color") == "green"  # 0 warnings → green
 
 
-def test_lint_section_sits_right_after_metadata() -> None:
+def test_activity_and_structure_precede_the_quality_group() -> None:
     lint = {"error": 1, "warning": 0, "info": 0}
     activity = {"last": "2026-06-20", "total": 12, "last_month": 3}
     fields = build_tui_ontology_overview_fields(_tax(), "en", activity, lint)
     titles = [f.display for f in fields if f.meta.get("type") == "separator"]
-    assert titles.index("Errors and Warnings") == titles.index("Metadata") + 1
-    # …and therefore before the stats and Activity blocks.
-    assert titles.index("Errors and Warnings") < titles.index("Classes")
-    assert titles.index("Errors and Warnings") < titles.index("Activity")
+    # Activity (3) and Structure (4) come before the Quality group's Health (5).
+    assert titles.index("Activity") < titles.index("Structure") < titles.index("Health & Issues")
+    assert titles.index("Health & Issues") < titles.index("Completeness")
 
 
 def test_no_lint_section_without_file() -> None:
@@ -442,7 +445,7 @@ def test_labelled_metric_counts_skos_preflabel() -> None:
     t.owl_classes["b"] = RDFClass(
         uri="b", annotations=[OntologyAnnotation(SKOS_PREFLABEL, "B")]
     )  # skos:prefLabel only
-    assert _by_key(_fields(t))["st:label_cov"].value.endswith("100%")  # both count as labelled
+    assert "100%" in _by_key(_fields(t))["st:label_cov"].value  # both count as labelled
 
 
 def test_metadata_coverage_rows_render_from_the_metadata_dict() -> None:
@@ -467,3 +470,60 @@ def test_metadata_coverage_omitted_when_not_computable() -> None:
     assert "Metadata coverage" not in [
         f.display for f in fields if f.meta.get("type") == "separator"
     ]
+
+
+# ── Health & Issues: structural gaps (reorganized overview, P1) ────────────────
+
+
+def test_health_keeps_issues_and_completeness_carries_the_missing_counts() -> None:
+    """Health keeps only non-coverage issues (missing domain/range); the label/comment
+    gaps are merged into the Completeness rows as a 'N missing' count."""
+    from ster.model import Label, OWLProperty, RDFClass
+
+    t = _tax()
+    t.owl_classes["c"] = RDFClass(uri="c")  # no label, no comment
+    t.owl_classes["d"] = RDFClass(uri="d", labels=[Label("en", "D")], comments=[])
+    t.owl_properties["p"] = OWLProperty(uri="p", prop_type="ObjectProperty")  # no domain/range
+    by_key = _by_key(_fields(t))
+    # Health: only the property issue remains (no separate label/comment gap rows)
+    assert by_key["st:incomplete_props"].value == "1"
+    assert "st:gap_undoc" not in by_key and "st:gap_unlab" not in by_key
+    # Completeness rows carry both percent and the count missing
+    assert "2 missing" in by_key["st:comment_cov"].value  # c and d undocumented
+    assert "1 missing" in by_key["st:label_cov"].value  # only c unlabelled
+    assert by_key["st:label_cov"].meta["color"] == "orange"  # 50% labelled → orange
+
+
+def test_quality_group_opens_and_closes_around_the_coverage_subsections() -> None:
+    """A 'Quality & Coverage' group is opened (separator_group) before Health and
+    closed (separator_group_end) after the coverage cluster."""
+    from ster.model import Label, RDFClass
+
+    t = _tax()
+    t.owl_classes["a"] = RDFClass(uri="a", labels=[Label("en", "A")])  # gives a Languages row
+    fields = build_tui_ontology_overview_fields(t, "en", None, {"error": 1, "warning": 0})
+    seps = [
+        (f.meta.get("type"), f.display)
+        for f in fields
+        if f.meta.get("type", "").startswith("separator")
+    ]
+    seq = [d for _, d in seps]
+    assert [d for ty, d in seps if ty == "separator_group"] == ["Quality & Coverage"]
+    assert sum(1 for ty, _ in seps if ty == "separator_group_end") == 1  # closed once
+    gi = seq.index("Quality & Coverage")
+    assert seq[gi + 1] == "Health & Issues"  # opens right before Health
+    assert seq.index("Health & Issues") < seq.index("Completeness") < seq.index("Languages")
+
+
+def test_structure_counts_first_order_and_meta_classes() -> None:
+    """Structure renames leaves to 'First Order classes', adds 'Meta Classes' (the
+    rest), and drops root-classes and the object/datatype property split."""
+    by_key = _by_key(_fields(_onto_with_hierarchy()))
+    total = int(by_key["st:classes"].value)
+    first_order = int(by_key["st:first_order"].value)
+    assert by_key["st:first_order"].display == "Nr of First Order classes"
+    assert by_key["st:meta_classes"].display == "Nr of Meta Classes"
+    assert int(by_key["st:meta_classes"].value) == total - first_order  # the non-first-order rest
+    # removed rows
+    assert "st:roots" not in by_key
+    assert "st:obj_props" not in by_key and "st:dt_props" not in by_key

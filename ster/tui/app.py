@@ -22,9 +22,10 @@ from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Tree
+from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
 
+from ster.metadata_coverage import MetaProp, entity_predicates
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
@@ -211,6 +212,15 @@ class OntologyApp(App):
     }
 
     .section-header { margin-top: 1; }
+    /* A visual group: a bordered, titled box enclosing its clustered sections. */
+    .detail-group {
+        height: auto;
+        border: round $secondary;
+        border-title-color: $secondary;
+        padding: 0 1;
+        margin: 1 0;
+    }
+    .detail-group .section-header:first-of-type { margin-top: 0; }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
     /* $boost is a translucent overlay → invisible on light themes; use a solid
@@ -238,6 +248,18 @@ class OntologyApp(App):
     /* Give the footer a neutral surface background (not the theme's $primary,
        which is blue on solarized-light → invisible key hints) with readable text. */
     Footer { background: $surface; color: $foreground; }
+    /* Bottom-right status overlay: the current display language. */
+    #lang-indicator {
+        layer: overlay;
+        dock: bottom;
+        width: auto;
+        height: 1;
+        offset-x: 100%;          /* push to the right edge … */
+        constrain: inside none;  /* … then pull fully back into view */
+        background: $surface;
+        color: $text-muted;
+        padding: 0 1;
+    }
     FooterKey { background: $surface; color: $foreground; }
     FooterKey:hover { background: $boost; }
     /* Footer key hints read as actionable (and are clickable). */
@@ -310,7 +332,7 @@ class OntologyApp(App):
         self._row_menu_delete: DetailField | None = None
         self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
 
-    def _load_metadata_props(self) -> list[tuple[str, str]]:
+    def _load_metadata_props(self) -> list[MetaProp]:
         """The configured ontology-metadata predicate catalog (built-in defaults
         when the user has never customised it)."""
         from ster.nav.logic import default_annotation_catalog
@@ -318,7 +340,7 @@ class OntologyApp(App):
 
         return load_metadata_props() or default_annotation_catalog()
 
-    def _load_entity_metadata_props(self) -> list[tuple[str, str]]:
+    def _load_entity_metadata_props(self) -> list[MetaProp]:
         """The configured entity-metadata predicate catalog (built-in defaults when
         the user has never customised it)."""
         from ster.nav.logic import default_entity_annotation_catalog
@@ -384,20 +406,36 @@ class OntologyApp(App):
         display_changed = new_lang != self.lang
         removed = sorted(set(self.configured_langs) - set(result["configured"]))
         langs_changed = set(self.configured_langs) != set(result["configured"])
+        # The entity-metadata criticities drive the tree icon colours, so a catalog edit
+        # must recolour the tree just like a display-language change relabels it.
+        entity_meta_changed = self._entity_meta_changed(result)
         self.configured_langs = result["configured"]  # exact selection (may be empty)
         self.lang = new_lang
-        theme = result.get("theme")
-        if theme and theme in self.available_themes:
-            self.theme = theme  # live preview
+        self._update_lang_indicator()
+        self._apply_theme(result)
         self._persist_config(result, new_lang)
 
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
+        if display_changed or entity_meta_changed:
             self._rebuild_tree()
         if display_changed or langs_changed:
             self._show(self._detail_uri)  # reflect the new configured-language rows
         for lang in removed:
             self._maybe_purge_language(lang)
+
+    def _apply_theme(self, result: dict) -> None:
+        """Live-preview the chosen theme when it is one we know."""
+        theme = result.get("theme")
+        if theme and theme in self.available_themes:
+            self.theme = theme
+
+    def _entity_meta_changed(self, result: dict) -> bool:
+        """True when the config result carries an entity-metadata catalog that differs
+        from the current one (predicate, label or criticity) — a signal to recolour."""
+        return "entity_metadata_props" in result and (
+            list(result["entity_metadata_props"]) != self.entity_metadata_props
+        )
 
     def _persist_config(self, result: dict, new_lang: str) -> None:
         """Save the config modal's settings (theme + metadata catalog globally,
@@ -412,10 +450,10 @@ class OntologyApp(App):
 
         _save_prefs({"theme": self.theme})  # theme is a global preference
         if "metadata_props" in result:  # the configurable "Add metadata" catalog (global)
-            self.metadata_props = [tuple(p) for p in result["metadata_props"]]
+            self.metadata_props = list(result["metadata_props"])
             save_metadata_props(self.metadata_props)
         if "entity_metadata_props" in result:  # the entity-metadata catalog (global)
-            self.entity_metadata_props = [tuple(p) for p in result["entity_metadata_props"]]
+            self.entity_metadata_props = list(result["entity_metadata_props"])
             save_entity_metadata_props(self.entity_metadata_props)
         if self._path is not None:
             _save_lang_pref(self._path, new_lang)
@@ -463,6 +501,7 @@ class OntologyApp(App):
                 yield OntologyTree("properties", id="prop-tree")
             yield DetailView(id="detail")
         yield Footer()
+        yield Static("", id="lang-indicator")  # bottom-right status: selected language
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
@@ -482,22 +521,62 @@ class OntologyApp(App):
         # clobber the detail pane. Show the overview after the refresh settles so
         # it is the last word; the Ontology node (first row) carries the URI.
         self.call_after_refresh(self._show, detail.OVERVIEW_URI)
+        self._update_lang_indicator()
+
+    def _update_lang_indicator(self) -> None:
+        """Refresh the bottom-right status with the current display language."""
+        indicators = self.query("#lang-indicator")
+        if indicators:
+            indicators.first(Static).update(f"selected language: {self.lang}")
 
     # ── tree building ─────────────────────────────────────────────────────────
 
     def _index(self, uri: str, node: TreeNode) -> None:
         self._uri_nodes.setdefault(uri, node)
 
+    def _entity_by_kind(self, uri: str, kind: str) -> object | None:
+        """The class / individual / property / concept behind *uri* for its node *kind*."""
+        attr = {
+            "class": "owl_classes",
+            "individual": "owl_individuals",
+            "property": "owl_properties",
+            "concept": "concepts",
+        }.get(kind)
+        return getattr(self.tax, attr).get(uri) if attr else None
+
+    def _entity_criticity_colour(self, uri: str, kind: str) -> str:
+        """The entity's tree-icon colour from its entity-metadata coverage: red if a
+        configured *mandatory* predicate is unfilled, orange if an *important* one is,
+        else green. With the default (all-optional) catalog nothing is flagged → green."""
+        entity = self._entity_by_kind(uri, kind)
+        if entity is None:
+            return "green"
+        present = entity_predicates(entity)
+        unfilled = {
+            mp.criticity for mp in self.entity_metadata_props if mp.predicate not in present
+        }
+        if "mandatory" in unfilled:
+            return "red"
+        if "important" in unfilled:
+            return "dark_orange"
+        return "green"
+
+    def _node_icon(self, uri: str, kind: str) -> str:
+        """The node's glyph, coloured red / orange / green by whether a mandatory or
+        important configured metadata property is unfilled on the entity."""
+        icon = data.ICON.get(kind, "")
+        colour = self._entity_criticity_colour(uri, kind)
+        return f"[{colour}]{icon}[/{colour}]"
+
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
-        text = f"{data.ICON.get(kind, '')} {data.label_of(self.tax, uri, self.lang)}{suffix}"
+        text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
         node = parent.add_leaf(text, data=uri)
         self._index(uri, node)
         return node
 
     def _add_class(self, parent: TreeNode, uri: str) -> None:
-        node = parent.add(
-            f"{data.ICON['class']} {data.label_of(self.tax, uri, self.lang)}", data=uri
-        )
+        label = data.label_of(self.tax, uri, self.lang)
+        node = parent.add(f"{self._node_icon(uri, 'class')} {label}", data=uri)
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
             self._add_class(node, sub)
@@ -505,9 +584,8 @@ class OntologyApp(App):
             self._leaf(node, ind, "individual")
 
     def _add_concept(self, parent: TreeNode, uri: str) -> None:
-        node = parent.add(
-            f"{data.ICON['concept']} {data.label_of(self.tax, uri, self.lang)}", data=uri
-        )
+        label = data.label_of(self.tax, uri, self.lang)
+        node = parent.add(f"{self._node_icon(uri, 'concept')} {label}", data=uri)
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)

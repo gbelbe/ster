@@ -23,18 +23,19 @@ from ster.nav.logic import (
     build_property_detail,
     build_rdf_class_detail,
     build_scheme_detail,
-    build_tui_ontology_overview_fields,
     build_tui_taxonomy_overview_fields,
 )
 
 from . import data
+from .presenters import PRESENTERS, EntityPresenter, LegacyPresenter, PresenterContext
+from .presenters.overview import OntologyOverviewPresenter
 
 # Sentinel "uris" for the overview nodes (no real entity behind them).
 OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
 TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 
 # Field meta["type"] values that start a new section rather than render a row.
-_SEPARATORS = frozenset({"separator", "separator_danger"})
+_SEPARATORS = frozenset({"separator", "separator_danger", "separator_group", "separator_group_end"})
 
 # entity kind (data.kind_of) → its DetailField builder. All accept the keyword
 # ``configured_langs`` (the languages whose label/description add rows to offer).
@@ -54,6 +55,8 @@ class DetailSection:
     title: str
     fields: list[DetailField] = dc_field(default_factory=list)
     danger: bool = False  # True for the "Danger Zone" (separator_danger) section
+    group: bool = False  # opens a bordered group box (separator_group)
+    group_end: bool = False  # closes the current group box (separator_group_end)
 
 
 def group_sections(fields: list[DetailField]) -> list[DetailSection]:
@@ -68,7 +71,12 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
     for f in fields:
         ftype = f.meta.get("type")
         if ftype in _SEPARATORS:
-            current = DetailSection(title=f.display, danger=(ftype == "separator_danger"))
+            current = DetailSection(
+                title=f.display,
+                danger=(ftype == "separator_danger"),
+                group=(ftype == "separator_group"),
+                group_end=(ftype == "separator_group_end"),
+            )
             sections.append(current)
         else:
             if current is None:
@@ -76,6 +84,33 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
                 sections.append(current)
             current.fields.append(f)
     return sections
+
+
+# ── legacy field builders, adapted to the (ctx, uri) presenter signature ──────
+# Each kind keeps its existing build_* function until it gets a dedicated
+# presenter; LegacyPresenter wraps these so output stays byte-identical.
+
+
+def _taxonomy_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
+    return build_tui_taxonomy_overview_fields(ctx.tax, ctx.lang)
+
+
+def _entity_render(ctx: PresenterContext, uri: str) -> list[DetailField]:
+    builder = _BUILDERS.get(data.kind_of(ctx.tax, uri))
+    return builder(ctx.tax, uri, ctx.lang, configured_langs=ctx.configured_langs) if builder else []
+
+
+def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
+    """The presenter for *uri*: a registered subclass, else a LegacyPresenter
+    wrapping the kind's existing build_* function."""
+    if uri == OVERVIEW_URI:
+        return OntologyOverviewPresenter(ctx, uri)
+    if uri == TAXONOMY_URI:
+        return LegacyPresenter(ctx, uri, _taxonomy_render)
+    presenter_cls = PRESENTERS.get(data.kind_of(ctx.tax, uri))
+    if presenter_cls is not None:
+        return presenter_cls(ctx, uri)
+    return LegacyPresenter(ctx, uri, _entity_render)
 
 
 def _fields_for(
@@ -87,15 +122,16 @@ def _fields_for(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
 ) -> list[DetailField]:
-    """The flat DetailField list for *uri* (overview sentinel or entity builder)."""
-    if uri == OVERVIEW_URI:
-        return build_tui_ontology_overview_fields(
-            tax, lang, activity, lint, configured_langs, metadata
-        )
-    if uri == TAXONOMY_URI:
-        return build_tui_taxonomy_overview_fields(tax, lang)
-    builder = _BUILDERS.get(data.kind_of(tax, uri))
-    return builder(tax, uri, lang, configured_langs=configured_langs) if builder else []
+    """The flat DetailField list for *uri*, via its presenter."""
+    ctx = PresenterContext(
+        tax=tax,
+        lang=lang,
+        configured_langs=configured_langs,
+        activity=activity,
+        lint=lint,
+        metadata=metadata,
+    )
+    return _presenter_for(ctx, uri).render()
 
 
 def _is_create(f: DetailField) -> bool:
@@ -161,7 +197,7 @@ def render_detail(
     lines: list[str] = []
     for sec in build_sections(tax, uri, lang, configured_langs=configured_langs):
         if sec.title:
-            style = "bold red" if sec.danger else "bold"
+            style = "bold red" if sec.danger else "bold underline" if sec.group else "bold"
             lines.append(f"[{style}]{_esc(sec.title)}[/]")
         lines.extend(_render_row(f) for f in sec.fields)
     return "\n".join(lines)
