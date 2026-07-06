@@ -269,6 +269,25 @@ def _grouped_widgets(sections: list[DetailSection]) -> list[Widget]:
     return widgets
 
 
+def _graph_action_row(tax: Taxonomy, uri: str) -> DetailRow | None:
+    """A highlighted, focusable '» Open Graph View' row leading the detail pane for the
+    entities a focused graph supports (OWL classes & individuals); None otherwise."""
+    from .data import kind_of
+
+    if kind_of(tax, uri) not in ("class", "individual"):
+        return None
+    field = DetailField(
+        "action:open_graph_view",
+        "» Open Graph View",
+        "",
+        editable=False,
+        meta={"type": "action", "action": "view_focused_graph", "uri": uri},
+    )
+    row = DetailRow(field)
+    row.add_class("graph-action")  # accent-highlighted, per the header affordance
+    return row
+
+
 class DetailView(VerticalScroll):
     """Compose an entity's detail into section headers + focusable field rows."""
 
@@ -309,4 +328,7 @@ class DetailView(VerticalScroll):
         )
         sections = _insert_issue_sections(sections, issue_fields)
         widgets = _grouped_widgets(sections)
+        graph_row = _graph_action_row(tax, uri)  # leads the pane for classes/individuals
+        if graph_row is not None:
+            widgets = [graph_row, *widgets]
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

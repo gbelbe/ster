@@ -135,22 +135,13 @@ def test_properties_section_node_type():
 # ── Class detail actions ──────────────────────────────────────────────────────
 
 
-def test_class_actions_include_focused_graph():
+def test_class_detail_no_longer_emits_the_graph_action():
+    """The '» Open Graph View' affordance moved to the detail-view header (view layer),
+    so build_rdf_class_detail no longer emits it as a logic-layer field."""
     tax = _owl_taxonomy(["Person"])
     fields = build_rdf_class_detail(tax, BASE + "Person", "en")
-    actions = [
-        f.meta.get("action")
-        for f in fields
-        if f.meta and f.meta.get("type") in ("action", "action_add")
-    ]
-    assert "view_focused_graph" in actions
-
-
-def test_class_focused_graph_action_carries_uri():
-    tax = _owl_taxonomy(["Person"])
-    fields = build_rdf_class_detail(tax, BASE + "Person", "en")
-    field = next(f for f in fields if f.meta and f.meta.get("action") == "view_focused_graph")
-    assert field.meta.get("uri") == BASE + "Person"
+    actions = [f.meta.get("action") for f in fields if f.meta]
+    assert "view_focused_graph" not in actions
 
 
 # ── Collapse behaviour ────────────────────────────────────────────────────────

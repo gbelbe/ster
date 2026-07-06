@@ -598,8 +598,8 @@ def test_panels_have_border_titles() -> None:
             assert app.query_one("#prop-tree", Tree).border_title == "Properties"
             app._show(ZOO + "Cat")
             await pilot.pause()
-            # A class has a context menu → its title carries the ⋯ affordance hint.
-            assert app.query_one("#detail", DetailView).border_title == "Cat  ⋯"
+            # The title notes the resource type and (class → context menu) the ⋯ hint.
+            assert app.query_one("#detail", DetailView).border_title == "Cat (Class)  ⋯"
 
     _run(scenario)
 
@@ -1109,6 +1109,192 @@ def test_view_graph_action_opens_browser(monkeypatch) -> None:
             await pilot.press("enter")
             await pilot.pause()
             assert calls  # open_in_browser was invoked
+
+    _run(scenario)
+
+
+def test_footer_swaps_theme_hint_for_graphview() -> None:
+    """The bottom bar drops the 'd Theme' hint (theme cycling still works, just hidden)
+    and gains a visible 'g GraphView' shortcut."""
+    binds = {b.key: b for b in OntologyApp.BINDINGS}
+    assert binds["d"].action == "cycle_theme" and binds["d"].show is False  # hidden, still works
+    assert binds["g"].action == "open_graph"
+    assert binds["g"].description == "GraphView" and binds["g"].show is True
+
+
+def _patch_graph(monkeypatch) -> list:
+    """Record which graph entry point fired: the focus URI for a focused graph, or the
+    sentinel ``"GLOBAL"`` for the whole-ontology graph."""
+    from ster import viz_vowl
+
+    calls: list = []
+    monkeypatch.setattr(
+        viz_vowl,
+        "open_focused_in_browser",
+        lambda tax, root, path=None: calls.append(root) or "http://x",
+    )
+    monkeypatch.setattr(
+        viz_vowl,
+        "open_in_browser",
+        lambda tax, path=None, on_change_fn=None: calls.append("GLOBAL") or "http://g",
+    )
+    return calls
+
+
+def test_g_focuses_the_graph_on_the_selected_class(monkeypatch) -> None:
+    """Pressing 'g' with a class selected in the tree opens a graph focused on it."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        calls = _patch_graph(monkeypatch)
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
+            tree.focus()
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            assert calls == [ZOO + "Dog"]  # focused on the selected class
+
+    _run(scenario)
+
+
+def test_g_focuses_the_graph_on_the_selected_individual(monkeypatch) -> None:
+    """Pressing 'g' with an individual selected opens a graph focused on that individual."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        calls = _patch_graph(monkeypatch)
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.move_cursor(app._uri_nodes[ZOO + "Rex"])  # individual under Dog
+            tree.focus()
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            assert calls == [ZOO + "Rex"]
+
+    _run(scenario)
+
+
+def test_g_opens_the_global_graph_when_nothing_focusable_is_selected(monkeypatch) -> None:
+    """With the overview shown (no focusable entity), 'g' opens the whole-ontology graph."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        calls = _patch_graph(monkeypatch)
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(detail.OVERVIEW_URI)  # overview is not a focusable entity
+            await pilot.pause()
+            app.action_open_graph()  # what the 'g' binding invokes
+            await pilot.pause()
+            assert calls == ["GLOBAL"]  # fell back to the global graph
+
+    _run(scenario)
+
+
+def test_detail_title_includes_the_resource_type() -> None:
+    """The detail pane title annotates the entity's kind, e.g. 'Dog (Class)'."""
+    from ster.tui import detail
+
+    app = _app()
+    assert app._detail_title(ZOO + "Dog").startswith("Dog (Class)")
+    assert app._detail_title(ZOO + "Rex").startswith("Rex (Individual)")
+    assert app._detail_title(ZOO + "hasOwner").startswith("has owner (Property)")
+    # Pseudo-entities (the overviews) keep their plain titles — no type suffix.
+    assert app._detail_title(detail.OVERVIEW_URI) == "Ontology overview"
+
+
+def _graph_row(app):  # type: ignore[no-untyped-def]
+    """The detail pane's '» Open Graph View' action row, or None."""
+    from ster.tui.detail_view import DetailRow
+
+    return next(
+        (r for r in app.query(DetailRow) if r.field.meta.get("action") == "view_focused_graph"),
+        None,
+    )
+
+
+def test_class_detail_leads_with_a_highlighted_graph_action_row() -> None:
+    """A class detail opens with a highlighted, focusable '» Open Graph View' row as
+    its first row."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Dog")
+            await pilot.pause()
+            first = next(iter(app.query(DetailRow)))  # the very first row in the pane
+            assert first.field.meta.get("action") == "view_focused_graph"
+            assert first.field.meta.get("uri") == ZOO + "Dog"
+            assert "Open Graph View" in first.field.display
+            assert first.can_focus  # keyboard-navigable
+            assert first.has_class("graph-action")  # highlighted
+
+    _run(scenario)
+
+
+def test_graph_action_row_opens_the_focused_graph(monkeypatch) -> None:
+    """Activating the detail pane's graph row opens a graph focused on that entity."""
+
+    async def scenario() -> None:
+        calls = _patch_graph(monkeypatch)
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Dog")
+            await pilot.pause()
+            row = _graph_row(app)
+            assert row is not None
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert calls == [ZOO + "Dog"]  # focused on the class
+
+    _run(scenario)
+
+
+def test_individual_detail_has_a_graph_action_row() -> None:
+    """Individuals get the same '» Open Graph View' row (scope: classes & individuals)."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Rex")
+            await pilot.pause()
+            assert _graph_row(app) is not None
+
+    _run(scenario)
+
+
+def test_property_detail_has_no_graph_action_row() -> None:
+    """A property is not focusable in the graph, so its detail gets no graph row."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "hasOwner")
+            await pilot.pause()
+            assert _graph_row(app) is None
 
     _run(scenario)
 

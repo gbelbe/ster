@@ -46,6 +46,15 @@ from .uri_modal import UriModal
 _ACTION_PREFIX = "__action:"
 _ACTION_SUFFIX = "__"
 
+# Human-readable resource type shown in the detail-pane title (e.g. "Person (Class)").
+_KIND_TITLE = {
+    "class": "Class",
+    "individual": "Individual",
+    "property": "Property",
+    "scheme": "Concept scheme",
+    "concept": "Concept",
+}
+
 
 def _action_uri(action: str, extra: str = "") -> str:
     return f"{_ACTION_PREFIX}{action}:{extra}{_ACTION_SUFFIX}"
@@ -228,6 +237,9 @@ class OntologyApp(App):
     .detail-row:hover { background: $secondary 20%; }
     /* Information-only rows are not interactive — no hover affordance. */
     .detail-row.info-row:hover { background: transparent; }
+    /* The leading "» Open Graph View" action — highlighted so it reads as the
+       primary quick action for the entity. */
+    .detail-row.graph-action { color: $secondary; text-style: bold; margin-bottom: 1; }
     /* Quality colours — one definition for every %-indicator + errors/warnings.
        Change a colour here and every indicator updates at once. */
     .detail-row.q-red    { color: #d70000; }
@@ -287,7 +299,8 @@ class OntologyApp(App):
         Binding("full_stop", "context_menu", "Actions"),
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
-        Binding("d", "cycle_theme", "Theme"),
+        Binding("g", "open_graph", "GraphView"),
+        Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit"),
@@ -876,7 +889,11 @@ class OntologyApp(App):
         if uri == detail.TAXONOMY_URI:
             return "Taxonomy overview"
         label = data.label_of(self.tax, uri, self.lang) or "Details"
-        if edits.context_actions(data.kind_of(self.tax, uri)):
+        kind = data.kind_of(self.tax, uri)
+        type_label = _KIND_TITLE.get(kind)
+        if type_label:
+            label += f" ({type_label})"  # note the resource's type, e.g. 'Person (Class)'
+        if edits.context_actions(kind):
             label += "  ⋯"  # a context menu is available
         return label
 
@@ -1691,7 +1708,32 @@ class OntologyApp(App):
         self.push_screen(HelpScreen())
 
     def _open_graph(self, action: str, field: DetailField) -> None:
-        """Open the VOWL graph in the browser (whole ontology, or focused on an entity).
+        """Detail-pane / context-menu graph action → the shared graph opener."""
+        if action == "view_focused_graph":
+            target = field.meta.get("uri") or self._detail_uri
+            if not target:
+                self.notify("No entity to focus the graph on.", severity="warning")
+                return
+            self._show_graph(target)
+        else:
+            self._show_graph(None)
+
+    def action_open_graph(self) -> None:
+        """The 'g' shortcut: open (or update) the graph from the tree selection —
+        focused on the selected OWL class/individual, else the whole-ontology graph."""
+        self._show_graph(self._graph_focus_target())
+
+    def _graph_focus_target(self) -> str | None:
+        """The entity to centre the graph on for 'g': the selected class or individual,
+        else None (overview, property, concept or nothing → the global graph)."""
+        uri = self._detail_uri
+        if uri and (uri in self.tax.owl_classes or uri in self.tax.owl_individuals):
+            return uri
+        return None
+
+    def _show_graph(self, target: str | None) -> None:
+        """Open (or update) the VOWL graph in the browser — focused on *target* when
+        given, else the whole ontology.
 
         A view, not a mutation: works read-only, opens a daemon-served page +
         browser tab (non-blocking) and reports the URL.
@@ -1699,11 +1741,7 @@ class OntologyApp(App):
         from ster import viz_vowl
 
         try:
-            if action == "view_focused_graph":
-                target = field.meta.get("uri") or self._detail_uri
-                if not target:
-                    self.notify("No entity to focus the graph on.", severity="warning")
-                    return
+            if target is not None:
                 url = viz_vowl.open_focused_in_browser(self.tax, target, self._path)
             else:
                 url = viz_vowl.open_in_browser(self.tax, self._path)

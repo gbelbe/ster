@@ -1994,14 +1994,6 @@ def build_rdf_class_detail(
             meta={"type": "stat"},
         )
     )
-    fields.append(
-        _add_action_field(
-            "action:view_focused_graph",
-            "⊙ Open Graph Viz",
-            "view_focused_graph",
-            uri=uri,
-        )
-    )
 
     # ── Labels (rdfs:label) — always shown ──────────────────────────────────
     fields.append(_sep("Labels"))
