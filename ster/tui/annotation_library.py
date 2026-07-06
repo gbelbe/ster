@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 CATEGORIES: tuple[str, ...] = (
+    "Names & labels",
     "Descriptions",
     "Images & media",
     "Links & URLs",
@@ -56,6 +57,55 @@ _PROV = "http://www.w3.org/ns/prov#"
 
 
 LIBRARY: tuple[LibraryProp, ...] = (
+    # ── Names & labels ────────────────────────────────────────────────────────
+    LibraryProp(
+        _SKOS + "prefLabel",
+        "skos:prefLabel",
+        "Preferred label for the entity",
+        "Names & labels",
+        "skos",
+        ("preferred", "label", "name", "title", "preflabel"),
+    ),
+    LibraryProp(
+        _SKOS + "altLabel",
+        "skos:altLabel",
+        "Alternative label / synonym",
+        "Names & labels",
+        "skos",
+        ("alternative", "alternate", "altlabel", "synonym", "aka", "acronym", "label", "name"),
+    ),
+    LibraryProp(
+        _SKOS + "hiddenLabel",
+        "skos:hiddenLabel",
+        "Hidden label — matched in search, not displayed",
+        "Names & labels",
+        "skos",
+        ("hidden", "hiddenlabel", "misspelling", "search", "label"),
+    ),
+    LibraryProp(
+        _SKOS + "notation",
+        "skos:notation",
+        "Notation / code identifying the concept",
+        "Names & labels",
+        "skos",
+        ("notation", "code", "identifier", "symbol"),
+    ),
+    LibraryProp(
+        _DCT + "title",
+        "dcterms:title",
+        "A name / title for the entity",
+        "Names & labels",
+        "dcterms",
+        ("title", "name", "heading", "label"),
+    ),
+    LibraryProp(
+        _FOAF + "name",
+        "foaf:name",
+        "A name for the entity",
+        "Names & labels",
+        "foaf",
+        ("name", "fullname", "title", "label"),
+    ),
     # ── Descriptions ──────────────────────────────────────────────────────────
     LibraryProp(
         _RDFS + "comment",

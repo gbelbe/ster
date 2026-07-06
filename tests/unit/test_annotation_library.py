@@ -59,6 +59,21 @@ def test_search_by_intent() -> None:
     assert labels("photo") & {"schema:image", "foaf:depiction"}  # keyword synonym
 
 
+def test_skos_labels_are_searchable() -> None:
+    """Regression: skos:altLabel (and its SKOS label siblings) must be in the library
+    and findable by name/intent from the search box."""
+
+    def labels(q: str) -> set[str]:
+        return {p.label for p in lib.search(q)}
+
+    all_labels = {p.label for p in lib.all_props()}
+    assert {"skos:altLabel", "skos:prefLabel", "skos:hiddenLabel"} <= all_labels
+    assert lib.get("http://www.w3.org/2004/02/skos/core#altLabel").label == "skos:altLabel"
+    assert "skos:altLabel" in labels("altlabel")  # by prefixed name
+    assert "skos:altLabel" in labels("synonym")  # by intent keyword
+    assert "skos:altLabel" in labels("alternative")
+
+
 def test_search_is_case_insensitive_and_empty_returns_all() -> None:
     assert {p.label for p in lib.search("IMAGE")} == {p.label for p in lib.search("image")}
     assert lib.search("") == lib.all_props()
