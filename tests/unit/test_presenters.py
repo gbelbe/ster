@@ -115,6 +115,24 @@ def test_overview_routes_through_its_presenter() -> None:
     assert [(f.key, f.display) for f in via_seam] == [(f.key, f.display) for f in direct]
 
 
+def test_overview_quality_block_gated_by_context_flag() -> None:
+    """The overview's 'Quality & Coverage' group renders only when ctx.quality_block
+    is on — the plugin's 'Show the Quality & Coverage block' feature toggle. Default
+    is on (backward-compatible)."""
+    from ster.tui.presenters.context import PresenterContext
+    from ster.tui.presenters.overview import OntologyOverviewPresenter
+
+    tax = store.load(DEMO)
+
+    def _has_group(quality_block: bool) -> bool:
+        ctx = PresenterContext(tax, "en", quality_block=quality_block)
+        fields = OntologyOverviewPresenter(ctx, detail.OVERVIEW_URI).render()
+        return any("Quality & Coverage" in str(f.display) for f in fields)
+
+    assert _has_group(True)  # default / feature on → shown
+    assert not _has_group(False)  # feature off → the whole group is omitted
+
+
 # ── ClassPresenter Completeness (merged % + missing count) ────────────────────
 
 

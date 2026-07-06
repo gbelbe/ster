@@ -333,6 +333,7 @@ class OntologyApp(App):
         self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
         self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
         self._lint_quality_on = False  # cached (plugin + 'quality_block' feature on)
+        self._overview_quality_on = True  # overview Quality & Coverage group visible
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
@@ -431,17 +432,32 @@ class OntologyApp(App):
         self._update_lang_indicator()
         self._apply_theme(result)
         self._persist_config(result, new_lang)
+        self._refresh_after_config(
+            result, display_changed, langs_changed, plugins_changed, entity_meta_changed
+        )
+        for lang in removed:
+            self._maybe_purge_language(lang)
 
+    def _refresh_after_config(
+        self,
+        result: dict,
+        display_changed: bool,
+        langs_changed: bool,
+        plugins_changed: bool,
+        entity_meta_changed: bool,
+    ) -> None:
+        """Repaint tree / detail / lint to reflect an applied config change."""
         if display_changed:
             self.search_rows = data.search_rows(self.tax, self.lang)
+        if display_changed or plugins_changed:
+            # A plugin toggle flips the lint-feature flags — rebuild so icon colours
+            # (and their absence) repaint instead of lingering from the last build.
             self._rebuild_tree()
         if "semanticlint" in result:  # thresholds / feature toggles changed → re-lint
             self._invalidate_lint()
             self._refresh_lint_async()
         elif display_changed or langs_changed or plugins_changed or entity_meta_changed:
             self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
-        for lang in removed:
-            self._maybe_purge_language(lang)
 
     def _apply_plugins(self, result: dict) -> bool:
         """Persist plugin enable-states from the config result. Returns True when any
@@ -602,6 +618,10 @@ class OntologyApp(App):
         self._lint_icons_on = active and config.feature_enabled("icons")
         self._lint_detail_on = active and config.feature_enabled("detail")
         self._lint_quality_on = active and config.feature_enabled("quality_block")
+        # The overview's Quality & Coverage group carries non-lint coverage too, so it
+        # stays visible when the plugin is off (unreachable toggle → default on); the
+        # feature only hides it while the plugin is active and the user turns it off.
+        self._overview_quality_on = (not active) or config.feature_enabled("quality_block")
 
     def _entity_detail_fields(self, uri: str | None) -> list[DetailField]:
         """The plugin's extra detail rows for entity *uri*: a subtree quality summary
@@ -766,6 +786,7 @@ class OntologyApp(App):
             clangs,
             metadata,
             issue_fields=self._entity_detail_fields(uri),
+            quality_block=self._overview_quality_on,
         )
         view.border_title = self._detail_title(uri)
 

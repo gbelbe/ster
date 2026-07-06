@@ -121,6 +121,7 @@ def _fields_for(
     lint: dict | None = None,
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
+    quality_block: bool = True,
 ) -> list[DetailField]:
     """The flat DetailField list for *uri*, via its presenter."""
     ctx = PresenterContext(
@@ -130,6 +131,7 @@ def _fields_for(
         activity=activity,
         lint=lint,
         metadata=metadata,
+        quality_block=quality_block,
     )
     return _presenter_for(ctx, uri).render()
 
@@ -158,6 +160,7 @@ def build_sections(
     lint: dict | None = None,
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
+    quality_block: bool = True,
 ) -> list[DetailSection]:
     """Return the grouped detail sections for *uri*, dispatched by entity kind.
 
@@ -165,7 +168,7 @@ def build_sections(
     (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
     sections = group_sections(
-        _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata)
+        _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata, quality_block)
     )
     for sec in sections:
         sec.fields = _creates_first(sec.fields)

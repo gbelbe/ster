@@ -295,6 +295,7 @@ class DetailView(VerticalScroll):
         configured_langs: list[str] | None = None,
         metadata: dict | None = None,
         issue_fields: list | None = None,
+        quality_block: bool = True,
     ) -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None). *issue_fields*
         (the semanticlint plugin's per-entity 'Quality issues' rows) are inserted right
@@ -303,7 +304,9 @@ class DetailView(VerticalScroll):
         if uri is None:
             self.mount(Static(PLACEHOLDER))
             return
-        sections = build_sections(tax, uri, lang, activity, lint, configured_langs, metadata)
+        sections = build_sections(
+            tax, uri, lang, activity, lint, configured_langs, metadata, quality_block
+        )
         sections = _insert_issue_sections(sections, issue_fields)
         widgets = _grouped_widgets(sections)
         self.mount(*widgets) if widgets else self.mount(Static(PLACEHOLDER))

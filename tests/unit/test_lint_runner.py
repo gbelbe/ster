@@ -92,6 +92,57 @@ def test_lint_detects_warnings(tmp_path: Path):
     assert any(v.severity == Severity.WARNING for v in violations)
 
 
+# ── semanticlint 0.5 SHACL integration ────────────────────────────────────────
+
+_OWL_GAPS = """\
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <http://ex/> .
+ex:O a owl:Ontology .
+ex:Animal a owl:Class .                 # RDS001 — no rdfs:label
+ex:hasOwner a owl:ObjectProperty .      # OWL001/OWL002 — no domain/range
+ex:i a owl:NamedIndividual .            # OWL003 — no real type
+"""
+
+
+def test_lint_files_surfaces_shape_backed_checks_regression(tmp_path: Path):
+    """Regression: OWL001/002/003 and RDS001 became SHACL shapes in semanticlint 0.5 and
+    left the Python registry. lint_files must run the SHACL pass so they still surface —
+    otherwise ster silently detects less after the upgrade."""
+    from semanticlint.checks.base import CheckConfig
+
+    path = _write(tmp_path, _OWL_GAPS)
+    ids = {v.check_id for v in lint_files([path], CheckConfig())}
+    assert {"OWL001", "OWL002", "OWL003", "RDS001"} <= ids
+
+
+def test_lint_files_discovers_sibling_business_rules(tmp_path: Path):
+    """A project-owned ``*.shapes.ttl`` next to the ontology is discovered and enforced."""
+    from semanticlint.checks.base import CheckConfig
+
+    (tmp_path / "zoo.shapes.ttl").write_text(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix ex: <http://example.org/> .\n"
+        "ex:PersonEmploymentShape a sh:NodeShape ; sh:targetClass ex:Person ;\n"
+        '  sh:property [ sh:path ex:work_for ; sh:maxCount 1 ; sh:message "one dept" ] .\n'
+    )
+    onto = tmp_path / "zoo.ttl"
+    onto.write_text(
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:work_for ex:D1, ex:D2 .\n"
+    )
+    ids = {v.check_id for v in lint_files([onto], CheckConfig())}
+    assert "PersonEmploymentShape" in ids
+
+
+def test_lint_files_default_ignores_noisy_rdf006(tmp_path: Path):
+    """RDF006 (base-URI consistency) is suppressed by default — a sibling-namespaced SKOS
+    vocabulary is valid and must not be flagged."""
+    from semanticlint.checks.base import CheckConfig
+
+    path = _write(tmp_path, _VALID_SKOS)
+    assert not any(v.check_id == "RDF006" for v in lint_files([path], CheckConfig()))
+
+
 # ── lint_overview (plain-data adapter for the TUI) ────────────────────────────
 
 
