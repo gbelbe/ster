@@ -85,10 +85,13 @@ def _fields_for(
     activity: dict | None = None,
     lint: dict | None = None,
     configured_langs: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> list[DetailField]:
     """The flat DetailField list for *uri* (overview sentinel or entity builder)."""
     if uri == OVERVIEW_URI:
-        return build_tui_ontology_overview_fields(tax, lang, activity, lint, configured_langs)
+        return build_tui_ontology_overview_fields(
+            tax, lang, activity, lint, configured_langs, metadata
+        )
     if uri == TAXONOMY_URI:
         return build_tui_taxonomy_overview_fields(tax, lang)
     builder = _BUILDERS.get(data.kind_of(tax, uri))
@@ -118,13 +121,16 @@ def build_sections(
     activity: dict | None = None,
     lint: dict | None = None,
     configured_langs: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> list[DetailSection]:
     """Return the grouped detail sections for *uri*, dispatched by entity kind.
 
     Within each section the constructive ＋ Add… action is hoisted to the top
     (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
-    sections = group_sections(_fields_for(tax, uri, lang, activity, lint, configured_langs))
+    sections = group_sections(
+        _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata)
+    )
     for sec in sections:
         sec.fields = _creates_first(sec.fields)
     return sections

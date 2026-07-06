@@ -110,6 +110,9 @@ class OWLProperty:
     inverse_of: list[str] = field(default_factory=list)  # owl:inverseOf
     is_functional: bool = False  # owl:FunctionalProperty
     note: str = ""  # ns1:note markdown annotation
+    # Any *other* predicate used on the property (skos:note, dcterms:source, …),
+    # captured generically so metadata quality can be assessed and round-tripped.
+    annotations: list[OntologyAnnotation] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:
@@ -175,6 +178,9 @@ class RDFClass:
     schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
     schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
     note: str = ""  # ns1:note markdown annotation
+    # Any *other* predicate used on the class (skos:note, rdfs:seeAlso, …), captured
+    # generically so metadata quality can be assessed and the triple round-trips.
+    annotations: list[OntologyAnnotation] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:

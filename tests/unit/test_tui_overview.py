@@ -329,7 +329,7 @@ def test_stats_grouped_into_subject_sections() -> None:
     titles = [
         f.display for f in _fields(_onto_with_hierarchy()) if f.meta.get("type") == "separator"
     ]
-    for section in ("Classes", "Properties", "Individuals", "Quality & coverage"):
+    for section in ("Classes", "Properties", "Individuals", "Quality & Coverage", "Languages"):
         assert section in titles, section
     # The stats subjects all come after Metadata.
     assert titles.index("Classes") > titles.index("Metadata")
@@ -415,3 +415,55 @@ def test_activity_section_renders_git_stats() -> None:
 def test_no_activity_section_without_git() -> None:
     fields = build_tui_ontology_overview_fields(_tax(), "en", None)
     assert "Activity" not in [f.display for f in fields if f.meta.get("type") == "separator"]
+
+
+# ── Metadata coverage subsection + label-predicate detail ──────────────────────
+
+
+def test_quality_lines_name_their_predicates() -> None:
+    """The labelled / documented coverage rows spell out which predicates they measure."""
+    from ster.model import Label, RDFClass
+
+    t = _tax()
+    t.owl_classes["c"] = RDFClass(uri="c", labels=[Label("en", "C")])
+    # rows are keyed; their display label carries the predicate hint
+    labels = {f.key: f.display for f in _fields(t)}
+    assert "rdfs:label" in labels["st:label_cov"] and "skos:prefLabel" in labels["st:label_cov"]
+    assert "rdfs:comment" in labels["st:comment_cov"]
+
+
+def test_labelled_metric_counts_skos_preflabel() -> None:
+    """A class labelled only with skos:prefLabel still counts toward 'labelled'."""
+    from ster.metadata_coverage import SKOS_PREFLABEL
+    from ster.model import Label, OntologyAnnotation, RDFClass
+
+    t = _tax()
+    t.owl_classes["a"] = RDFClass(uri="a", labels=[Label("en", "A")])  # rdfs:label
+    t.owl_classes["b"] = RDFClass(
+        uri="b", annotations=[OntologyAnnotation(SKOS_PREFLABEL, "B")]
+    )  # skos:prefLabel only
+    assert _by_key(_fields(t))["st:label_cov"].value.endswith("100%")  # both count as labelled
+
+
+def test_metadata_coverage_rows_render_from_the_metadata_dict() -> None:
+    """The Metadata coverage subsection shows the ontology/entity completion bars."""
+    fields = build_tui_ontology_overview_fields(
+        _tax(), "en", None, None, None, {"ontology_pct": 60, "entity_pct": 35}
+    )
+    seps = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "Metadata coverage" in seps
+    by_key = {f.key: f for f in fields}
+    assert by_key["st:meta_ont"].value.endswith("60%")
+    assert by_key["st:meta_entity"].value.endswith("35%")
+    assert by_key["st:meta_ont"].meta["color"] == "orange"  # 50–79 → orange
+    assert by_key["st:meta_entity"].meta["color"] == "red"  # < 50 → red
+
+
+def test_metadata_coverage_omitted_when_not_computable() -> None:
+    """No catalogs configured → both percentages None → no Metadata coverage section."""
+    fields = build_tui_ontology_overview_fields(
+        _tax(), "en", None, None, None, {"ontology_pct": None, "entity_pct": None}
+    )
+    assert "Metadata coverage" not in [
+        f.display for f in fields if f.meta.get("type") == "separator"
+    ]

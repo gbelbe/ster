@@ -241,6 +241,7 @@ class DetailView(VerticalScroll):
         activity: dict | None = None,
         lint: dict | None = None,
         configured_langs: list[str] | None = None,
+        metadata: dict | None = None,
     ) -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None)."""
         self.remove_children()
@@ -248,7 +249,7 @@ class DetailView(VerticalScroll):
             self.mount(Static(PLACEHOLDER))
             return
         widgets: list[Static] = []
-        for sec in build_sections(tax, uri, lang, activity, lint, configured_langs):
+        for sec in build_sections(tax, uri, lang, activity, lint, configured_langs, metadata):
             if sec.title:
                 widgets.append(SectionHeader(sec.title, danger=sec.danger))
             widgets.extend(_rows_for(sec.fields))
