@@ -315,6 +315,7 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("⊘ Delete…", "delete_class"),
     ],
     "individual": [
+        ("✎ Edit individual…", "edit_individual"),
         ("+ Add class membership…", "add_ind_type"),
         ("+ Add property value…", "add_prop_value"),
         ("⇢ Change to class", "individual_to_class"),

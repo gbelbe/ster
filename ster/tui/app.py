@@ -859,6 +859,9 @@ class OntologyApp(App):
         self._set_lint(result)
         self._rebuild_tree()
         if self._detail_uri:
+            # Re-reveal the current entity so the recolour rebuild doesn't collapse
+            # ancestors / reset the cursor (without stealing focus from a detail row).
+            self._reveal_in_tree(self._detail_uri, focus=False)
             self._show(self._detail_uri)
 
     def _detail_title(self, uri: str | None) -> str:
@@ -889,8 +892,14 @@ class OntologyApp(App):
         props.root.remove_children()
         self._build_prop_tree(props)
 
-    def _apply_command(self, command: object) -> None:
-        """Execute *command* via TaxonomyService, then refresh tax + tree + detail."""
+    def _apply_command(self, command: object, select: str | None = None) -> None:
+        """Execute *command* via TaxonomyService, then refresh tax + tree + detail.
+
+        The tree highlight lands on the *resulting* entity: a freshly created one when
+        *select* names it (reveal the mutation), otherwise the current entity — restored
+        after the rebuild so it never jumps to the top. Focus stays in the detail pane;
+        the tree cursor moves without stealing keyboard focus (unlike ``jump_to``).
+        """
         if self._service is None or self._path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
@@ -903,11 +912,16 @@ class OntologyApp(App):
         self.search_rows = data.search_rows(self.tax, self.lang)
         self._invalidate_lint()  # the edit may fix/introduce issues
         self._rebuild_tree()
-        self._show(self._detail_uri)
-        self._refresh_lint_async()  # recompute in the background → recolour when ready
+        # A freshly created entity (select) is revealed; anything else keeps the
+        # highlight on the current entity — following it if the edit renamed its URI.
+        target = select if (select is not None and select in self._uri_nodes) else self._detail_uri
+        if target is not None and target in self._uri_nodes:
+            self._reveal_in_tree(target, focus=False)  # restore the cursor, keep focus put
+        self._show(target)
         # The mutation rebuilt the detail rows, destroying the row that had focus —
         # restore it (next refresh) so the keyboard keeps working after a modal.
         self.call_after_refresh(self._restore_focus)
+        self._refresh_lint_async()  # recompute in the background → recolour when ready
 
     def _invalidate_lint(self) -> None:
         """Drop the cached lint so the next access (or the async worker) recomputes."""
@@ -992,6 +1006,9 @@ class OntologyApp(App):
             return
         if action == "edit_class":
             self._open_class_edit(uri, path)  # full class modal (URI + labels + comments)
+            return
+        if action == "edit_individual":
+            self._open_individual_edit(uri, path)  # full individual modal
             return
         direct = edits.direct_command(field, uri, path)
         if direct is not None:  # meta-driven removal — run immediately, no modal
@@ -1110,30 +1127,39 @@ class OntologyApp(App):
             return
         self.push_screen(PickerModal(prompt, candidates, kind_label=kind), on_pick)
 
-    def _run_or_warn(self, command: object | None) -> None:
+    def _run_or_warn(self, command: object | None, select: str | None = None) -> None:
         """Apply *command*, or warn if the dispatch produced nothing."""
         if command is None:
             self.notify("This action isn't wired up yet.", severity="warning")
             return
-        self._apply_command(command)
+        self._apply_command(command, select=select)
 
     _CLASS_CREATE_ACTIONS = frozenset({"create_owl_class", "new_subclass"})
 
     def _open_input(self, field: DetailField, uri: str, path: Path) -> None:
         """Collect a single text/URI value in a modal, then run its action command."""
         action = field.meta.get("action", "")
-        # Creating a class opens the full class modal (URI + labels + comments).
+        # Creating a class / individual opens its full modal (URI + labels + …).
         if action in self._CLASS_CREATE_ACTIONS:
             self._open_class_create(action, uri, path)
             return
+        if action == "add_individual":
+            self._open_individual_create(uri, path)
+            return
         prompt, prefill_kind = edits.INPUT_ACTIONS[action]
+        # For a URI-minting action the created entity's URI *is* the typed value,
+        # so navigate to it once the tree rebuilds (make the create visible).
+        mints = prefill_kind == "base_uri"
 
         def _on_submit(value: str | None) -> None:
             if value:
-                self._run_or_warn(edits.action_command(action, uri, path, value, self.lang))
+                self._run_or_warn(
+                    edits.action_command(action, uri, path, value, self.lang),
+                    select=value if mints else None,
+                )
 
         # A new URI is minted fragment-only under the locked ontology/scheme base.
-        if prefill_kind == "base_uri":
+        if mints:
             base = uri_edit.mint_base(self.tax, action, uri)
             self.push_screen(UriModal(prompt, base), _on_submit)
         else:
@@ -1160,10 +1186,131 @@ class OntologyApp(App):
                         parent,
                         tuple(result["labels"].items()),
                         tuple(result["comments"].items()),
-                    )
+                    ),
+                    select=result["uri"],
                 )
 
         self.push_screen(ClassModal(prefix=base, langs=self._class_langs()), _on_submit)
+
+    # ── add / edit individual (full modal, mirroring the class flow) ────────────
+
+    @staticmethod
+    def _split_values(values: dict) -> tuple[tuple, tuple]:  # type: ignore[type-arg]
+        """Split the modal's ``{prop: (kind, value)}`` into (object, literal) pairs,
+        dropping empties."""
+        obj: list[tuple[str, str]] = []
+        lit: list[tuple[str, str]] = []
+        for prop_uri, (kind, value) in values.items():
+            if value:
+                (obj if kind == "object" else lit).append((prop_uri, value))
+        return tuple(obj), tuple(lit)
+
+    def _individual_candidates(self, range_uri: str | None) -> list[tuple[str, str]]:
+        """Existing individuals typed as *range_uri* (or a subclass) — the object-property
+        dropdown options, sorted by label."""
+        if not range_uri or range_uri not in self.tax.owl_classes:
+            return []
+        subtree = self._subtree_uris(range_uri)
+        out = [
+            (data.label_of(self.tax, u, self.lang), u)
+            for u, ind in self.tax.owl_individuals.items()
+            if subtree & set(ind.types)
+        ]
+        return sorted(out, key=lambda t: t[0].lower())
+
+    def _individual_prop_fields(self, class_uri: str) -> list:
+        """Build the modal's property rows from the class's direct + inherited properties."""
+        from ster.nav.logic import suggested_properties
+
+        from .individual_modal import PropField
+
+        fields = []
+        for sp in suggested_properties(self.tax, class_uri, self.lang):
+            label = sp.label
+            if sp.inherited_from:
+                label += f"  (from {data.label_of(self.tax, sp.inherited_from, self.lang)})"
+            candidates = self._individual_candidates(sp.range_uri) if sp.kind == "object" else []
+            fields.append(
+                PropField(
+                    prop_uri=sp.prop_uri, label=label, kind=sp.kind, candidates=tuple(candidates)
+                )
+            )
+        return fields
+
+    def _open_individual_create(self, class_uri: str, path: Path) -> None:
+        """Open the full individual modal to create an instance of *class_uri*."""
+        from ster.core.commands import OwlCreateIndividualFull
+
+        from .individual_modal import IndividualModal
+
+        base = uri_edit.mint_base(self.tax, "add_individual", class_uri)
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                obj_values, lit_values = self._split_values(result["values"])
+                self._apply_command(
+                    OwlCreateIndividualFull(
+                        path,
+                        result["uri"],
+                        class_uri,
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                        obj_values,
+                        lit_values,
+                    ),
+                    select=result["uri"],
+                )
+
+        self.push_screen(
+            IndividualModal(
+                prefix=base,
+                langs=self._class_langs(),
+                type_label=data.label_of(self.tax, class_uri, self.lang),
+                prop_fields=self._individual_prop_fields(class_uri),
+            ),
+            _on_submit,
+        )
+
+    def _open_individual_edit(self, uri: str, path: Path) -> None:
+        """Open the full individual modal to edit an existing individual (URI / labels /
+        comments). Types and property values stay managed via the per-row actions."""
+        from ster.core.commands import OwlSaveIndividual
+
+        from .individual_modal import IndividualModal
+
+        ind = self.tax.owl_individuals.get(uri)
+        if ind is None:
+            return
+        prefix, fragment = uri_edit.split_namespace(uri)
+        labels = {lbl.lang: lbl.value for lbl in ind.labels}
+        comments = {c.lang: c.value for c in ind.comments}
+        type_label = ", ".join(data.label_of(self.tax, t, self.lang) for t in ind.types)
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlSaveIndividual(
+                        path,
+                        uri,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                    ),
+                    select=result["uri"],
+                )
+
+        self.push_screen(
+            IndividualModal(
+                prefix=prefix,
+                fragment=fragment,
+                langs=self._class_langs(),
+                type_label=type_label,
+                labels=labels,
+                comments=comments,
+                title="Edit individual",
+            ),
+            _on_submit,
+        )
 
     def _open_class_edit(self, uri: str, path: Path) -> None:
         """Open the full class modal to edit an existing class (URI / labels / comments)."""
@@ -1187,7 +1334,8 @@ class OntologyApp(App):
                         result["uri"],
                         tuple(result["labels"].items()),
                         tuple(result["comments"].items()),
-                    )
+                    ),
+                    select=result["uri"],  # keep the highlight on the (possibly renamed) class
                 )
 
         self.push_screen(
@@ -1465,6 +1613,11 @@ class OntologyApp(App):
         if uri and _parse_action_uri(uri) is not None:
             self._show(None)
             return
+        if uri == self._detail_uri:
+            # Re-highlighting the entity already shown (e.g. a programmatic cursor move
+            # after a mutation) must not rebuild the detail — that would drop the focus
+            # _restore_focus just placed on a row. The explicit _show already refreshed it.
+            return
         self._show(uri)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
@@ -1503,11 +1656,19 @@ class OntologyApp(App):
             self.notify(f"Action not wired: {action}", severity="warning")
 
     def jump_to(self, uri: str) -> None:
-        """Expand ancestors, move the cursor to *uri*, and show its detail."""
+        """Expand ancestors, move the cursor to *uri* (focusing the tree), show its detail."""
+        if self._reveal_in_tree(uri, focus=True):
+            self._show(uri)  # detail is independent of tree layout — show it now
+        else:
+            self.notify(f"Not in tree: {uri}", severity="warning")
+
+    def _reveal_in_tree(self, uri: str, *, focus: bool) -> bool:
+        """Expand *uri*'s ancestors and move the cursor onto its node. Returns False
+        when *uri* has no tree node. *focus* steals keyboard focus to the tree — off
+        for background refreshes so the user's current focus is preserved."""
         node = self._uri_nodes.get(uri)
         if node is None:
-            self.notify(f"Not in tree: {uri}", severity="warning")
-            return
+            return False
         # Properties live in their own pane; everything else in the main tree.
         tree_id = "#prop-tree" if uri in self.tax.owl_properties else "#tree"
         tree = self.query_one(tree_id, Tree)
@@ -1515,14 +1676,15 @@ class OntologyApp(App):
         while parent is not None:
             parent.expand()
             parent = parent.parent
-        self._show(uri)  # detail is independent of tree layout — show it now
         # expand() only takes effect on the next refresh, so move the cursor after it:
-        self.call_after_refresh(self._focus_tree_node, tree, node)
+        self.call_after_refresh(self._focus_tree_node, tree, node, focus)
+        return True
 
-    def _focus_tree_node(self, tree: Tree, node: TreeNode) -> None:
+    def _focus_tree_node(self, tree: Tree, node: TreeNode, focus: bool = True) -> None:
         tree.move_cursor(node)
         tree.scroll_to_node(node)
-        tree.focus()
+        if focus:
+            tree.focus()
 
     def action_help(self) -> None:
         """Open the keys-and-actions help overlay."""

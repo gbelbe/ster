@@ -16,6 +16,7 @@ def _isolate_quality(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
 
+
 from ster.plugins.semanticlint.runner import (
     has_blocking_violations,
     lint_files,

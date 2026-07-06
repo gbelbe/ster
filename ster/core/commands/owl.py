@@ -178,6 +178,72 @@ class OwlCreateIndividual:
         return (self.uri,)
 
 
+_ValuePairs = tuple[tuple[str, str], ...]  # ((prop_uri, value), …)
+
+
+def _apply_individual_values(
+    taxonomy: Taxonomy, uri: str, obj_values: _ValuePairs, lit_values: _ValuePairs
+) -> None:
+    """Set an individual's object- and literal-property values (skipping empty ones)."""
+    for prop_uri, target in obj_values:
+        if target:
+            set_individual_property_value(taxonomy, uri, prop_uri, target, "")
+    for prop_uri, value in lit_values:
+        if value:
+            set_individual_literal(taxonomy, uri, prop_uri, "", value, "")
+
+
+@dataclass(frozen=True)
+class OwlCreateIndividualFull:
+    """Create an OWL individual with its type, ``rdfs:label`` / ``rdfs:comment`` and
+    property values in one step — the add-individual modal's command. Empty values
+    are skipped."""
+
+    target_path: Path
+    uri: str
+    type_uri: str | None = None
+    labels: _LangPairs = ()
+    comments: _LangPairs = ()
+    obj_values: _ValuePairs = ()
+    lit_values: _ValuePairs = ()
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        add_owl_individual(taxonomy, self.uri, self.type_uri)
+        for lang, value in self.labels:
+            if value:
+                set_owl_label(taxonomy, self.uri, lang, value)
+        for lang, value in self.comments:
+            if value:
+                set_owl_comment(taxonomy, self.uri, lang, value)
+        _apply_individual_values(taxonomy, self.uri, self.obj_values, self.lit_values)
+        assign_handles(taxonomy)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class OwlSaveIndividual:
+    """Edit an existing individual: rename it when *new_uri* differs (cascading across
+    references), then apply the label/comment desired-state — non-empty values upsert,
+    empty ones clear that language. Types and property values are left untouched
+    (managed via the per-row actions)."""
+
+    target_path: Path
+    old_uri: str
+    new_uri: str
+    labels: _LangPairs = ()
+    comments: _LangPairs = ()
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        uri = self.old_uri
+        if self.new_uri and self.new_uri != self.old_uri:
+            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
+            uri = self.new_uri
+        _set_localized(taxonomy, uri, self.labels, kind="label")
+        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        assign_handles(taxonomy)
+        return (uri,)
+
+
 @dataclass(frozen=True)
 class OwlAddProperty:
     """Create an OWL property. A bare property passes prop_type='ObjectProperty'

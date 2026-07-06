@@ -1667,6 +1667,131 @@ def test_overview_quality_sections_render_in_a_bordered_group_box() -> None:
     _run(scenario)
 
 
+def test_editing_keeps_tree_highlight_put_regression(tmp_path) -> None:
+    """Regression: after a plain edit (no new entity), the tree highlight must stay on
+    the entity the user was on — not reset to the top of the tree when the rebuild
+    wipes and re-adds the nodes. Root cause: the ``select is None`` branch of
+    ``_apply_command`` never restored the cursor the ``_rebuild_tree`` reset."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input, Tree
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")  # expand so Dog is a visible node
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
+            app._show(ZOO + "Dog")  # detail pane on Dog
+            await pilot.pause()
+            label_row = next(
+                r
+                for r in app.query(DetailRow)
+                if r.field.meta.get("type") == "rdf_label" and r.field.editable
+            )
+            label_row.focus()
+            await pilot.press("enter")  # open the edit modal
+            await pilot.pause()
+            app.screen.query_one("#edit-input", Input).value = "Canine"
+            await pilot.press("enter")  # submit → command → rebuild
+            for _ in range(4):
+                await pilot.pause()
+            # The highlight stayed on Dog (did not jump to the top of the tree) …
+            assert tree.cursor_node is app._uri_nodes[ZOO + "Dog"]
+            # … and focus stayed in the detail pane, never stolen to the tree.
+            assert app.focused is not tree
+
+    _run(scenario)
+
+
+def test_renaming_a_class_follows_the_entity_regression(tmp_path) -> None:
+    """Regression: renaming a class's URI must keep the highlight on that same (renamed)
+    entity, not jump to the top. Root cause: ``_open_class_edit`` passed no ``select``,
+    so the rebuild reset the cursor and ``_detail_uri`` was left pointing at the gone
+    old URI."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.nav.logic import DetailField
+        from ster.tui.class_modal import ClassModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
+            app._show(ZOO + "Dog")
+            await pilot.pause()
+            # "Edit class…" is a context-menu action, dispatched via _run_field_action.
+            app._run_field_action(
+                DetailField("k", "Edit class", "", editable=False, meta={"action": "edit_class"})
+            )
+            await pilot.pause()
+            assert isinstance(app.screen, ClassModal)
+            app.screen._uri.value = ZOO + "Canine"  # rename the URI fragment
+            app.screen._submit()
+            for _ in range(4):
+                await pilot.pause()
+            renamed = ZOO + "Canine"
+            assert renamed in app.tax.owl_classes  # the rename happened
+            # The highlight followed the entity to its new URI …
+            assert tree.cursor_node is app._uri_nodes[renamed]
+            # … and the detail pane tracks the new URI, not the stale old one.
+            assert app._detail_uri == renamed
+
+    _run(scenario)
+
+
+def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_path) -> None:
+    """Regression: creating an individual reveals it in the tree (highlight moves to the
+    new entity) but must NOT steal keyboard focus away to the tree. Root cause: creates
+    went through ``jump_to`` which focuses the tree."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.detail_view import DetailRow
+        from ster.tui.individual_modal import IndividualModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Dog")  # a class detail exposes "New individual of this class"
+            await pilot.pause()
+            row = next(
+                r for r in app.query(DetailRow) if r.field.meta.get("action") == "add_individual"
+            )
+            row.focus()
+            await pilot.press("enter")  # → full individual modal
+            await pilot.pause()
+            assert isinstance(app.screen, IndividualModal)
+            app.screen._uri.value = ZOO + "Fido"
+            app.screen._submit()
+            for _ in range(4):
+                await pilot.pause()
+            created = ZOO + "Fido"
+            assert created in app.tax.owl_individuals  # created
+            tree = app.query_one("#tree", Tree)
+            # The new individual is revealed (highlight moved to it) …
+            assert tree.cursor_node is app._uri_nodes[created]
+            # … but focus stayed in the detail pane, not stolen to the tree.
+            assert app.focused is not tree
+
+    _run(scenario)
+
+
 def test_bottom_bar_shows_the_selected_language() -> None:
     """The bottom-right status overlay reports the current display language."""
 

@@ -1898,6 +1898,46 @@ def _inherited_properties(taxonomy: Taxonomy, class_uri: str) -> list[tuple]:
     return result
 
 
+@dataclass(frozen=True)
+class SuggestedProperty:
+    """One property applicable to instances of a class — surfaced in the
+    add-individual modal. ``inherited_from`` is ``None`` for a property whose
+    domain is the class itself, else the ancestor class the domain was declared on."""
+
+    prop_uri: str
+    label: str
+    kind: str  # "object" | "datatype" | "other"
+    range_uri: str | None
+    inherited_from: str | None
+
+
+_PROP_KIND = {"ObjectProperty": "object", "DatatypeProperty": "datatype"}
+
+
+def suggested_properties(taxonomy: Taxonomy, class_uri: str, lang: str = "en") -> list:
+    """Properties an instance of *class_uri* may carry — direct then inherited.
+
+    Direct properties (domain is the class) come first, then properties inherited
+    from any ``rdfs:subClassOf`` ancestor (de-duplicated, each tagged with the
+    ancestor it came from). Returns ``[]`` for an unknown class.
+    """
+    if class_uri not in taxonomy.owl_classes:
+        return []
+
+    def _make(prop, source: str | None) -> SuggestedProperty:  # type: ignore[no-untyped-def]
+        return SuggestedProperty(
+            prop_uri=prop.uri,
+            label=prop.label(lang),
+            kind=_PROP_KIND.get(prop.prop_type, "other"),
+            range_uri=prop.ranges[0] if prop.ranges else None,
+            inherited_from=source,
+        )
+
+    direct = [_make(p, None) for p in _direct_properties(taxonomy, class_uri)]
+    inherited = [_make(p, src) for p, src in _inherited_properties(taxonomy, class_uri)]
+    return direct + inherited
+
+
 def _add_class_property_actions(class_uri: str) -> list[DetailField]:
     """Action rows to define a new property on a class: a relationship, or an
     attribute of each supported datatype. Each row carries the prop_type and
