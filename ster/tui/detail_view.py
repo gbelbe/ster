@@ -28,14 +28,18 @@ PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
 def _insert_issue_sections(
     sections: list[DetailSection], issue_fields: list | None
 ) -> list[DetailSection]:
-    """Splice the plugin's 'Quality issues' section(s) in just after Identity (the first
+    """Splice the plugin's quality sections (the 'Issues' summary + 'Quality issues'
+    list) in just after the class's 'Property Fill' section — inside the Quality &
+    Coverage box — when one is present; otherwise just after Identity (the first
     section), or at the top when there is none. No-op when there are no issue fields."""
     if not issue_fields:
         return sections
     issue_sections = group_sections(issue_fields)
     if not sections:
         return issue_sections
-    return [sections[0], *issue_sections, *sections[1:]]
+    # Prefer landing under "Property Fill" (inside the box); else fall back to Identity.
+    anchor = next((i for i, s in enumerate(sections) if s.title == "Property Fill"), 0)
+    return [*sections[: anchor + 1], *issue_sections, *sections[anchor + 1 :]]
 
 
 # Hover help for action rows (mouse + keyboard discoverability). Anything not

@@ -668,7 +668,7 @@ class OntologyApp(App):
         for entity_uri in self._subtree_uris(uri):
             for issue in by_subject.get(entity_uri, []):
                 counts[issue["severity"]] = counts.get(issue["severity"], 0) + 1
-        return hooks.quality_summary_fields(counts, title="Quality (subtree)")
+        return hooks.quality_summary_fields(counts, title="Issues")
 
     def _subtree_uris(self, uri: str) -> set[str]:
         """Every entity URI in *uri*'s subtree (class / concept hierarchy), else {uri}."""

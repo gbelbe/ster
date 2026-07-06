@@ -1007,6 +1007,44 @@ def test_detail_shows_subtree_quality_block_for_a_class_or_concept(
     _run(scenario)
 
 
+_OWL_SUBCLASS = (
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+    "@prefix ex:   <http://example.org/> .\n\n"
+    "ex:Ont a owl:Ontology .\n"
+    'ex:Animal a owl:Class ; rdfs:label "Animal"@en .\n'
+    'ex:Dog a owl:Class ; rdfs:subClassOf ex:Animal ; rdfs:label "Dog"@en .\n'
+    'ex:hasAge a owl:DatatypeProperty ; rdfs:label "has age"@en ; rdfs:domain ex:Animal .\n'
+    'ex:Rex a owl:NamedIndividual, ex:Dog ; rdfs:label "Rex"@en .\n'  # gives Property Fill a row
+)
+
+
+def test_class_quality_summary_is_titled_issues_under_property_fill(
+    tmp_path, semanticlint_enabled
+) -> None:
+    """On a class with subclasses the subtree quality summary drops the old 'Quality
+    (subtree)' header, becomes an 'Issues' section, and sits right after 'Property Fill'
+    inside the Quality & Coverage box."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import SectionHeader
+
+        src = tmp_path / "o.ttl"
+        src.write_text(_OWL_SUBCLASS, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(4):
+                await pilot.pause()
+            app._show("http://example.org/Animal")  # has subclass Dog → the box shows
+            await pilot.pause()
+            titles = [h.title_text for h in app.query(SectionHeader)]
+            assert "Quality (subtree)" not in titles  # old header gone
+            assert "Property Fill" in titles and "Issues" in titles
+            assert titles.index("Issues") == titles.index("Property Fill") + 1  # directly under
+
+    _run(scenario)
+
+
 def _lint_row(app, severity: str):  # noqa: ANN001 - test helper
     """The overview's 'Errors'/'Warnings' count row for *severity*."""
     from ster.tui.detail_view import DetailRow

@@ -120,3 +120,41 @@ def test_render_detail_individual_shows_property_value() -> None:
 def test_render_detail_unknown_uri_is_empty() -> None:
     tax = store.load(_DEMO)
     assert render_detail(tax, _ZOO + "DoesNotExist", "en") == ""
+
+
+# ── Quality sections relocate under "Property Fill" ────────────────────────────
+
+
+def _grp(title: str = "", **kw) -> DetailSection:  # type: ignore[no-untyped-def]
+    return DetailSection(title=title, **kw)
+
+
+def test_issue_sections_land_under_property_fill_inside_the_box() -> None:
+    """The plugin's quality sections splice in right after the 'Property Fill' section,
+    still inside the Quality & Coverage group (before its group-end)."""
+    from ster.nav.logic import _sep, _stat
+    from ster.tui.detail_view import _insert_issue_sections
+
+    sections = [
+        _grp("Identity"),
+        _grp("Quality & Coverage", group=True),
+        _grp("Completeness"),
+        _grp("Property Fill"),
+        _grp("", group_end=True),
+    ]
+    issue_fields = [_sep("Issues"), _stat("stq:error", "Errors", "2")]
+    out = _insert_issue_sections(sections, issue_fields)
+    titles = [s.title for s in out]
+    assert titles.index("Issues") == titles.index("Property Fill") + 1  # directly under it
+    assert out[titles.index("Issues") + 1].group_end  # still inside the bordered box
+
+
+def test_issue_sections_fall_back_to_after_identity_without_property_fill() -> None:
+    """When there's no Property Fill (concept / individual / leaf class), the quality
+    sections keep their after-Identity placement."""
+    from ster.nav.logic import _sep, _stat
+    from ster.tui.detail_view import _insert_issue_sections
+
+    sections = [_grp("Identity"), _grp("Labels")]
+    out = _insert_issue_sections(sections, [_sep("Issues"), _stat("stq:clean", "✓ no issues", "")])
+    assert [s.title for s in out] == ["Identity", "Issues", "Labels"]
