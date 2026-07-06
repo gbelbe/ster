@@ -11,6 +11,8 @@ The configured-languages block is a single Tab stop: Tab from it jumps to
 
 from __future__ import annotations
 
+from typing import Literal
+
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -54,6 +56,23 @@ class DeclareAnnotationProperty(Message):
         self.comment = comment
 
 
+class EnforceShaclRequested(Message):
+    """Ask the app to write (or remove) a mandatory SHACL rule for an annotation
+    property configured in a catalog.
+
+    *scope* is ``"ontology"`` (require it on the ontology node) or ``"entity"``
+    (require it on every owl:Class and skos:Concept). *enforce* True writes the
+    rule, False removes it. The app owns the ontology file, so it does the I/O.
+    """
+
+    def __init__(self, predicate: str, label: str, enforce: bool, scope: str) -> None:
+        super().__init__()
+        self.predicate = predicate
+        self.label = label
+        self.enforce = enforce
+        self.scope = scope
+
+
 # Common namespaces → prefix, for suggesting a label when registering a predicate.
 _KNOWN_PREFIXES: tuple[tuple[str, str], ...] = (
     ("http://purl.org/dc/terms/", "dcterms"),
@@ -82,6 +101,46 @@ class _MetaCheckbox(Checkbox):
         self.label_text = label or suggest_label(predicate)
         super().__init__(self.label_text, value=True, classes="cfg-mp-box")
         self.predicate = predicate
+
+
+class _EnforceButton(Button):
+    """Per-predicate toggle, styled by standard convention: a green (success) '◆ Enforce
+    (SHACL rule)' when not enforced, a red (error) '⊘ Delete SHACL rule' when it is — so
+    the create vs destructive action reads at a glance from both colour and icon."""
+
+    def __init__(self, predicate: str, enforce: bool = False) -> None:
+        self.predicate = predicate
+        self._enforce = enforce
+        super().__init__(self._text(), variant=self._variant(), classes="cfg-mp-enforce")
+
+    def _text(self) -> str:
+        return "⊘ Delete SHACL rule" if self._enforce else "◆ Enforce (SHACL rule)"
+
+    def _variant(self) -> Literal["success", "error"]:
+        return "error" if self._enforce else "success"  # red = destructive, green = create
+
+    @property
+    def enforce(self) -> bool:
+        return self._enforce
+
+    def toggle(self) -> bool:
+        """Flip the enforced state, restyle (label + colour), and return the new state."""
+        self._enforce = not self._enforce
+        self.label = self._text()
+        self.variant = self._variant()  # type: ignore[assignment]
+        return self._enforce
+
+
+class _MetaRow(Horizontal):
+    """One catalog row: the offered-checkbox next to its Enforce/Delete SHACL button."""
+
+    def __init__(self, predicate: str, label: str, enforce: bool = False) -> None:
+        super().__init__(classes="cfg-mp-row")
+        self._predicate, self._label, self._enforce = predicate, label, enforce
+
+    def compose(self) -> ComposeResult:
+        yield _MetaCheckbox(self._predicate, self._label)
+        yield _EnforceButton(self._predicate, self._enforce)
 
 
 class _SecretInput(Input):
@@ -159,6 +218,7 @@ class _MetaCatalog(FocusGroup):
         verifier=None,  # Callable[[str], bool] | None — is the URI an annotation property?
         can_declare: bool = False,  # may we declare it locally on confirm?
         base_uri: str = "",  # ontology base IRI — fixed prefix for new local properties
+        scope: str = "entity",  # "ontology" | "entity" — SHACL enforcement target
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -168,11 +228,12 @@ class _MetaCatalog(FocusGroup):
         self._verifier = verifier
         self._can_declare = can_declare
         self._base_uri = base_uri
+        self.scope = scope
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="cfg-mprops"):
             for mp in self._initial:
-                yield _MetaCheckbox(mp.predicate, mp.label)
+                yield _MetaRow(mp.predicate, mp.label, mp.enforce)
         yield Button("🔍 Search library…", classes="cfg-mp-search")
         yield Static("or add by URI:", classes="cfg-hint")
         with Horizontal(classes="cfg-mp-add-row"):
@@ -187,7 +248,7 @@ class _MetaCatalog(FocusGroup):
         library picker and the typed-URI add."""
         if not predicate or predicate in {cb.predicate for cb in self.query(_MetaCheckbox)}:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(predicate, label))
+        await self.query_one(".cfg-mprops").mount(_MetaRow(predicate, label))
         self.post_message(self.Changed())
 
     @on(Button.Pressed, ".cfg-mp-search")
@@ -206,10 +267,40 @@ class _MetaCatalog(FocusGroup):
             await self.add_predicate(prop.predicate, prop.label)
 
     def props(self) -> list[MetaProp]:
-        """The ticked predicates as ``(predicate, label)`` :class:`MetaProp` entries."""
+        """The ticked predicates as :class:`MetaProp` entries, each carrying its row's
+        SHACL-enforce state."""
         return [
-            MetaProp(cb.predicate, cb.label_text) for cb in self.query(_MetaCheckbox) if cb.value
+            MetaProp(cb.predicate, cb.label_text, enforce=self._enforce_of(cb))
+            for cb in self.query(_MetaCheckbox)
+            if cb.value
         ]
+
+    @staticmethod
+    def _enforce_of(cb: _MetaCheckbox) -> bool:
+        """The enforce state of the row *cb* belongs to (its sibling button)."""
+        row = cb.parent
+        if row is None:
+            return False
+        buttons = list(row.query(_EnforceButton))
+        return bool(buttons) and buttons[0].enforce
+
+    @on(Button.Pressed, ".cfg-mp-enforce")
+    def _on_enforce(self, event: Button.Pressed) -> None:
+        """Toggle a predicate's SHACL enforcement — ask the app to write/remove the rule
+        and persist the flag."""
+        event.stop()
+        button = event.button
+        now = button.toggle()  # type: ignore[attr-defined]
+        label = suggest_label(button.predicate)  # type: ignore[attr-defined]
+        row = button.parent
+        if row is not None:
+            checkboxes = list(row.query(_MetaCheckbox))
+            if checkboxes:
+                label = checkboxes[0].label_text
+        self.post_message(
+            EnforceShaclRequested(button.predicate, label, now, self.scope)  # type: ignore[attr-defined]
+        )
+        self.post_message(self.Changed())  # persist the enforce flag into the catalog
 
     async def add_typed(self) -> None:
         """Mount a checkbox for the typed predicate (deduped); clear the fields."""
@@ -218,7 +309,7 @@ class _MetaCatalog(FocusGroup):
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaRow(uri, label))
         self.query_one(".cfg-mp-uri", Input).value = ""
         self.query_one(".cfg-mp-label", Input).value = ""
         self.post_message(self.Changed())  # ask the modal to auto-save
@@ -255,7 +346,7 @@ class _MetaCatalog(FocusGroup):
         if not name or uri in present:
             return
         label = label.strip() or name
-        await self.query_one(".cfg-mprops").mount(_MetaCheckbox(uri, label))
+        await self.query_one(".cfg-mprops").mount(_MetaRow(uri, label))
         self.post_message(self.Changed())  # auto-save the catalog
         self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
 
@@ -290,8 +381,14 @@ class _MetaCatalog(FocusGroup):
 
     # ── focus-group navigation ──────────────────────────────────────────────────
     def _items(self) -> list:  # type: ignore[type-arg]
+        # Each row contributes its offered-checkbox then its Enforce/Delete button, in
+        # order, so Up/Down rove offered → enforce → next row's offered → …
+        rows: list = []
+        for row in self.query(_MetaRow):
+            rows.extend(row.query(_MetaCheckbox))
+            rows.extend(row.query(_EnforceButton))
         return [
-            *self.query(_MetaCheckbox),
+            *rows,
             *self.query(".cfg-mp-search"),
             *self.query(".cfg-mp-uri"),
             *self.query(".cfg-mp-label"),
@@ -306,7 +403,8 @@ class _MetaCatalog(FocusGroup):
             item.scroll_visible()  # keep the current property in view while roving
             self.focus()  # keep focus on the group so space toggles
         else:
-            item.focus()  # the add field / + button
+            item.scroll_visible()
+            item.focus()  # the enforce button / add field / + button (Enter presses it)
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         """Inside the list: Up/Down rove the items, Left (or Up past the top) returns
@@ -465,9 +563,11 @@ class ConfigModal(ModalBase[None]):
     #cfg-tab-props CollapsibleTitle:focus { background: $secondary 30%; }
     #cfg-tab-props Contents { background: transparent; }
     _MetaCatalog { height: auto; }
-    .cfg-mprops { height: auto; max-height: 12; }
-    .cfg-mprops .cfg-mp-box { height: auto; margin-bottom: 1; border: none; background: transparent; }
+    .cfg-mprops { height: auto; max-height: 18; }
+    .cfg-mp-row { height: 3; width: 1fr; }
+    .cfg-mprops .cfg-mp-box { height: 3; width: 1fr; content-align: left middle; border: none; background: transparent; }
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
+    .cfg-mp-enforce { width: auto; min-width: 24; margin-left: 1; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
     .cfg-mp-uri { width: 2fr; border: round $primary; }
     .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
@@ -743,6 +843,7 @@ class ConfigModal(ModalBase[None]):
                 verifier=self._annotation_verifier,
                 can_declare=self._can_declare,
                 base_uri=self._base_uri,
+                scope="ontology",  # enforced on the ontology node
             )
         with Collapsible(title="Entity metadata", collapsed=False, id="cfg-entity-meta-group"):
             yield Static(
@@ -757,6 +858,7 @@ class ConfigModal(ModalBase[None]):
                 verifier=self._annotation_verifier,
                 can_declare=self._can_declare,
                 base_uri=self._base_uri,
+                scope="entity",  # enforced on every owl:Class and skos:Concept
             )
 
     def _tab_ids(self) -> list[str]:

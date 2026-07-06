@@ -325,6 +325,8 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
     "property": [
         ("→ Add domain class…", "add_prop_domain"),
         ("→ Add range class…", "add_prop_range"),
+        ("◆ Enforce with SHACL rule", "enforce_shacl"),
+        ("◇ Remove SHACL rule", "unenforce_shacl"),
         ("✎ Rename URI…", "rename"),
         ("⊘ Delete…", "delete_property"),
     ],

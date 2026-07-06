@@ -209,7 +209,7 @@ def test_item_list_roves_with_arrows_and_space_toggles(tmp_path) -> None:
     toggles the highlighted one."""
 
     async def scenario() -> None:
-        from ster.tui.config_modal import _MetaCheckbox
+        from ster.tui.config_modal import _EnforceButton, _MetaCheckbox
 
         app, _src = _app(tmp_path)
         async with app.run_test(size=(120, 48)) as pilot:
@@ -225,7 +225,10 @@ def test_item_list_roves_with_arrows_and_space_toggles(tmp_path) -> None:
             await pilot.press("space")  # toggle it off
             await pilot.pause()
             assert first.value is False
-            await pilot.press("down")  # rove to the next property
+            await pilot.press("down")  # rove onto this row's Enforce (SHACL) button
+            await pilot.pause()
+            assert app.focused is catalog.query(_EnforceButton).first()
+            await pilot.press("down")  # rove to the next property's checkbox
             await pilot.pause()
             assert list(catalog.query(_MetaCheckbox))[1].has_class("mp-current")
 
@@ -1035,3 +1038,44 @@ def test_default_catalog_no_longer_offers_change_provenance(tmp_path) -> None:
     preds = {mp.predicate for mp in default_annotation_catalog()}
     for gone in ("creator", "contributor", "created", "modified"):
         assert f"http://purl.org/dc/terms/{gone}" not in preds
+
+
+def test_enforce_button_toggles_its_label() -> None:
+    """The per-property button reads 'Enforce (SHACL rule)' and flips to 'Delete SHACL
+    rule' once enforced."""
+    from ster.tui.config_modal import _EnforceButton
+
+    button = _EnforceButton("http://example.org/creator", enforce=False)
+    assert "Enforce" in str(button.label) and button.enforce is False
+    assert button.variant == "success"  # green = create (standard convention)
+    assert button.toggle() is True
+    assert "Delete" in str(button.label) and button.enforce is True
+    assert button.variant == "error"  # red = destructive
+    assert button.toggle() is False  # back to Enforce
+    assert "Enforce" in str(button.label) and button.variant == "success"
+
+
+def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path) -> None:
+    """Pressing a catalog row's Enforce button writes a SHACL rule (message reaches the
+    app) and relabels the button to Delete; pressing again removes the rule."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import _EnforceButton
+
+        app, src = _app(tmp_path)
+        shapes = src.with_name("o.shapes.ttl")
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            button = _entity_catalog(modal).query(_EnforceButton).first()
+            button.press()  # → EnforceShaclRequested bubbles to the app
+            for _ in range(3):
+                await pilot.pause()
+            assert shapes.exists() and "sh:minCount 1" in shapes.read_text(encoding="utf-8")
+            assert "Delete" in str(button.label)
+            button.press()  # toggle off → rule removed
+            for _ in range(3):
+                await pilot.pause()
+            assert "sh:minCount 1" not in shapes.read_text(encoding="utf-8")
+            assert "Enforce" in str(button.label)
+
+    _run(scenario)

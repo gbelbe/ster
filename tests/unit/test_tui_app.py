@@ -2016,6 +2016,168 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
     _run(scenario)
 
 
+def _action_field(action: str):  # type: ignore[no-untyped-def]
+    """A synthetic action field standing in for a property context-menu choice."""
+    from ster.nav.logic import DetailField
+
+    return DetailField("ctx", "", "", editable=False, meta={"type": "action", "action": action})
+
+
+def _enforce_field():  # type: ignore[no-untyped-def]
+    return _action_field("enforce_shacl")
+
+
+def test_enforce_shacl_writes_a_mandatory_rule_to_the_sibling_shapes_file(tmp_path) -> None:
+    """The property context action writes a mandatory SHACL rule (targeting the domain)
+    to <stem>.shapes.ttl, with a dated comment."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "hasOwner")  # domain: Animal, range: Person
+            await pilot.pause()
+            app._run_field_action(_enforce_field())
+            await pilot.pause()
+            shapes = src.with_name("o.shapes.ttl")
+            assert shapes.exists()
+            text = shapes.read_text(encoding="utf-8")
+            assert "# ster " in text  # dated comment
+            assert f"sh:targetClass <{ZOO}Animal>" in text  # required on its domain
+            assert f"sh:path <{ZOO}hasOwner>" in text and "sh:minCount 1" in text
+
+    _run(scenario)
+
+
+def test_unenforce_shacl_removes_the_rule(tmp_path) -> None:
+    """The 'Remove SHACL rule' action deletes the property's rule from the shapes file."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "hasOwner")
+            await pilot.pause()
+            app._run_field_action(_enforce_field())  # enforce first
+            await pilot.pause()
+            shapes = src.with_name("o.shapes.ttl")
+            assert f"sh:path <{ZOO}hasOwner>" in shapes.read_text(encoding="utf-8")
+            app._run_field_action(_action_field("unenforce_shacl"))  # then remove
+            await pilot.pause()
+            assert f"sh:path <{ZOO}hasOwner>" not in shapes.read_text(encoding="utf-8")
+
+    _run(scenario)
+
+
+def test_config_enforce_entity_scope_writes_class_and_concept_rules(tmp_path) -> None:
+    """Enforcing an entity-metadata property (config tab) writes rules requiring it on
+    every owl:Class and skos:Concept, and un-enforcing removes them."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import EnforceShaclRequested
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        shapes = src.with_name("o.shapes.ttl")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            pred = "http://purl.org/dc/terms/description"
+            app.on_enforce_shacl_requested(
+                EnforceShaclRequested(pred, "description", True, "entity")
+            )
+            await pilot.pause()
+            text = shapes.read_text(encoding="utf-8")
+            assert "sh:targetClass <http://www.w3.org/2002/07/owl#Class>" in text
+            assert "sh:targetClass <http://www.w3.org/2004/02/skos/core#Concept>" in text
+            assert f"sh:path <{pred}>" in text
+            app.on_enforce_shacl_requested(
+                EnforceShaclRequested(pred, "description", False, "entity")
+            )
+            await pilot.pause()
+            assert pred not in shapes.read_text(encoding="utf-8")  # both rules removed
+
+    _run(scenario)
+
+
+def test_config_enforce_ontology_scope_targets_the_ontology_node(tmp_path) -> None:
+    """Enforcing an ontology-metadata property requires it on the ontology node."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import EnforceShaclRequested
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            ont = app.tax.ontology_uri
+            assert ont  # the demo declares an owl:Ontology
+            pred = "http://purl.org/dc/terms/creator"
+            app.on_enforce_shacl_requested(EnforceShaclRequested(pred, "creator", True, "ontology"))
+            await pilot.pause()
+            text = src.with_name("o.shapes.ttl").read_text(encoding="utf-8")
+            assert f"sh:targetNode <{ont}>" in text and f"sh:path <{pred}>" in text
+
+    _run(scenario)
+
+
+def test_config_enforce_ontology_scope_without_ontology_node_writes_nothing(tmp_path) -> None:
+    """Ontology-scope enforcement needs an owl:Ontology node; without one it warns and
+    writes no rule."""
+
+    async def scenario() -> None:
+        from ster.tui.config_modal import EnforceShaclRequested
+
+        ttl = (
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "@prefix ex: <http://example.org/> .\n\n"
+            "ex:Animal a owl:Class .\n"  # no owl:Ontology declaration
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert not app.tax.ontology_uri
+            app.on_enforce_shacl_requested(
+                EnforceShaclRequested("http://x/creator", "creator", True, "ontology")
+            )
+            await pilot.pause()
+            assert not src.with_name("o.shapes.ttl").exists()
+
+    _run(scenario)
+
+
+def test_enforce_shacl_without_a_domain_writes_nothing(tmp_path) -> None:
+    """A property with no rdfs:domain has nothing to attach 'required' to — no file."""
+
+    async def scenario() -> None:
+        ttl = (
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            "@prefix ex:   <http://example.org/> .\n\n"
+            "ex:Ont a owl:Ontology .\n"
+            'ex:orphan a owl:ObjectProperty ; rdfs:label "orphan"@en .\n'  # no domain
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(ttl, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show("http://example.org/orphan")
+            await pilot.pause()
+            app._run_field_action(_enforce_field())
+            await pilot.pause()
+            assert not src.with_name("o.shapes.ttl").exists()
+
+    _run(scenario)
+
+
 def test_bottom_bar_shows_the_selected_language() -> None:
     """The bottom-right status overlay reports the current display language."""
 

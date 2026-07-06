@@ -19,10 +19,12 @@ from .model import Taxonomy
 
 @dataclass(frozen=True)
 class MetaProp:
-    """One catalogued annotation predicate: its URI and a display label."""
+    """One catalogued annotation predicate: its URI, a display label, and whether it is
+    enforced as a mandatory SHACL rule (``enforce``)."""
 
     predicate: str
     label: str = ""
+    enforce: bool = False
 
 
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"

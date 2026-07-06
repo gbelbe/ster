@@ -165,6 +165,8 @@ def test_context_actions_per_kind() -> None:
         "delete_scheme",
     ]
     assert "delete" in [a for _, a in context_actions("concept")]
+    prop_actions = [a for _, a in context_actions("property")]
+    assert "enforce_shacl" in prop_actions and "unenforce_shacl" in prop_actions  # SHACL rules
     assert context_actions("nonexistent") == []
 
 

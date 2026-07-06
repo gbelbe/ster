@@ -90,7 +90,11 @@ def _load_props_catalog(path: Path) -> list[MetaProp] | None:
             data = json.loads(path.read_text())
             if isinstance(data, list):
                 return [
-                    MetaProp(str(e["predicate"]), str(e.get("label", "")))
+                    MetaProp(
+                        str(e["predicate"]),
+                        str(e.get("label", "")),
+                        enforce=bool(e.get("enforce", False)),
+                    )
                     for e in data
                     if isinstance(e, dict) and e.get("predicate")
                 ]
@@ -103,7 +107,9 @@ def _save_props_catalog(path: Path, props: list[MetaProp]) -> None:
     """Persist a ``(predicate, label)`` :class:`MetaProp` catalog to *path* (best-effort)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        entries = [{"predicate": mp.predicate, "label": mp.label} for mp in props]
+        entries = [
+            {"predicate": mp.predicate, "label": mp.label, "enforce": mp.enforce} for mp in props
+        ]
         path.write_text(json.dumps(entries, indent=2))
     except Exception:
         pass

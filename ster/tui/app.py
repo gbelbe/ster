@@ -428,6 +428,66 @@ class OntologyApp(App):
         if comment:
             self._apply_command(OwlSetComment(self._path, uri, self.lang, comment))
 
+    #: SHACL enforcement targets for the entity-metadata catalog (user decision:
+    #: classes and concepts only — not individuals or properties).
+    _ENTITY_SHACL_TARGETS = (
+        ("http://www.w3.org/2002/07/owl#Class", "every class"),
+        ("http://www.w3.org/2004/02/skos/core#Concept", "every concept"),
+    )
+
+    def on_enforce_shacl_requested(self, message) -> None:  # type: ignore[no-untyped-def]
+        """A config-tab enforce button toggled → write (or remove) the SHACL rule(s)
+        making an annotation property mandatory, then re-lint."""
+        import datetime
+
+        from ster import shacl
+
+        if self._path is None:
+            self.notify("Read-only session — open the ontology first.", severity="warning")
+            return
+        targets = self._shacl_targets(message.scope)
+        if not targets:
+            self.notify("No ontology node to enforce on.", severity="warning")
+            return
+        shapes_path = shacl.shapes_path_for(self._path)
+        if message.enforce:
+            today = datetime.date.today().isoformat()
+            rules = [
+                self._annotation_rule(t, t_label, message.predicate, message.label, today)
+                for t, t_label in targets
+            ]
+            shacl.append_rules(shapes_path, rules)
+            self.notify(f"Enforced “{message.label}” via SHACL.")
+        else:
+            iris = [shacl.shape_iri(t, message.predicate) for t, _ in targets]
+            shacl.remove_rules(shapes_path, iris)
+            self.notify(f"Removed the SHACL rule for “{message.label}”.")
+        self._invalidate_lint()
+        self._refresh_lint_async()
+
+    def _shacl_targets(self, scope: str) -> list[tuple[str, str]]:
+        """(target_uri, label) pairs for a catalog *scope*: the ontology node, or every
+        class + concept."""
+        if scope == "ontology":
+            ont = self.tax.ontology_uri
+            return [(ont, "the ontology")] if ont else []
+        return list(self._ENTITY_SHACL_TARGETS)
+
+    def _annotation_rule(
+        self, target: str, target_label: str, predicate: str, label: str, date: str
+    ):  # type: ignore[no-untyped-def]
+        """Build the mandatory rule for *predicate* on *target* — a node rule for the
+        ontology, else a class rule."""
+        from ster import shacl
+
+        if target == self.tax.ontology_uri:
+            return shacl.mandatory_on_node_rule(
+                target, predicate, node_label=target_label, prop_label=label, date=date
+            )
+        return shacl.mandatory_property_rule(
+            target, predicate, target_label=target_label, prop_label=label, date=date
+        )
+
     def _apply_config(self, result: dict) -> None:
         """Apply + persist the chosen languages and theme. Re-renders the detail
         whenever the configured set changes (so new add-label rows appear), and
@@ -1008,24 +1068,27 @@ class OntologyApp(App):
         """An action row was activated → run it (shared with the right-click menu)."""
         self._run_field_action(message.field)
 
+    #: (uri, path) entity actions that open a dedicated flow — dispatched by name so
+    #: adding one is a table row, not another branch in _run_field_action.
+    _ENTITY_ACTION_HANDLERS = {
+        "edit_class": "_open_class_edit",  # full class modal (URI + labels + comments)
+        "edit_individual": "_open_individual_edit",  # full individual modal
+        "enforce_shacl": "_enforce_shacl",  # write a mandatory SHACL rule, then re-lint
+        "unenforce_shacl": "_unenforce_shacl",  # remove the property's SHACL rule
+    }
+
     def _run_field_action(self, field: DetailField) -> None:
         """Dispatch an action *field*: graph view, meta-driven removal, or a flow."""
         action = field.meta.get("action", "")
-        if action in ("view_ontology_graph", "view_focused_graph"):
-            self._open_graph(action, field)  # a view, not a mutation — no service needed
-            return
-        if action == "view_lint":
-            self._open_lint(field.meta.get("lint_severity"))  # a view — no service needed
+        if self._run_view_action(action, field):  # read-only views need no service
             return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
-        if action == "edit_class":
-            self._open_class_edit(uri, path)  # full class modal (URI + labels + comments)
-            return
-        if action == "edit_individual":
-            self._open_individual_edit(uri, path)  # full individual modal
+        handler = self._ENTITY_ACTION_HANDLERS.get(action)
+        if handler is not None:
+            getattr(self, handler)(uri, path)
             return
         direct = edits.direct_command(field, uri, path)
         if direct is not None:  # meta-driven removal — run immediately, no modal
@@ -1036,6 +1099,17 @@ class OntologyApp(App):
             self.notify("This action isn't wired up yet.", severity="warning")
             return
         opener(field, uri, path)
+
+    def _run_view_action(self, action: str, field: DetailField) -> bool:
+        """Handle read-only view actions (graph, lint) that need no service. Returns
+        True when *action* was one of them (and has been handled)."""
+        if action in ("view_ontology_graph", "view_focused_graph"):
+            self._open_graph(action, field)
+            return True
+        if action == "view_lint":
+            self._open_lint(field.meta.get("lint_severity"))
+            return True
+        return False
 
     def action_context_menu(self) -> None:
         """'.' → open the context menu for the selected entity, at the tree cursor."""
@@ -1769,6 +1843,63 @@ class OntologyApp(App):
         """Callback for the lint modal: navigate to the chosen issue's subject."""
         if subject:
             self.jump_to(subject)
+
+    def _enforce_shacl(self, prop_uri: str, path: Path) -> None:
+        """Write a SHACL rule making *prop_uri* mandatory on each of its domain classes
+        into the sibling ``<stem>.shapes.ttl`` (idempotent), then refresh the lint so the
+        rule is enforced live. Warns when the property has no domain to attach it to."""
+        import datetime
+
+        from ster import shacl
+
+        prop = self.tax.owl_properties.get(prop_uri)
+        if prop is None:
+            self.notify("Not an OWL property.", severity="warning")
+            return
+        if not prop.domains:
+            self.notify(
+                "This property has no domain — nothing to make it mandatory on.",
+                severity="warning",
+            )
+            return
+        prop_label = prop.label(self.lang) or prop.local_name
+        today = datetime.date.today().isoformat()
+        rules = [
+            shacl.mandatory_property_rule(
+                dom,
+                prop_uri,
+                target_label=data.label_of(self.tax, dom, self.lang),
+                prop_label=prop_label,
+                date=today,
+            )
+            for dom in prop.domains
+        ]
+        written = shacl.append_rules(shacl.shapes_path_for(path), rules)
+        if not written:
+            self.notify(f"“{prop_label}” is already enforced.")
+            return
+        self.notify(f"Enforced “{prop_label}” as mandatory — {len(written)} SHACL rule(s).")
+        self._invalidate_lint()
+        self._refresh_lint_async()  # the new rule takes effect on the next lint pass
+
+    def _unenforce_shacl(self, prop_uri: str, path: Path) -> None:
+        """Remove the SHACL rule(s) that make *prop_uri* mandatory (one per domain) from
+        the sibling ``<stem>.shapes.ttl``, then refresh the lint."""
+        from ster import shacl
+
+        prop = self.tax.owl_properties.get(prop_uri)
+        if prop is None:
+            self.notify("Not an OWL property.", severity="warning")
+            return
+        iris = [shacl.shape_iri(dom, prop_uri) for dom in prop.domains]
+        removed = shacl.remove_rules(shacl.shapes_path_for(path), iris)
+        prop_label = prop.label(self.lang) or prop.local_name
+        if not removed:
+            self.notify(f"No SHACL rule to remove for “{prop_label}”.")
+            return
+        self.notify(f"Removed the SHACL rule for “{prop_label}” — {len(removed)} rule(s).")
+        self._invalidate_lint()
+        self._refresh_lint_async()
 
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""
