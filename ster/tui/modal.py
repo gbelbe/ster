@@ -81,6 +81,17 @@ class ModalBase(ModalScreen[_R]):
     }
     ModalBase Button:hover { background: $secondary; }
     ModalBase Button:focus { text-style: reverse; }
+    /* Inputs get a clean rounded border that survives focus — Textual's default
+       Input:focus swaps to a `tall` edge that reads as a broken border. Fix it once
+       here so every modal input (and future one) stays consistent. */
+    ModalBase Input { border: round $primary; }
+    ModalBase Input:focus { border: round $primary; }
+    /* A Select's border lives on its inner SelectCurrent / overlay, not the widget
+       itself. Give every modal Select the same rounded border as our inputs — once,
+       here — so no modal (or future one) shows the default mismatched/broken edge. */
+    ModalBase Select > SelectCurrent { border: round $primary; }
+    ModalBase Select:focus > SelectCurrent { border: round $primary; }
+    ModalBase SelectOverlay { border: round $primary; }
     """
 
     @on(events.Mount)

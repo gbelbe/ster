@@ -527,12 +527,9 @@ class ConfigModal(ModalBase[None]):
     .cfg-sl-label { width: 1fr; content-align: left middle; }
     .cfg-sl-num { width: 14; }
     .cfg-sl-text { width: 1fr; }
-    /* Narrow dropdowns with clean rounded borders (override the dashed `tall`). */
+    /* Narrow dropdowns; the rounded Select border is shared from ModalBase. */
     #cfg-theme { width: 24; margin-bottom: 1; }
     #cfg-display { width: 16; margin-bottom: 1; }
-    #cfg-display > SelectCurrent, #cfg-theme > SelectCurrent { border: round $primary; }
-    #cfg-display:focus > SelectCurrent, #cfg-theme:focus > SelectCurrent { border: round $primary; }
-    #cfg-display SelectOverlay, #cfg-theme SelectOverlay { border: round $primary; }
     /* The configured-languages block: one titled box holding the checkbox group and
        the add-language row; its border lights up while focus is anywhere inside. */
     #cfg-langs {
@@ -548,7 +545,7 @@ class ConfigModal(ModalBase[None]):
     #cfg-boxes Checkbox.lang-current { background: $secondary 30%; text-style: bold; }
     /* Add-language row (inside the block): a wide field + a tiny + button. */
     #cfg-add-row { height: auto; margin-top: 1; }
-    #cfg-extra { width: 1fr; border: round $primary; }
+    #cfg-extra { width: 1fr; }  /* Input border shared from ModalBase */
     #cfg-add { width: auto; min-width: 5; margin-left: 1; }
     /* Metadata predicate catalogs (Annotation-properties tab): two foldable groups
        (Ontology Metadata + Entity metadata), each a checklist of predicates (ticked
@@ -578,11 +575,8 @@ class ConfigModal(ModalBase[None]):
     .cfg-mprops .cfg-mp-box.mp-current { background: $secondary 30%; text-style: bold; }
     .cfg-mp-enforce { width: auto; min-width: 24; margin-left: 1; }
     .cfg-mp-add-row { height: auto; margin-top: 1; }
-    .cfg-mp-uri { width: 2fr; border: round $primary; }
-    .cfg-mp-label { width: 1fr; border: round $primary; margin-left: 1; }
-    /* Keep the rounded border on focus — Input's default `:focus` swaps to a `tall`
-       border (same specificity as our class rule), which breaks the rounded look. */
-    .cfg-mp-uri:focus, .cfg-mp-label:focus { border: round $primary; }
+    .cfg-mp-uri { width: 2fr; }  /* rounded Input border (incl. focus) shared from ModalBase */
+    .cfg-mp-label { width: 1fr; margin-left: 1; }
     .cfg-mp-add { width: auto; min-width: 5; margin-left: 1; }
     /* Opens the (separate) create-local-annotation-property modal. */
     .cfg-mp-new { width: auto; min-width: 8; margin-top: 1; }

@@ -1,41 +1,25 @@
 """A full add / edit modal for an OWL class.
 
-Collects everything basic about a class in one place: the URI (fragment-locked,
-like :class:`~ster.tui.uri_modal.FragmentInput`) plus an ``rdfs:label`` and an
-``rdfs:comment`` for every *configured* language. Dismisses with
+Collects everything basic about a class in one place: the URI (fragment-locked)
+plus an ``rdfs:label`` and an ``rdfs:comment`` for every *configured* language.
+Just the shared :class:`~ster.tui.entity_form.EntityFormModal` — a class has no
+fields beyond the common ones. Dismisses with
 ``{"uri": str, "labels": {lang: value}, "comments": {lang: value}}`` (every
-configured language present, empty when blank — so an edit can clear a value), or
-``None`` on cancel / empty fragment.
+configured language present, empty when blank), or ``None`` on cancel.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Input, Static
-
-from .modal import ModalBase
-from .uri_modal import FragmentInput
+from .entity_form import EntityFormModal
 
 
-class ClassModal(ModalBase[dict | None]):
+class ClassModal(EntityFormModal):
     """Add or edit a class: URI + rdfs:label / rdfs:comment per configured language."""
 
-    DEFAULT_CSS = """
-    #class-box { width: 70%; max-width: 64; max-height: 90%; }
-    #class-box .cm-label { text-style: bold; margin-top: 1; }
-    #class-box .cm-row { height: 3; }
-    /* The [lang] caption: full row height + vertically centred so it lines up
-       with the input (a 1-row-tall caption with top padding gets clipped). */
-    #class-box .cm-lang { width: 5; height: 3; content-align: right middle; color: $text-muted; }
-    #class-box Input { width: 1fr; border: round $primary; }
-    #class-box #cm-save { margin-top: 1; width: auto; }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BOX_ID = "class-box"
+    NEEDS_URI_MSG = "A class needs a URI."
 
     def __init__(
         self,
@@ -47,65 +31,11 @@ class ClassModal(ModalBase[dict | None]):
         comments: Mapping[str, str] | None = None,
         title: str = "New class",
     ) -> None:
-        super().__init__()
-        self._prefix = prefix
-        self._fragment = fragment
-        self._langs = langs or ["en"]
-        self._labels = dict(labels or {})
-        self._comments = dict(comments or {})
-        self._title = title
-
-    def compose(self) -> ComposeResult:
-        self._uri = FragmentInput(self._prefix, self._fragment, id="cm-uri")
-        self._label_inputs = {
-            lg: Input(value=self._labels.get(lg, ""), placeholder=f"label [{lg}]")
-            for lg in self._langs
-        }
-        self._comment_inputs = {
-            lg: Input(value=self._comments.get(lg, ""), placeholder=f"comment [{lg}]")
-            for lg in self._langs
-        }
-        with VerticalScroll(id="class-box", classes="modal-box"):
-            yield Static("URI", classes="cm-label")
-            yield self._uri
-            yield Static("rdfs:label", classes="cm-label")
-            yield from self._lang_rows(self._label_inputs)
-            yield Static("rdfs:comment", classes="cm-label")
-            yield from self._lang_rows(self._comment_inputs)
-            yield Button("Save", id="cm-save", variant="primary")
-            yield Static("enter  save     esc  cancel", classes="modal-footer")
-
-    def _lang_rows(self, inputs: dict[str, Input]) -> ComposeResult:
-        for lg in self._langs:
-            with Horizontal(classes="cm-row"):
-                yield Static(f"[{lg}]", classes="cm-lang")
-                yield inputs[lg]
-
-    def on_mount(self) -> None:
-        self.query_one("#class-box").border_title = self._title
-        self._uri.focus()  # land on the URI fragment (preselected in edit mode)
-
-    def _result(self) -> dict | None:
-        if not self._uri.fragment.strip():
-            return None  # a class needs a URI fragment
-        return {
-            "uri": self._uri.value,
-            "labels": {lg: inp.value.strip() for lg, inp in self._label_inputs.items()},
-            "comments": {lg: inp.value.strip() for lg, inp in self._comment_inputs.items()},
-        }
-
-    def _submit(self) -> None:
-        result = self._result()
-        if result is not None:
-            self.dismiss(result)
-        else:
-            self.notify("A class needs a URI.", severity="warning")
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self._submit()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self._submit()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+        super().__init__(
+            prefix=prefix,
+            fragment=fragment,
+            langs=langs,
+            labels=labels,
+            comments=comments,
+            title=title,
+        )

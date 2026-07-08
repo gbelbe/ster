@@ -69,6 +69,22 @@ def _parse_action_uri(uri: str) -> tuple[str, str] | None:
     return None
 
 
+# A property-section header's ``data``: distinct from an action sentinel so left-click /
+# Enter just expands it, while right-click offers "add a property of this kind".
+_ADD_PROP_PREFIX = "__addprop:"
+
+
+def _add_prop_uri(prop_type: str) -> str:
+    return f"{_ADD_PROP_PREFIX}{prop_type}{_ACTION_SUFFIX}"
+
+
+def _parse_add_prop(uri: str | None) -> str | None:
+    """The property type of an "add property here" section sentinel, else None."""
+    if uri and uri.startswith(_ADD_PROP_PREFIX) and uri.endswith(_ACTION_SUFFIX):
+        return uri[len(_ADD_PROP_PREFIX) : -len(_ACTION_SUFFIX)]
+    return None
+
+
 class OntologyTree(Tree):
     """The left-pane tree. `right` jumps into the detail pane; up/down wrap around."""
 
@@ -809,11 +825,15 @@ class OntologyApp(App):
         tax = self.tax
         if not tax.owl_properties and not tax.ontology_annotations:
             return
+        obj_title = dict(data.PROPERTY_CATEGORIES)["ObjectProperty"]
         for title, local, external in data.property_groups(tax, self.lang):
             label = (
                 f"[orange1]{title}[/orange1]" if title == data.UNTYPED_PROPERTIES_TITLE else title
             )
-            sec = tree.root.add(label, data=None)
+            # The Object Properties header is right-clickable to add one (sentinel data);
+            # left-click / Enter still just expands it.
+            sec_data = _add_prop_uri("ObjectProperty") if title == obj_title else None
+            sec = tree.root.add(label, data=sec_data)
             for uri in local:
                 self._leaf(sec, uri, "property")
             for uri in external:
@@ -1129,6 +1149,9 @@ class OntologyApp(App):
         quick actions. *anchor* is the cursor position; the menu pops up there
         (centred when None).
         """
+        if _parse_add_prop(uri) is not None:  # right-clicked the Object Properties header
+            self._open_object_property_create()
+            return
         items = self._filter_plugin_actions(edits.context_actions(data.kind_of(self.tax, uri)))
         if not items:
             return
@@ -1186,7 +1209,9 @@ class OntologyApp(App):
             if value and value != uri:
                 command = edits.edit_command(field, uri, path, value)
                 if command is not None:
-                    self._apply_command(command)
+                    # select=value so the highlight + detail follow the entity to its new
+                    # URI (the old one is gone, so restoring _detail_uri would lose it).
+                    self._apply_command(command, select=value)
 
         prefix, fragment = uri_edit.split_namespace(uri)
         self.push_screen(UriModal("Rename URI", prefix, fragment), _on_submit)
@@ -1270,6 +1295,42 @@ class OntologyApp(App):
 
     def _class_langs(self) -> list[str]:
         return self.configured_langs or [self.lang]
+
+    def _open_object_property_create(self) -> None:
+        """Right-click on the Object Properties header → full add modal (URI + labels /
+        comments per configured language + domain + range) → create command."""
+        from ster.core.commands import OwlCreateObjectProperty
+
+        from .object_property_modal import ObjectPropertyModal
+
+        path = self._path
+        if self._service is None or path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        base = uri_edit.mint_base(self.tax, "create_owl_property", detail.OVERVIEW_URI)
+        classes = sorted(
+            ((data.label_of(self.tax, u, self.lang), u) for u in self.tax.owl_classes),
+            key=lambda t: t[0].lower(),
+        )
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlCreateObjectProperty(
+                        path,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                        result["domain"],
+                        result["range"],
+                    ),
+                    select=result["uri"],
+                )
+
+        self.push_screen(
+            ObjectPropertyModal(prefix=base, langs=self._class_langs(), classes=classes),
+            _on_submit,
+        )
 
     def _open_class_create(self, action: str, uri: str, path: Path) -> None:
         """Open the full class modal to create a class (top-level or under *uri*)."""
@@ -1713,8 +1774,8 @@ class OntologyApp(App):
         uri = event.node.data
         # Action sentinel nodes (＋ Add class / scheme / concept) have no detail
         # panel — clear the pane so the user sees the placeholder until they press Enter.
-        if uri and _parse_action_uri(uri) is not None:
-            self._show(None)
+        if uri and (_parse_action_uri(uri) is not None or _parse_add_prop(uri) is not None):
+            self._show(None)  # action / add-property section headers have no detail
             return
         if uri == self._detail_uri:
             # Re-highlighting the entity already shown (e.g. a programmatic cursor move

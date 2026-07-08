@@ -1659,6 +1659,75 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
     _run(scenario)
 
 
+def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> None:
+    """The Object Properties section header carries an add-sentinel; right-clicking it
+    opens the full modal, whose submission creates the object property (labels + domain)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.app import _add_prop_uri
+        from ster.tui.object_property_modal import ObjectPropertyModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            sentinel = _add_prop_uri("ObjectProperty")
+            prop_tree = app.query_one("#prop-tree", Tree)
+            assert sentinel in [n.data for n in prop_tree.root.children]  # header is wired
+            app.open_context_menu(sentinel)  # simulate the right-click
+            await pilot.pause()
+            assert isinstance(app.screen, ObjectPropertyModal)
+            modal = app.screen
+            modal._uri.value = ZOO + "livesIn"
+            modal._label_inputs[app.lang].value = "lives in"
+            modal._domain.value = ZOO + "Animal"  # a valid class option
+            modal._submit()
+            for _ in range(3):
+                await pilot.pause()
+            prop = app.tax.owl_properties.get(ZOO + "livesIn")
+            assert prop is not None and prop.prop_type == "ObjectProperty"
+            assert {lbl.value for lbl in prop.labels} == {"lives in"}
+            assert prop.domains == [ZOO + "Animal"]
+            assert "livesIn" in src.read_text(encoding="utf-8")  # persisted
+
+    _run(scenario)
+
+
+def test_renaming_a_property_keeps_the_highlight_on_it_regression(tmp_path) -> None:
+    """Regression: renaming a property (URI change) must keep the tree highlight + detail
+    on that same property — not leave the detail on the gone old URI (which cascades to
+    the highlight jumping to the main tree). _rename_entity must pass select=new URI."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.tui.uri_modal import FragmentInput
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            prop_tree = app.query_one("#prop-tree", Tree)
+            prop_tree.move_cursor(app._uri_nodes[ZOO + "hasOwner"])
+            app._show(ZOO + "hasOwner")
+            await pilot.pause()
+            app._rename_entity(ZOO + "hasOwner")  # opens the rename UriModal
+            await pilot.pause()
+            app.screen.query_one("#uri-input", FragmentInput).value = ZOO + "hasKeeper"
+            await pilot.press("enter")  # submit the rename
+            for _ in range(4):
+                await pilot.pause()
+            assert ZOO + "hasKeeper" in app.tax.owl_properties  # renamed
+            assert app._detail_uri == ZOO + "hasKeeper"  # detail follows the property
+            assert prop_tree.cursor_node is app._uri_nodes[ZOO + "hasKeeper"]  # highlight follows
+
+    _run(scenario)
+
+
 def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     """An action row (Enter) → modal → constructive command → reload + save."""
 

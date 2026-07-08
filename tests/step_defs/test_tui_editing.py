@@ -102,12 +102,12 @@ async def _submit_text(app, pilot, value: str) -> None:  # noqa: ANN001
     from textual.css.query import NoMatches
     from textual.widgets import Input
 
-    # Creating a class opens the full ClassModal (#cm-uri); an individual opens the
-    # full IndividualModal (#ind-uri); URI flows open the fragment-locking UriModal
-    # (#uri-input); other text edits use the plain EditModal (#edit-input). The full
-    # URI starts with the locked base, so assigning the whole value leaves the prefix
-    # intact in every case.
-    for sel in ("#cm-uri", "#ind-uri", "#uri-input", "#edit-input"):
+    # Creating a class opens the full ClassModal (shared EntityFormModal URI = #ef-uri);
+    # an individual opens the full IndividualModal (#ind-uri); URI flows open the
+    # fragment-locking UriModal (#uri-input); other text edits use the plain EditModal
+    # (#edit-input). The full URI starts with the locked base, so assigning the whole
+    # value leaves the prefix intact in every case.
+    for sel in ("#ef-uri", "#ind-uri", "#uri-input", "#edit-input"):
         try:
             inp = app.screen.query_one(sel, Input)
             break
