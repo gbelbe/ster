@@ -82,9 +82,11 @@ def when_add_datatype_attr(ctx, name):
     ctx["prop"] = f"{BASE}#{name}"
 
 
-@then(parsers.parse('"{name}" is offered as an applicable property on "{ind}"'))
-def then_applicable_on_individual(ctx, name, ind):
+@then(parsers.parse('"{name}" is not shown on the individual "{ind}" until it has a value'))
+def then_not_shown_on_individual(ctx, name, ind):
     from ster.nav.logic import build_individual_detail
 
     fields = build_individual_detail(ctx["tax"], ctx["ind"], "en")
-    assert any(f"{BASE}#{name}" in (f.key or "") for f in fields)
+    # The individual page prints only asserted data — an applicable but unasserted
+    # property is not shown (add a value via the right-click menu).
+    assert not any(f"{BASE}#{name}" in (f.key or "") for f in fields)

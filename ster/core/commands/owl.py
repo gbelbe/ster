@@ -165,6 +165,36 @@ class OwlSaveClass:
 
 
 @dataclass(frozen=True)
+class OwlSaveProperty:
+    """Edit an existing property: rename it when *new_uri* differs (cascading across
+    references), apply the rdfs:label / rdfs:comment desired-state (empty clears a
+    language), and replace its domain / range with *domains* / *ranges* (desired state;
+    empty tuples clear them)."""
+
+    target_path: Path
+    old_uri: str
+    new_uri: str
+    labels: _LangPairs = ()
+    comments: _LangPairs = ()
+    domains: tuple[str, ...] = ()
+    ranges: tuple[str, ...] = ()
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        uri = self.old_uri
+        if self.new_uri and self.new_uri != self.old_uri:
+            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
+            uri = self.new_uri
+        _set_localized(taxonomy, uri, self.labels, kind="label")
+        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        prop = taxonomy.owl_properties.get(uri)
+        if prop is not None:
+            prop.domains = list(self.domains)
+            prop.ranges = list(self.ranges)
+        assign_handles(taxonomy)
+        return (uri,)
+
+
+@dataclass(frozen=True)
 class OwlCreateIndividual:
     """Create an OWL individual, typed as *class_uri* when given (no-op if present)."""
 
@@ -273,7 +303,11 @@ class OwlAddProperty:
 
 @dataclass(frozen=True)
 class OwlSetLabel:
-    """Set an OWL class/individual/property ``rdfs:label`` for *lang* (upsert)."""
+    """Set an OWL class/individual/property ``rdfs:label`` for *lang*.
+
+    A non-empty value upserts; an empty one *removes* that language's label
+    (clearing the field deletes the triple rather than leaving ``rdfs:label ""``,
+    which would still count as "labelled"). Mirrors the batch ``_set_localized``."""
 
     target_path: Path
     uri: str
@@ -281,13 +315,19 @@ class OwlSetLabel:
     value: str
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        set_owl_label(taxonomy, self.uri, self.lang, self.value)
+        if self.value:
+            set_owl_label(taxonomy, self.uri, self.lang, self.value)
+        else:
+            remove_owl_label(taxonomy, self.uri, self.lang)
         return (self.uri,)
 
 
 @dataclass(frozen=True)
 class OwlSetComment:
-    """Set an OWL class/individual/property ``rdfs:comment`` for *lang* (upsert)."""
+    """Set an OWL class/individual/property ``rdfs:comment`` for *lang*.
+
+    A non-empty value upserts; an empty one *removes* that language's comment
+    (clearing the field deletes the triple). Mirrors the batch ``_set_localized``."""
 
     target_path: Path
     uri: str
@@ -295,7 +335,10 @@ class OwlSetComment:
     value: str
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        set_owl_comment(taxonomy, self.uri, self.lang, self.value)
+        if self.value:
+            set_owl_comment(taxonomy, self.uri, self.lang, self.value)
+        else:
+            remove_owl_comment(taxonomy, self.uri, self.lang)
         return (self.uri,)
 
 
@@ -538,6 +581,23 @@ class OwlRemoveIndividualType:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         remove_individual_type(taxonomy, self.ind_uri, self.type_uri)
+        return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class OwlChangeIndividualType:
+    """Re-classify an individual: drop *old_type_uri*, add *new_type_uri* (a no-op when
+    they are the same). Backs the editable ``instanceOf`` row (✎ → pick a class)."""
+
+    target_path: Path
+    ind_uri: str
+    old_type_uri: str
+    new_type_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        if self.new_type_uri != self.old_type_uri:
+            remove_individual_type(taxonomy, self.ind_uri, self.old_type_uri)
+            add_individual_type(taxonomy, self.ind_uri, self.new_type_uri)
         return (self.ind_uri,)
 
 

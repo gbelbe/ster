@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ster.model import Label, OWLIndividual, OWLProperty, RDFClass, Taxonomy
+from ster.model import Definition, Label, OWLIndividual, OWLProperty, RDFClass, Taxonomy
 from ster.nav.logic import (
     _direct_properties,
     _inherited_properties,
@@ -166,13 +166,21 @@ def test_build_class_detail_inherited_prop_has_no_edit_action():
         assert not f.editable
 
 
-def test_build_class_detail_inherited_label_includes_parent():
+def test_build_class_detail_inherited_grouped_under_collapsible_parent_subtitle():
     person = _cls("Person")
     employee = _cls("Employee", ["Person"])
     t = _taxonomy([person, employee], [_prop("hasName", ["Person"])])
     fields = build_rdf_class_detail(t, BASE + "Employee", "en")
+    # a collapsible disclosure titled with the inherited count …
+    assert any(
+        f.meta.get("type") == "separator_collapsible" and "inherited" in f.display for f in fields
+    )
+    # … the parent name now heads a sub-section, not the property row …
+    subtitles = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert any(s.startswith("inherited from") and "Person" in s for s in subtitles)
+    # … and each inherited row is just the property label.
     inherited = [f for f in fields if f.meta.get("type") == "inherited_prop"]
-    assert any("Person" in f.display for f in inherited)
+    assert inherited and all(not f.editable for f in inherited)
 
 
 def test_build_class_detail_add_property_action_present():
@@ -198,3 +206,58 @@ def test_build_class_detail_direct_prop_not_in_inherited():
     inherited = [f for f in fields if f.meta.get("type") == "inherited_prop"]
     inherited_uris = [f.meta.get("uri") for f in inherited]
     assert BASE + "sharedP" not in inherited_uris
+
+
+# ── property rows: local name (not label), short type, comment tooltip ────────
+
+
+def test_direct_property_row_shows_local_name_short_type_and_comment_tooltip():
+    """A direct property row displays the property's local name (not its rdfs:label),
+    a short type label, and carries its rdfs:comment as a hover tooltip."""
+    person = _cls("Person")
+    prop = OWLProperty(
+        uri=BASE + "hasName",
+        labels=[Label("en", "has name")],  # a label that differs from the local name
+        domains=[BASE + "Person"],
+        comments=[Definition("en", "The person's name.")],
+    )
+    t = _taxonomy([person], [prop])
+    fields = build_rdf_class_detail(t, BASE + "Person", "en")
+    row = next(f for f in fields if f.key == f"classprop:{BASE}hasName")
+    assert row.display == "hasName"  # local name, not "has name"
+    assert row.value == "(Object Prop.)"
+    assert row.meta.get("tooltip") == "The person's name."
+
+
+def test_direct_property_row_datatype_type_and_no_tooltip_without_comment():
+    """A DatatypeProperty shows '(Datatype)'; a property with no comment has no tooltip."""
+    person = _cls("Person")
+    prop = OWLProperty(
+        uri=BASE + "age",
+        prop_type="DatatypeProperty",
+        labels=[Label("en", "age")],
+        domains=[BASE + "Person"],
+    )
+    t = _taxonomy([person], [prop])
+    fields = build_rdf_class_detail(t, BASE + "Person", "en")
+    row = next(f for f in fields if f.key == f"classprop:{BASE}age")
+    assert row.value == "(Datatype)"
+    assert "tooltip" not in row.meta
+
+
+def test_inherited_property_row_shows_local_name_short_type_and_tooltip():
+    """Inherited property rows follow the same convention: local name, short type, comment."""
+    animal = _cls("Animal")
+    dog = _cls("Dog", ["Animal"])
+    prop = OWLProperty(
+        uri=BASE + "hasHabitat",
+        labels=[Label("en", "has habitat")],
+        domains=[BASE + "Animal"],
+        comments=[Definition("en", "Where it lives.")],
+    )
+    t = _taxonomy([animal, dog], [prop])
+    fields = build_rdf_class_detail(t, BASE + "Dog", "en")
+    row = next(f for f in fields if f.key == f"inherited_prop:{BASE}hasHabitat:{BASE}Animal")
+    assert row.display == "hasHabitat"
+    assert row.value == "(Object Prop.)"
+    assert row.meta.get("tooltip") == "Where it lives."

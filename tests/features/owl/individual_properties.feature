@@ -73,14 +73,14 @@ Feature: OWL individual property capture and display
     When I build the individual detail for "Inst"
     Then the detail panel contains a property row for "score" with value "42"
 
-  # ── Display: applicable-but-unapplied shown below asserted ───────────────
+  # ── Display: only asserted values (no applicable-but-unapplied placeholders) ──
 
-  Scenario: Applicable property with no value shown after asserted values
+  Scenario: An applicable property with no asserted value is not shown
     Given a taxonomy with individual "Doc" of class "Document" with applicable property "hasAuthor" and no asserted value
     When I build the individual detail for "Doc"
-    Then the detail panel contains an empty placeholder row for "hasAuthor"
+    Then the detail panel does not contain an empty placeholder row for "hasAuthor"
 
-  Scenario: Applicable property that has a value does not show empty placeholder
+  Scenario: An asserted property value is shown as an editable row
     Given a taxonomy with individual "Doc" of class "Document" having property "hasAuthor" pointing to individual "Alice"
     When I build the individual detail for "Doc"
     Then the detail panel contains a property row for "hasAuthor" with value "Alice"

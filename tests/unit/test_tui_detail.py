@@ -17,6 +17,7 @@ from ster.tui.detail import (
     OVERVIEW_URI,
     DetailSection,
     build_sections,
+    field_markup,
     group_sections,
     render_detail,
 )
@@ -102,13 +103,60 @@ def test_build_sections_keeps_value_order_after_the_create_action() -> None:
 def test_render_detail_class_has_section_titles() -> None:
     tax = store.load(_DEMO)
     out = render_detail(tax, _ZOO + "Cat", "en")
-    assert "Identity" in out and "Labels" in out and "Danger Zone" in out
+    assert "Identity" in out and "Labels" in out
 
 
-def test_render_detail_danger_section_is_styled() -> None:
+def test_detail_view_omits_danger_note_and_schema_add() -> None:
+    """The detail view drops the Danger Zone + Note (markdown) sections and the
+    schema:* add actions (for classes and individuals alike); delete/convert stay on
+    the right-click context menu."""
     tax = store.load(_DEMO)
-    out = render_detail(tax, _ZOO + "Cat", "en")
-    assert "[bold red]Danger Zone[/]" in out
+    for uri in (_ZOO + "Cat", _ZOO + "Rex"):  # a class and an individual
+        sections = build_sections(tax, uri, "en")
+        titles = {s.title for s in sections}
+        assert "Danger Zone" not in titles
+        assert "Note (markdown)" not in titles
+        actions = [f.meta.get("action") for s in sections for f in s.fields]
+        assert not any(a and a.startswith("add_schema") for a in actions)
+        # the destructive actions are gone from the detail panel entirely
+        assert "delete_class" not in actions and "delete_individual" not in actions
+        assert "edit_note" not in actions and "delete_note" not in actions
+
+
+def test_class_properties_are_editable_and_have_no_add_actions() -> None:
+    """The class Properties section drops the '+ Add …' actions; each direct property
+    row is an editable action (edit_property → the edit modal)."""
+    tax = store.load(_DEMO)
+    sections = build_sections(tax, _ZOO + "Animal", "en")  # Animal has hasOwner/hasAge
+    actions = [f.meta.get("action") for s in sections for f in s.fields]
+    assert "add_class_property" not in actions  # no more "+ Add relationship/attribute"
+    props = next(s for s in sections if s.title == "Properties")
+    edit_rows = [f for f in props.fields if f.meta.get("action") == "edit_property"]
+    assert edit_rows, "direct property rows should offer edit_property"
+    assert all(f.meta.get("uri") for f in edit_rows)  # each names its property
+
+
+def test_inherited_properties_render_as_collapsible_grouped_by_parent() -> None:
+    """Inherited properties are tucked into a collapsed 'N inherited properties'
+    disclosure, grouped under an 'inherited from <ancestor>:' sub-header."""
+    tax = store.load(_DEMO)
+    sections = build_sections(tax, _ZOO + "Dog", "en")  # Dog inherits hasOwner/hasAge from Animal
+    collapsible = next((s for s in sections if s.collapsible), None)
+    assert collapsible is not None and "inherited" in collapsible.title
+    subtitles = [s.title for s in sections if s.title.startswith("inherited from")]
+    assert any("Animal" in s for s in subtitles)
+
+
+def test_class_detail_omits_hierarchy_section() -> None:
+    """The OWL class detail drops its Hierarchy section (subClassOf + inline add/remove);
+    superclass edits live in the tree + context menu. Concepts keep their Hierarchy."""
+    tax = store.load(_DEMO)
+    class_titles = {s.title for s in build_sections(tax, _ZOO + "Cat", "en")}
+    assert "Hierarchy" not in class_titles
+    class_actions = [
+        f.meta.get("action") for s in build_sections(tax, _ZOO + "Cat", "en") for f in s.fields
+    ]
+    assert "link_superclass" not in class_actions and "remove_superclass" not in class_actions
 
 
 def test_render_detail_individual_shows_property_value() -> None:
@@ -120,6 +168,17 @@ def test_render_detail_individual_shows_property_value() -> None:
 def test_render_detail_unknown_uri_is_empty() -> None:
     tax = store.load(_DEMO)
     assert render_detail(tax, _ZOO + "DoesNotExist", "en") == ""
+
+
+def test_property_row_markup_has_no_colon_before_type() -> None:
+    """A property row (plain_value meta) renders 'name (Type)' with a space, no ': ';
+    ordinary rows keep the 'label: value' colon."""
+    prop_row = DetailField(
+        "classprop:x", "hasName", "(Object Prop.)", editable=False, meta={"plain_value": True}
+    )
+    assert field_markup(prop_row) == "hasName (Object Prop.)"
+    plain_row = DetailField("k", "label", "v", editable=False, meta={})
+    assert field_markup(plain_row) == "label: v"
 
 
 # ── Quality sections relocate under "Property Fill" ────────────────────────────

@@ -156,9 +156,10 @@ def test_move_class_maps_to_replacing_move() -> None:
 
 def test_context_actions_per_kind() -> None:
     class_actions = [a for _, a in context_actions("class")]
-    assert {"new_subclass", "move_class", "class_to_individual", "rename", "delete_class"} <= set(
+    assert {"new_subclass", "move_class", "class_to_individual", "delete_class"} <= set(
         class_actions
     )
+    assert "rename" not in class_actions  # URI edits go through "Edit class…", not "Rename URI"
     assert [a for _, a in context_actions("scheme")] == [
         "add_top_concept",
         "rename",

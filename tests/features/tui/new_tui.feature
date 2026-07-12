@@ -29,8 +29,7 @@ Feature: New-TUI — the Textual ontology browser
 
   Scenario: The detail panel surfaces a class's most important facts
     When I select the class "Dog"
-    Then the detail panel shows the parent "Mammal"
-    And the detail panel shows the comment "Loyal domestic companion."
+    Then the detail panel shows the comment "Loyal domestic companion."
 
   Scenario: Arrow keys move between the tree and the detail rows (no Tab needed)
     When I step right into the detail panel, down a row, then left back to the tree

@@ -52,6 +52,16 @@ def label_of(tax: Taxonomy, uri: str, lang: str = "en") -> str:
     return _local(uri)
 
 
+def node_name(tax: Taxonomy, uri: str, lang: str, kind: str) -> str:
+    """Tree-leaf display text: a property's local name (e.g. ``hasOwner``), and the
+    human label for every other kind. Properties are shown by name, not rdfs:label."""
+    if kind == "property":
+        prop = tax.owl_properties.get(uri)
+        if prop is not None:
+            return prop.local_name
+    return label_of(tax, uri, lang)
+
+
 def kind_of(tax: Taxonomy, uri: str) -> str:
     if uri in tax.owl_classes:
         return "class"

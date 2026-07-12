@@ -15,7 +15,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Collapsible, Static
 
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
@@ -86,7 +86,11 @@ _ACTION_HELP = {
 
 
 def _row_tooltip(field: DetailField) -> str | None:
-    """Hover help for a row: edit hint, a per-action description, or a run hint."""
+    """Hover help for a row: an explicit tooltip (e.g. a property's rdfs:comment),
+    else an edit hint, a per-action description, or a run hint."""
+    tooltip = field.meta.get("tooltip")
+    if tooltip:
+        return tooltip
     if field.editable:
         return "Enter to edit"
     action = field.meta.get("action")
@@ -115,7 +119,8 @@ def _row_content(field: DetailField, actionable: bool) -> str:
     """
     markup = field_markup(field)
     if actionable and field.meta.get("type") not in _GLYPH_ACTION_TYPES:
-        icon = "✎" if field.editable else "▸"
+        edits_value = field.editable or field.meta.get("action") == "edit_property"
+        icon = "✎" if edits_value else "▸"
         return f"{icon} {markup}"
     return markup
 
@@ -267,6 +272,11 @@ def _grouped_widgets(sections: list[DetailSection]) -> list[Widget]:
             box = Vertical(*members, classes="detail-group")
             box.border_title = sec.title
             widgets.append(box)
+        elif sec.collapsible:
+            members, i = _collect_group_members(sections, i + 1)
+            widgets.append(
+                Collapsible(*members, title=sec.title, collapsed=True, classes="detail-collapsible")
+            )
         else:
             widgets.extend(_section_widgets(sec))
             i += 1
@@ -274,18 +284,28 @@ def _grouped_widgets(sections: list[DetailSection]) -> list[Widget]:
 
 
 def _graph_action_row(tax: Taxonomy, uri: str) -> DetailRow | None:
-    """A highlighted, focusable '» Open Graph View' row leading the detail pane for the
-    entities a focused graph supports (OWL classes & individuals); None otherwise."""
-    from .data import kind_of
+    """A highlighted, focusable '» Open Graph View' row leading the detail pane.
 
-    if kind_of(tax, uri) not in ("class", "individual"):
+    Classes & individuals open a graph *focused* on them (``view_focused_graph``); the
+    ontology / taxonomy overviews and concept schemes open the *whole-ontology* graph
+    (``view_ontology_graph``), so the affordance looks the same everywhere. Properties
+    and concepts get no row (nothing focusable in the graph)."""
+    from .data import kind_of
+    from .detail import OVERVIEW_URI, TAXONOMY_URI
+
+    kind = kind_of(tax, uri)
+    if kind in ("class", "individual"):
+        action = "view_focused_graph"
+    elif kind == "scheme" or uri in (OVERVIEW_URI, TAXONOMY_URI):
+        action = "view_ontology_graph"
+    else:
         return None
     field = DetailField(
         "action:open_graph_view",
         "» Open Graph View",
         "",
         editable=False,
-        meta={"type": "action", "action": "view_focused_graph", "uri": uri},
+        meta={"type": "action", "action": action, "uri": uri},
     )
     row = DetailRow(field)
     row.add_class("graph-action")  # accent-highlighted, per the header affordance

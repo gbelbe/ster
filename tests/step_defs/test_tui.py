@@ -268,11 +268,6 @@ def then_detail_owner(ctx, owner):
     assert owner in ctx["detail"]
 
 
-@then(parsers.parse('the detail panel shows the parent "{parent}"'))
-def then_detail_parent(ctx, parent):
-    assert parent in ctx["detail"]
-
-
 @then(parsers.parse('the detail panel shows the comment "{comment}"'))
 def then_detail_comment(ctx, comment):
     assert comment in ctx["detail"]

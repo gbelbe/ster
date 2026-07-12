@@ -125,3 +125,40 @@ def test_write_onto_ci_exports_shared_keys_only(tmp_path) -> None:
     assert data["select"] == ["SKO"] and data["ignore"] == ["QUA002"]
     assert data["quality"]["min_label_coverage"] == 0.5
     assert "features" not in data  # UI-only block is not exported to CI
+
+
+# ── per-language rdfs:label shapes (STER001 class / STER002 property) ────────────
+
+from pathlib import Path  # noqa: E402
+
+_DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
+
+
+def test_build_label_language_shapes_empty_when_no_languages_required() -> None:
+    from ster.plugins.semanticlint.language_shapes import build_label_language_shapes
+
+    assert len(build_label_language_shapes([], [])) == 0  # no requirement → no shapes
+
+
+def test_build_label_language_shapes_emits_a_shape_per_language() -> None:
+    from ster.plugins.semanticlint.language_shapes import build_label_language_shapes
+
+    graph = build_label_language_shapes(["en", "fr"], ["fr"])
+    assert len(graph) > 0
+    assert "language 'fr'" in graph.serialize(format="turtle")
+
+
+def test_class_and_property_label_language_shapes_flag_missing_languages() -> None:
+    """A class / property lacking an rdfs:label in a required language yields a per-entity
+    STER001 / STER002 warning (subject = the entity); none when no language is required."""
+    from semanticlint.checks.base import CheckConfig
+
+    from ster.plugins.semanticlint.runner import lint_files
+
+    cfg = CheckConfig(quality={"class_label_languages": ["fr"], "property_label_languages": ["fr"]})
+    hits = {(v.check_id, str(v.subject).rsplit("/", 1)[-1]) for v in lint_files([_DEMO], cfg)}
+    assert ("STER001", "Dog") in hits  # class Dog has only an en rdfs:label
+    assert ("STER002", "hasOwner") in hits  # property hasOwner too
+
+    baseline = CheckConfig(quality={"class_label_languages": [], "property_label_languages": []})
+    assert not any(v.check_id in {"STER001", "STER002"} for v in lint_files([_DEMO], baseline))

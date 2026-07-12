@@ -271,8 +271,9 @@ def test_display_shows_literal_values():
 # ── Display: applicable-but-unapplied ────────────────────────────────────────
 
 
-def test_display_applicable_unapplied_shown_as_placeholder():
-    """Applicable property with no value shows an empty placeholder row."""
+def test_display_applicable_unapplied_property_not_shown():
+    """The individual page prints only what's asserted in the .ttl — an applicable but
+    unasserted property is NOT shown (no more '—' placeholder rows)."""
     ind_uri = BASE + "Doc"
     prop_uri = BASE + "hasAuthor"
     t = Taxonomy()
@@ -284,8 +285,8 @@ def test_display_applicable_unapplied_shown_as_placeholder():
         uri=prop_uri, labels=[Label("en", "hasAuthor")], domains=[BASE + "Document"]
     )
     fields = build_individual_detail(t, ind_uri, "en")
-    # There should be a "—" placeholder row for hasAuthor
-    assert any("hasAuthor" in f.display and f.value == "—" for f in fields)
+    assert not any("hasAuthor" in f.display for f in fields)  # unasserted → absent
+    assert not any(f.value == "—" for f in fields)  # no placeholder rows at all
 
 
 def test_display_no_empty_placeholder_when_value_asserted():
@@ -335,3 +336,59 @@ def test_add_schema_image_shown_when_no_image():
     t.owl_individuals[ind_uri] = ind
     fields = build_individual_detail(t, ind_uri, "en")
     assert _has_action(fields, "add_schema_image")
+
+
+# ── reworked display: editable value rows with a folded Delete ──────────────────
+
+
+def _individual_with_values() -> tuple[Taxonomy, str]:
+    t = Taxonomy()
+    t.owl_classes[BASE + "Person"] = RDFClass(uri=BASE + "Person", labels=[Label("en", "Person")])
+    alice = OWLIndividual(uri=BASE + "Alice", labels=[Label("en", "Alice")])
+    t.owl_individuals[BASE + "Alice"] = alice
+    rex = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label("en", "Rex")],
+        types=[BASE + "Person"],
+        property_values=[(BASE + "knows", BASE + "Alice")],
+        literal_values=[(BASE + "age", "3", "")],
+    )
+    t.owl_individuals[BASE + "Rex"] = rex
+    t.owl_properties[BASE + "knows"] = OWLProperty(
+        uri=BASE + "knows", labels=[Label("en", "knows")]
+    )
+    t.owl_properties[BASE + "age"] = OWLProperty(
+        uri=BASE + "age", prop_type="DatatypeProperty", labels=[Label("en", "age")]
+    )
+    return t, BASE + "Rex"
+
+
+def test_object_value_is_an_editable_row_with_a_folded_remove() -> None:
+    """An asserted object value is a single editable (✎) row carrying edit_prop_value,
+    immediately followed by its remove (which folds into the row's Delete) — no separate
+    '✎ Change' row."""
+    t, rex = _individual_with_values()
+    fields = build_individual_detail(t, rex, "en")
+    i = next(i for i, f in enumerate(fields) if f.meta.get("type") == "ind_prop_val")
+    row, nxt = fields[i], fields[i + 1]
+    assert row.editable and row.meta["action"] == "edit_prop_value"
+    assert nxt.meta["type"] == "action_del" and nxt.meta["action"] == "remove_prop_value"
+    # no leftover separate change/edit action rows
+    assert not any(f.meta.get("action") == "edit_prop_value" and not f.editable for f in fields)
+
+
+def test_literal_value_is_an_editable_row_with_a_folded_remove() -> None:
+    t, rex = _individual_with_values()
+    fields = build_individual_detail(t, rex, "en")
+    i = next(i for i, f in enumerate(fields) if f.meta.get("type") == "ind_lit_val")
+    row, nxt = fields[i], fields[i + 1]
+    assert row.editable and row.meta["action"] == "edit_literal_value"
+    assert row.value == "3"  # raw value, editable as-is
+    assert nxt.meta["type"] == "action_del" and nxt.meta["action"] == "remove_literal_value"
+
+
+def test_no_inline_add_rows_on_the_individual_page() -> None:
+    """Adding a value / class membership moved to the right-click menu — no inline '+ Add'."""
+    t, rex = _individual_with_values()
+    actions = {f.meta.get("action") for f in build_individual_detail(t, rex, "en")}
+    assert "add_prop_value" not in actions and "add_ind_type" not in actions

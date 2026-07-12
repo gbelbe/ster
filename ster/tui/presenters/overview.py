@@ -60,13 +60,10 @@ class OntologyOverviewPresenter(EntityPresenter):
         return fields
 
     def identity(self) -> list[DetailField]:
+        # The graph affordance is the highlighted '» Open Graph View' row the detail view
+        # leads the pane with (see detail_view._graph_action_row) — not an in-section row.
         fields = [_sep("Identity")]
         fields.extend(_tui_identity_rows(self.tax))
-        fields.append(
-            _add_action_field(
-                "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
-            )
-        )
         return fields
 
     def health(self) -> list[DetailField]:

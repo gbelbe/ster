@@ -59,3 +59,42 @@ def test_create_object_property_skips_blank_label_and_comment_values() -> None:
     prop = t.owl_properties[NS + "p"]
     assert _labels(prop) == {"en": "P"}
     assert _comments(prop) == {}
+
+
+def test_save_property_renames_and_sets_labels_domain_range() -> None:
+    from ster.core.commands import OwlSaveProperty
+
+    t = Taxonomy()
+    OwlCreateObjectProperty(
+        _P,
+        NS + "hasOwner",
+        labels=(("en", "has owner"),),
+        domain_uri=NS + "Animal",
+        range_uri=NS + "Person",
+    ).apply(t)
+    OwlSaveProperty(
+        _P,
+        NS + "hasOwner",
+        NS + "hasKeeper",
+        labels=(("en", "has keeper"), ("fr", "a pour gardien")),
+        comments=(("en", "the keeper"),),
+        domains=(NS + "Pet",),
+        ranges=(NS + "Human",),
+    ).apply(t)
+    assert NS + "hasOwner" not in t.owl_properties  # renamed
+    prop = t.owl_properties[NS + "hasKeeper"]
+    assert _labels(prop) == {"en": "has keeper", "fr": "a pour gardien"}
+    assert _comments(prop) == {"en": "the keeper"}
+    assert prop.domains == [NS + "Pet"] and prop.ranges == [NS + "Human"]
+
+
+def test_save_property_without_rename_replaces_domain_range() -> None:
+    from ster.core.commands import OwlSaveProperty
+
+    t = Taxonomy()
+    OwlCreateObjectProperty(
+        _P, NS + "p", labels=(("en", "P"),), domain_uri=NS + "A", range_uri=NS + "B"
+    ).apply(t)
+    OwlSaveProperty(_P, NS + "p", NS + "p", labels=(("en", "P"),), domains=(), ranges=()).apply(t)
+    prop = t.owl_properties[NS + "p"]
+    assert prop.domains == [] and prop.ranges == []  # cleared

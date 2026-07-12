@@ -31,6 +31,7 @@ from ster.core.commands import (
     OwlAddIndividualType,
     OwlAddProperty,
     OwlAddPropertyClass,
+    OwlChangeIndividualType,
     OwlConvertClassToIndividual,
     OwlConvertIndividualToClass,
     OwlCreateIndividual,
@@ -303,6 +304,8 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
 # Each (label, action): "rename" is handled by the app (an edit flow); every other
 # action is dispatched exactly like its detail-pane row (via _run_field_action).
 _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
+    # "↑ Add superclass" is shown only on top-level classes (filtered in the app);
+    # URI edits go through "Edit class…", so there's no separate "Rename URI" here.
     "class": [
         ("✎ Edit class…", "edit_class"),
         ("↓ Add subclass", "new_subclass"),
@@ -311,7 +314,6 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("↷ Move under a different superclass…", "move_class"),
         ("⇢ Change to individual", "class_to_individual"),
         ("⊙ Open graph", "view_focused_graph"),
-        ("✎ Rename URI…", "rename"),
         ("⊘ Delete…", "delete_class"),
     ],
     "individual": [
@@ -395,6 +397,7 @@ def meta_input_command(
 # action → (prompt, candidate-kind) — picks an entity, command reads the meta.
 META_PICKER_ACTIONS: dict[str, tuple[str, str]] = {
     "edit_prop_value": ("Change the value — pick an individual", "individual"),
+    "change_ind_type": ("Change class membership — pick a class", "class"),
 }
 
 
@@ -449,6 +452,8 @@ def meta_relation_command(
         return OwlSetIndividualValue(
             path, uri, field.meta["prop_uri"], target_uri, field.meta["val_uri"]
         )
+    if field.meta.get("action") == "change_ind_type":
+        return OwlChangeIndividualType(path, uri, field.meta["type_uri"], target_uri)
     return None
 
 

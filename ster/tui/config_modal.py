@@ -40,6 +40,27 @@ from .local_property_modal import LocalPropertyModal
 from .modal import ModalBase
 
 
+def _pct_display(value: object) -> str:
+    """A stored 0.0–1.0 coverage threshold as a percent string ('' when unset/invalid),
+    e.g. ``1.0`` → ``"100"``, ``0.5`` → ``"50"``."""
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value) * 100:g}"  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+
+
+def _pct_parse(raw: str) -> float | None:
+    """Parse a percent field back to a 0.0–1.0 threshold (clamped); ``None`` when blank
+    or non-numeric, so the caller keeps the stored value."""
+    text = raw.strip().rstrip("%").strip()
+    try:
+        return max(0.0, min(1.0, float(text) / 100))
+    except ValueError:
+        return None
+
+
 class DeclareAnnotationProperty(Message):
     """Ask the app to declare *uri* as a local ``owl:AnnotationProperty``.
 
@@ -523,10 +544,21 @@ class ConfigModal(ModalBase[None]):
         padding: 0 1;
         margin-bottom: 1;
     }
-    .cfg-sl-thresh { height: auto; }
-    .cfg-sl-label { width: 1fr; content-align: left middle; }
-    .cfg-sl-num { width: 14; }
+    /* Each threshold + its "required in:" row form one tight group, spaced from the next. */
+    .cfg-sl-thresh-group { height: auto; margin: 0 0 1 0; }
+    /* Single-line rows (flat field, no 3-line border) so the threshold and its
+       "required in:" row sit directly adjacent — no blank line between them. */
+    .cfg-sl-thresh { height: 1; }
+    /* Fixed label width so the fields align in a column right after the names (not pushed
+       to the far right), keeping the name, its field and "required in:" visually close. */
+    .cfg-sl-label { width: 38; content-align: left middle; }
+    .cfg-sl-num { width: 12; height: 1; border: none; padding: 0 1; background: $foreground 10%; }
+    .cfg-sl-pct { width: 2; height: 1; content-align: left middle; color: $text-muted; }
     .cfg-sl-text { width: 1fr; }
+    /* Per-language "required in:" row, tucked directly beneath its threshold. */
+    .cfg-sl-langrow { height: 1; }
+    .cfg-sl-langcaption { width: auto; color: $text-muted; content-align: left middle; margin-right: 1; }
+    .cfg-sl-langbox { width: auto; margin-right: 2; border: none; background: transparent; }
     /* Narrow dropdowns; the rounded Select border is shared from ModalBase. */
     #cfg-theme { width: 24; margin-bottom: 1; }
     #cfg-display { width: 16; margin-bottom: 1; }
@@ -697,6 +729,14 @@ class ConfigModal(ModalBase[None]):
         ("min_class_label_coverage", "Class label coverage (QUA004)"),
         ("min_property_label_coverage", "Property label coverage (QUA005)"),
     )
+    #: threshold name → the quality key holding its per-language "required in" list.
+    #: Each maps a label-type coverage to per-language requirements sourced from the
+    #: configured languages (definition coverage, QUA002, has no language row).
+    _SL_LANG_KEYS = {
+        "min_label_coverage": "languages",  # QUA001/QUA003 — concept prefLabel
+        "min_class_label_coverage": "class_label_languages",  # QUA004 — class rdfs:label
+        "min_property_label_coverage": "property_label_languages",  # QUA005 — property rdfs:label
+    }
 
     @staticmethod
     def _sl_section(title: str, *widgets):  # type: ignore[no-untyped-def]
@@ -706,22 +746,47 @@ class ConfigModal(ModalBase[None]):
         return section
 
     def _sl_thresholds(self, cfg: dict):  # type: ignore[no-untyped-def]
-        """The threshold rows + required-languages input (quality-coverage section)."""
+        """One group per coverage threshold: the ``name  [nn]%`` row and — for label-type
+        coverages — its 'required in language' checkbox row, tucked directly beneath."""
+        quality = cfg["quality"]
         for name, label in self._SL_THRESHOLDS:
-            yield Horizontal(
+            row = Horizontal(
                 Static(label, classes="cfg-sl-label"),
                 Input(
-                    value=str(cfg["quality"].get(name, "")),
+                    value=_pct_display(quality.get(name)),
                     id=f"cfg-slthr-{name}",
                     classes="cfg-sl-input cfg-sl-num",
                 ),
+                Static("%", classes="cfg-sl-pct"),
                 classes="cfg-sl-thresh",
             )
-        yield Static("Required prefLabel languages, comma-separated (QUA003)", classes="cfg-label")
-        yield Input(
-            value=", ".join(cfg["quality"].get("languages", [])),
-            id="cfg-sllangs",
-            classes="cfg-sl-input cfg-sl-text",
+            lang_key = self._SL_LANG_KEYS.get(name)
+            members = (
+                [row, *self._sl_language_row(lang_key, quality.get(lang_key, []))]
+                if lang_key
+                else [row]
+            )
+            yield Vertical(*members, classes="cfg-sl-thresh-group")
+
+    def _sl_language_row(self, lang_key: str, required: list):  # type: ignore[no-untyped-def]
+        """A 'required in' row for a label type: one checkbox per configured language
+        (checked = every entity of this type must carry a label in that language)."""
+        if not self._configured:
+            yield Static("  (add configured languages in the General tab)", classes="cfg-hint")
+            return
+        required_set = set(required)
+        yield Horizontal(
+            Static("required in:", classes="cfg-sl-langcaption"),
+            *(
+                Checkbox(
+                    lang,
+                    value=(lang in required_set),
+                    id=f"cfg-sllang-{lang_key}-{lang}",
+                    classes="cfg-sl-langbox",
+                )
+                for lang in self._configured
+            ),
+            classes="cfg-sl-langrow",
         )
 
     def _semanticlint_widgets(self):  # type: ignore[no-untyped-def]
@@ -751,7 +816,7 @@ class ConfigModal(ModalBase[None]):
                 ),
             )
         )
-        sections.append(self._sl_section("Quality thresholds (0.0–1.0)", *self._sl_thresholds(cfg)))
+        sections.append(self._sl_section("Quality thresholds (%)", *self._sl_thresholds(cfg)))
         sections.append(
             self._sl_section(
                 "Check selection",
@@ -966,13 +1031,18 @@ class ConfigModal(ModalBase[None]):
         }
         quality: dict = {}
         for name, _ in self._SL_THRESHOLDS:
-            raw = self.query_one(f"#cfg-slthr-{name}", Input).value.strip()
-            try:
-                quality[name] = float(raw)
-            except ValueError:
-                pass  # leave unset → keeps the stored/default value
-        langs = self.query_one("#cfg-sllangs", Input).value
-        quality["languages"] = [c.strip() for c in langs.split(",") if c.strip()]
+            pct = _pct_parse(self.query_one(f"#cfg-slthr-{name}", Input).value)
+            if pct is not None:  # blank/invalid → leave unset → keeps the stored/default value
+                quality[name] = pct
+        # Per-language "required in" lists — the checked configured languages per label
+        # type (replaces the old comma-separated QUA003 field; scoped to configured langs).
+        if self._configured:
+            for lang_key in self._SL_LANG_KEYS.values():
+                quality[lang_key] = [
+                    lang
+                    for lang in self._configured
+                    if self.query_one(f"#cfg-sllang-{lang_key}-{lang}", Checkbox).value
+                ]
         return {
             "features": features,
             "quality": quality,

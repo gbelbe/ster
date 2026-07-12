@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster.core.commands import OwlCreateClass, OwlSaveClass
+from ster.core.commands import OwlCreateClass, OwlSaveClass, OwlSetComment, OwlSetLabel
 from ster.model import Definition, Label, RDFClass, Taxonomy
 
 _P = Path("o.ttl")
@@ -84,3 +84,39 @@ def test_save_class_renames_and_cascades() -> None:
     assert NS + "Car" not in t.owl_classes
     assert NS + "Automobile" in t.owl_classes
     assert NS + "Automobile" in t.owl_classes[NS + "Sedan"].sub_class_of
+
+
+# ── OwlSetLabel / OwlSetComment — single-field inline edit ─────────────────────
+# Regression: clearing a label/comment via the inline edit must *remove* that
+# language's entry, not upsert an empty-string literal. An empty `rdfs:label ""`
+# still satisfies every "has a label" check (semanticlint QUA004 / RDS001, the
+# overview coverage), so the class wrongly stayed at 100 % coverage / green glyph.
+# Root cause: OwlSetLabel.apply called set_owl_label unconditionally (upsert),
+# unlike the batch OwlSaveClass path which already removes on empty.
+
+
+def test_set_label_empty_removes_that_language_regression() -> None:
+    t = _seed()  # Car has en + fr labels
+    OwlSetLabel(_P, NS + "Car", "fr", "").apply(t)  # user clears the fr label
+    cls = t.owl_classes[NS + "Car"]
+    assert _labels(cls) == {"en": "Car"}  # fr removed, not left as ("fr", "")
+    assert all(lbl.value for lbl in cls.labels)  # no empty-string label survives
+
+
+def test_set_label_empty_on_last_label_leaves_class_unlabelled_regression() -> None:
+    t = Taxonomy()
+    t.owl_classes[NS + "Bare"] = RDFClass(uri=NS + "Bare", labels=[Label("en", "Bare")])
+    OwlSetLabel(_P, NS + "Bare", "en", "").apply(t)  # clear the only label
+    assert t.owl_classes[NS + "Bare"].labels == []  # truly unlabelled → lint can flag it
+
+
+def test_set_label_non_empty_still_upserts() -> None:
+    t = _seed()
+    OwlSetLabel(_P, NS + "Car", "en", "Automobile").apply(t)
+    assert _labels(t.owl_classes[NS + "Car"]) == {"en": "Automobile", "fr": "Voiture"}
+
+
+def test_set_comment_empty_removes_that_language_regression() -> None:
+    t = _seed()  # Car has an en comment
+    OwlSetComment(_P, NS + "Car", "en", "").apply(t)
+    assert t.owl_classes[NS + "Car"].comments == []

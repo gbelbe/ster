@@ -26,10 +26,7 @@ Feature: Editing the ontology in the New-TUI
     When I add the superclass "Person" to the class "Cat"
     Then the class "Cat" is a subclass of "Person"
 
-  Scenario: Remove a superclass
-    Given the zoo ontology is open for editing
-    When I remove the superclass "Mammal" from the class "Cat"
-    Then the class "Cat" is not a subclass of "Mammal"
+  # (Remove-superclass had no home once the class Hierarchy section was removed.)
 
   Scenario: Delete a class
     Given the zoo ontology is open for editing
@@ -118,17 +115,8 @@ Feature: Editing the ontology in the New-TUI
     When I change the ontology domain to "garden.example.org"
     Then a class exists at "https://garden.example.org/zoo/Animal"
 
-  # Phase 7 — rich content, notes, individual values
-
-  Scenario: Add a schema:image to an individual
-    Given the zoo ontology is open for editing
-    When I add the image "https://example.org/felix.jpg" to the individual "Felix"
-    Then the individual "Felix" has the image "https://example.org/felix.jpg"
-
-  Scenario: Set a markdown note on a class
-    Given the zoo ontology is open for editing
-    When I set the note of the class "Cat" to "Independent and curious."
-    Then the class "Cat" has the note "Independent and curious."
+  # Phase 7 — individual values
+  # (schema:image add + markdown note were removed from the detail view)
 
   Scenario: Remove an object-property value from an individual
     Given the zoo ontology is open for editing

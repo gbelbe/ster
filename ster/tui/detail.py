@@ -35,7 +35,15 @@ OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
 TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 
 # Field meta["type"] values that start a new section rather than render a row.
-_SEPARATORS = frozenset({"separator", "separator_danger", "separator_group", "separator_group_end"})
+_SEPARATORS = frozenset(
+    {
+        "separator",
+        "separator_danger",
+        "separator_group",
+        "separator_collapsible",
+        "separator_group_end",
+    }
+)
 
 # entity kind (data.kind_of) → its DetailField builder. All accept the keyword
 # ``configured_langs`` (the languages whose label/description add rows to offer).
@@ -56,6 +64,7 @@ class DetailSection:
     fields: list[DetailField] = dc_field(default_factory=list)
     danger: bool = False  # True for the "Danger Zone" (separator_danger) section
     group: bool = False  # opens a bordered group box (separator_group)
+    collapsible: bool = False  # opens a collapsed-by-default disclosure group
     group_end: bool = False  # closes the current group box (separator_group_end)
 
 
@@ -75,6 +84,7 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
                 title=f.display,
                 danger=(ftype == "separator_danger"),
                 group=(ftype == "separator_group"),
+                collapsible=(ftype == "separator_collapsible"),
                 group_end=(ftype == "separator_group_end"),
             )
             sections.append(current)
@@ -167,12 +177,41 @@ def build_sections(
     Within each section the constructive ＋ Add… action is hoisted to the top
     (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
-    sections = group_sections(
-        _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata, quality_block)
+    fields = _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata, quality_block)
+    # The "Hierarchy" section is dropped from OWL class details only (concepts keep
+    # their narrower/broader/related hierarchy).
+    extra: frozenset[str] = (
+        frozenset({"Hierarchy"}) if data.kind_of(tax, uri) == "class" else frozenset()
     )
+    sections = group_sections(_declutter(fields, extra))
     for sec in sections:
         sec.fields = _creates_first(sec.fields)
     return sections
+
+
+# Sections / actions hidden from every entity detail view. Delete & convert stay
+# reachable on the right-click context menu; these just declutter the detail panel.
+_HIDDEN_SECTIONS = frozenset({"Note (markdown)", "Danger Zone"})
+_HIDDEN_ACTIONS = frozenset(
+    {"add_schema_image", "add_schema_video", "add_schema_url", "add_class_property"}
+)
+
+
+def _declutter(
+    fields: list[DetailField], extra_hidden: frozenset[str] | set[str] = frozenset()
+) -> list[DetailField]:
+    """Drop the Note (markdown) and Danger Zone sections (plus any *extra_hidden*
+    section titles) and the ``+ Add schema:*`` actions from the flat field list."""
+    hidden = _HIDDEN_SECTIONS | extra_hidden
+    out: list[DetailField] = []
+    skipping = False
+    for f in fields:
+        if f.meta.get("type", "").startswith("separator"):
+            skipping = f.display in hidden  # skip the section + its rows
+        if skipping or f.meta.get("action") in _HIDDEN_ACTIONS:
+            continue
+        out.append(f)
+    return out
 
 
 def field_markup(f: DetailField) -> str:
@@ -180,7 +219,8 @@ def field_markup(f: DetailField) -> str:
     affordance line for action/empty rows. Shared by the flat render and the
     composed DetailView row widgets."""
     if f.value:
-        return f"{_esc(f.display)}: {_esc(f.value)}"
+        sep = " " if f.meta.get("plain_value") else ": "
+        return f"{_esc(f.display)}{sep}{_esc(f.value)}"
     return f"[dim]{_esc(f.display)}[/dim]"
 
 

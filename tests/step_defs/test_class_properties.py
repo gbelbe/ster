@@ -289,9 +289,12 @@ def then_has_action_row(ctx, action):
 
 @then(parsers.parse('the detail panel shows "{prop_name}" as inherited from "{parent_name}"'))
 def then_inherited_from(ctx, prop_name, parent_name):
+    # Inherited rows are grouped under an "inherited from <parent>:" sub-header; the row
+    # carries its parent in meta (the display is just the property label).
     inherited = [f for f in ctx["fields"] if f.meta.get("type") == "inherited_prop"]
     assert any(
-        f.meta.get("uri") == BASE + prop_name and parent_name in f.display for f in inherited
+        f.meta.get("uri") == BASE + prop_name and f.meta.get("parent_uri") == BASE + parent_name
+        for f in inherited
     ), f"No inherited row for {prop_name} from {parent_name}"
 
 

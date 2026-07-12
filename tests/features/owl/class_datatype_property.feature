@@ -18,7 +18,7 @@ Feature: Define a datatype attribute or a relationship on a class
     When I choose the first datatype
     Then a "DatatypeProperty" is created with an xsd range
 
-  Scenario: A new datatype attribute is available on the class's individuals
+  Scenario: A new datatype attribute is not auto-shown on the class's individuals until asserted
     Given a class "Paper" with an individual "MyPaper"
     When I add a datatype attribute "year" to the class
-    Then "year" is offered as an applicable property on "MyPaper"
+    Then "year" is not shown on the individual "MyPaper" until it has a value

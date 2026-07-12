@@ -842,9 +842,10 @@ def test_build_individual_detail_class_membership():
 
     t = _individual_taxonomy()
     fields = build_individual_detail(t, BASE_I + "Rex", "en")
-    membership = [f for f in fields if f.meta.get("type") == "rdf_relation"]
+    membership = [f for f in fields if f.meta.get("type") == "ind_type"]
     assert len(membership) == 1
     assert membership[0].meta["uri"] == BASE_I + "Dog"
+    assert membership[0].editable and membership[0].meta["action"] == "change_ind_type"
 
 
 def test_build_individual_detail_add_label_action():

@@ -27,7 +27,7 @@ from textual.widgets.tree import TreeNode
 
 from ster.metadata_coverage import MetaProp
 from ster.model import Taxonomy
-from ster.nav.logic import DetailField
+from ster.nav.logic import DetailField, prop_comment
 
 from . import data, detail, edits, uri_edit
 from .choice_modal import ChoiceModal
@@ -168,6 +168,19 @@ class OntologyTree(Tree):
             self.cursor_line = line  # select the right-clicked node visually
             self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
 
+    def watch_hover_line(self, previous_line: int, line: int) -> None:
+        """Show a property's rdfs:comment as a tooltip while the mouse hovers its row."""
+        node = self.get_node_at_line(line) if line is not None and line >= 0 else None
+        uri = node.data if node is not None else None
+        self.tooltip = self._hover_comment(uri) if uri else None
+
+    def _hover_comment(self, uri: str) -> str | None:
+        """The rdfs:comment of the property at *uri* (else None) — no tooltip for other kinds."""
+        prop = self.app.tax.owl_properties.get(uri)  # type: ignore[attr-defined]
+        if prop is None or not prop.comments:
+            return None
+        return prop_comment(prop, self.app.lang)  # type: ignore[attr-defined]
+
 
 class _StorePersistence:
     """Persistence port backed by ster.store (writes the .ttl on commit)."""
@@ -246,6 +259,9 @@ class OntologyApp(App):
         margin: 1 0;
     }
     .detail-group .section-header:first-of-type { margin-top: 0; }
+    /* Inherited-properties disclosure: no extra gap, subtle title. */
+    .detail-collapsible { margin: 1 0 0 0; border: none; padding-top: 0; }
+    .detail-collapsible CollapsibleTitle { color: $text-muted; }
     .detail-row { padding: 0 1; }
     .detail-row:focus { background: $primary 20%; }
     /* $boost is a translucent overlay → invisible on light themes; use a solid
@@ -757,7 +773,9 @@ class OntologyApp(App):
         return {uri}
 
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
-        text = f"{self._node_icon(uri, kind)} {data.label_of(self.tax, uri, self.lang)}{suffix}"
+        text = (
+            f"{self._node_icon(uri, kind)} {data.node_name(self.tax, uri, self.lang, kind)}{suffix}"
+        )
         node = parent.add_leaf(text, data=uri)
         self._index(uri, node)
         return node
@@ -1106,6 +1124,9 @@ class OntologyApp(App):
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
+        if action == "edit_property":  # the field names the property (not the shown class)
+            self._open_property_edit(field.meta.get("uri", ""), path)
+            return
         handler = self._ENTITY_ACTION_HANDLERS.get(action)
         if handler is not None:
             getattr(self, handler)(uri, path)
@@ -1153,6 +1174,7 @@ class OntologyApp(App):
             self._open_object_property_create()
             return
         items = self._filter_plugin_actions(edits.context_actions(data.kind_of(self.tax, uri)))
+        items = self._filter_class_actions(uri, items)
         if not items:
             return
         self._show(uri)  # select it, so the actions target this entity
@@ -1171,13 +1193,29 @@ class OntologyApp(App):
             return items
         return [(lbl, act) for lbl, act in items if act not in self._ENFORCE_ACTIONS]
 
+    def _filter_class_actions(
+        self, uri: str, items: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """Hide '↑ Add superclass' on non-top-level classes — only a root class (no
+        rdfs:subClassOf parent) may gain a superclass from the menu."""
+        cls = self.tax.owl_classes.get(uri)
+        if cls is None or not cls.sub_class_of:  # not a class, or a top-level class → keep all
+            return items
+        return [(lbl, act) for lbl, act in items if act != "link_superclass"]
+
     def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
         """A context-menu action was picked → run it against the selected entity."""
         # Detail-row Edit/Delete submenu (takes priority over the tree-node menu).
         if message.action == "row_edit" and self._row_menu_field is not None:
             field, self._row_menu_field = self._row_menu_field, None
             self._row_menu_delete = None
-            self._open_edit_modal(field, origin=self._row_menu_origin)
+            # Value rows carry an edit *action* (a picker for object values / class
+            # membership, a text modal for literals) — dispatch it; plain editable rows
+            # (labels, comments, URI) open the generic edit modal.
+            if field.meta.get("action"):
+                self._run_field_action(field)
+            else:
+                self._open_edit_modal(field, origin=self._row_menu_origin)
             return
         if message.action == "row_delete" and self._row_menu_delete is not None:
             delete_field, self._row_menu_delete = self._row_menu_delete, None
@@ -1510,6 +1548,47 @@ class OntologyApp(App):
                 labels=labels,
                 comments=comments,
                 title="Edit class",
+            ),
+            _on_submit,
+        )
+
+    def _open_property_edit(self, prop_uri: str, path: Path) -> None:
+        """Open the edit modal for a property (URI + labels/comments per language) → save.
+        Its domain / range are preserved (edited via the property context menu)."""
+        from ster.core.commands import OwlSaveProperty
+
+        from .property_edit_modal import PropertyEditModal
+
+        prop = self.tax.owl_properties.get(prop_uri)
+        if prop is None:
+            return
+        prefix, fragment = uri_edit.split_namespace(prop_uri)
+        labels = {lbl.lang: lbl.value for lbl in prop.labels}
+        comments = {c.lang: c.value for c in prop.comments}
+        domains, ranges = tuple(prop.domains), tuple(prop.ranges)  # preserved as-is
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlSaveProperty(
+                        path,
+                        prop_uri,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                        domains,
+                        ranges,
+                    ),
+                    select=result["uri"],  # highlight follows the (possibly renamed) property
+                )
+
+        self.push_screen(
+            PropertyEditModal(
+                prefix=prefix,
+                fragment=fragment,
+                langs=self._class_langs(),
+                labels=labels,
+                comments=comments,
             ),
             _on_submit,
         )
@@ -1882,9 +1961,22 @@ class OntologyApp(App):
         """Open (or update) the VOWL graph in the browser — focused on *target* when
         given, else the whole ontology.
 
-        A view, not a mutation: works read-only, opens a daemon-served page +
-        browser tab (non-blocking) and reports the URL.
+        A view, not a mutation. When the live-server port is already taken by another
+        process, warn and offer to close it (rather than silently opening a read-only
+        snapshot) — see :meth:`_prompt_port_conflict`.
         """
+        from ster import viz_vowl
+
+        if not viz_vowl.is_live_server():
+            holder = viz_vowl.port_holder()
+            if holder is not None:
+                self._prompt_port_conflict(holder, target)
+                return
+        self._open_graph_now(target)
+
+    def _open_graph_now(self, target: str | None) -> None:
+        """Open the graph browser tab now (the live server when the port is free, else the
+        static offline snapshot), reporting the URL or any failure."""
         from ster import viz_vowl
 
         try:
@@ -1895,6 +1987,48 @@ class OntologyApp(App):
             self.notify(f"Graph opened in your browser — {url}")
         except Exception as exc:  # surfacing beats crashing the UI for a view action
             self.notify(f"Couldn't open the graph: {exc}", severity="error")
+
+    def _prompt_port_conflict(self, holder: tuple[int, str], target: str | None) -> None:
+        """Warn that the graph's live-server port is taken and offer to close the process
+        holding it (then open the live graph), open a read-only snapshot, or cancel."""
+        from ster.api_server import load_server_config
+
+        pid, desc = holder
+        _url, port = load_server_config()
+        short = desc if len(desc) <= 70 else desc[:69] + "…"
+        prompt = (
+            f"Port {port} is already in use by another application (or another ster "
+            f"instance):\n  {short}  (PID {pid})\n\n"
+            "ster can't start the live graph server there. Close that process and open "
+            "the live graph?"
+        )
+        options = [
+            ("Close it & open the live graph", "close"),
+            ("Open a read-only snapshot instead", "snapshot"),
+            ("Cancel", "cancel"),
+        ]
+        self.push_screen(
+            ChoiceModal(prompt, options, danger=True),
+            lambda choice: self._on_port_conflict(choice, pid, target),
+        )
+
+    def _on_port_conflict(self, choice: str | None, pid: int, target: str | None) -> None:
+        """Act on the port-conflict choice: close the process then open the live graph,
+        open the offline snapshot, or do nothing."""
+        from ster import viz_vowl
+
+        if choice in (None, "cancel"):
+            return
+        if choice == "snapshot":
+            self._open_graph_now(target)  # port still busy → static offline snapshot
+            return
+        if viz_vowl.free_port(pid):
+            self.notify(f"Closed the process on the port (PID {pid}).")
+            self._open_graph_now(target)
+        else:
+            self.notify(
+                f"Couldn't free the port — PID {pid} may still be running.", severity="error"
+            )
 
     def _open_lint(self, severity: str | None = None) -> None:
         """Open a modal listing the semanticlint issues of *severity* (a read-only

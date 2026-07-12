@@ -921,12 +921,76 @@ def test_semanticlint_thresholds_and_features_persist_to_quality_json(tmp_path) 
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
             modal.query_one("#cfg-slfeat-icons", Checkbox).value = False
-            modal.query_one("#cfg-slthr-min_label_coverage", Input).value = "0.5"
+            modal.query_one("#cfg-slthr-min_label_coverage", Input).value = "50"  # 50% → 0.5
             for _ in range(3):
                 await pilot.pause()
         saved = config.load_config()
         assert saved["features"]["icons"] is False
         assert saved["quality"]["min_label_coverage"] == 0.5
+
+    _run(scenario)
+
+
+def test_threshold_percent_display_and_parse_round_trip() -> None:
+    """Thresholds are shown/edited as a percent but stored as a 0.0–1.0 fraction."""
+    from ster.tui.config_modal import _pct_display, _pct_parse
+
+    assert _pct_display(1.0) == "100" and _pct_display(0.5) == "50"
+    assert _pct_display(None) == "" and _pct_display("") == ""  # unset → blank field
+    assert _pct_parse("100") == 1.0 and _pct_parse("50%") == 0.5
+    assert _pct_parse("") is None and _pct_parse("abc") is None  # keep stored value
+    assert _pct_parse("250") == 1.0 and _pct_parse("-5") == 0.0  # clamped to 0–1
+
+
+def test_semanticlint_per_language_checkboxes_replace_the_comma_field(tmp_path) -> None:
+    """Each label-type threshold gets a checkbox per configured language (seeded from the
+    stored requirement lists); the old comma-separated prefLabel-languages field is gone."""
+
+    async def scenario() -> None:
+        from ster import plugins
+        from ster.plugins.semanticlint import config
+
+        plugins.set_enabled("semanticlint", True)
+        stored = config.load_config()["quality"]
+        config.save_config(
+            {"quality": {**stored, "languages": ["en"], "class_label_languages": ["fr"]}}
+        )
+        app = _Host()
+        async with app.run_test(size=(120, 48)) as pilot:
+            app.push_screen(ConfigModal("en", ["en", "fr"], ["en", "fr"]))
+            await pilot.pause()
+            modal = app.screen
+            assert not modal.query("#cfg-sllangs")  # the comma field is gone
+            for key in ("languages", "class_label_languages", "property_label_languages"):
+                assert modal.query(f"#cfg-sllang-{key}-en") and modal.query(f"#cfg-sllang-{key}-fr")
+            # seeded from the stored config
+            assert modal.query_one("#cfg-sllang-languages-en", Checkbox).value is True
+            assert modal.query_one("#cfg-sllang-languages-fr", Checkbox).value is False
+            assert modal.query_one("#cfg-sllang-class_label_languages-fr", Checkbox).value is True
+
+    _run(scenario)
+
+
+def test_semanticlint_per_language_checkboxes_persist_the_required_lists(tmp_path) -> None:
+    """Checking languages writes the per-label-type required-in lists (concept prefLabel /
+    class label / property label), scoped to the configured languages."""
+
+    async def scenario() -> None:
+        from ster import plugins
+
+        plugins.set_enabled("semanticlint", True)
+        app = _Host()
+        async with app.run_test(size=(120, 48)) as pilot:
+            app.push_screen(ConfigModal("en", ["en", "fr"], ["en", "fr"]))
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#cfg-sllang-languages-fr", Checkbox).value = True
+            modal.query_one("#cfg-sllang-class_label_languages-fr", Checkbox).value = True
+            modal.query_one("#cfg-sllang-property_label_languages-en", Checkbox).value = True
+            quality = modal._semanticlint_result()["quality"]
+            assert quality["languages"] == ["en", "fr"]  # en was seeded on, fr now checked
+            assert quality["class_label_languages"] == ["fr"]
+            assert quality["property_label_languages"] == ["en"]
 
     _run(scenario)
 

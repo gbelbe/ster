@@ -36,6 +36,7 @@ Drive = Callable[[OntologyApp, object], Awaitable[None]]
 def _run(ctx: dict, monkeypatch, do: Drive) -> None:
     """Open the app, record graph calls, run *do*, and capture the recorded calls."""
     calls: list = []
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)  # port free
     monkeypatch.setattr(
         viz_vowl,
         "open_focused_in_browser",

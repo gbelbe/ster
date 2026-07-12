@@ -220,8 +220,10 @@ def test_edit_base_uri_action_present() -> None:
     assert "edit_ontology_uri" in _actions(_tax())
 
 
-def test_view_graph_action_present() -> None:
-    assert "view_ontology_graph" in _actions(_tax())
+def test_view_graph_action_moved_to_the_header_row() -> None:
+    """The graph affordance is no longer an in-section field — it's the highlighted
+    '» Open Graph View' header row (see detail_view._graph_action_row), like classes."""
+    assert "view_ontology_graph" not in _actions(_tax())
 
 
 # ── taxonomy (SKOS) overview ──────────────────────────────────────────────────

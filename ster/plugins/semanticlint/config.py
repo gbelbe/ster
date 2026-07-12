@@ -18,12 +18,19 @@ if TYPE_CHECKING:  # semanticlint is optional — imported lazily in build_check
     from semanticlint.checks.base import CheckConfig
 
 # Threshold keys the QUA checks read, with semanticlint's own defaults.
+# The three ``*_languages`` lists are per-language "must be present" requirements,
+# scoped to the configured languages: ``languages`` drives semanticlint's QUA003
+# (concept prefLabel per language); ``class_label_languages`` /
+# ``property_label_languages`` drive ster-authored rdfs:label shapes (see
+# ``language_shapes.py``) — semanticlint 0.5 has no built-in check for those.
 DEFAULT_THRESHOLDS: dict = {
     "min_label_coverage": 1.0,
     "min_definition_coverage": 0.5,
     "min_class_label_coverage": 1.0,
     "min_property_label_coverage": 1.0,
     "languages": ["en"],
+    "class_label_languages": [],
+    "property_label_languages": [],
 }
 
 # The plugin's UI features, each independently toggleable. Read-side features default

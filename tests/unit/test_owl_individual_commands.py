@@ -105,3 +105,22 @@ def test_save_individual_empty_value_clears_that_language() -> None:
     )
     OwlSaveIndividual(_P, NS + "Rex", NS + "Rex", labels=(("en", "Rex"), ("fr", ""))).apply(t)
     assert _labels(t.owl_individuals[NS + "Rex"]) == {"en": "Rex"}
+
+
+# ── OwlChangeIndividualType (re-classify via the editable instanceOf row) ────────
+
+
+def test_change_individual_type_reclassifies() -> None:
+    from ster.core.commands import OwlChangeIndividualType
+
+    t = _seed()  # Alice : Person
+    OwlChangeIndividualType(_P, NS + "Alice", PERSON, DOG).apply(t)
+    assert t.owl_individuals[NS + "Alice"].types == [DOG]  # Person dropped, Dog added
+
+
+def test_change_individual_type_to_same_is_a_noop() -> None:
+    from ster.core.commands import OwlChangeIndividualType
+
+    t = _seed()
+    OwlChangeIndividualType(_P, NS + "Alice", PERSON, PERSON).apply(t)
+    assert t.owl_individuals[NS + "Alice"].types == [PERSON]

@@ -398,8 +398,6 @@ def test_picker_list_wraps_around(tmp_path) -> None:
     async def scenario() -> None:
         from textual.widgets import OptionList
 
-        from ster.tui.detail_view import DetailRow
-
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
@@ -407,12 +405,7 @@ def test_picker_list_wraps_around(tmp_path) -> None:
             await pilot.pause()
             app._show(ZOO + "Cat")
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "link_superclass"
-            )
-            row.focus()
-            await pilot.pause()
-            await pilot.press("enter")  # opens the picker modal
+            app._run_field_action(_action_field("link_superclass"))  # context-menu action
             await pilot.pause()
             options = app.screen.query_one(OptionList)
             options.highlighted = 0
@@ -504,6 +497,52 @@ def test_prop_tree_groups_properties_by_kind() -> None:
             assert untyped.label.plain == "Untyped Properties"
             assert any("orange1" in str(span.style) for span in untyped.label.spans)
             assert leaves(untyped) == [(ZOO + "relatedTo", False)]
+
+    _run(scenario)
+
+
+def test_prop_tree_leaf_shows_local_name_not_label() -> None:
+    """Property leaves are labelled by local name (hasOwner), not rdfs:label (has owner)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            leaf = app._uri_nodes[ZOO + "hasOwner"]
+            assert leaf in app.query_one("#prop-tree", Tree).root.children[0].children
+            assert "hasOwner" in leaf.label.plain
+            assert "has owner" not in leaf.label.plain
+
+    _run(scenario)
+
+
+def test_prop_tree_hover_shows_property_comment_tooltip() -> None:
+    """Hovering a property leaf sets the tree tooltip to its rdfs:comment; hovering
+    nothing (or a non-property) clears it."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        from ster.model import Definition
+
+        app = _app()
+        app.tax.owl_properties[ZOO + "hasOwner"].comments = [
+            Definition("en", "Who owns the animal.")
+        ]
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            prop_tree = app.query_one("#prop-tree", Tree)
+            prop_tree.root.expand_all()
+            await pilot.pause()
+            node = app._uri_nodes[ZOO + "hasOwner"]
+            prop_tree.hover_line = node.line
+            await pilot.pause()
+            assert prop_tree.tooltip == "Who owns the animal."
+            prop_tree.hover_line = -1
+            await pilot.pause()
+            assert prop_tree.tooltip is None
 
     _run(scenario)
 
@@ -662,8 +701,6 @@ def test_picker_filters_as_you_type(tmp_path) -> None:
     async def scenario() -> None:
         from textual.widgets import OptionList
 
-        from ster.tui.detail_view import DetailRow
-
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
@@ -671,12 +708,7 @@ def test_picker_filters_as_you_type(tmp_path) -> None:
             await pilot.pause()
             app._show(ZOO + "Cat")
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "link_superclass"
-            )
-            row.focus()
-            await pilot.pause()
-            await pilot.press("enter")  # open the picker (filter box is focused)
+            app._run_field_action(_action_field("link_superclass"))  # context-menu action
             await pilot.pause()
             options = app.screen.query_one(OptionList)
             full = options.option_count
@@ -735,6 +767,24 @@ def test_detail_row_tooltips() -> None:
     assert action.tooltip and "Delete" in action.tooltip
     stat = DetailRow(DetailField("k", "x", "y", editable=False, meta={"type": "stat"}))
     assert stat.tooltip is None
+
+
+def test_detail_row_tooltip_prefers_explicit_comment() -> None:
+    """A property row carries its rdfs:comment as an explicit tooltip, shown ahead of any
+    edit/action hint."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import DetailRow
+
+    row = DetailRow(
+        DetailField(
+            "classprop:x",
+            "hasName",
+            "(Object Prop.)",
+            editable=False,
+            meta={"type": "class_prop_nav", "action": "edit_property", "tooltip": "The name."},
+        )
+    )
+    assert row.tooltip == "The name."
 
 
 def test_clicking_blank_pane_space_selects_the_window() -> None:
@@ -1127,6 +1177,7 @@ def test_view_graph_action_opens_browser(monkeypatch) -> None:
         from ster.tui.detail_view import DetailRow
 
         calls: list = []
+        monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)  # port free
         monkeypatch.setattr(
             viz_vowl,
             "open_in_browser",
@@ -1166,6 +1217,7 @@ def _patch_graph(monkeypatch) -> list:
     from ster import viz_vowl
 
     calls: list = []
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)  # port free
     monkeypatch.setattr(
         viz_vowl,
         "open_focused_in_browser",
@@ -1257,11 +1309,15 @@ def test_detail_title_includes_the_resource_type() -> None:
 
 
 def _graph_row(app):  # type: ignore[no-untyped-def]
-    """The detail pane's '» Open Graph View' action row, or None."""
+    """The detail pane's '» Open Graph View' action row (focused or whole-ontology), or None."""
     from ster.tui.detail_view import DetailRow
 
     return next(
-        (r for r in app.query(DetailRow) if r.field.meta.get("action") == "view_focused_graph"),
+        (
+            r
+            for r in app.query(DetailRow)
+            if r.field.meta.get("action") in ("view_focused_graph", "view_ontology_graph")
+        ),
         None,
     )
 
@@ -1337,6 +1393,49 @@ def test_property_detail_has_no_graph_action_row() -> None:
     _run(scenario)
 
 
+def test_overview_and_taxonomy_lead_with_the_same_highlighted_graph_row() -> None:
+    """The ontology + taxonomy overviews get the same highlighted '» Open Graph View'
+    header row as classes — the whole-ontology graph (view_ontology_graph)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            for uri in (detail.OVERVIEW_URI, detail.TAXONOMY_URI):
+                app._show(uri)
+                await pilot.pause()
+                first = next(iter(app.query(DetailRow)))  # leads the pane, like classes
+                assert first.field.meta.get("action") == "view_ontology_graph", uri
+                assert "Open Graph View" in first.field.display
+                assert first.has_class("graph-action")  # same highlighted formatting
+
+    _run(scenario)
+
+
+def test_concept_scheme_detail_leads_with_the_graph_row() -> None:
+    """A concept scheme gets the same highlighted graph row (whole-ontology graph)."""
+
+    async def scenario() -> None:
+        from ster.model import ConceptScheme, Label, Taxonomy
+
+        t = Taxonomy()
+        s = ConceptScheme(uri="https://ex.org/skos/Sch", labels=[Label("en", "Sch")])
+        t.schemes[s.uri] = s
+        app = OntologyApp(t, source="skos")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(s.uri)
+            await pilot.pause()
+            row = _graph_row(app)
+            assert row is not None and row.field.meta.get("action") == "view_ontology_graph"
+            assert row.has_class("graph-action")
+
+    _run(scenario)
+
+
 def test_right_click_opens_context_menu_left_click_does_not() -> None:
     """Right-click a node opens its context menu; left-click is left to the tree."""
 
@@ -1364,7 +1463,9 @@ def test_right_click_opens_context_menu_left_click_does_not() -> None:
             await pilot.pause()
             assert menu.has_class("open")
             actions = [a for _, a in menu._items]
-            assert {"move_class", "class_to_individual", "rename", "delete_class"} <= set(actions)
+            assert {"move_class", "class_to_individual", "delete_class"} <= set(actions)
+            assert "rename" not in actions  # URI edits go through "Edit class…"
+            assert "link_superclass" not in actions  # Cat is non-top-level (under Mammal)
 
     _run(scenario)
 
@@ -1728,12 +1829,52 @@ def test_renaming_a_property_keeps_the_highlight_on_it_regression(tmp_path) -> N
     _run(scenario)
 
 
+def test_editing_a_class_property_renames_it_and_keeps_domain(tmp_path) -> None:
+    """Activating a property's ✎ row opens the edit modal; saving renames the property
+    (URI + label) while preserving its domain/range."""
+
+    async def scenario() -> None:
+        from ster.nav.logic import DetailField
+        from ster.tui.property_edit_modal import PropertyEditModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Animal")  # its Properties list has hasOwner (domain Animal)
+            await pilot.pause()
+            # what the ✎ property row dispatches (carries the property uri in its meta)
+            app._run_field_action(
+                DetailField(
+                    "classprop",
+                    "",
+                    "",
+                    editable=False,
+                    meta={"action": "edit_property", "uri": ZOO + "hasOwner"},
+                )
+            )
+            await pilot.pause()
+            assert isinstance(app.screen, PropertyEditModal)
+            app.screen._uri.value = ZOO + "hasKeeper"
+            app.screen._label_inputs[app.lang].value = "has keeper"
+            app.screen._submit()
+            for _ in range(4):
+                await pilot.pause()
+            assert ZOO + "hasKeeper" in app.tax.owl_properties  # renamed
+            assert ZOO + "hasOwner" not in app.tax.owl_properties
+            prop = app.tax.owl_properties[ZOO + "hasKeeper"]
+            assert {lbl.value for lbl in prop.labels} == {"has keeper"}
+            assert prop.domains == [ZOO + "Animal"]  # domain preserved
+
+    _run(scenario)
+
+
 def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
     """An action row (Enter) → modal → constructive command → reload + save."""
 
     async def scenario() -> None:
         from ster.tui.class_modal import ClassModal
-        from ster.tui.detail_view import DetailRow
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -1742,12 +1883,7 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             await pilot.pause()
             app._show(ZOO + "Person")
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "new_subclass"
-            )
-            row.focus()
-            await pilot.pause()
-            await pilot.press("enter")  # action row → full class modal
+            app._run_field_action(_action_field("new_subclass"))  # context-menu action
             await pilot.pause()
             assert isinstance(app.screen, ClassModal)
             modal = app.screen
@@ -1766,10 +1902,11 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
 
 
 def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
-    """Destructive path: Enter on delete row → mode choice → OwlDeleteClass → save."""
+    """Destructive path: the delete action (right-click context menu) → mode choice →
+    OwlDeleteClass → save. (Delete moved off the detail panel to the context menu.)"""
 
     async def scenario() -> None:
-        from ster.tui.detail_view import DetailRow
+        from ster.nav.logic import DetailField
 
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
@@ -1778,12 +1915,12 @@ def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
             await pilot.pause()
             app._show(ZOO + "Cat")
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "delete_class"
+            # what the right-click "⊘ Delete…" menu item dispatches
+            app._run_field_action(
+                DetailField(
+                    "ctx", "", "", editable=False, meta={"type": "action", "action": "delete_class"}
+                )
             )
-            row.focus()
-            await pilot.pause()
-            await pilot.press("enter")  # → mode-choice modal
             await pilot.pause()
             assert app.screen.__class__.__name__ == "ChoiceModal"
             await pilot.click("#opt-delete_all")  # pick a mode
@@ -1801,8 +1938,6 @@ def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
     async def scenario() -> None:
         from textual.widgets import OptionList
 
-        from ster.tui.detail_view import DetailRow
-
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
@@ -1810,12 +1945,7 @@ def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
             await pilot.pause()
             app._show(ZOO + "Cat")
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "link_superclass"
-            )
-            row.focus()
-            await pilot.pause()
-            await pilot.press("enter")  # → picker
+            app._run_field_action(_action_field("link_superclass"))  # context-menu action
             await pilot.pause()
             modal = app.screen
             assert modal.__class__.__name__ == "PickerModal"
@@ -2053,7 +2183,6 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
     async def scenario() -> None:
         from textual.widgets import Tree
 
-        from ster.tui.detail_view import DetailRow
         from ster.tui.individual_modal import IndividualModal
 
         src = tmp_path / "o.ttl"
@@ -2061,13 +2190,9 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            app._show(ZOO + "Dog")  # a class detail exposes "New individual of this class"
+            app._show(ZOO + "Dog")  # its context menu offers "+ Add individual"
             await pilot.pause()
-            row = next(
-                r for r in app.query(DetailRow) if r.field.meta.get("action") == "add_individual"
-            )
-            row.focus()
-            await pilot.press("enter")  # → full individual modal
+            app._run_field_action(_action_field("add_individual"))  # context-menu action → modal
             await pilot.pause()
             assert isinstance(app.screen, IndividualModal)
             app.screen._uri.value = ZOO + "Fido"
@@ -2094,6 +2219,19 @@ def _action_field(action: str):  # type: ignore[no-untyped-def]
 
 def _enforce_field():  # type: ignore[no-untyped-def]
     return _action_field("enforce_shacl")
+
+
+def test_add_superclass_only_offered_on_top_level_classes() -> None:
+    """The class context menu offers '↑ Add superclass' only on a top-level (root) class;
+    a class that already has a superclass doesn't get it."""
+    from ster.tui import edits
+
+    app = _app()  # demo zoo: Animal is a root; Dog is under Mammal
+    class_items = edits.context_actions("class")
+    top = [a for _, a in app._filter_class_actions(ZOO + "Animal", class_items)]
+    child = [a for _, a in app._filter_class_actions(ZOO + "Dog", class_items)]
+    assert "link_superclass" in top  # root class → can add a superclass
+    assert "link_superclass" not in child  # already has one → hidden
 
 
 def test_context_menu_hides_shacl_actions_when_enforce_feature_off() -> None:
@@ -2273,5 +2411,122 @@ def test_bottom_bar_shows_the_selected_language() -> None:
             assert "selected language: fr" in str(ind.render())
             # sits at the bottom-right corner
             assert ind.region.right == 120 and ind.region.bottom == 40
+
+    _run(scenario)
+
+
+# ── graph web view: port-conflict warning + offer to close the holder ───────────
+
+
+def test_show_graph_warns_when_the_live_server_port_is_held() -> None:
+    """When the port is taken by another process (and our server isn't live), the graph
+    action pops a confirmation naming the holder instead of silently going offline."""
+    from unittest.mock import patch
+
+    from ster import viz_vowl
+    from ster.tui.choice_modal import ChoiceModal
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            with (
+                patch.object(viz_vowl, "is_live_server", return_value=False),
+                patch.object(
+                    viz_vowl, "port_holder", return_value=(999, "python ster new-tui x.ttl")
+                ),
+            ):
+                app._show_graph(None)
+                await pilot.pause()
+            assert isinstance(app.screen, ChoiceModal)
+            assert "999" in app.screen._prompt and "already in use" in app.screen._prompt
+
+    _run(scenario)
+
+
+def test_show_graph_opens_directly_when_the_port_is_free() -> None:
+    from unittest.mock import patch
+
+    from ster import viz_vowl
+    from ster.tui.choice_modal import ChoiceModal
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            opened: list = []
+            with (
+                patch.object(viz_vowl, "is_live_server", return_value=False),
+                patch.object(viz_vowl, "port_holder", return_value=None),
+                patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
+            ):
+                app._show_graph(None)
+                await pilot.pause()
+            assert opened == [None]
+            assert not isinstance(app.screen, ChoiceModal)  # no prompt when the port is free
+
+    _run(scenario)
+
+
+def test_port_conflict_close_frees_the_port_then_opens() -> None:
+    from unittest.mock import patch
+
+    from ster import viz_vowl
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            freed: list = []
+            opened: list = []
+            with (
+                patch.object(viz_vowl, "free_port", lambda pid: freed.append(pid) or True),
+                patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
+            ):
+                app._on_port_conflict("close", 999, None)
+            assert freed == [999] and opened == [None]  # killed then opened the live graph
+
+    _run(scenario)
+
+
+def test_port_conflict_close_failure_reports_and_does_not_open() -> None:
+    from unittest.mock import patch
+
+    from ster import viz_vowl
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            opened: list = []
+            with (
+                patch.object(viz_vowl, "free_port", lambda pid: False),
+                patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
+            ):
+                app._on_port_conflict("close", 999, None)
+            assert opened == []  # port never freed → don't open (user is notified of the error)
+
+    _run(scenario)
+
+
+def test_port_conflict_snapshot_opens_without_killing_and_cancel_does_nothing() -> None:
+    from unittest.mock import patch
+
+    from ster import viz_vowl
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            freed: list = []
+            opened: list = []
+            with (
+                patch.object(viz_vowl, "free_port", lambda pid: freed.append(pid) or True),
+                patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
+            ):
+                app._on_port_conflict("snapshot", 999, None)  # offline snapshot, no kill
+                app._on_port_conflict("cancel", 999, None)  # nothing
+                app._on_port_conflict(None, 999, None)  # dismissed → nothing
+            assert opened == [None] and freed == []
 
     _run(scenario)

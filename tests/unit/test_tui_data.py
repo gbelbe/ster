@@ -109,4 +109,11 @@ def test_label_and_kind(tax):
     assert data.label_of(tax, ZOO + "Unknown") == "Unknown"  # fallback to local name
 
 
+def test_node_name_uses_local_name_for_properties(tax):
+    """Property tree leaves are shown by local name (hasOwner), not rdfs:label (has owner);
+    every other kind keeps its human label."""
+    assert data.node_name(tax, ZOO + "hasOwner", "en", "property") == "hasOwner"
+    assert data.node_name(tax, ZOO + "Dog", "en", "class") == "Dog"
+
+
 # Detail rendering moved to ster.tui.detail.render_detail — see test_tui_detail.py.

@@ -84,7 +84,7 @@ def test_new_datatype_prop_is_direct_property_of_class():
     assert f"{BASE}#year" in direct
 
 
-def test_new_datatype_prop_applicable_on_individual_of_class():
+def test_new_datatype_prop_not_shown_on_individual_until_asserted():
     from ster.nav.logic import build_individual_detail
     from ster.operations import add_owl_property
 
@@ -95,8 +95,9 @@ def test_new_datatype_prop_applicable_on_individual_of_class():
         t, f"{BASE}#year", "DatatypeProperty", "year", "en", f"{BASE}#Paper", XSD + "integer"
     )
     fields = build_individual_detail(t, ind, "en")
-    # the new datatype property is offered as an applicable (unapplied) row
-    assert any(f"{BASE}#year" in (fld.key or "") for fld in fields)
+    # The individual page prints only asserted data — an applicable but unasserted
+    # property is not offered as a placeholder row (add via the right-click menu).
+    assert not any(f"{BASE}#year" in (fld.key or "") for fld in fields)
 
 
 def test_add_object_property_relationship_regression():

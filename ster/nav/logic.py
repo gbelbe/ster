@@ -12,7 +12,7 @@ from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
 from ..metadata_coverage import MetaProp
 from ..metadata_coverage import is_labelled as _is_labelled
-from ..model import LabelType, OntologyAnnotation, Taxonomy
+from ..model import LabelType, OntologyAnnotation, OWLProperty, Taxonomy
 from ..owl_analysis import (
     ONTOLOGY_ISSUE_DISPLAY_NAMES,
     OntologyAnalysis,
@@ -427,6 +427,19 @@ def _sep_group(label: str) -> DetailField:
         "",
         editable=False,
         meta={"type": "separator_group"},
+    )
+
+
+def _sep_collapsible(label: str) -> DetailField:
+    """Open a *collapsible* group (collapsed by default): the sections up to the matching
+    :func:`_sep_group_end` are tucked behind a disclosure titled *label* (e.g.
+    'N inherited properties')."""
+    return DetailField(
+        f"sep_collapsible:{label}",
+        label,
+        "",
+        editable=False,
+        meta={"type": "separator_collapsible"},
     )
 
 
@@ -1967,6 +1980,94 @@ def _add_class_property_actions(class_uri: str) -> list[DetailField]:
     return rows
 
 
+# Short, human-friendly value labels for a property's OWL type, shown in class
+# detail property lists (e.g. "(Object Prop.)" instead of "owl:ObjectProperty").
+_PROP_TYPE_DISPLAY = {
+    "ObjectProperty": "(Object Prop.)",
+    "DatatypeProperty": "(Datatype)",
+    "AnnotationProperty": "(Annotation)",
+}
+
+
+def _prop_type_display(prop_type: str) -> str:
+    return _PROP_TYPE_DISPLAY.get(prop_type, f"({prop_type})")
+
+
+def prop_comment(prop: OWLProperty, lang: str) -> str:
+    """The property's rdfs:comment for *lang* (else any, else ''), used as its hover tooltip."""
+    for c in prop.comments:
+        if c.lang == lang:
+            return c.value
+    return prop.comments[0].value if prop.comments else ""
+
+
+def _prop_row_meta(prop: OWLProperty, lang: str, base: dict) -> dict:
+    """*base* meta for a property row: renders the short type with a space (not ': ') and
+    carries the rdfs:comment as a hover tooltip when present."""
+    base = {**base, "plain_value": True}
+    cmt = prop_comment(prop, lang)
+    return {**base, "tooltip": cmt} if cmt else base
+
+
+def _inherited_property_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+    """The collapsed 'N inherited properties' disclosure — properties inherited from
+    ancestor classes, grouped under an 'inherited from <ancestor>:' sub-header. Empty
+    when the class inherits none."""
+    inherited = _inherited_properties(taxonomy, uri)
+    if not inherited:
+        return []
+    grouped: dict[str, list] = {}
+    for prop, parent_uri in inherited:
+        grouped.setdefault(parent_uri, []).append(prop)
+    n = len(inherited)
+    fields: list[DetailField] = [
+        _sep_collapsible(f"{n} inherited propert{'y' if n == 1 else 'ies'}")
+    ]
+    # Highest-level ancestor first: the walk collects nearest-parent first, so reverse.
+    for parent_uri, props in reversed(list(grouped.items())):
+        parent_cls = taxonomy.owl_classes.get(parent_uri)
+        parent_lbl = (parent_cls.label(lang) or parent_cls.local_name) if parent_cls else parent_uri
+        fields.append(_sep(f"inherited from {parent_lbl}:"))
+        fields.extend(
+            DetailField(
+                f"inherited_prop:{prop.uri}:{parent_uri}",
+                prop.local_name,
+                _prop_type_display(prop.prop_type),
+                editable=False,
+                meta=_prop_row_meta(
+                    prop,
+                    lang,
+                    {"type": "inherited_prop", "uri": prop.uri, "parent_uri": parent_uri},
+                ),
+            )
+            for prop in props
+        )
+    fields.append(_sep_group_end())
+    return fields
+
+
+def _class_properties_section(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+    """The class 'Properties' section: direct properties (editable via ✎), the collapsed
+    inherited-properties disclosure, then the add-property action rows."""
+    fields: list[DetailField] = [_sep("Properties")]
+    fields.extend(
+        DetailField(
+            f"classprop:{prop.uri}",
+            prop.local_name,
+            _prop_type_display(prop.prop_type),
+            editable=False,
+            # editable via ✎ → the property edit modal (the uri names the property).
+            meta=_prop_row_meta(
+                prop, lang, {"type": "class_prop_nav", "uri": prop.uri, "action": "edit_property"}
+            ),
+        )
+        for prop in sorted(_direct_properties(taxonomy, uri), key=lambda p: p.local_name)
+    )
+    fields.extend(_inherited_property_fields(taxonomy, uri, lang))
+    fields.extend(_add_class_property_actions(uri))
+    return fields
+
+
 def build_rdf_class_detail(
     taxonomy: Taxonomy,
     uri: str,
@@ -2107,31 +2208,7 @@ def build_rdf_class_detail(
     )
 
     # ── Properties ───────────────────────────────────────────────────────────
-    fields.append(_sep("Properties"))
-    direct_props = sorted(_direct_properties(taxonomy, uri), key=lambda p: p.label(lang))
-    for prop in direct_props:
-        fields.append(
-            DetailField(
-                f"classprop:{prop.uri}",
-                prop.label(lang),
-                f"owl:{prop.prop_type}",
-                editable=False,
-                meta={"type": "class_prop_nav", "uri": prop.uri, "nav": True},
-            )
-        )
-    for prop, parent_uri in _inherited_properties(taxonomy, uri):
-        parent_cls = taxonomy.owl_classes.get(parent_uri)
-        parent_lbl = parent_cls.label(lang) if parent_cls else parent_uri
-        fields.append(
-            DetailField(
-                f"inherited_prop:{prop.uri}:{parent_uri}",
-                f"  → from {parent_lbl}: {prop.label(lang)}",
-                f"owl:{prop.prop_type}",
-                editable=False,
-                meta={"type": "inherited_prop", "uri": prop.uri, "parent_uri": parent_uri},
-            )
-        )
-    fields.extend(_add_class_property_actions(uri))
+    fields.extend(_class_properties_section(taxonomy, uri, lang))
 
     # ── Subtree quality stats ────────────────────────────────────────────────
     fields.extend(_class_quality_fields(taxonomy, uri, lang))
@@ -2279,6 +2356,136 @@ def build_promoted_detail(
 # ──────────────────────────── individual detail ──────────────────────────────
 
 
+def _individual_membership_fields(taxonomy: Taxonomy, individual, lang: str) -> list[DetailField]:  # type: ignore[no-untyped-def]
+    """Each ``instanceOf`` as an editable row: ✎ re-picks the class (change_ind_type),
+    Delete removes it. Adding a membership lives on the right-click context menu."""
+    fields: list[DetailField] = []
+    for type_uri in sorted(individual.types):
+        cls = taxonomy.owl_classes.get(type_uri)
+        label_str = cls.label(lang) if cls else type_uri
+        h = taxonomy.uri_to_handle(type_uri) or "?"
+        fields.append(
+            DetailField(
+                f"ind_type:{type_uri}",
+                "◈ instanceOf",
+                f"{label_str}  [{h}]",
+                editable=True,  # ✎ → change_ind_type picker; the paired remove folds into Delete
+                meta={
+                    "type": "ind_type",
+                    "action": "change_ind_type",
+                    "uri": type_uri,
+                    "type_uri": type_uri,
+                    "nav": bool(cls),
+                },
+            )
+        )
+        fields.append(
+            _add_action_del_field(
+                f"action:rm_ind_type:{type_uri}",
+                "✗ Remove instanceOf",
+                "remove_ind_type",
+                type_uri=type_uri,
+            )
+        )
+    return fields
+
+
+def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -> list[DetailField]:  # type: ignore[no-untyped-def]
+    """Asserted object-property values, each editable via ✎ (pick a new target) with a
+    folded Delete. Grouped by predicate so multi-valued properties sit together."""
+    fields: list[DetailField] = []
+    seen: list[str] = []
+    for prop_uri, _ in individual.property_values:
+        if prop_uri not in seen:
+            seen.append(prop_uri)
+    for p_uri in seen:
+        prop = taxonomy.owl_properties.get(p_uri)
+        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        for val_uri in [vu for pu, vu in individual.property_values if pu == p_uri]:
+            target = taxonomy.owl_individuals.get(val_uri)
+            val_lbl = target.label(lang) if target else val_uri
+            fields.append(
+                DetailField(
+                    f"ind_propval:{p_uri}::{val_uri}",
+                    f"→ {prop_lbl}",
+                    val_lbl,
+                    editable=True,  # ✎ → edit_prop_value picker; paired remove folds into Delete
+                    meta={
+                        "type": "ind_prop_val",
+                        "action": "edit_prop_value",
+                        "prop_uri": p_uri,
+                        "val_uri": val_uri,
+                        "nav": bool(target),
+                    },
+                )
+            )
+            fields.append(
+                _add_action_del_field(
+                    f"action:rm_prop_value:{p_uri}::{val_uri}",
+                    f"✗ Remove → {prop_lbl}: {val_lbl}",
+                    "remove_prop_value",
+                    prop_uri=p_uri,
+                    val_uri=val_uri,
+                )
+            )
+    return fields
+
+
+def _individual_literal_value_fields(
+    taxonomy: Taxonomy, individual, lang: str
+) -> list[DetailField]:  # type: ignore[no-untyped-def]
+    """Asserted literal-property values, each editable via ✎ (a text modal) with a folded
+    Delete. The language / datatype tag rides on the label so the value stays raw-editable."""
+    fields: list[DetailField] = []
+    seen: list[str] = []
+    for prop_uri, _, _ in individual.literal_values:
+        if prop_uri not in seen:
+            seen.append(prop_uri)
+    for p_uri in seen:
+        prop = taxonomy.owl_properties.get(p_uri)
+        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        for val_str, lang_or_dt in [
+            (vs, ld) for pu, vs, ld in individual.literal_values if pu == p_uri
+        ]:
+            tag = f"  [{lang_or_dt[1:]}]" if lang_or_dt.startswith("@") and lang_or_dt[1:] else ""
+            fields.append(
+                DetailField(
+                    f"ind_litval:{p_uri}::{val_str}",
+                    f"→ {prop_lbl}{tag}",
+                    val_str,
+                    editable=True,  # ✎ → edit_literal_value text modal; paired remove → Delete
+                    meta={
+                        "type": "ind_lit_val",
+                        "action": "edit_literal_value",
+                        "prop_uri": p_uri,
+                        "val_str": val_str,
+                        "lang_or_dt": lang_or_dt,
+                    },
+                )
+            )
+            fields.append(
+                _add_action_del_field(
+                    f"action:rm_lit_value:{p_uri}::{val_str}",
+                    f"✗ Remove → {prop_lbl}: {val_str}",
+                    "remove_literal_value",
+                    prop_uri=p_uri,
+                    val_str=val_str,
+                    lang_or_dt=lang_or_dt,
+                )
+            )
+    return fields
+
+
+def _individual_property_value_fields(
+    taxonomy: Taxonomy, individual, lang: str
+) -> list[DetailField]:  # type: ignore[no-untyped-def]
+    """Every asserted property value (object then literal) as an editable ✎ row."""
+    return [
+        *_individual_object_value_fields(taxonomy, individual, lang),
+        *_individual_literal_value_fields(taxonomy, individual, lang),
+    ]
+
+
 def build_individual_detail(
     taxonomy: Taxonomy,
     uri: str,
@@ -2350,172 +2557,14 @@ def build_individual_detail(
         )
     )
 
-    # ── Class Membership — always shown with inline mutations ────────────────
+    # ── Class Membership — editable instanceOf rows (✎ change class / Delete) ─
     fields.append(_sep("Class Membership"))
-    for type_uri in sorted(individual.types):
-        cls = taxonomy.owl_classes.get(type_uri)
-        label_str = cls.label(lang) if cls else type_uri
-        h = taxonomy.uri_to_handle(type_uri) or "?"
-        fields.append(
-            DetailField(
-                f"ind_type:{type_uri}",
-                "◈ instanceOf",
-                f"{label_str}  [{h}]",
-                editable=False,
-                meta={"type": "rdf_relation", "uri": type_uri, "nav": bool(cls)},
-            )
-        )
-        type_lbl = cls.label(lang) if cls else type_uri
-        fields.append(
-            _add_action_del_field(
-                f"action:rm_ind_type:{type_uri}",
-                f"  ✗ Remove instanceOf: {type_lbl}",
-                "remove_ind_type",
-                type_uri=type_uri,
-            )
-        )
-    fields.append(
-        _add_action_add_field(
-            "action:add_ind_type",
-            "+ Add class membership (rdf:type)",
-            "add_ind_type",
-        )
-    )
+    fields.extend(_individual_membership_fields(taxonomy, individual, lang))
 
-    # ── Property Values — all asserted first, then applicable-but-unapplied ──
-    has_any_assertion = bool(individual.property_values or individual.literal_values)
-    # Track which predicates are already asserted (to suppress empty placeholders)
-    asserted_pred_uris: set[str] = {pv[0] for pv in individual.property_values} | {
-        lv[0] for lv in individual.literal_values
-    }
-
-    # Applicable properties (domain-matching) for the "unapplied" section
-    eff_types_display = _effective_types(taxonomy, individual.types)
-    applicable_unapplied = [
-        (p_uri, prop)
-        for p_uri, prop in sorted(taxonomy.owl_properties.items(), key=lambda kv: kv[1].label(lang))
-        if p_uri not in asserted_pred_uris
-        and (not prop.domains or any(t in prop.domains for t in eff_types_display))
-    ]
-
-    if has_any_assertion or applicable_unapplied:
+    # ── Property Values — only what's asserted; each editable via ✎ ──────────
+    if individual.property_values or individual.literal_values:
         fields.append(_sep("Property Values"))
-
-    # 1. URI-valued assertions (all of them, regardless of domain)
-    # Group by predicate so multi-valued props appear together
-    seen_preds_uri: list[str] = []
-    for prop_uri, _val_uri in individual.property_values:
-        if prop_uri not in seen_preds_uri:
-            seen_preds_uri.append(prop_uri)
-    for p_uri in seen_preds_uri:
-        prop = taxonomy.owl_properties.get(p_uri)
-        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
-        for _, val_uri in [(pu, vu) for pu, vu in individual.property_values if pu == p_uri]:
-            target = taxonomy.owl_individuals.get(val_uri)
-            val_lbl = target.label(lang) if target else val_uri
-            fields.append(
-                DetailField(
-                    f"ind_propval:{p_uri}::{val_uri}",
-                    f"→ {prop_lbl}",
-                    val_lbl,
-                    editable=False,
-                    meta={
-                        "type": "ind_prop_val",
-                        "prop_uri": p_uri,
-                        "val_uri": val_uri,
-                        "nav": bool(target),
-                    },
-                )
-            )
-            fields.append(
-                _add_action_field(
-                    f"action:edit_prop_value:{p_uri}::{val_uri}",
-                    f"  ✎ Change → {prop_lbl}: {val_lbl}",
-                    "edit_prop_value",
-                    prop_uri=p_uri,
-                    val_uri=val_uri,
-                )
-            )
-            fields.append(
-                _add_action_del_field(
-                    f"action:rm_prop_value:{p_uri}::{val_uri}",
-                    f"  ✗ Remove → {prop_lbl}: {val_lbl}",
-                    "remove_prop_value",
-                    prop_uri=p_uri,
-                    val_uri=val_uri,
-                )
-            )
-
-    # 2. Literal-valued assertions
-    seen_preds_lit: list[str] = []
-    for prop_uri, _, _ in individual.literal_values:
-        if prop_uri not in seen_preds_lit:
-            seen_preds_lit.append(prop_uri)
-    for p_uri in seen_preds_lit:
-        prop = taxonomy.owl_properties.get(p_uri)
-        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
-        for _, val_str, lang_or_dt in [
-            (pu, vs, ld) for pu, vs, ld in individual.literal_values if pu == p_uri
-        ]:
-            display_val = val_str
-            if lang_or_dt.startswith("@") and lang_or_dt[1:]:
-                display_val = f"{val_str}  [{lang_or_dt[1:]}]"
-            fields.append(
-                DetailField(
-                    f"ind_litval:{p_uri}::{val_str}",
-                    f"→ {prop_lbl}",
-                    display_val,
-                    editable=False,
-                    meta={
-                        "type": "ind_lit_val",
-                        "prop_uri": p_uri,
-                        "val_str": val_str,
-                        "lang_or_dt": lang_or_dt,
-                    },
-                )
-            )
-            fields.append(
-                _add_action_field(
-                    f"action:edit_lit_value:{p_uri}::{val_str}",
-                    f"  ✎ Edit → {prop_lbl}: {val_str}",
-                    "edit_literal_value",
-                    prop_uri=p_uri,
-                    val_str=val_str,
-                    lang_or_dt=lang_or_dt,
-                )
-            )
-            fields.append(
-                _add_action_del_field(
-                    f"action:rm_lit_value:{p_uri}::{val_str}",
-                    f"  ✗ Remove → {prop_lbl}: {val_str}",
-                    "remove_literal_value",
-                    prop_uri=p_uri,
-                    val_str=val_str,
-                    lang_or_dt=lang_or_dt,
-                )
-            )
-
-    # 3. Applicable but not yet asserted — shown as "—" placeholders
-    for p_uri, prop in applicable_unapplied:
-        prop_lbl = prop.label(lang)
-        fields.append(
-            DetailField(
-                f"ind_prop_empty:{p_uri}",
-                f"→ {prop_lbl}",
-                "—",
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-
-    if has_any_assertion or applicable_unapplied:
-        fields.append(
-            _add_action_add_field(
-                "action:add_prop_value",
-                "+ Add property value",
-                "add_prop_value",
-            )
-        )
+        fields.extend(_individual_property_value_fields(taxonomy, individual, lang))
 
     # ── Note (ns1:note markdown) ──────────────────────────────────────────────
     fields.extend(_note_display_fields(individual.note, "ind:"))

@@ -78,6 +78,17 @@ async def _activate(app, pilot, predicate) -> None:  # noqa: ANN001
     await pilot.pause()
 
 
+async def _menu_action(app, pilot, action: str) -> None:  # noqa: ANN001
+    """Dispatch a right-click context-menu action (delete / convert) on the shown entity
+    — these moved off the detail panel to the context menu."""
+    from ster.nav.logic import DetailField
+
+    app._run_field_action(
+        DetailField("ctx", "", "", editable=False, meta={"type": "action", "action": action})
+    )
+    await pilot.pause()
+
+
 async def _activate_menu(app, pilot, predicate, choice: str) -> None:  # noqa: ANN001
     """Open a value row's Edit/Delete submenu and pick *choice* ("edit"|"delete").
 
@@ -173,7 +184,7 @@ def when_add_subclass(ctx: dict, child: str, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("new_subclass"))
+        await _menu_action(app, pilot, "new_subclass")
         await _submit_text(app, pilot, ZOO + child)
 
     _edit(ctx, do)
@@ -184,25 +195,8 @@ def when_add_superclass(ctx: dict, parent: str, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("link_superclass"))
+        await _menu_action(app, pilot, "link_superclass")
         await _pick(app, pilot, ZOO + parent)
-
-    _edit(ctx, do)
-
-
-@when(parsers.parse('I remove the superclass "{parent}" from the class "{name}"'))
-def when_remove_superclass(ctx: dict, parent: str, name: str) -> None:
-    async def do(app, pilot):  # noqa: ANN001
-        app._show(ZOO + name)
-        await pilot.pause()
-        await _activate(
-            app,
-            pilot,
-            lambda f: (
-                f.meta.get("action") == "remove_superclass"
-                and f.meta.get("parent_uri") == ZOO + parent
-            ),
-        )
 
     _edit(ctx, do)
 
@@ -212,7 +206,7 @@ def when_delete_class(ctx: dict, name: str, mode: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("delete_class"))
+        await _menu_action(app, pilot, "delete_class")
         await pilot.click(f"#opt-{mode}")
 
     _edit(ctx, do)
@@ -226,7 +220,7 @@ def when_add_individual(ctx: dict, ind: str, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("add_individual"))
+        await _menu_action(app, pilot, "add_individual")
         await _submit_text(app, pilot, ZOO + ind)
 
     _edit(ctx, do)
@@ -237,7 +231,7 @@ def when_add_type(ctx: dict, cls: str, ind: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("add_ind_type"))
+        await _menu_action(app, pilot, "add_ind_type")  # add via the right-click context menu
         await _pick(app, pilot, ZOO + cls)
 
     _edit(ctx, do)
@@ -248,12 +242,12 @@ def when_remove_type(ctx: dict, cls: str, ind: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(
+        # The remove folds into the instanceOf row's Edit/Delete menu → pick Delete.
+        await _activate_menu(
             app,
             pilot,
-            lambda f: (
-                f.meta.get("action") == "remove_ind_type" and f.meta.get("type_uri") == ZOO + cls
-            ),
+            lambda f: f.meta.get("type") == "ind_type" and f.meta.get("uri") == ZOO + cls,
+            "delete",
         )
 
     _edit(ctx, do)
@@ -264,7 +258,7 @@ def when_delete_individual(ctx: dict, ind: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("delete_individual"))
+        await _menu_action(app, pilot, "delete_individual")
         await pilot.click("#opt-delete")
 
     _edit(ctx, do)
@@ -424,7 +418,7 @@ def when_delete_property(ctx: dict, prop: str, choice: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + prop)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("delete_property"))
+        await _menu_action(app, pilot, "delete_property")
         await pilot.click(f"#opt-{choice}")
 
     _edit(ctx, do)
@@ -463,17 +457,14 @@ def then_prop_gone(ctx: dict, prop: str) -> None:
 @when(parsers.parse('I add an object property "{prop}" on the class "{cls}"'))
 def when_add_class_property(ctx: dict, prop: str, cls: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
-        app._show(ZOO + cls)
+        # Object properties are created from the Object Properties tree section's
+        # add modal (URI + domain), not the class detail's removed "+ Add" rows.
+        app._open_object_property_create()
         await pilot.pause()
-        await _activate(
-            app,
-            pilot,
-            lambda f: (
-                f.meta.get("action") == "add_class_property"
-                and f.meta.get("prop_type") == "ObjectProperty"
-            ),
-        )
-        await _submit_text(app, pilot, ZOO + prop)
+        modal = app.screen
+        modal._uri.value = ZOO + prop
+        modal._domain.value = ZOO + cls  # domain class
+        modal._submit()
 
     _edit(ctx, do)
 
@@ -483,7 +474,7 @@ def when_add_prop_value(ctx: dict, val: str, prop: str, ind: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("add_prop_value"))
+        await _menu_action(app, pilot, "add_prop_value")  # add via the right-click context menu
         await _pick(app, pilot, ZOO + prop)  # step 1: pick the property
         await pilot.pause()
         await _pick(app, pilot, ZOO + val)  # step 2: pick the object individual
@@ -494,26 +485,7 @@ def when_add_prop_value(ctx: dict, val: str, prop: str, ind: str) -> None:
 # ── when (rich content, notes, individual values) ───────────────────────────--
 
 
-@when(parsers.parse('I add the image "{url}" to the individual "{ind}"'))
-def when_add_image(ctx: dict, url: str, ind: str) -> None:
-    async def do(app, pilot):  # noqa: ANN001
-        app._show(ZOO + ind)
-        await pilot.pause()
-        await _activate(app, pilot, _by_action("add_schema_image"))
-        await _submit_text(app, pilot, url)
-
-    _edit(ctx, do)
-
-
-@when(parsers.parse('I set the note of the class "{name}" to "{note}"'))
-def when_set_note(ctx: dict, name: str, note: str) -> None:
-    async def do(app, pilot):  # noqa: ANN001
-        app._show(ZOO + name)
-        await pilot.pause()
-        await _activate(app, pilot, _by_action("edit_note"))
-        await _submit_text(app, pilot, note)
-
-    _edit(ctx, do)
+# (schema:image add + markdown note were removed from the detail view — no steps.)
 
 
 @when(parsers.parse('I remove the value "{val}" of property "{prop}" from the individual "{ind}"'))
@@ -521,14 +493,16 @@ def when_remove_value(ctx: dict, val: str, prop: str, ind: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(
+        # The remove folds into the value row's Edit/Delete menu → pick Delete.
+        await _activate_menu(
             app,
             pilot,
             lambda f: (
-                f.meta.get("action") == "remove_prop_value"
+                f.meta.get("type") == "ind_prop_val"
                 and f.meta.get("prop_uri") == ZOO + prop
                 and f.meta.get("val_uri") == ZOO + val
             ),
+            "delete",
         )
 
     _edit(ctx, do)
@@ -542,14 +516,17 @@ def when_change_value(ctx: dict, prop: str, ind: str, old: str, new: str) -> Non
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(
+        # The value row is editable (✎) → open its Edit/Delete menu, pick Edit, then
+        # pick the new target in the picker.
+        await _activate_menu(
             app,
             pilot,
             lambda f: (
-                f.meta.get("action") == "edit_prop_value"
+                f.meta.get("type") == "ind_prop_val"
                 and f.meta.get("prop_uri") == ZOO + prop
                 and f.meta.get("val_uri") == ZOO + old
             ),
+            "edit",
         )
         await _pick(app, pilot, ZOO + new)
 
@@ -561,18 +538,6 @@ def then_individual_has_value(ctx: dict, ind: str, val: str, prop: str) -> None:
     pairs = ctx["tax"].owl_individuals[ZOO + ind].property_values
     assert (ZOO + prop, ZOO + val) in pairs
     assert (ZOO + prop, ZOO + val) in ctx["saved"].owl_individuals[ZOO + ind].property_values
-
-
-@then(parsers.parse('the individual "{ind}" has the image "{url}"'))
-def then_individual_has_image(ctx: dict, ind: str, url: str) -> None:
-    assert url in ctx["tax"].owl_individuals[ZOO + ind].schema_images
-    assert url in ctx["saved"].owl_individuals[ZOO + ind].schema_images
-
-
-@then(parsers.parse('the class "{name}" has the note "{note}"'))
-def then_class_has_note(ctx: dict, name: str, note: str) -> None:
-    assert note in ctx["tax"].owl_classes[ZOO + name].note
-    assert note in ctx["saved"].owl_classes[ZOO + name].note
 
 
 @then(parsers.parse('the individual "{ind}" no longer has the value "{val}" for property "{prop}"'))
@@ -591,7 +556,7 @@ def when_convert_ind_to_class(ctx: dict, ind: str, choice: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + ind)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("individual_to_class"))
+        await _menu_action(app, pilot, "individual_to_class")
         await pilot.click(f"#opt-{choice}")
 
     _edit(ctx, do)
@@ -602,7 +567,7 @@ def when_convert_class_to_ind(ctx: dict, cls: str, choice: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(ZOO + cls)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("class_to_individual"))
+        await _menu_action(app, pilot, "class_to_individual")
         await pilot.click(f"#opt-{choice}")
 
     _edit(ctx, do)
@@ -794,7 +759,7 @@ def when_delete_concept(ctx: dict, name: str, choice: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(SK + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("delete"))
+        await _menu_action(app, pilot, "delete")
         await pilot.click(f"#opt-{choice}")
 
     _edit(ctx, do)

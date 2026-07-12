@@ -29,8 +29,11 @@ import functools
 import html as _html
 import http.server
 import json
+import os
 import re
+import signal
 import socket
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -876,6 +879,95 @@ def _offline_banner(api_token: str) -> str:
 def is_live_server() -> bool:
     """True when the live FastAPI server backs the graph (vs a static snapshot)."""
     return _api_app is not None
+
+
+def _server_host_port(host: str | None, port: int | None) -> tuple[str, int]:
+    """Fill in *host*/*port* from the saved server config when not supplied."""
+    if host is not None and port is not None:
+        return host, port
+    from .api_server import load_server_config  # noqa: PLC0415
+
+    url, cfg_port = load_server_config()
+    return host or url.split("://", 1)[-1], port or cfg_port
+
+
+def _listening_pid(port: int) -> int | None:
+    """The PID listening on *port* via ``lsof``, or None when the port is free, ``lsof``
+    is unavailable, or nothing can be parsed (never raises — best-effort)."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    for token in result.stdout.split():
+        try:
+            return int(token)
+        except ValueError:
+            continue
+    return None
+
+
+def _process_name(pid: int) -> str:
+    """A human description (the command line) of *pid* via ``ps``, else ``"PID <n>"``."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        name = result.stdout.strip()
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        name = ""
+    return name or f"PID {pid}"
+
+
+def port_holder(host: str | None = None, port: int | None = None) -> tuple[int, str] | None:
+    """The ``(pid, command)`` of the process listening on the configured server port, or
+    None when the port is free or the process cannot be identified. Used to warn — and
+    offer to close — when the graph's live-server port is already taken."""
+    host, port = _server_host_port(host, port)
+    pid = _listening_pid(port)
+    return (pid, _process_name(pid)) if pid is not None else None
+
+
+def _port_is_free(host: str, port: int) -> bool:
+    """True when *host*:*port* can be bound (nothing is holding it)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def free_port(
+    pid: int,
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    timeout: float = 5.0,
+    poll: float = 0.1,
+) -> bool:
+    """Gracefully terminate *pid* (``SIGTERM``) and wait until the server port is free.
+    Returns True once the port can be bound, False on timeout (or if it never frees)."""
+    host, port = _server_host_port(host, port)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return _port_is_free(host, port)  # already gone / not ours → report the port state
+    deadline = time.monotonic() + timeout
+    while True:
+        if _port_is_free(host, port):
+            return True
+        if time.monotonic() >= deadline:
+            return _port_is_free(host, port)
+        time.sleep(poll)
 
 
 API_PORT: int = 8765

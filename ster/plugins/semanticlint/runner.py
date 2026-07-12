@@ -62,12 +62,24 @@ def _check_included(check_id: str, cfg: CheckConfig) -> bool:
     return True
 
 
+def _language_label_shapes(cfg: CheckConfig):  # type: ignore[no-untyped-def]
+    """The ster-authored per-language ``rdfs:label`` shapes for the configured class /
+    property label languages (empty graph when none are required)."""
+    from ster.plugins.semanticlint.language_shapes import build_label_language_shapes
+
+    return build_label_language_shapes(
+        cfg.quality.get("class_label_languages", []),
+        cfg.quality.get("property_label_languages", []),
+    )
+
+
 def _graph_violations(graph, cfg: CheckConfig, path: Path) -> list[Violation]:  # type: ignore[no-untyped-def]
     """Violations for one parsed *graph*: the SHACL pass (built-in shapes since
     semanticlint 0.5 + any sibling ``*.shapes.ttl`` business rules) plus the registered
     Python checks, each filtered by select/ignore."""
     vtype = detect_vocab_type(graph)
     local_shapes = load_shapes(discover_shapes_files(path))  # project-owned rules next to the file
+    local_shapes += _language_label_shapes(cfg)  # ster-authored per-language rdfs:label rules
     out: list[Violation] = [
         v
         for v in run_shapes(graph, cfg, vtype, extra_shapes=local_shapes)
