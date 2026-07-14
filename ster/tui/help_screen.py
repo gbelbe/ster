@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 _HELP = """\
@@ -54,7 +55,9 @@ class HelpScreen(ModalBase[None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="help-box", classes="modal-box"):
             yield Static(_HELP)
-            yield Static("↑↓ scroll     esc / q / ?  close", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        return [Hint("↑↓", "scroll"), Hint("esc / q / ?", "close", "dismiss")]
 
     def on_mount(self) -> None:
         box = self.query_one("#help-box")

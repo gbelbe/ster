@@ -11,6 +11,7 @@ action; every mutation is validated and written back to the file.
 
 from __future__ import annotations
 
+import threading
 from functools import partial
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
 from textual.widgets.tree import TreeNode
@@ -262,7 +264,7 @@ class OntologyApp(App):
     /* Inherited-properties disclosure: no extra gap, subtle title. */
     .detail-collapsible { margin: 1 0 0 0; border: none; padding-top: 0; }
     .detail-collapsible CollapsibleTitle { color: $text-muted; }
-    .detail-row { padding: 0 1; }
+    .detail-row { padding: 0 1; margin-bottom: 1; }  /* a little air between property lines */
     .detail-row:focus { background: $primary 20%; }
     /* $boost is a translucent overlay → invisible on light themes; use a solid
        accent tint so the mouse-over highlight shows in every theme. */
@@ -383,6 +385,14 @@ class OntologyApp(App):
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
         self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
+        # Persist off the UI thread (the slow part of an edit); the lock serialises writes
+        # and each save writes the latest authority, so the disk converges to it.
+        self._save_lock = threading.Lock()
+        self._save_dirty = False
+        self._lint_timer: Timer | None = None  # debounce handle for the heavy re-lint
+        # The detail row (by field key) that was being edited, so focus lands back on it
+        # after a mutation rebuilds the pane — not on the first row / tree.
+        self._pending_focus_key: str | None = None
 
     def _load_metadata_props(self) -> list[MetaProp]:
         """The configured ontology-metadata predicate catalog (built-in defaults
@@ -949,6 +959,17 @@ class OntologyApp(App):
         self._lint_computed = True
         self._lint_index = report.worst_by_subject(result[1]) if result else {}
 
+    #: seconds of edit inactivity before the (heavy) re-lint fires — comfortably longer
+    #: than a large-file background save, so the file-based lint reads the fresh state.
+    _LINT_DEBOUNCE = 1.5
+
+    def _schedule_lint(self) -> None:
+        """Debounce the heavy re-lint: recompute only after a lull, so a burst of edits
+        triggers one lint pass instead of one per edit (each ~2 s on a large ontology)."""
+        if self._lint_timer is not None:
+            self._lint_timer.stop()
+        self._lint_timer = self.set_timer(self._LINT_DEBOUNCE, self._refresh_lint_async)
+
     def _refresh_lint_async(self) -> None:
         """Recompute lint off the UI thread (when the plugin is active), then recolour
         the tree and refresh the open detail. No-op otherwise."""
@@ -966,14 +987,23 @@ class OntologyApp(App):
         self.call_from_thread(self._on_lint_ready, result)
 
     def _on_lint_ready(self, result: tuple[dict, list] | None) -> None:
-        """Apply a background lint result on the UI thread: recolour + refresh."""
+        """Apply a background lint result on the UI thread: recolour + refresh.
+
+        The debounced lint lands a second or two *after* an edit, when focus is back on a
+        detail row. ``_show`` rebuilds (and so destroys) that row, which would drop focus to
+        the tree — so we remember the focused row and restore it after the rebuild."""
         self._set_lint(result)
+        focused = self.focused
+        keep_key = focused.field.key if isinstance(focused, DetailRow) else None
         self._rebuild_tree()
         if self._detail_uri:
             # Re-reveal the current entity so the recolour rebuild doesn't collapse
             # ancestors / reset the cursor (without stealing focus from a detail row).
             self._reveal_in_tree(self._detail_uri, focus=False)
             self._show(self._detail_uri)
+            if keep_key is not None:  # keep the cursor on the row the user was on
+                self._pending_focus_key = keep_key
+                self.call_after_refresh(self._restore_focus)
 
     def _detail_title(self, uri: str | None) -> str:
         """The detail pane's border title — the current entity, or a generic label.
@@ -1007,18 +1037,24 @@ class OntologyApp(App):
         props.root.remove_children()
         self._build_prop_tree(props)
 
-    def _apply_command(self, command: object, select: str | None = None) -> None:
+    def _apply_command(
+        self, command: object, select: str | None = None, *, focus_tree: bool = False
+    ) -> None:
         """Execute *command* via TaxonomyService, then refresh tax + tree + detail.
 
         The tree highlight lands on the *resulting* entity: a freshly created one when
         *select* names it (reveal the mutation), otherwise the current entity — restored
         after the rebuild so it never jumps to the top. Focus stays in the detail pane;
         the tree cursor moves without stealing keyboard focus (unlike ``jump_to``).
+
+        ``focus_tree`` instead lands keyboard focus on the entity's *tree* node — used when
+        the edited row is being deleted, so the user is one Tab/arrow from the detail pane
+        rather than stranded on a row that no longer exists.
         """
         if self._service is None or self._path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
-        result = self._service.execute(command)  # type: ignore[arg-type]
+        result = self._service.execute(command, persist=False)  # type: ignore[arg-type]
         if not result.ok:
             self.notify(result.error or "Command failed.", severity="error")
             return
@@ -1031,12 +1067,49 @@ class OntologyApp(App):
         # highlight on the current entity — following it if the edit renamed its URI.
         target = select if (select is not None and select in self._uri_nodes) else self._detail_uri
         if target is not None and target in self._uri_nodes:
-            self._reveal_in_tree(target, focus=False)  # restore the cursor, keep focus put
+            self._reveal_in_tree(target, focus=focus_tree)  # focus the tree node on delete
         self._show(target)
-        # The mutation rebuilt the detail rows, destroying the row that had focus —
-        # restore it (next refresh) so the keyboard keeps working after a modal.
-        self.call_after_refresh(self._restore_focus)
-        self._refresh_lint_async()  # recompute in the background → recolour when ready
+        if focus_tree:
+            self._pending_focus_key = None  # the row is gone; we deliberately left the pane
+        else:
+            # The mutation rebuilt the detail rows, destroying the row that had focus —
+            # restore it (next refresh) so the keyboard keeps working after a modal.
+            self.call_after_refresh(self._restore_focus)
+        self._schedule_save()  # persist off the UI thread → the window stays responsive
+        self._schedule_lint()  # debounce: one lint after a lull, not one per edit
+
+    def _schedule_save(self) -> None:
+        """Persist the current authority to disk on a background worker (the slow part of
+        an edit). Serialised by ``_save_lock``; a later edit's save supersedes an earlier."""
+        if self._service is None or self._path is None:
+            return
+        self._save_dirty = True
+        self.run_worker(
+            self._save_worker, thread=True, exclusive=True, group="ster-save", name="ster-save"
+        )
+
+    def _save_worker(self) -> None:
+        from ster import store
+
+        with self._save_lock:
+            self._save_dirty = False  # cleared first: a concurrent edit re-marks it
+            tax, path = self.tax, self._path
+            if path is not None:
+                store.save(tax, path)
+
+    def _flush_save(self) -> None:
+        """Synchronously persist any unsaved edit — called on quit so a backgrounded save
+        can never be lost."""
+        from ster import store
+
+        with self._save_lock:
+            if self._save_dirty and self._path is not None:
+                store.save(self.tax, self._path)
+                self._save_dirty = False
+
+    def on_unmount(self) -> None:
+        """Flush a pending background save when the app closes."""
+        self._flush_save()
 
     def _invalidate_lint(self) -> None:
         """Drop the cached lint so the next access (or the async worker) recomputes."""
@@ -1045,12 +1118,41 @@ class OntologyApp(App):
         self._lint_index = {}
 
     def _restore_focus(self) -> None:
-        """Land focus on a usable widget after a mutation rebuilt the panes."""
+        """Land focus back on the row that was being edited after a mutation rebuilt the
+        panes (so the cursor stays put), falling back to the first row, then the tree.
+
+        A mutation destroys the old row widgets, so we re-find by field key. Value rows
+        embed the value in their key (``…::<value>``); when an edit changes the value the
+        key changes too, so we also try the stable stem before that separator."""
         rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
-        (rows[0] if rows else self.query_one("#tree", Tree)).focus()
+        if not rows:
+            self.query_one("#tree", Tree).focus()
+            return
+        key, self._pending_focus_key = self._pending_focus_key, None
+        target = self._row_for_focus_key(rows, key) if key else None
+        (target or rows[0]).focus()
+
+    @staticmethod
+    def _row_for_focus_key(rows: list, key: str):  # type: ignore[no-untyped-def]
+        """The row matching *key* exactly, else one sharing its stable ``…::``-stem."""
+        exact = next((r for r in rows if r.field.key == key), None)
+        if exact is not None:
+            return exact
+        stem = key.rsplit("::", 1)[0] + "::" if "::" in key else None
+        return next((r for r in rows if stem and r.field.key.startswith(stem)), None)
+
+    def _refocus_edited_row(self) -> None:
+        """Focus back the row that was being edited after a *cancel* — value edits open
+        from the row's menu (which held focus), so Textual can't restore the row itself."""
+        rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
+        key, self._pending_focus_key = self._pending_focus_key, None
+        target = self._row_for_focus_key(rows, key) if (rows and key) else None
+        if target is not None:
+            target.focus()
 
     def on_detail_row_edit_requested(self, message: DetailRow.EditRequested) -> None:
         """An edit-only value row asked to be edited → open the modal → command."""
+        self._pending_focus_key = message.field.key  # refocus this row after the edit
         self._open_edit_modal(message.field, origin=self.focused)
 
     def _open_edit_modal(self, field: DetailField, origin: Widget | None = None) -> None:
@@ -1068,6 +1170,7 @@ class OntologyApp(App):
 
         def _on_submit(value: str | None) -> None:
             if value is None:
+                self._pending_focus_key = None
                 if origin is not None:
                     origin.focus()  # Esc/cancel: keep focus in the detail pane
                 return
@@ -1082,28 +1185,50 @@ class OntologyApp(App):
             prefix, fragment = uri_edit.split_namespace(field.value)
             self.push_screen(UriModal(field.display, prefix, fragment), _on_submit)
         else:
-            self.push_screen(EditModal(field.display, field.value), _on_submit)
+            self.push_screen(
+                EditModal(
+                    field.display,
+                    field.value,
+                    multiline=edits.is_long_text(field),
+                    autolink=edits.is_prose(field),
+                ),
+                _on_submit,
+            )
 
     def on_detail_row_menu_requested(self, message: DetailRow.MenuRequested) -> None:
         """A value row with both edit and delete was activated → Edit/Delete submenu."""
         self._row_menu_field = message.field
         self._row_menu_delete = message.delete_field
         self._row_menu_origin = self.focused  # the row, before the menu grabs focus
+        self._pending_focus_key = message.field.key  # refocus this row after edit/delete
         items = [("✎ Edit", "row_edit"), ("⊘ Delete", "row_delete")]
         self.query_one("#ctx-menu", ContextMenu).show(message.field.display, items, message.anchor)
 
-    def _apply_row_delete(self, delete_field: DetailField) -> None:
-        """Run the paired removal command for a row's Delete submenu choice."""
+    def _apply_row_delete(self, delete_field: DetailField, *, label: str | None = None) -> None:
+        """Confirm, then run the paired removal command for a row's Delete submenu choice.
+
+        On confirm the row is gone, so focus lands on the entity's tree node (``focus_tree``)
+        — one Tab/arrow back to the detail pane; on cancel it stays on the edited row."""
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify("Read-only session (no file loaded).", severity="warning")
             return
         command = edits.direct_command(delete_field, uri, path)
-        if command is not None:
-            self._apply_command(command)
+        if command is None:
+            return
+        prompt = f"Delete «{label or delete_field.display}»?"
+
+        def _on_choice(choice: str | None) -> None:
+            if choice is None:
+                self._refocus_edited_row()  # cancel → stay on the edited row
+                return
+            self._apply_command(command, focus_tree=True)
+
+        self.push_screen(ChoiceModal(prompt, [("Delete", "ok")], danger=True), _on_choice)
 
     def on_detail_row_action_requested(self, message: DetailRow.ActionRequested) -> None:
         """An action row was activated → run it (shared with the right-click menu)."""
+        self._pending_focus_key = message.field.key  # refocus this row after the action
         self._run_field_action(message.field)
 
     #: (uri, path) entity actions that open a dedicated flow — dispatched by name so
@@ -1219,8 +1344,9 @@ class OntologyApp(App):
             return
         if message.action == "row_delete" and self._row_menu_delete is not None:
             delete_field, self._row_menu_delete = self._row_menu_delete, None
-            self._row_menu_field = None
-            self._apply_row_delete(delete_field)
+            menu_field, self._row_menu_field = self._row_menu_field, None
+            label = menu_field.display if menu_field is not None else delete_field.display
+            self._apply_row_delete(delete_field, label=label)
             return
 
         uri = self._detail_uri
@@ -1329,7 +1455,12 @@ class OntologyApp(App):
             base = uri_edit.mint_base(self.tax, action, uri)
             self.push_screen(UriModal(prompt, base), _on_submit)
         else:
-            self.push_screen(EditModal(prompt, ""), _on_submit)
+            self.push_screen(
+                EditModal(
+                    prompt, "", multiline=edits.is_long_text(field), autolink=edits.is_prose(field)
+                ),
+                _on_submit,
+            )
 
     def _class_langs(self) -> list[str]:
         return self.configured_langs or [self.lang]
@@ -1601,6 +1732,8 @@ class OntologyApp(App):
         def _on_submit(value: str | None) -> None:
             if value:
                 self._run_or_warn(edits.meta_input_command(field, uri, path, value, self.lang))
+            else:
+                self._refocus_edited_row()  # cancel → stay on the edited row
 
         # base_uri-kind meta inputs (e.g. add_class_property) mint a new URI fragment-only.
         if prefill_key == "base_uri":
@@ -1608,7 +1741,15 @@ class OntologyApp(App):
             self.push_screen(UriModal(prompt, base), _on_submit)
             return
 
-        self.push_screen(EditModal(prompt, field.meta.get(prefill_key, "")), _on_submit)
+        self.push_screen(
+            EditModal(
+                prompt,
+                field.meta.get(prefill_key, ""),
+                multiline=edits.is_long_text(field),
+                autolink=edits.is_prose(field),
+            ),
+            _on_submit,
+        )
 
     def _confirm_delete(self, field: DetailField, uri: str, path: Path) -> None:
         """Ask for the delete mode, then run the destructive command + navigate away."""
@@ -1657,6 +1798,8 @@ class OntologyApp(App):
         def _on_pick(target: str | None) -> None:
             if target is not None:
                 self._run_or_warn(edits.meta_relation_command(field, uri, path, target))
+            else:
+                self._refocus_edited_row()  # cancel → stay on the edited row
 
         self._open_picker(prompt, kind, uri, _on_pick)
 
@@ -1694,7 +1837,7 @@ class OntologyApp(App):
             if value:
                 self._apply_command(edits.add_literal_value_command(uri, path, prop_uri, value))
 
-        self.push_screen(EditModal("Literal value", ""), _on_literal)
+        self.push_screen(EditModal("Literal value", "", multiline=True), _on_literal)
 
     def _edit_ontology_identity(self, field: DetailField, uri: str, path: Path) -> None:
         """Edit the ontology base URI (or its domain), cascading across every entity."""

@@ -32,7 +32,7 @@ class LocalPropertyModal(ModalBase[dict | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="local-prop-box", classes="modal-box"):
             yield Static(f"Base IRI: {self._base_uri}", classes="cfg-hint")
-            yield Static("(property-creation form — to be designed)", classes="modal-footer")
+            yield Static("(property-creation form — to be designed)", classes="cfg-hint")
 
     def on_mount(self) -> None:
         self.query_one("#local-prop-box").border_title = "Add local annotation property"

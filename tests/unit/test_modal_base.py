@@ -64,7 +64,7 @@ def test_clicking_inside_the_box_does_not_cancel() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
             app.push_screen(ChoiceModal("Pick one", [("A", "a"), ("B", "b")]), results.append)
             await pilot.pause()
-            await pilot.click(".modal-footer")  # a non-interactive spot inside the box
+            await pilot.click(".hint-label")  # a non-interactive footer spot inside the box
             await pilot.pause()
             assert results == []  # click-away does not fire for clicks inside the box
 

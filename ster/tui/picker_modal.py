@@ -18,9 +18,10 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Input, OptionList
 from textual.widgets.option_list import Option
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 _FUZZY_CAP = 20  # stop adding fuzzy matches once we already have this many hits
@@ -84,9 +85,17 @@ class PickerModal(ModalBase[str | None]):
         with Vertical(id="picker-box", classes="modal-box"):
             yield Input(placeholder="type to filter…", id="picker-filter")
             yield OptionList(id="picker-list")
-            yield Static(
-                "type to filter    ↑↓ move    enter select    esc cancel", classes="modal-footer"
-            )
+
+    def footer_hints(self) -> list[Hint]:
+        return [
+            Hint("type", "to filter"),
+            Hint("↑↓", "move"),
+            Hint("⏎", "select", "confirm"),
+            Hint("esc", "cancel", "cancel"),
+        ]
+
+    def action_confirm(self) -> None:
+        self._select_highlighted()
 
     def on_mount(self) -> None:
         self.query_one("#picker-box").border_title = self._prompt

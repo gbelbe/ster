@@ -19,6 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, Input, Static
 
+from .hint_bar import Hint
 from .modal import ModalBase
 from .uri_modal import FragmentInput
 
@@ -86,7 +87,12 @@ class EntityFormModal(ModalBase[dict | None]):
             yield from self._lang_rows(self._comment_inputs)
             yield from self._extra_fields()
             yield Button("Save", classes="ef-save", variant="primary")
-            yield Static("enter  save     esc  cancel", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        return [Hint("⏎", "save", "save"), Hint("esc", "cancel", "cancel")]
+
+    def action_save(self) -> None:
+        self._submit()
 
     def _extra_fields(self) -> ComposeResult:
         """Override to yield subclass-specific widgets (rendered after the comments)."""

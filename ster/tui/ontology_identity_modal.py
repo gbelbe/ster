@@ -20,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 # (label, separator char) — order matters: index 0 is the default/recommended.
@@ -60,7 +61,16 @@ class OntologyIdentityModal(ModalBase[dict | None]):
             yield Input(value=self._prefix, id="oi-prefix")
             yield Static("", id="oi-error")
             yield Button("Save", id="oi-save")
-            yield Static("enter  save     tab  next field     esc  cancel", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        return [
+            Hint("⏎", "save", "save"),
+            Hint("tab", "next field"),
+            Hint("esc", "cancel", "cancel"),
+        ]
+
+    def action_save(self) -> None:
+        self._submit()
 
     def on_mount(self) -> None:
         self.query_one("#oi-box").border_title = "Edit ontology identity"

@@ -579,3 +579,50 @@ def test_ont_annotation_remove_maps_to_onto_remove_annotation() -> None:
     cmd = direct_command(f, "__ster:overview__", _P)
     assert isinstance(cmd, OntoRemoveAnnotation)
     assert (cmd.predicate, cmd.value) == (DCT + "creator", "Alice")
+
+
+# ── long-text detection + comment editing (multi-line Markdown editor) ──────────
+
+
+def test_is_long_text_for_comments_definitions_notes_and_literals() -> None:
+    from ster.nav.logic import DetailField
+    from ster.tui.edits import is_long_text
+
+    def _f(meta):
+        return DetailField("k", "d", "v", editable=True, meta=meta)
+
+    assert is_long_text(_f({"type": "rdf_comment"}))
+    assert is_long_text(_f({"type": "def"}))
+    assert is_long_text(_f({"type": "ont_description"}))
+    assert is_long_text(_f({"action": "edit_literal_value"}))
+    assert is_long_text(_f({"action": "add_prop_comment"}))
+    # short identifiers stay single-line
+    assert not is_long_text(_f({"type": "rdf_label"}))
+    assert not is_long_text(_f({"type": "uri"}))
+
+
+def test_edit_command_now_wires_comment_types() -> None:
+    """Regression: rdfs:comment rows were editable=True but had no edit_command (a no-op).
+    They now map to OwlSetComment."""
+    from ster.core.commands import OwlSetComment
+    from ster.nav.logic import DetailField
+
+    for ctype in ("rdf_comment", "ind_comment", "prop_comment"):
+        f = DetailField("k", "comment", "old", editable=True, meta={"type": ctype, "lang": "en"})
+        cmd = edit_command(f, "u", Path("o.ttl"), "new text")
+        assert isinstance(cmd, OwlSetComment) and cmd.value == "new text" and cmd.lang == "en"
+
+
+def test_is_prose_excludes_literal_values() -> None:
+    from ster.nav.logic import DetailField
+    from ster.tui.edits import is_long_text, is_prose
+
+    def _f(meta):
+        return DetailField("k", "d", "v", editable=True, meta=meta)
+
+    assert is_prose(_f({"type": "rdf_comment"})) and is_prose(_f({"type": "def"}))
+    assert is_prose(_f({"action": "add_scope_note"}))
+    # literal values are long-text but NOT prose (a literal may be a bare URL to keep)
+    lit = _f({"type": "ind_lit_val", "action": "edit_literal_value"})
+    assert is_long_text(lit) and not is_prose(lit)
+    assert not is_prose(_f({"type": "rdf_label"}))

@@ -16,6 +16,7 @@ from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from . import annotation_library as lib
+from .hint_bar import Hint
 from .modal import ModalBase
 
 
@@ -48,9 +49,17 @@ class AnnotationLibraryModal(ModalBase[str | None]):
                 id="annlib-filter",
             )
             yield OptionList(id="annlib-list")
-            yield Static(
-                "type to filter    ↑↓ move    enter add    esc cancel", classes="modal-footer"
-            )
+
+    def footer_hints(self) -> list[Hint]:
+        return [
+            Hint("type", "to filter"),
+            Hint("↑↓", "move"),
+            Hint("⏎", "add", "confirm"),
+            Hint("esc", "cancel", "cancel"),
+        ]
+
+    def action_confirm(self) -> None:
+        self._select_highlighted()
 
     def on_mount(self) -> None:
         self.query_one("#annlib-box").border_title = "Add annotation property from library"

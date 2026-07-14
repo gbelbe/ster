@@ -170,6 +170,28 @@ def test_render_detail_unknown_uri_is_empty() -> None:
     assert render_detail(tax, _ZOO + "DoesNotExist", "en") == ""
 
 
+def test_markdown_value_row_autolinks_bare_urls_into_clickable_links() -> None:
+    """A bare URL in a rendered Markdown value becomes a clickable hyperlink (OSC 8) —
+    Rich only linkifies explicit [text](url) markup, so the row auto-links first."""
+    import io
+
+    from rich.console import Console
+
+    from ster.tui.detail_view import _markdown_row_content, _renders_markdown
+    from ster.tui.urls import autolink_urls
+
+    field = DetailField(
+        "k", "Comment", "See https://example.org now", editable=True, meta={"type": "ind_comment"}
+    )
+    assert _renders_markdown(field)
+    # the bare URL is turned into a Markdown link before rendering …
+    assert autolink_urls(field.value) == "See [https://example.org](https://example.org) now"
+    # … so Rich emits a terminal hyperlink (OSC 8) for it → clickable
+    con = Console(file=io.StringIO(), force_terminal=True, width=80)
+    con.print(_markdown_row_content(field, actionable=True))
+    assert "\x1b]8;" in con.file.getvalue()
+
+
 def test_property_row_markup_has_no_colon_before_type() -> None:
     """A property row (plain_value meta) renders 'name (Type)' with a space, no ': ';
     ordinary rows keep the 'label: value' colon."""

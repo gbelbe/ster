@@ -12,9 +12,10 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Input, Static
+from textual.widgets import Input
 from textual.widgets.input import Selection
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 
@@ -81,13 +82,18 @@ class UriModal(ModalBase[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="uri-box", classes="modal-box"):
             yield FragmentInput(self._prefix, self._fragment, id="uri-input")
-            yield Static("enter  save     esc  cancel", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        return [Hint("⏎", "save", "save"), Hint("esc", "cancel", "cancel")]
 
     def on_mount(self) -> None:
         self.query_one("#uri-box").border_title = self._prompt
         self.query_one(FragmentInput).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_save()
+
+    def action_save(self) -> None:
         field = self.query_one(FragmentInput)
         # An empty fragment means "nothing entered" → treat like cancel.
         self.dismiss(field.value if field.fragment.strip() else None)

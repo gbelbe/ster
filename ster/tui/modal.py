@@ -23,6 +23,8 @@ from textual import events, on
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from .hint_bar import Hint, HintBar
+
 _R = TypeVar("_R")
 
 
@@ -71,7 +73,28 @@ class ModalBase(ModalScreen[_R]):
         color: $text-muted;
     }
     ModalBase .modal-close:hover { color: $error; text-style: bold; }
-    ModalBase .modal-footer { color: $text-muted; margin-top: 1; }
+    /* Footer shortcut bar: actionable hints are bordered, focusable, clickable chips;
+       informational hints are plain borderless labels. Both align on one row. */
+    ModalBase .hint-bar { height: auto; width: 100%; align: center middle; margin-top: 1; }
+    ModalBase .hint-chip {
+        width: auto;
+        height: 3;
+        content-align: center middle;
+        padding: 0 1;
+        margin: 0 1;
+        border: round $primary;
+        color: $text-muted;
+    }
+    ModalBase .hint-chip:hover { color: $text; }
+    ModalBase .hint-chip:focus { border: round $secondary; color: $text; text-style: bold; }
+    ModalBase .hint-label {
+        width: auto;
+        height: 3;
+        content-align: center middle;
+        padding: 0 1;
+        margin: 0 1;
+        color: $text-muted;
+    }
     ModalBase Button {
         width: 100%;
         margin-bottom: 1;
@@ -94,6 +117,16 @@ class ModalBase(ModalScreen[_R]):
     ModalBase SelectOverlay { border: round $primary; }
     """
 
+    def footer_hints(self) -> list[Hint]:
+        """The modal's footer shortcuts. Override to declare them; ModalBase renders the
+        clickable :class:`HintBar` from this list. Defaults to a single Esc-cancel chip."""
+        return [Hint("esc", "cancel", "cancel")]
+
+    def action_cancel(self) -> None:
+        """Default cancel — dismiss with None. Subclasses may override (e.g. to restore
+        focus); the ✕, click-away and the 'cancel' chip all funnel through here."""
+        self.dismiss(None)
+
     @on(events.Mount)
     def _add_close_button(self) -> None:
         """Mount the ✕ header into the modal box once it exists (runs for every
@@ -101,6 +134,15 @@ class ModalBase(ModalScreen[_R]):
         boxes = self.query(".modal-box")
         if boxes and not self.query(".modal-close"):
             boxes.first().mount(_ModalClose())
+
+    @on(events.Mount)
+    def _add_footer_hints(self) -> None:
+        """Mount the shared footer HintBar (from :meth:`footer_hints`) into the box, so
+        every modal — current and future — gets the clickable shortcut bar for free."""
+        boxes = self.query(".modal-box")
+        hints = self.footer_hints()
+        if boxes and hints and not self.query(HintBar):
+            boxes.first().mount(HintBar(hints))
 
     @on(events.Click)
     def _dismiss_on_click_away(self, event: events.Click) -> None:

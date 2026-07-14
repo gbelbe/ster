@@ -67,8 +67,15 @@ class TaxonomyService:
             return None
         return ValidationReport.delta(self._validator.check(before), self._validator.check(after))
 
-    def execute(self, command: Command, *, base_version: int | None = None) -> CommandResult:
-        """Run *command* as a transaction; see module docstring for the pipeline."""
+    def execute(
+        self, command: Command, *, base_version: int | None = None, persist: bool = True
+    ) -> CommandResult:
+        """Run *command* as a transaction; see module docstring for the pipeline.
+
+        ``persist=False`` mutates + validates + swaps the in-memory authority but skips
+        the (potentially slow) disk write — the caller is then responsible for persisting
+        the new authority (e.g. the TUI writes it on a background worker so edits stay
+        snappy on large ontologies)."""
         path = command.target_path
         with self._lock_for(path):
             current = self._versions.get(path, 0)
@@ -96,7 +103,8 @@ class TaxonomyService:
                     validation=report,
                 )
 
-            self._persistence.save(working, path)
+            if persist:
+                self._persistence.save(working, path)
             self._workspace.taxonomies[path] = working  # atomic swap of the authority
             new_version = current + 1
             self._versions[path] = new_version

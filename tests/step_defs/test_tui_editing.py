@@ -60,6 +60,7 @@ def _edit(ctx: dict, do: EditCoro) -> None:
             await do(app, pilot)
             for _ in range(4):
                 await pilot.pause()
+            app._flush_save()  # edits persist on a background worker → flush before reading disk
             ctx["tax"] = app.tax
             ctx["saved"] = store.load(ctx["src"])
             ctx["overview"] = detail.render_detail(app.tax, detail.OVERVIEW_URI, "en")
@@ -107,15 +108,27 @@ async def _activate_menu(app, pilot, predicate, choice: str) -> None:  # noqa: A
     menu.highlighted = 0 if choice == "edit" else 1
     await pilot.press("enter")
     await pilot.pause()
+    if choice == "delete":  # a value delete now asks to confirm first
+        await pilot.click("#opt-ok")
+        await pilot.pause()
 
 
 async def _submit_text(app, pilot, value: str) -> None:  # noqa: ANN001
     from textual.css.query import NoMatches
-    from textual.widgets import Input
+    from textual.widgets import Input, TextArea
 
+    # Long-text edits (comments, definitions, notes, datatype/annotation literals) open
+    # the multi-line Markdown editor: set the TextArea text and Esc to auto-save + close.
+    try:
+        area = app.screen.query_one("#edit-area", TextArea)
+        area.text = value
+        await pilot.press("escape")  # auto-save + close the multi-line editor
+        return
+    except NoMatches:
+        pass
     # Creating a class opens the full ClassModal (shared EntityFormModal URI = #ef-uri);
     # an individual opens the full IndividualModal (#ind-uri); URI flows open the
-    # fragment-locking UriModal (#uri-input); other text edits use the plain EditModal
+    # fragment-locking UriModal (#uri-input); other single-line edits use EditModal
     # (#edit-input). The full URI starts with the locked base, so assigning the whole
     # value leaves the prefix intact in every case.
     for sel in ("#ef-uri", "#ind-uri", "#uri-input", "#edit-input"):

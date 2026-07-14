@@ -22,6 +22,7 @@ from textual.binding import Binding
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 # Per-severity text colour. Warnings are black (readable on the light surface);
@@ -96,7 +97,18 @@ class LintModal(ModalBase[str | None]):
                 )
             else:
                 yield Static("[green]✓ No issues found.[/green]")
-            yield Static("↑↓ move   enter  go to issue   esc / q  close", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        hints = [Hint("↑↓", "move"), Hint("esc / q", "close", "dismiss")]
+        if self._issues:
+            hints.insert(1, Hint("⏎", "go to issue", "confirm"))
+        return hints
+
+    def action_confirm(self) -> None:
+        """The 'go to issue' chip: close on the highlighted issue's subject."""
+        idx = self.query_one(OptionList).highlighted
+        if idx is not None:
+            self.dismiss(self._issues[idx].get("subject") or None)
 
     def on_mount(self) -> None:
         box = self.query_one("#lint-box")

@@ -128,7 +128,8 @@ def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
             # committed in memory …
             labels = {lbl.lang: lbl.value for lbl in app.tax.owl_classes[ZOO + "Person"].labels}
             assert labels.get("en") == "Human"
-            # … and persisted to disk
+            # … and persisted to disk (the save runs on a background worker now)
+            await app.workers.wait_for_complete()
             assert "Human" in src.read_text(encoding="utf-8")
 
     _run(scenario)
@@ -1705,6 +1706,7 @@ def test_identity_modal_saves_domain_and_prefix_together(tmp_path) -> None:
             await pilot.press("enter")  # confirm the rename cascade
             await pilot.pause()
             await pilot.pause()
+            await app.workers.wait_for_complete()  # let the background save land
             saved = src.read_text(encoding="utf-8")
             assert "garden.org" in saved  # domain rename cascaded + saved
             assert "@prefix zoo:" in saved  # prefix saved too
@@ -1739,7 +1741,7 @@ def test_cancel_edit_keeps_focus_in_detail_pane(tmp_path) -> None:
             app.query_one("#ctx-menu", ContextMenu).highlighted = 0  # Edit
             await pilot.press("enter")  # open edit modal
             await pilot.pause()
-            await pilot.press("escape")  # cancel
+            app.screen.dismiss(None)  # discard (✕ / click-away) — Esc now auto-saves
             await pilot.pause()
             assert isinstance(app.focused, DetailRow)  # stayed in the detail pane
 
@@ -1792,6 +1794,7 @@ def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> Non
             assert prop is not None and prop.prop_type == "ObjectProperty"
             assert {lbl.value for lbl in prop.labels} == {"lives in"}
             assert prop.domains == [ZOO + "Animal"]
+            await app.workers.wait_for_complete()
             assert "livesIn" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
@@ -1896,6 +1899,7 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             cls = app.tax.owl_classes.get(ZOO + "Worker")
             assert cls is not None and ZOO + "Person" in cls.sub_class_of  # created under Person
             assert {lbl.value for lbl in cls.labels} == {"Worker"}  # label set at creation
+            await app.workers.wait_for_complete()
             assert "Worker" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
@@ -1927,6 +1931,7 @@ def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
             for _ in range(3):
                 await pilot.pause()
             assert ZOO + "Cat" not in app.tax.owl_classes  # gone in memory
+            await app.workers.wait_for_complete()  # let the background save flush
             assert ZOO + "Cat" not in store.load(src).owl_classes  # gone on disk
 
     _run(scenario)
@@ -1955,6 +1960,7 @@ def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
             for _ in range(3):
                 await pilot.pause()
             assert ZOO + "Person" in app.tax.owl_classes[ZOO + "Cat"].sub_class_of  # in memory
+            await app.workers.wait_for_complete()  # let the background save flush
             assert ZOO + "Person" in store.load(src).owl_classes[ZOO + "Cat"].sub_class_of  # disk
 
     _run(scenario)
@@ -2528,5 +2534,269 @@ def test_port_conflict_snapshot_opens_without_killing_and_cancel_does_nothing() 
                 app._on_port_conflict("cancel", 999, None)  # nothing
                 app._on_port_conflict(None, 999, None)  # dismissed → nothing
             assert opened == [None] and freed == []
+
+    _run(scenario)
+
+
+def test_editing_a_datatype_literal_value_opens_the_multiline_markdown_editor(tmp_path) -> None:
+    """The user's case: editing a datatype/annotation literal opens the larger multi-line
+    editor (a TextArea), not the one-line box."""
+
+    async def scenario() -> None:
+        from textual.widgets import TextArea
+
+        from ster.model import Label, OWLIndividual, OWLProperty, Taxonomy
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.detail_view import DetailRow
+
+        t = Taxonomy()
+        t.ontology_uri = ZOO.rstrip("/")
+        t.owl_properties[ZOO + "note"] = OWLProperty(
+            uri=ZOO + "note", prop_type="DatatypeProperty", labels=[Label("en", "note")]
+        )
+        t.owl_individuals[ZOO + "Rex"] = OWLIndividual(
+            uri=ZOO + "Rex", labels=[Label("en", "Rex")], literal_values=[(ZOO + "note", "hi", "")]
+        )
+        src = tmp_path / "o.ttl"
+        store.save(t, src)
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)  # editable (has a path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Rex")
+            await pilot.pause()
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "ind_lit_val")
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # opens the row's Edit/Delete menu
+            await pilot.pause()
+            app.query_one("#ctx-menu", ContextMenu).highlighted = 0  # Edit
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen.query_one("#edit-area", TextArea), TextArea)  # multi-line
+
+    _run(scenario)
+
+
+def test_flush_save_persists_a_pending_background_edit(tmp_path) -> None:
+    """_flush_save (run on quit / on_unmount) writes an edit whose background save
+    hasn't landed yet — so async persistence can never lose data."""
+
+    async def scenario() -> None:
+        from ster.model import Label
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.tax.owl_classes[ZOO + "Person"].labels[:] = [Label("en", "FlushMe")]
+            app._save_dirty = True  # a pending, not-yet-persisted edit
+            app._flush_save()
+            assert "FlushMe" in src.read_text(encoding="utf-8")
+            assert app._save_dirty is False
+
+    _run(scenario)
+
+
+def test_an_edit_debounces_the_relint(tmp_path, monkeypatch) -> None:
+    """An edit arms a debounce timer for the heavy re-lint instead of linting immediately,
+    so a burst of edits triggers one lint pass."""
+
+    async def scenario() -> None:
+        from ster.core.commands import OwlSetLabel
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            calls: list = []
+            monkeypatch.setattr(app, "_refresh_lint_async", lambda: calls.append(1))
+            app._apply_command(OwlSetLabel(src, ZOO + "Person", "en", "Human"))
+            await app.workers.wait_for_complete()  # let the background save land
+            assert calls == []  # not linted synchronously
+            assert app._lint_timer is not None  # a debounce timer is armed instead
+
+    _run(scenario)
+
+
+def test_editing_a_row_keeps_focus_on_that_row(tmp_path) -> None:
+    """After saving an edit, the cursor stays on the edited detail row (not the first
+    row / tree) — the mutation rebuilds the pane, so focus is re-found by field key."""
+
+    async def scenario() -> None:
+        from textual.widgets import Input
+
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "rdf_label")
+            key = row.field.key
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open the edit modal
+            await pilot.pause()
+            app.screen.query_one("#edit-input", Input).value = "Human"
+            await pilot.press("enter")  # save
+            await app.workers.wait_for_complete()
+            for _ in range(3):
+                await pilot.pause()
+            assert isinstance(app.focused, DetailRow) and app.focused.field.key == key
+
+    _run(scenario)
+
+
+def test_cancelling_an_edit_keeps_focus_on_that_row(tmp_path) -> None:
+    """Discarding an edit (✕ / click-away → dismiss None, no save) keeps the cursor on the
+    edited row — the pane isn't rebuilt, so focus returns to the origin row. (Esc itself now
+    auto-saves — see test_editing_a_row_keeps_focus_on_that_row.)"""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "rdf_label")
+            key = row.field.key
+            row.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # open the edit modal
+            await pilot.pause()
+            app.screen.dismiss(None)  # ✕ / click-away discards — no save, no rebuild
+            for _ in range(3):
+                await pilot.pause()
+            assert isinstance(app.focused, DetailRow) and app.focused.field.key == key
+
+    _run(scenario)
+
+
+def test_async_lint_refresh_keeps_focus_on_the_edited_row_regression(tmp_path) -> None:
+    """Regression: the debounced re-lint lands a second or two after an edit and rebuilds
+    the detail pane, which dropped focus to the tree. Focus must stay on the edited row."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "rdf_label")
+            key = row.field.key
+            row.focus()
+            await pilot.pause()
+            assert app.focused is row
+            # Simulate the background lint completing (what set_timer → _lint_worker calls).
+            app._on_lint_ready(None)
+            for _ in range(3):
+                await pilot.pause()
+            assert isinstance(app.focused, DetailRow) and app.focused.field.key == key
+
+    _run(scenario)
+
+
+def test_async_lint_refresh_leaves_tree_focus_alone(tmp_path) -> None:
+    """When focus is on the tree (not a detail row), the lint refresh must not yank it into
+    the detail pane — only a focused row is preserved."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            tree = app.query_one("#tree", Tree)
+            tree.focus()
+            await pilot.pause()
+            app._on_lint_ready(None)
+            for _ in range(3):
+                await pilot.pause()
+            assert app.focused is tree
+
+    _run(scenario)
+
+
+async def _open_value_delete_menu(app, pilot):  # noqa: ANN001
+    """Open Rex's 'has owner' value row Edit/Delete submenu and pick Delete → the
+    confirm modal. Returns the value DetailRow."""
+    from ster.tui.context_menu import ContextMenu
+    from ster.tui.detail_view import DetailRow
+
+    app._show(ZOO + "Rex")
+    await pilot.pause()
+    row = next(r for r in app.query(DetailRow) if r.field.meta.get("type") == "ind_prop_val")
+    row.focus()
+    await pilot.pause()
+    await pilot.press("enter")  # Edit/Delete submenu
+    await pilot.pause()
+    app.query_one("#ctx-menu", ContextMenu).highlighted = 1  # Delete
+    await pilot.press("enter")
+    await pilot.pause()
+    return row
+
+
+def test_deleting_a_value_row_asks_to_confirm_then_focuses_the_tree(tmp_path) -> None:
+    """Deleting a property value confirms first, then removes it and lands focus on the
+    entity's tree node (one Tab/arrow back to the detail pane)."""
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _open_value_delete_menu(app, pilot)
+            assert app.screen.__class__.__name__ == "ChoiceModal"  # confirm first
+            await pilot.click("#opt-ok")  # confirm the delete
+            await app.workers.wait_for_complete()
+            for _ in range(3):
+                await pilot.pause()
+            # the value is gone …
+            assert not app.tax.owl_individuals[ZOO + "Rex"].property_values
+            # … and focus landed on Rex's tree node, not a stale detail row
+            assert app.focused is app.query_one("#tree", Tree)
+
+    _run(scenario)
+
+
+def test_cancelling_a_value_delete_keeps_the_value_and_row_focus(tmp_path) -> None:
+    """Declining the delete confirm leaves the value intact and the cursor on its row."""
+
+    async def scenario() -> None:
+        from ster.tui.detail_view import DetailRow
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            row = await _open_value_delete_menu(app, pilot)
+            key = row.field.key
+            app.screen.dismiss(None)  # decline the confirm
+            for _ in range(3):
+                await pilot.pause()
+            assert app.tax.owl_individuals[ZOO + "Rex"].property_values  # value kept
+            assert isinstance(app.focused, DetailRow) and app.focused.field.key == key
 
     _run(scenario)

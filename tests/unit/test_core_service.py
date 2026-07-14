@@ -1200,3 +1200,19 @@ def test_set_ontology_prefix_renames_existing() -> None:
     svc.execute(OntoSetPrefix(PATH, "neo"))
     binds = ws.taxonomies[PATH].namespace_bindings
     assert "neo" in binds and "old" not in binds
+
+
+def test_execute_persist_false_swaps_authority_without_writing() -> None:
+    """persist=False mutates + swaps the in-memory authority but skips the disk write, so
+    the TUI can persist on a background worker (snappy edits on large ontologies)."""
+    svc, ws, pers = _service()
+    result = svc.execute(OwlMoveClass(PATH, f"{NS}Dog", f"{NS}Mammal"), persist=False)
+    assert result.ok
+    assert ws.taxonomies[PATH].owl_classes[f"{NS}Dog"].sub_class_of == [f"{NS}Mammal"]  # swapped
+    assert pers.saved == []  # nothing written to disk
+
+
+def test_execute_persists_by_default() -> None:
+    svc, _ws, pers = _service()
+    assert svc.execute(OwlMoveClass(PATH, f"{NS}Dog", f"{NS}Mammal")).ok
+    assert len(pers.saved) == 1  # default persist=True writes

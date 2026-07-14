@@ -11,6 +11,9 @@ See docs/architecture/textual-tui-refactor.md.
 
 from __future__ import annotations
 
+from rich.console import Group, RenderableType
+from rich.markdown import Markdown as RichMarkdown
+from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
@@ -21,6 +24,8 @@ from ster.model import Taxonomy
 from ster.nav.logic import DetailField
 
 from .detail import DetailSection, build_sections, field_markup, group_sections
+from .edits import is_long_text
+from .urls import autolink_urls
 
 PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
 
@@ -112,17 +117,33 @@ def _is_actionable(field: DetailField, delete_field: DetailField | None) -> bool
 _GLYPH_ACTION_TYPES = frozenset({"action", "action_add", "action_del"})
 
 
-def _row_content(field: DetailField, actionable: bool) -> str:
-    """The row's markup, prefixed with a small affordance icon when it is
-    clickable but doesn't already carry an action glyph — so every clickable row
-    is visibly interactive. Editable values get ``✎``; other clickable rows ``▸``.
-    """
-    markup = field_markup(field)
+def _row_prefix(field: DetailField, actionable: bool) -> str:
+    """The leading affordance icon for a clickable row — ``✎ `` for an editable value,
+    ``▸ `` for another clickable row, ``''`` for info / already-glyphed rows."""
     if actionable and field.meta.get("type") not in _GLYPH_ACTION_TYPES:
         edits_value = field.editable or field.meta.get("action") == "edit_property"
-        icon = "✎" if edits_value else "▸"
-        return f"{icon} {markup}"
-    return markup
+        return "✎ " if edits_value else "▸ "
+    return ""
+
+
+def _row_content(field: DetailField, actionable: bool) -> str:
+    """The row's markup, prefixed with its affordance icon (see :func:`_row_prefix`)."""
+    return f"{_row_prefix(field, actionable)}{field_markup(field)}"
+
+
+def _renders_markdown(field: DetailField) -> bool:
+    """True for a value row authored in the Markdown editor (comment, definition, note,
+    datatype/annotation literal, ontology description) → render it formatted, not raw."""
+    return bool(field.value) and is_long_text(field)
+
+
+def _markdown_row_content(field: DetailField, actionable: bool) -> RenderableType:
+    """A Markdown value row: a dim label line above the value rendered as Markdown.
+
+    Bare URLs are auto-linked first so they render as clickable hyperlinks (Rich only
+    linkifies explicit ``[text](url)`` markup, not bare URLs)."""
+    header = Text(f"{_row_prefix(field, actionable)}{field.display}:", style="dim")
+    return Group(header, RichMarkdown(autolink_urls(field.value)))
 
 
 def _rows_for(fields: list[DetailField]) -> list[DetailRow]:
@@ -212,7 +233,12 @@ class DetailRow(Static):
     def __init__(self, field: DetailField, delete_field: DetailField | None = None) -> None:
         # Only actionable rows take focus; info rows are skipped by arrows/Tab/click.
         actionable = _is_actionable(field, delete_field)
-        super().__init__(_row_content(field, actionable))
+        content = (
+            _markdown_row_content(field, actionable)
+            if _renders_markdown(field)
+            else _row_content(field, actionable)
+        )
+        super().__init__(content)
         self.field = field
         self.delete_field = delete_field  # the paired "✕ remove" row, if any
         self.add_class("detail-row")

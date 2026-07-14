@@ -96,6 +96,9 @@ def _build_edit_registry() -> dict[str, _EditFactory]:
         "rdf_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
         "ind_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
         "prop_label": lambda f, u, p, v, lang: OwlSetLabel(p, u, lang, v),
+        "rdf_comment": lambda f, u, p, v, lang: OwlSetComment(p, u, lang, v),
+        "ind_comment": lambda f, u, p, v, lang: OwlSetComment(p, u, lang, v),
+        "prop_comment": lambda f, u, p, v, lang: OwlSetComment(p, u, lang, v),
         "uri": lambda f, u, p, v, lang: RenameEntity(p, u, v),  # cascades across every layer
         "pref": lambda f, u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="pref"),
         "alt": lambda f, u, p, v, lang: SkosSetLabel(p, u, lang, v, kind="alt"),
@@ -118,6 +121,55 @@ def edit_command(field: DetailField, uri: str, path: Path, value: str) -> object
     """Return the Command for editing an editable value row, or None if unsupported."""
     factory = _EDIT_REGISTRY.get(field.meta.get("type", ""))
     return factory(field, uri, path, value, field.meta.get("lang", "en")) if factory else None
+
+
+# Field types / actions whose value is free-form long text (a comment, definition,
+# scope note, ontology description, or a datatype/annotation literal) → edit them in
+# the multi-line Markdown editor instead of the one-line input.
+LONG_TEXT_TYPES = frozenset(
+    {"rdf_comment", "ind_comment", "prop_comment", "def", "scope_note", "ont_description"}
+)
+LONG_TEXT_ACTIONS = frozenset(
+    {
+        "edit_literal_value",
+        "add_rdf_comment",
+        "add_ind_comment",
+        "add_prop_comment",
+        "add_def",
+        "add_scope_note",
+        "edit_note",
+    }
+)
+
+
+def is_long_text(field: DetailField) -> bool:
+    """True when *field* holds free-form long text → open the multi-line Markdown editor."""
+    return (
+        field.meta.get("type") in LONG_TEXT_TYPES or field.meta.get("action") in LONG_TEXT_ACTIONS
+    )
+
+
+# Prose fields = the long-text fields *except* datatype/annotation literal values (which
+# can legitimately be a bare URL/URN to keep as-is). Only prose fields auto-link URLs.
+_PROSE_TYPES = frozenset(
+    {"rdf_comment", "ind_comment", "prop_comment", "def", "scope_note", "ont_description"}
+)
+_PROSE_ACTIONS = frozenset(
+    {
+        "add_rdf_comment",
+        "add_ind_comment",
+        "add_prop_comment",
+        "add_def",
+        "add_scope_note",
+        "edit_note",
+    }
+)
+
+
+def is_prose(field: DetailField) -> bool:
+    """True for a prose Markdown field (comment / definition / note / description) → its
+    editor auto-links URLs. Literal-value fields are excluded (they may *be* a URL)."""
+    return field.meta.get("type") in _PROSE_TYPES or field.meta.get("action") in _PROSE_ACTIONS
 
 
 # ── action_command — constructive text-input rows (keyed by "action") ───────────

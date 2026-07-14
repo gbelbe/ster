@@ -12,8 +12,9 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Button, Static
+from textual.widgets import Button
 
+from .hint_bar import Hint
 from .modal import ModalBase
 
 
@@ -35,7 +36,10 @@ class ChoiceModal(ModalBase[str | None]):
         with Vertical(id="choice-box", classes=classes):
             for label, value in self._options:
                 yield Button(label, id=f"opt-{value}")
-            yield Static("↑↓ move    enter  choose     esc  cancel", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        # The options are already clickable buttons, so "move" / "choose" are informational.
+        return [Hint("↑↓", "move"), Hint("⏎", "choose"), Hint("esc", "cancel", "cancel")]
 
     def on_mount(self) -> None:
         self.query_one("#choice-box").border_title = self._prompt

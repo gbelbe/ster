@@ -25,7 +25,7 @@ dependencies = [
     "rdflib>=7.0",
     "typer>=0.12",
     "rich>=13.0",
-    "textual>=0.80",              # modern TUI (New-TUI tree browser; future primary UI)
+    "textual[syntax]>=0.80",      # modern TUI (New-TUI tree browser); [syntax] = TextArea Markdown highlighting
     "idna>=3.15",
     "fastapi[standard]>=0.110",   # includes uvicorn[standard]
     "watchfiles>=0.21",           # file-change watcher for live push

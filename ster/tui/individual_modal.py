@@ -23,6 +23,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, Input, Select, Static
 
+from .hint_bar import Hint
 from .modal import ModalBase
 from .uri_modal import FragmentInput
 
@@ -104,7 +105,12 @@ class IndividualModal(ModalBase[dict | None]):
             yield from self._lang_rows(self._comment_inputs)
             yield from self._property_rows()
             yield Button("Save", id="ind-save", variant="primary")
-            yield Static("enter  save     esc  cancel", classes="modal-footer")
+
+    def footer_hints(self) -> list[Hint]:
+        return [Hint("⏎", "save", "save"), Hint("esc", "cancel", "cancel")]
+
+    def action_save(self) -> None:
+        self._submit()
 
     def _lang_rows(self, inputs: dict[str, Input]) -> ComposeResult:
         for lg in self._langs:

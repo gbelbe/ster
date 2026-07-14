@@ -35,6 +35,7 @@ from ster.metadata_coverage import MetaProp
 
 from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup, FormGroup
+from .hint_bar import Hint
 from .llm_group import LlmSetup
 from .local_property_modal import LocalPropertyModal
 from .modal import ModalBase
@@ -680,23 +681,25 @@ class ConfigModal(ModalBase[None]):
         self._ready = False  # suppress Changed until fully composed
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="cfg-box", classes="modal-box"):
-            with TabbedContent():
-                with TabPane("General", id="cfg-tab-general"):
-                    yield from self._general_tab()
-                with TabPane("Annotation properties", id="cfg-tab-props"):
-                    yield from self._props_tab()
-                with TabPane("Plugins", id="cfg-tab-plugins"):
-                    yield from self._plugins_tab()
-                from ster import plugins
+        with Vertical(id="cfg-box", classes="modal-box"), TabbedContent():
+            with TabPane("General", id="cfg-tab-general"):
+                yield from self._general_tab()
+            with TabPane("Annotation properties", id="cfg-tab-props"):
+                yield from self._props_tab()
+            with TabPane("Plugins", id="cfg-tab-plugins"):
+                yield from self._plugins_tab()
+            from ster import plugins
 
-                if plugins.is_enabled("semanticlint"):
-                    with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
-                        yield from self._semanticlint_widgets()
-            yield Static(
-                "arrows  move     esc  close     (changes save automatically)",
-                classes="modal-footer",
-            )
+            if plugins.is_enabled("semanticlint"):
+                with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
+                    yield from self._semanticlint_widgets()
+
+    def footer_hints(self) -> list[Hint]:
+        return [
+            Hint("arrows", "move"),
+            Hint("esc", "close", "cancel"),
+            Hint("↻", "changes save automatically"),
+        ]
 
     def _plugins_tab(self) -> ComposeResult:
         from ster import plugins
