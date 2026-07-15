@@ -31,6 +31,7 @@ class QueryScreen(Screen[None]):
     #query-editor { height: 45%; border: round $primary; }
     #query-status { height: 1; color: $text-muted; padding: 0 1; }
     #query-results { height: 1fr; border: round $primary; }
+    #query-hint { height: 1; color: $text-muted; padding: 0 1; text-style: dim; }
     #ac-popup { layer: popup; width: auto; max-height: 10; border: round $accent;
                 background: $panel; }
     """
@@ -58,7 +59,20 @@ class QueryScreen(Screen[None]):
             )
             yield Static("", id="query-status")
             yield DataTable(id="query-results")
+            yield Static(self._trigger_hint(), id="query-hint")
         yield Footer()
+
+    def _example_prefix(self) -> str:
+        """The file's own prefix (with the colon) — the one the user most likely completes."""
+        return f"{query.main_prefix(self._index)}:" if query.main_prefix(self._index) else "prefix:"
+
+    def _trigger_hint(self) -> str:
+        """The bottom hint line: how to trigger each kind of autocomplete for this file."""
+        pfx = self._example_prefix()
+        return (
+            f"autocomplete —  [b]{pfx}[/b] entities · [b]?[/b]var variables · [b]word[/b] keywords"
+            "     ↑↓ move · ⏎/tab accept · esc close popup"
+        )
 
     def _suggest(self, text: str, cursor: int) -> tuple[list[Completion], int]:
         """Adapt the pure completion logic for the editor: completions + the replace start."""

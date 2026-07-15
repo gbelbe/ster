@@ -49,16 +49,41 @@ def presets() -> list[PresetQuery]:
 _STARTER_PREFIXES = ("", "rdf", "rdfs", "owl", "skos")
 
 
+def main_prefix(index: EntityIndex) -> str:
+    """The file's own prefix name — instance data (individuals / concepts) is weighted far
+    above classes/properties so the file's namespace wins over standard-prefix boilerplate
+    (owl:Class …). Empty string when nothing qualifies."""
+
+    def score(prefix: str) -> int:
+        return (
+            (len(index.individuals.get(prefix, [])) + len(index.concepts.get(prefix, []))) * 1000
+            + len(index.classes.get(prefix, [])) * 10
+            + len(index.properties.get(prefix, []))
+        )
+
+    best = max(index.prefixes, key=score, default="")
+    return best if score(best) else ""
+
+
 def starter_query(index: EntityIndex) -> str:
-    """A starter query: PREFIX lines for the file's own namespaces + a SELECT skeleton, so
-    entity completions like ``:Animal`` run without the user hand-writing the prefix."""
-    lines = [
-        f"PREFIX {pfx}: <{index.prefixes[pfx]}>"
-        for pfx in _STARTER_PREFIXES
-        if index.prefixes.get(pfx)
-    ]
+    """A starter query: PREFIX lines for the file's namespaces + a sample query listing
+    instances of the file's first few classes (so it is useful and runnable out of the box),
+    falling back to ``SELECT ?s ?p ?o`` when the file declares no classes."""
+    pfx = main_prefix(index)
+    wanted = list(dict.fromkeys([pfx, *_STARTER_PREFIXES]))  # the file's own prefix first
+    lines = [f"PREFIX {p}: <{index.prefixes[p]}>" for p in wanted if index.prefixes.get(p)]
     header = ("\n".join(lines) + "\n\n") if lines else ""
-    return f"{header}SELECT ?s ?p ?o\nWHERE {{ ?s ?p ?o }}\nLIMIT 50\n"
+    classes = index.classes.get(pfx, [])[:5]  # the first five classes of the file's namespace
+    if not classes:
+        return f"{header}SELECT ?s ?p ?o\nWHERE {{ ?s ?p ?o }}\nLIMIT 50\n"
+    values = " ".join(f"{pfx}:{name}" for name in classes)
+    return (
+        f"{header}# sample: instances of the first {len(classes)} classes\n"
+        "SELECT ?class ?instance WHERE {\n"
+        "  ?instance a ?class .\n"
+        f"  VALUES ?class {{ {values} }}\n"
+        "}\nORDER BY ?class\nLIMIT 25\n"
+    )
 
 
 def build_graph(tax: Taxonomy) -> rdflib.Graph:
