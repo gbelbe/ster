@@ -41,16 +41,17 @@ def _set(ed: SparqlEditor, text: str) -> None:
     ed.move_cursor((len(lines) - 1, len(lines[-1])))
 
 
-def test_editor_enables_syntax_highlighting() -> None:
+def test_editor_highlights_sparql_tokens() -> None:
     async def scenario() -> None:
         app = _Host()
         async with app.run_test(size=(80, 24)) as pilot:
             ed = app.query_one("#ed", SparqlEditor)
-            _set(ed, "SELECT ?s WHERE { ?s a :Class }")
+            _set(ed, 'SELECT ?s WHERE { ?s a :Class ; :p "v" }')
+            ed._build_highlight_map()  # what an edit triggers
             await pilot.pause()
-            assert ed.language == "sql"  # best-effort SPARQL highlighting via the SQL grammar
-            tags = {h[2] for line in getattr(ed, "_highlights", {}).values() for h in line}
-            assert "keyword" in tags  # SELECT/WHERE are coloured
+            tags = {h[2] for line in ed._highlights.values() for h in line}
+            # the custom SPARQL highlighter colours every token kind, not just SQL keywords
+            assert {"keyword", "variable.builtin", "type", "string"} <= tags
 
     _run(scenario)
 

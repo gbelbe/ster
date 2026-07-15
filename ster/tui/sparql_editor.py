@@ -19,6 +19,7 @@ from textual import events
 from textual.widgets import OptionList, TextArea
 from textual.widgets.option_list import Option
 
+from . import sparql_highlight
 from .sparql_complete import Completion
 
 SuggestFn = Callable[[str, int], "tuple[list[Completion], int]"]
@@ -42,13 +43,22 @@ class SparqlEditor(TextArea):
         self._popup: OptionList | None = None
         self._completions: list[Completion] = []
         self._replace_start = 0
-        # Best-effort syntax highlighting: no maintained tree-sitter SPARQL grammar exists,
-        # but the built-in SQL grammar colours the shared keywords / variables / operators
-        # well enough (and SPARQL '?var' maps to SQL's parameter). Editing must always work.
+        # A language activates the highlight machinery (calls _build_highlight_map on every
+        # edit, and the renderer applies self._highlights); we override that map to colour
+        # SPARQL precisely via regex, since no maintained tree-sitter SPARQL grammar exists.
         try:
             self.language = "sql"
         except Exception:  # noqa: BLE001 — highlighting is optional; never block editing
             pass
+
+    def _build_highlight_map(self) -> None:
+        """Override TextArea's tree-sitter highlighting with a full SPARQL regex highlighter."""
+        self._line_cache.clear()
+        highlights = self._highlights
+        highlights.clear()
+        for row, line in enumerate(self.text.splitlines()):
+            for start, end, name in sparql_highlight.spans(line):
+                highlights[row].append((start, end, name))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
