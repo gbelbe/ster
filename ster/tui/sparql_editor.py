@@ -25,6 +25,7 @@ SuggestFn = Callable[[str, int], "tuple[list[Completion], int]"]
 
 _KIND_STYLE = {
     "keyword": "bold",
+    "variable": "bright_blue",
     "class": "cyan",
     "individual": "green",
     "property": "magenta",

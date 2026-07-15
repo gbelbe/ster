@@ -44,7 +44,11 @@ class QueryScreen(Screen[None]):
     def __init__(self, tax: Taxonomy) -> None:
         super().__init__()
         self._tax = tax
-        self._index = query.build_entity_index(tax)  # entities for autocomplete
+        # Build the graph once and reuse it for the index and every run — a large ontology
+        # is otherwise re-serialised on each query. The screen is modal (no editing while
+        # open), so the graph stays valid for the session.
+        self._graph = query.build_graph(tax)
+        self._index = query.build_entity_index(tax, graph=self._graph)
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
 
     def compose(self) -> ComposeResult:
@@ -70,9 +74,9 @@ class QueryScreen(Screen[None]):
         editor.focus()
 
     def action_run(self) -> None:
-        """Execute the editor's query and render its result (inline — small ontologies)."""
+        """Execute the editor's query against the session graph and render its result."""
         text = self.query_one("#query-editor", TextArea).text
-        self._show_result(query.run(self._tax, text))
+        self._show_result(query.run_on_graph(self._graph, text))
 
     def _show_result(self, result: QueryResult) -> None:
         self._last_result = result

@@ -15,6 +15,7 @@ Kept pure so it is exhaustively unit-testable; the Textual editor renders these
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 # Characters that delimit SPARQL identifiers (``:`` is handled separately as a qname sep).
@@ -23,6 +24,18 @@ WORD_SEPS = frozenset(" \t\n\r{}()<>,;|@?$\"'=!*+/#^&[]\\")
 # Block keywords expand to '… {\n  \n}'; FILTER/BIND expand to '…()'.
 _BRACE_EXPAND = frozenset({"WHERE", "OPTIONAL", "UNION", "GRAPH", "MINUS", "SERVICE"})
 _PAREN_EXPAND = frozenset({"FILTER", "BIND"})
+
+# Predicates whose object is a class (so a qname there is ranked classes-first).
+_CLASS_PREDICATES = frozenset(
+    {"a", "rdf:type", "rdfs:subClassOf", "rdfs:domain", "rdfs:range", "owl:equivalentClass"}
+)
+
+_VAR_RE = re.compile(r"[?$]([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def extract_variables(text: str) -> list[str]:
+    """Sorted, unique ``?var`` / ``$var`` names used in *text* (without the sigil)."""
+    return sorted(set(_VAR_RE.findall(text)))
 
 
 @dataclass(frozen=True)
@@ -134,20 +147,21 @@ def triple_slot(text: str, token_start: int) -> str:
     """The slot of the entity token starting at *token_start* within a WHERE triple:
     ``subject`` | ``predicate`` | ``type-object`` | ``object`` (``object`` outside a body).
 
-    ``?s a :`` → the object of ``a``/``rdf:type`` is a *type-object* (a class); ``?s :`` is
-    the *predicate* (a property); the first token is the *subject*."""
+    ``?s a :`` → the object of ``a`` / ``rdfs:domain`` … is a *type-object* (a class); ``?s :``
+    is the *predicate* (a property); the first token is the *subject*."""
     before = text[:token_start]
     if before.count("{") <= before.count("}"):
         return "object"
     sep = max((before.rfind(c) for c in "{}."), default=-1)
-    if before.rfind(";") > sep:  # ';' continues the subject → a fresh predicate
+    if before.rfind(";") > sep:  # ';' continues the subject → a fresh predicate slot
         return "predicate"
     toks = before[sep + 1 :].split()
     if not toks:
         return "subject"
-    if len(toks) == 1:
+    if len(toks) == 1 and before.rfind(",") <= sep:  # subject present, no ',' → predicate
         return "predicate"
-    return "type-object" if toks[1] == "a" or toks[1].endswith(":type") else "object"
+    predicate = toks[1] if len(toks) >= 2 else None  # 2nd token of the triple
+    return "type-object" if predicate in _CLASS_PREDICATES else "object"
 
 
 # ── suggestion ────────────────────────────────────────────────────────────────
@@ -205,19 +219,29 @@ def replace_start(text: str, cursor: int, prefixes: set[str]) -> int:
     return current_word(text, cursor)[1]
 
 
+def _variable_completions(text: str, partial: str, limit: int) -> list[Completion]:
+    pl = partial.lower()
+    names = [n for n in extract_variables(text) if n.lower().startswith(pl) and n != partial]
+    return [Completion(n, f"?{n}", "variable") for n in names][:limit]
+
+
 def suggest(
     text: str, cursor: int, index: EntityIndex, keywords: list[str], limit: int = 12
 ) -> list[Completion]:
-    """Completions for the cursor: entity local names inside a known ``prefix:`` token
-    (ranked by triple slot), else position-aware SPARQL keywords for the partial word
-    being typed (empty when nothing applies)."""
+    """Completions for the cursor, by what is being typed:
+
+    * a ``?`` / ``$`` **variable** → other variables already used in the query (never keywords);
+    * inside a known ``prefix:`` token → **entities**, ranked by the triple slot;
+    * a bare word → position-aware **keywords**.
+    """
+    word, word_start = current_word(text, cursor)
+    if word_start > 0 and text[word_start - 1] in "?$":  # typing a variable name
+        return _variable_completions(text, word, limit)
     qn = qname_at_cursor(text, cursor, set(index.prefixes))
     if qn is not None:
         prefix, partial = qn
         token_start = cursor - len(partial) - 1 - len(prefix)  # start of 'prefix:'
-        slot = triple_slot(text, token_start)
-        return _entity_completions(index, prefix, partial, slot, limit)
-    word, _ = current_word(text, cursor)
+        return _entity_completions(index, prefix, partial, triple_slot(text, token_start), limit)
     if word:
         return _keyword_completions(text, cursor, word, keywords, limit)
     return []

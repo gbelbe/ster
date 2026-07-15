@@ -96,6 +96,32 @@ def test_build_entity_index_includes_standard_wellknown_names() -> None:
     assert "Concept" in idx.classes.get("skos", [])
 
 
+def test_graph_is_built_once_and_reused_for_index_and_run() -> None:
+    """The session graph is reused: the index built from it and run_on_graph agree, without
+    re-serialising the taxonomy each time."""
+    tax = _tax_with_bindings()
+    graph = query.build_graph(tax)
+    idx = query.build_entity_index(tax, graph=graph)  # reuses the graph
+    assert "Person" in idx.classes.get("kai", [])
+    res = query.run_on_graph(
+        graph, "SELECT ?c WHERE { ?c a <http://www.w3.org/2002/07/owl#Class> }"
+    )
+    assert BASE + "Person" in {r[0] for r in res.rows}
+
+
+def test_engine_graph_cache_still_hits(tmp_path) -> None:
+    """The former engine's file-keyed cache is intact: a second load returns the same object."""
+    import ster.sparql_query as sq
+
+    src = tmp_path / "o.ttl"
+    src.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix : <https://ex/> .\n:A a owl:Class .\n",
+        encoding="utf-8",
+    )
+    assert sq.load_graph_cached([src]) is sq.load_graph_cached([src])  # warm cache hit
+
+
 # ── screen ──────────────────────────────────────────────────────────────────
 
 

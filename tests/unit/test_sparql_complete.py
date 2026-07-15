@@ -148,6 +148,30 @@ def test_suggest_empty_when_nothing_to_complete() -> None:
     assert suggest("SELECT ?s ", 10, _index(), KEYWORDS) == []
 
 
+def test_typing_a_variable_does_not_suggest_keywords() -> None:
+    """Regression: '?s' used to offer SELECT/SERVICE — a variable is never a keyword."""
+    text = "SELECT ?s WHERE { ?s"  # typing the '?s' variable reference
+    out = suggest(text, len(text), _index(), KEYWORDS)
+    assert all(c.kind != "keyword" for c in out)
+
+
+def test_suggest_completes_existing_variables() -> None:
+    text = "SELECT ?subject ?object WHERE { ?su"  # typing '?su' → offer ?subject
+    out = suggest(text, len(text), _index(), KEYWORDS)
+    assert [(c.label, c.insert, c.kind) for c in out] == [("?subject", "subject", "variable")]
+
+
+def test_variable_completion_excludes_the_one_being_typed() -> None:
+    text = "SELECT ?s WHERE { ?s"  # only ?s exists → nothing else to offer
+    assert suggest(text, len(text), _index(), KEYWORDS) == []
+
+
+def test_type_object_ranks_classes_for_rdfs_range() -> None:
+    text = "WHERE { ?p rdfs:range kai:"  # object of rdfs:range → a class
+    out = suggest(text, len(text), _index(), KEYWORDS)
+    assert out[0].kind == "class"
+
+
 def test_replace_start_keeps_prefix_for_qname_else_word_start() -> None:
     text = "WHERE { ?s a kai:Pers"
     assert replace_start(text, len(text), {"kai"}) == text.index("Pers")  # after 'kai:'

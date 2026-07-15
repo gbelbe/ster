@@ -7,11 +7,16 @@ taxonomy (``taxonomy_to_graph``) so unsaved edits are reflected.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ster.model import Taxonomy
 from ster.sparql_query import PRESET_QUERIES, PresetQuery, QueryResult, run_query_on_graph
 from ster.store import taxonomy_to_graph
 
 from .sparql_complete import EntityIndex
+
+if TYPE_CHECKING:
+    import rdflib
 
 # Well-known local names to offer under the standard prefixes even when unused in the file.
 _STANDARD: dict[str, dict[str, list[str]]] = {
@@ -56,9 +61,20 @@ def starter_query(index: EntityIndex) -> str:
     return f"{header}SELECT ?s ?p ?o\nWHERE {{ ?s ?p ?o }}\nLIMIT 50\n"
 
 
+def build_graph(tax: Taxonomy) -> rdflib.Graph:
+    """The rdflib graph for *tax* — built once per query session and reused for the entity
+    index and every run, so a large ontology isn't re-serialised on each query."""
+    return taxonomy_to_graph(tax)
+
+
 def run(tax: Taxonomy, sparql: str) -> QueryResult:
     """Run *sparql* against *tax* in memory, returning a normalised ``QueryResult``."""
     return run_query_on_graph(taxonomy_to_graph(tax), sparql)
+
+
+def run_on_graph(graph: rdflib.Graph, sparql: str) -> QueryResult:
+    """Run *sparql* against an already-built *graph* (reuses the session graph)."""
+    return run_query_on_graph(graph, sparql)
 
 
 def _split_namespace(uri: str) -> str | None:
@@ -81,39 +97,49 @@ def _primary_namespace(tax: Taxonomy, bound: set[str]) -> str | None:
     return counts.most_common(1)[0][0] if counts else None
 
 
-def build_entity_index(tax: Taxonomy) -> EntityIndex:
+def build_entity_index(tax: Taxonomy, graph: rdflib.Graph | None = None) -> EntityIndex:
     """Build the autocomplete index from *tax* via rdflib: the graph's namespace manager
     splits each entity URI into ``prefix:local`` (rdflib's qname logic), and the model
-    classifies it (class / individual / property / concept). Built once per query session."""
-    graph = taxonomy_to_graph(tax)
-    nm = graph.namespace_manager
-    bound_ns = {str(ns) for _, ns in graph.namespaces()}
-    base = _primary_namespace(tax, bound_ns)
-    if base is not None:  # re-bind the file's default (':') namespace, dropped on load
-        nm.bind("", base, override=True, replace=True)
+    classifies it (class / individual / property / concept). Reuses *graph* when given."""
+    graph = graph if graph is not None else taxonomy_to_graph(tax)
+    _rebind_default_namespace(tax, graph)
     index = EntityIndex(prefixes={p: str(ns) for p, ns in graph.namespaces()})
-
-    def add(uri: str, bucket: dict[str, list[str]]) -> None:
-        try:
-            prefix, _, local = nm.compute_qname(uri, generate=False)
-        except (ValueError, KeyError):
-            return  # no bound prefix for this namespace → not qname-completable
-        if local:
-            bucket.setdefault(prefix, []).append(local)
-
-    for uri in tax.owl_classes:
-        add(uri, index.classes)
-    for uri in tax.owl_individuals:
-        add(uri, index.individuals)
-    for uri in tax.owl_properties:
-        add(uri, index.properties)
-    for uri in tax.concepts:
-        add(uri, index.concepts)
+    _classify_entities(tax, graph.namespace_manager, index)
     _merge_standard(index)
     for bucket in (index.classes, index.individuals, index.properties, index.concepts):
         for prefix, locals_ in bucket.items():
             bucket[prefix] = sorted(dict.fromkeys(locals_))  # dedupe + sort
     return index
+
+
+def _rebind_default_namespace(tax: Taxonomy, graph: rdflib.Graph) -> None:
+    """Re-bind the file's default (``:``) namespace, which store drops on load, so its
+    entities are qname-completable."""
+    bound_ns = {str(ns) for _, ns in graph.namespaces()}
+    base = _primary_namespace(tax, bound_ns)
+    if base is not None:
+        graph.namespace_manager.bind("", base, override=True, replace=True)
+
+
+def _classify_entities(tax: Taxonomy, nm: object, index: EntityIndex) -> None:
+    """Bucket each entity's ``prefix:local`` (via rdflib's namespace manager) by model kind."""
+
+    def add(uri: str, bucket: dict[str, list[str]]) -> None:
+        try:
+            prefix, _, local = nm.compute_qname(uri, generate=False)  # type: ignore[attr-defined]
+        except (ValueError, KeyError):
+            return  # no bound prefix for this namespace → not qname-completable
+        if local:
+            bucket.setdefault(prefix, []).append(local)
+
+    for entities, bucket in (
+        (tax.owl_classes, index.classes),
+        (tax.owl_individuals, index.individuals),
+        (tax.owl_properties, index.properties),
+        (tax.concepts, index.concepts),
+    ):
+        for uri in entities:
+            add(uri, bucket)
 
 
 def _merge_standard(index: EntityIndex) -> None:
