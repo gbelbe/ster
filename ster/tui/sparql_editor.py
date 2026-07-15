@@ -42,6 +42,13 @@ class SparqlEditor(TextArea):
         self._popup: OptionList | None = None
         self._completions: list[Completion] = []
         self._replace_start = 0
+        # Best-effort syntax highlighting: no maintained tree-sitter SPARQL grammar exists,
+        # but the built-in SQL grammar colours the shared keywords / variables / operators
+        # well enough (and SPARQL '?var' maps to SQL's parameter). Editing must always work.
+        try:
+            self.language = "sql"
+        except Exception:  # noqa: BLE001 — highlighting is optional; never block editing
+            pass
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

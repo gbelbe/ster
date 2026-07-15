@@ -41,6 +41,20 @@ def _set(ed: SparqlEditor, text: str) -> None:
     ed.move_cursor((len(lines) - 1, len(lines[-1])))
 
 
+def test_editor_enables_syntax_highlighting() -> None:
+    async def scenario() -> None:
+        app = _Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            ed = app.query_one("#ed", SparqlEditor)
+            _set(ed, "SELECT ?s WHERE { ?s a :Class }")
+            await pilot.pause()
+            assert ed.language == "sql"  # best-effort SPARQL highlighting via the SQL grammar
+            tags = {h[2] for line in getattr(ed, "_highlights", {}).values() for h in line}
+            assert "keyword" in tags  # SELECT/WHERE are coloured
+
+    _run(scenario)
+
+
 def test_typing_a_qname_opens_the_entity_popup() -> None:
     async def scenario() -> None:
         app = _Host()
