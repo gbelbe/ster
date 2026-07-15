@@ -339,6 +339,7 @@ class OntologyApp(App):
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),
         Binding("g", "open_graph", "GraphView"),
+        Binding("s", "open_query", "SPARQL"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
@@ -352,8 +353,10 @@ class OntologyApp(App):
         source: str = "ontology",
         lang: str = "en",
         path: Path | None = None,
+        open_query: bool = False,
     ) -> None:
         super().__init__()
+        self._open_query_on_start = open_query
         self.register_theme(STER_THEME)  # available alongside every built-in theme
         from ster.nav.prefs import _load_prefs
 
@@ -704,6 +707,14 @@ class OntologyApp(App):
         self._show(detail.OVERVIEW_URI)
         if self._lint_icons_on:
             self._rebuild_tree()
+        if self._open_query_on_start:  # home-menu "Query" opens straight into the query screen
+            self.action_open_query()
+
+    def action_open_query(self) -> None:
+        """Open the SPARQL query workspace over the live taxonomy."""
+        from .query_screen import QueryScreen
+
+        self.push_screen(QueryScreen(self.tax))
 
     def _update_lang_indicator(self) -> None:
         """Refresh the bottom-right status with the current display language."""

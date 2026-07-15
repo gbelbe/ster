@@ -18,12 +18,13 @@ def launch(
     source: str = "ontology",
     lang: str = "en",
     path: Path | None = None,
+    open_query: bool = False,
 ) -> None:
     """Open the Textual ontology browser for *taxonomy* (blocks until quit).
 
     When *path* is given, edits commit there via ``TaxonomyService``; without it
-    the browser is read-only.
+    the browser is read-only. ``open_query`` opens straight into the SPARQL screen.
     """
     from .app import OntologyApp
 
-    OntologyApp(taxonomy, source=source, lang=lang, path=path).run()
+    OntologyApp(taxonomy, source=source, lang=lang, path=path, open_query=open_query).run()

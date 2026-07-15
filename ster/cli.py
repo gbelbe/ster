@@ -990,33 +990,17 @@ def _launch_new_tui(found: list[Path]) -> None:
 
 
 def _launch_query(found: list[Path]) -> None:
-    """Open the TUI in SPARQL query mode for the given files."""
-    from .git.manager import GitManager
-    from .nav import TaxonomyViewer
-    from .workspace import TaxonomyWorkspace
-
+    """Open the New-TUI straight into the SPARQL query screen for the primary file."""
     if not found:
         err.print("[red]No taxonomy files to query.[/red]")
         return
-
-    try:
-        workspace = TaxonomyWorkspace.from_files(found)
-    except Exception as exc:
-        err.print(f"[red]Failed to load files: {exc}[/red]")
-        return
-
     primary = found[0]
-    if primary in workspace.taxonomies:
-        taxonomy = workspace.taxonomies[primary]
-    else:
-        from .model import Taxonomy
+    taxonomy = _load_safe(primary)
+    if taxonomy is None:
+        return
+    from .tui import launch
 
-        taxonomy = Taxonomy()
-
-    gm = GitManager(primary)
-    viewer = TaxonomyViewer(taxonomy, primary, workspace=workspace, git_manager=gm)
-    viewer._trigger_action("open_query")
-    viewer.run()
+    launch(taxonomy, source=primary.name, path=primary, open_query=True)
 
 
 # ──────────────────────────── viewer helper ──────────────────────────────────

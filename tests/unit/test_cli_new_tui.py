@@ -17,6 +17,7 @@ from ster.cli import (
     _SUBCOMMANDS,
     _dispatch_menu_action,
     _launch_new_tui,
+    _launch_query,
     _multi_file_picker,
     app,
 )
@@ -54,6 +55,22 @@ def test_launch_new_tui_menu_handler():
 def test_launch_new_tui_with_no_files_is_noop():
     with patch("ster.tui.launch") as launch:
         _launch_new_tui([])
+    launch.assert_not_called()
+
+
+def test_launch_query_opens_the_new_tui_in_query_mode():
+    with patch("ster.tui.launch") as launch:
+        _launch_query([DEMO])
+    launch.assert_called_once()
+    (taxonomy,), kwargs = launch.call_args
+    assert kwargs.get("open_query") is True
+    assert kwargs.get("source") == "demo.ttl"
+    assert taxonomy.owl_classes  # a real taxonomy was loaded and handed off
+
+
+def test_launch_query_with_no_files_is_noop():
+    with patch("ster.tui.launch") as launch:
+        _launch_query([])
     launch.assert_not_called()
 
 
