@@ -11,6 +11,16 @@ from ster.model import Taxonomy
 from ster.sparql_query import PRESET_QUERIES, PresetQuery, QueryResult, run_query_on_graph
 from ster.store import taxonomy_to_graph
 
+from .sparql_complete import EntityIndex
+
+# Well-known local names to offer under the standard prefixes even when unused in the file.
+_STANDARD: dict[str, dict[str, list[str]]] = {
+    "owl": {"classes": ["Class", "Thing", "Nothing", "NamedIndividual"]},
+    "rdfs": {"classes": ["Class", "Resource"], "properties": ["label", "comment", "subClassOf"]},
+    "rdf": {"properties": ["type", "Property"]},
+    "skos": {"classes": ["Concept", "ConceptScheme"], "properties": ["prefLabel", "broader"]},
+}
+
 # A starter query: the common prefixes plus a SELECT skeleton to edit.
 DEFAULT_QUERY = """\
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
@@ -32,3 +42,68 @@ def presets() -> list[PresetQuery]:
 def run(tax: Taxonomy, sparql: str) -> QueryResult:
     """Run *sparql* against *tax* in memory, returning a normalised ``QueryResult``."""
     return run_query_on_graph(taxonomy_to_graph(tax), sparql)
+
+
+def _split_namespace(uri: str) -> str | None:
+    """The namespace part of *uri* (up to and including the last ``#`` or ``/``)."""
+    cut = max(uri.rfind("#"), uri.rfind("/"))
+    return uri[: cut + 1] if cut >= 0 else None
+
+
+def _primary_namespace(tax: Taxonomy, bound: set[str]) -> str | None:
+    """The ontology's own namespace — the most common *unbound* entity namespace. Files
+    that declare it as the default ``:`` prefix lose it on load (store drops ``""``), so we
+    recover it here to make the file's own entities qname-completable."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for uri in (*tax.owl_classes, *tax.owl_individuals, *tax.owl_properties, *tax.concepts):
+        ns = _split_namespace(uri)
+        if ns and ns not in bound:
+            counts[ns] += 1
+    return counts.most_common(1)[0][0] if counts else None
+
+
+def build_entity_index(tax: Taxonomy) -> EntityIndex:
+    """Build the autocomplete index from *tax* via rdflib: the graph's namespace manager
+    splits each entity URI into ``prefix:local`` (rdflib's qname logic), and the model
+    classifies it (class / individual / property / concept). Built once per query session."""
+    graph = taxonomy_to_graph(tax)
+    nm = graph.namespace_manager
+    bound_ns = {str(ns) for _, ns in graph.namespaces()}
+    base = _primary_namespace(tax, bound_ns)
+    if base is not None:  # re-bind the file's default (':') namespace, dropped on load
+        nm.bind("", base, override=True, replace=True)
+    index = EntityIndex(prefixes={p: str(ns) for p, ns in graph.namespaces()})
+
+    def add(uri: str, bucket: dict[str, list[str]]) -> None:
+        try:
+            prefix, _, local = nm.compute_qname(uri, generate=False)
+        except (ValueError, KeyError):
+            return  # no bound prefix for this namespace → not qname-completable
+        if local:
+            bucket.setdefault(prefix, []).append(local)
+
+    for uri in tax.owl_classes:
+        add(uri, index.classes)
+    for uri in tax.owl_individuals:
+        add(uri, index.individuals)
+    for uri in tax.owl_properties:
+        add(uri, index.properties)
+    for uri in tax.concepts:
+        add(uri, index.concepts)
+    _merge_standard(index)
+    for bucket in (index.classes, index.individuals, index.properties, index.concepts):
+        for prefix, locals_ in bucket.items():
+            bucket[prefix] = sorted(dict.fromkeys(locals_))  # dedupe + sort
+    return index
+
+
+def _merge_standard(index: EntityIndex) -> None:
+    """Fold the well-known standard-prefix names into the index (owl:Thing, rdf:type, …)."""
+    buckets = {"classes": index.classes, "properties": index.properties}
+    for prefix, kinds in _STANDARD.items():
+        if prefix not in index.prefixes:
+            continue
+        for kind, locals_ in kinds.items():
+            buckets[kind].setdefault(prefix, []).extend(locals_)

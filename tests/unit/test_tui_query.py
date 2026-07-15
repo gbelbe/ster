@@ -58,6 +58,44 @@ def test_presets_are_exposed() -> None:
     assert ps and all(p.label and p.sparql for p in ps)
 
 
+# ── entity index (rdflib-powered) ─────────────────────────────────────────────
+
+
+def _tax_with_bindings() -> Taxonomy:
+    from ster.model import OWLIndividual, OWLProperty
+
+    t = Taxonomy()
+    t.ontology_uri = BASE.rstrip("/")
+    t.namespace_bindings = {"kai": BASE, "skos": "http://www.w3.org/2004/02/skos/core#"}
+    t.owl_classes[BASE + "Person"] = RDFClass(uri=BASE + "Person", labels=[Label("en", "Person")])
+    t.owl_individuals[BASE + "alice"] = OWLIndividual(uri=BASE + "alice")
+    t.owl_properties[BASE + "hasOwner"] = OWLProperty(
+        uri=BASE + "hasOwner", prop_type="ObjectProperty"
+    )
+    from ster.model import Concept
+
+    t.concepts["http://www.w3.org/2004/02/skos/core#X"] = Concept(
+        uri="http://www.w3.org/2004/02/skos/core#X"
+    )
+    return t
+
+
+def test_build_entity_index_classifies_and_prefixes_entities() -> None:
+    idx = query.build_entity_index(_tax_with_bindings())
+    assert "kai" in idx.prefixes
+    assert idx.classes.get("kai") == ["Person"]  # only the file's own class under kai:
+    assert "alice" in idx.individuals.get("kai", [])
+    assert "hasOwner" in idx.properties.get("kai", [])
+    assert "X" in idx.concepts.get("skos", [])
+
+
+def test_build_entity_index_includes_standard_wellknown_names() -> None:
+    idx = query.build_entity_index(_tax_with_bindings())
+    # standard names are offered under their prefix even if unused in the file
+    assert "type" in idx.properties.get("rdf", []) or "rdf" not in idx.prefixes
+    assert "Concept" in idx.classes.get("skos", [])
+
+
 # ── screen ──────────────────────────────────────────────────────────────────
 
 
