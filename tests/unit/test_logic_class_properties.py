@@ -197,6 +197,83 @@ def test_build_class_detail_no_properties_still_has_section():
     assert "Properties" in sep_labels
 
 
+# ── direct properties grouped by type: Annotation → Object → Datatype ──────────
+
+_GROUP_TITLES = ["Annotation properties", "Object properties", "Datatype properties"]
+
+
+def _group_titles(fields) -> list[str]:
+    return [
+        f.display
+        for f in fields
+        if f.meta.get("type") == "separator_sub" and f.display in _GROUP_TITLES
+    ]
+
+
+def _rows_under(fields, title: str) -> list[str]:
+    """Displays of the property rows appearing under sub-header *title* (until the next
+    separator of any kind). Empty list when the group is absent (omitted when it has none)."""
+    i = next(
+        (
+            i
+            for i, f in enumerate(fields)
+            if f.meta.get("type") == "separator_sub" and f.display == title
+        ),
+        None,
+    )
+    if i is None:
+        return []
+    out: list[str] = []
+    for f in fields[i + 1 :]:
+        if f.meta.get("type", "").startswith("separator"):
+            break
+        if f.meta.get("type") == "class_prop_nav":
+            out.append(f.display)
+    return out
+
+
+def _typed_prop(name: str, prop_type: str) -> OWLProperty:
+    return OWLProperty(
+        uri=BASE + name,
+        prop_type=prop_type,
+        labels=[Label("en", name)],
+        domains=[BASE + "Person"],
+    )
+
+
+def test_class_properties_grouped_by_type_in_order():
+    t = _taxonomy(
+        [_cls("Person")],
+        [  # deliberately unsorted input
+            _typed_prop("hasPet", "ObjectProperty"),
+            _typed_prop("age", "DatatypeProperty"),
+            _typed_prop("note", "AnnotationProperty"),
+        ],
+    )
+    fields = build_rdf_class_detail(t, BASE + "Person", "en")
+    assert _group_titles(fields) == _GROUP_TITLES  # three titles, in order
+    assert _rows_under(fields, "Annotation properties") == ["note"]
+    assert _rows_under(fields, "Object properties") == ["hasPet"]
+    assert _rows_under(fields, "Datatype properties") == ["age"]
+
+
+def test_class_properties_omits_empty_groups():
+    """A group with no properties of that type is dropped entirely — no title, no
+    '(none)' row. A class with only an object property shows just that group."""
+    t = _taxonomy([_cls("Person")], [_typed_prop("hasPet", "ObjectProperty")])
+    fields = build_rdf_class_detail(t, BASE + "Person", "en")
+    assert _group_titles(fields) == ["Object properties"]  # only the non-empty group
+    assert not any(f.display == "(none)" for f in fields)  # no placeholder rows
+
+
+def test_class_property_of_bare_property_type_falls_into_object_group():
+    """A property typed plain `Property` (or anything unrecognised) lands in Object —
+    nothing is silently dropped from the list."""
+    t = _taxonomy([_cls("Person")], [_typed_prop("rel", "Property")])
+    fields = build_rdf_class_detail(t, BASE + "Person", "en")
+    assert _rows_under(fields, "Object properties") == ["rel"]
+
+
 def test_build_class_detail_direct_prop_not_in_inherited():
     person = _cls("Person")
     employee = _cls("Employee", ["Person"])

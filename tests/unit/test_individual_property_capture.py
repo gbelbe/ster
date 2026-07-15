@@ -392,3 +392,119 @@ def test_no_inline_add_rows_on_the_individual_page() -> None:
     t, rex = _individual_with_values()
     actions = {f.meta.get("action") for f in build_individual_detail(t, rex, "en")}
     assert "add_prop_value" not in actions and "add_ind_type" not in actions
+
+
+# ── property values grouped by type: Annotation → Object → Datatype ────────────
+
+_IND_GROUP_TITLES = ["Annotation properties", "Object properties", "Datatype properties"]
+
+
+def _ind_group_titles(fields) -> list[str]:
+    return [
+        f.display
+        for f in fields
+        if f.meta.get("type") == "separator_sub" and f.display in _IND_GROUP_TITLES
+    ]
+
+
+def _prop_uris_under(fields, title: str) -> list[str]:
+    """prop_uris of the value rows appearing under sub-header *title* (until the next
+    separator of any kind). Empty when the group is absent (omitted when it has none)."""
+    i = next(
+        (
+            i
+            for i, f in enumerate(fields)
+            if f.meta.get("type") == "separator_sub" and f.display == title
+        ),
+        None,
+    )
+    if i is None:
+        return []
+    out: list[str] = []
+    for f in fields[i + 1 :]:
+        if f.meta.get("type", "").startswith("separator"):
+            break
+        if f.meta.get("type") in ("ind_prop_val", "ind_lit_val"):
+            out.append(f.meta.get("prop_uri"))
+    return out
+
+
+def _individual_typed_values() -> tuple[Taxonomy, str]:
+    t = Taxonomy()
+    t.owl_individuals[BASE + "Alice"] = OWLIndividual(
+        uri=BASE + "Alice", labels=[Label("en", "Alice")]
+    )
+    t.owl_individuals[BASE + "Rex"] = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label("en", "Rex")],
+        property_values=[(BASE + "knows", BASE + "Alice")],
+        literal_values=[(BASE + "age", "3", ""), (BASE + "src", "ref", "")],
+    )
+    t.owl_properties[BASE + "knows"] = OWLProperty(
+        uri=BASE + "knows", prop_type="ObjectProperty", labels=[Label("en", "knows")]
+    )
+    t.owl_properties[BASE + "age"] = OWLProperty(
+        uri=BASE + "age", prop_type="DatatypeProperty", labels=[Label("en", "age")]
+    )
+    t.owl_properties[BASE + "src"] = OWLProperty(
+        uri=BASE + "src", prop_type="AnnotationProperty", labels=[Label("en", "src")]
+    )
+    return t, BASE + "Rex"
+
+
+def test_individual_values_grouped_by_property_type_in_order() -> None:
+    t, rex = _individual_typed_values()
+    fields = build_individual_detail(t, rex, "en")
+    assert _ind_group_titles(fields) == _IND_GROUP_TITLES  # three titles, in order
+    assert _prop_uris_under(fields, "Annotation properties") == [BASE + "src"]
+    assert _prop_uris_under(fields, "Object properties") == [BASE + "knows"]
+    assert _prop_uris_under(fields, "Datatype properties") == [BASE + "age"]
+
+
+def test_individual_value_group_fallback_when_property_undeclared() -> None:
+    """When a value's property isn't declared, an object value falls to Object and a
+    literal value to Datatype — nothing is dropped."""
+    t = Taxonomy()
+    t.owl_individuals[BASE + "Bob"] = OWLIndividual(uri=BASE + "Bob", labels=[Label("en", "Bob")])
+    t.owl_individuals[BASE + "Rex"] = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label("en", "Rex")],
+        property_values=[(BASE + "undObj", BASE + "Bob")],
+        literal_values=[(BASE + "undLit", "x", "")],
+    )
+    fields = build_individual_detail(t, BASE + "Rex", "en")
+    assert _prop_uris_under(fields, "Object properties") == [BASE + "undObj"]
+    assert _prop_uris_under(fields, "Datatype properties") == [BASE + "undLit"]
+    assert _prop_uris_under(fields, "Annotation properties") == []
+
+
+def test_individual_with_no_values_has_no_property_values_section() -> None:
+    """An individual that asserts no property values shows neither the 'Property Values'
+    section nor any empty type groups."""
+    t = Taxonomy()
+    t.owl_individuals[BASE + "Rex"] = OWLIndividual(uri=BASE + "Rex", labels=[Label("en", "Rex")])
+    fields = build_individual_detail(t, BASE + "Rex", "en")
+    titles = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
+    assert "Property Values" not in titles
+    assert _ind_group_titles(fields) == []
+    assert not any(f.display == "(none)" for f in fields)
+
+
+def test_individual_omits_empty_property_groups() -> None:
+    """With only an object value asserted, just the Object group shows — no Annotation /
+    Datatype titles, no '(none)' rows."""
+    t = Taxonomy()
+    t.owl_individuals[BASE + "Alice"] = OWLIndividual(
+        uri=BASE + "Alice", labels=[Label("en", "Alice")]
+    )
+    t.owl_individuals[BASE + "Rex"] = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label("en", "Rex")],
+        property_values=[(BASE + "knows", BASE + "Alice")],
+    )
+    t.owl_properties[BASE + "knows"] = OWLProperty(
+        uri=BASE + "knows", prop_type="ObjectProperty", labels=[Label("en", "knows")]
+    )
+    fields = build_individual_detail(t, BASE + "Rex", "en")
+    assert _ind_group_titles(fields) == ["Object properties"]
+    assert not any(f.display == "(none)" for f in fields)

@@ -164,13 +164,17 @@ def _rows_for(fields: list[DetailField]) -> list[DetailRow]:
 
 
 class SectionHeader(Static):
-    """A non-focusable section title (e.g. 'Identity', 'Danger Zone')."""
+    """A non-focusable section title (e.g. 'Identity', 'Danger Zone'). A *sub* header is
+    an indented subcategory nested under the preceding section (e.g. the property-type
+    groups under 'Properties')."""
 
-    def __init__(self, title: str, *, danger: bool = False) -> None:
+    def __init__(self, title: str, *, danger: bool = False, sub: bool = False) -> None:
         style = "bold red" if danger else "bold"
         super().__init__(f"[{style}]{title}[/]")
         self.title_text = title  # plain title, for queries/tests
         self.add_class("section-header")
+        if sub:
+            self.add_class("sub-header")
 
 
 class DetailRow(Static):
@@ -268,11 +272,17 @@ class DetailRow(Static):
 
 
 def _section_widgets(sec: DetailSection) -> list[Widget]:
-    """A section's header (if titled) followed by its focusable rows."""
+    """A section's header (if titled) followed by its focusable rows. Sub-sections (the
+    property-type groups) indent both their header and their rows so they read as
+    subcategories nested under the preceding section."""
     out: list[Widget] = []
     if sec.title:
-        out.append(SectionHeader(sec.title, danger=sec.danger))
-    out.extend(_rows_for(sec.fields))
+        out.append(SectionHeader(sec.title, danger=sec.danger, sub=sec.sub))
+    rows = _rows_for(sec.fields)
+    if sec.sub:
+        for row in rows:
+            row.add_class("sub-row")
+    out.extend(rows)
     return out
 
 

@@ -252,6 +252,11 @@ class OntologyApp(App):
     }
 
     .section-header { margin-top: 1; }
+    /* Sub-sections (property-type groups) nest under their section: the header and its
+       rows are indented so they read as subcategories of e.g. "Properties", with an extra
+       line break above each subtitle to set the groups apart. */
+    .section-header.sub-header { padding-left: 2; margin-top: 2; color: $text-muted; }
+    .detail-row.sub-row { padding-left: 3; }
     /* A visual group: a bordered, titled box enclosing its clustered sections. */
     .detail-group {
         height: auto;

@@ -125,15 +125,34 @@ def test_detail_view_omits_danger_note_and_schema_add() -> None:
 
 def test_class_properties_are_editable_and_have_no_add_actions() -> None:
     """The class Properties section drops the '+ Add …' actions; each direct property
-    row is an editable action (edit_property → the edit modal)."""
+    row is an editable action (edit_property → the edit modal), grouped by type."""
     tax = store.load(_DEMO)
     sections = build_sections(tax, _ZOO + "Animal", "en")  # Animal has hasOwner/hasAge
     actions = [f.meta.get("action") for s in sections for f in s.fields]
     assert "add_class_property" not in actions  # no more "+ Add relationship/attribute"
-    props = next(s for s in sections if s.title == "Properties")
-    edit_rows = [f for f in props.fields if f.meta.get("action") == "edit_property"]
+    # direct properties live under the typed group sections, not a flat "Properties" list
+    titles = {s.title for s in sections}
+    assert {"Object properties", "Datatype properties"} <= titles
+    edit_rows = [f for s in sections for f in s.fields if f.meta.get("action") == "edit_property"]
     assert edit_rows, "direct property rows should offer edit_property"
     assert all(f.meta.get("uri") for f in edit_rows)  # each names its property
+
+
+def test_property_type_groups_are_indented_subsections() -> None:
+    """The (non-empty) property-type groups are sub-sections (sec.sub) so the view nests
+    them under 'Properties'; the outer 'Properties' header is not a sub-section, and
+    render_detail indents the sub-headers + rows and sets a blank line before each."""
+    tax = store.load(_DEMO)
+    sections = build_sections(tax, _ZOO + "Animal", "en")  # Animal has object + datatype only
+    props = next(s for s in sections if s.title == "Properties")
+    assert props.sub is False
+    for title in ("Object properties", "Datatype properties"):
+        assert next(s for s in sections if s.title == title).sub is True
+    assert not any(s.title == "Annotation properties" for s in sections)  # empty → omitted
+    out = render_detail(tax, _ZOO + "Animal", "en")
+    assert "\n[bold]Properties[/]" in out  # section header flush-left
+    assert "\n\n  [bold]Object properties[/]" in out  # blank line, then indented sub-header
+    assert "\n    hasOwner (Object Prop.)" in out  # its rows indented one level deeper
 
 
 def test_inherited_properties_render_as_collapsible_grouped_by_parent() -> None:

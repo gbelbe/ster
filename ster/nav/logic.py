@@ -417,6 +417,18 @@ def _sep(label: str) -> DetailField:
     )
 
 
+def _sep_sub(label: str) -> DetailField:
+    """A *sub-section* separator: an indented sub-header nested under the preceding section
+    (e.g. the Annotation / Object / Datatype property groups under 'Properties')."""
+    return DetailField(
+        f"sepsub:{label}",
+        label,
+        "",
+        editable=False,
+        meta={"type": "separator_sub"},
+    )
+
+
 def _sep_group(label: str) -> DetailField:
     """Open a visual *group*: the sections up to the matching :func:`_sep_group_end`
     are wrapped in one bordered, titled box (e.g. 'Quality & Coverage' over Health /
@@ -2046,23 +2058,60 @@ def _inherited_property_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[
     return fields
 
 
-def _class_properties_section(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
-    """The class 'Properties' section: direct properties (editable via ✎), the collapsed
-    inherited-properties disclosure, then the add-property action rows."""
-    fields: list[DetailField] = [_sep("Properties")]
-    fields.extend(
-        DetailField(
-            f"classprop:{prop.uri}",
-            prop.local_name,
-            _prop_type_display(prop.prop_type),
-            editable=False,
-            # editable via ✎ → the property edit modal (the uri names the property).
-            meta=_prop_row_meta(
-                prop, lang, {"type": "class_prop_nav", "uri": prop.uri, "action": "edit_property"}
-            ),
-        )
-        for prop in sorted(_direct_properties(taxonomy, uri), key=lambda p: p.local_name)
+# Detail property groups, in display order: annotation, then object, then datatype.
+_PROP_TYPE_GROUPS: tuple[tuple[str, str], ...] = (
+    ("AnnotationProperty", "Annotation properties"),
+    ("ObjectProperty", "Object properties"),
+    ("DatatypeProperty", "Datatype properties"),
+)
+
+
+def _prop_group_key(prop_type: str) -> str:
+    """Bucket a property's rdf type into one of the three display groups: annotation and
+    datatype map straight across; everything else (ObjectProperty, bare Property, unknown)
+    falls into the object group so nothing is ever dropped from the list."""
+    if prop_type in ("AnnotationProperty", "DatatypeProperty"):
+        return prop_type
+    return "ObjectProperty"
+
+
+def _grouped_property_sections(grouped: dict[str, list[DetailField]]) -> list[DetailField]:
+    """Emit the typed property groups in order (annotation → object → datatype) — each a
+    title sub-header followed by its rows. Groups with no members are omitted entirely."""
+    fields: list[DetailField] = []
+    for ptype, title in _PROP_TYPE_GROUPS:
+        rows = grouped.get(ptype) or []
+        if rows:
+            fields.append(_sep_sub(title))  # indented sub-header under the section
+            fields.extend(rows)
+    return fields
+
+
+def _class_prop_field(prop: OWLProperty, lang: str) -> DetailField:
+    """A direct-property row: local name + short type, editable via ✎ → the property edit
+    modal (the uri names the property)."""
+    return DetailField(
+        f"classprop:{prop.uri}",
+        prop.local_name,
+        _prop_type_display(prop.prop_type),
+        editable=False,
+        meta=_prop_row_meta(
+            prop, lang, {"type": "class_prop_nav", "uri": prop.uri, "action": "edit_property"}
+        ),
     )
+
+
+def _class_properties_section(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
+    """The class 'Properties' section: direct properties grouped by type (annotation →
+    object → datatype), the collapsed inherited-properties disclosure, then the
+    add-property action rows."""
+    grouped: dict[str, list[DetailField]] = {}
+    for prop in sorted(_direct_properties(taxonomy, uri), key=lambda p: p.local_name):
+        grouped.setdefault(_prop_group_key(prop.prop_type), []).append(
+            _class_prop_field(prop, lang)
+        )
+    fields: list[DetailField] = [_sep("Properties")]
+    fields.extend(_grouped_property_sections(grouped))
     fields.extend(_inherited_property_fields(taxonomy, uri, lang))
     fields.extend(_add_class_property_actions(uri))
     return fields
@@ -2476,14 +2525,34 @@ def _individual_literal_value_fields(
     return fields
 
 
+def _value_group_key(taxonomy: Taxonomy, prop_uri: str, is_literal: bool) -> str:
+    """The display group for an asserted value, by its property's declared type. Falls back
+    to datatype for a literal value / object for a relation when the property is undeclared."""
+    prop = taxonomy.owl_properties.get(prop_uri)
+    if prop is not None:
+        return _prop_group_key(prop.prop_type)
+    return "DatatypeProperty" if is_literal else "ObjectProperty"
+
+
 def _individual_property_value_fields(
     taxonomy: Taxonomy, individual, lang: str
 ) -> list[DetailField]:  # type: ignore[no-untyped-def]
-    """Every asserted property value (object then literal) as an editable ✎ row."""
-    return [
+    """Every asserted property value grouped by its property's type (annotation → object →
+    datatype); each value an editable ✎ row with its Delete folded in, all three titles shown."""
+    flat = [
         *_individual_object_value_fields(taxonomy, individual, lang),
         *_individual_literal_value_fields(taxonomy, individual, lang),
     ]
+    grouped: dict[str, list[DetailField]] = {}
+    current: str | None = None
+    for f in flat:
+        ftype = f.meta.get("type")
+        if ftype in ("ind_prop_val", "ind_lit_val"):
+            current = _value_group_key(taxonomy, f.meta["prop_uri"], ftype == "ind_lit_val")
+            grouped.setdefault(current, []).append(f)
+        elif current is not None:  # the paired '✗ Remove' row rides with its value's group
+            grouped[current].append(f)
+    return _grouped_property_sections(grouped)
 
 
 def build_individual_detail(
@@ -2561,7 +2630,7 @@ def build_individual_detail(
     fields.append(_sep("Class Membership"))
     fields.extend(_individual_membership_fields(taxonomy, individual, lang))
 
-    # ── Property Values — only what's asserted; each editable via ✎ ──────────
+    # ── Property Values — grouped by type; only shown when the individual asserts any ─
     if individual.property_values or individual.literal_values:
         fields.append(_sep("Property Values"))
         fields.extend(_individual_property_value_fields(taxonomy, individual, lang))

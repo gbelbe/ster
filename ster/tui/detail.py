@@ -38,6 +38,7 @@ TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
 _SEPARATORS = frozenset(
     {
         "separator",
+        "separator_sub",
         "separator_danger",
         "separator_group",
         "separator_collapsible",
@@ -66,6 +67,7 @@ class DetailSection:
     group: bool = False  # opens a bordered group box (separator_group)
     collapsible: bool = False  # opens a collapsed-by-default disclosure group
     group_end: bool = False  # closes the current group box (separator_group_end)
+    sub: bool = False  # an indented sub-section nested under the preceding section
 
 
 def group_sections(fields: list[DetailField]) -> list[DetailSection]:
@@ -86,6 +88,7 @@ def group_sections(fields: list[DetailField]) -> list[DetailSection]:
                 group=(ftype == "separator_group"),
                 collapsible=(ftype == "separator_collapsible"),
                 group_end=(ftype == "separator_group_end"),
+                sub=(ftype == "separator_sub"),
             )
             sections.append(current)
         else:
@@ -239,8 +242,11 @@ def render_detail(
     """
     lines: list[str] = []
     for sec in build_sections(tax, uri, lang, configured_langs=configured_langs):
+        pad = "  " if sec.sub else ""  # sub-sections nest one level under their section
+        if sec.sub:
+            lines.append("")  # a blank line sets each subtitle apart from the group above
         if sec.title:
             style = "bold red" if sec.danger else "bold underline" if sec.group else "bold"
-            lines.append(f"[{style}]{_esc(sec.title)}[/]")
-        lines.extend(_render_row(f) for f in sec.fields)
+            lines.append(f"{pad}[{style}]{_esc(sec.title)}[/]")
+        lines.extend(f"{pad}{_render_row(f)}" for f in sec.fields)
     return "\n".join(lines)
