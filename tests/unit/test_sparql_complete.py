@@ -10,6 +10,7 @@ from ster.tui.sparql_complete import (
     keyword_candidates,
     keyword_insertion,
     qname_at_cursor,
+    replace_start,
     suggest,
     triple_slot,
 )
@@ -145,3 +146,9 @@ def test_suggest_keywords_are_position_aware_no_select_inside_where() -> None:
 
 def test_suggest_empty_when_nothing_to_complete() -> None:
     assert suggest("SELECT ?s ", 10, _index(), KEYWORDS) == []
+
+
+def test_replace_start_keeps_prefix_for_qname_else_word_start() -> None:
+    text = "WHERE { ?s a kai:Pers"
+    assert replace_start(text, len(text), {"kai"}) == text.index("Pers")  # after 'kai:'
+    assert replace_start("SELE", 4, {"kai"}) == 0  # whole word replaced

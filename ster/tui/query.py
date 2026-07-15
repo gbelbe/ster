@@ -39,6 +39,23 @@ def presets() -> list[PresetQuery]:
     return list(PRESET_QUERIES)
 
 
+# Prefixes worth declaring in the starter query when the file binds them ("" = the file's
+# own default namespace, so `:Local` resolves without the user adding a PREFIX line).
+_STARTER_PREFIXES = ("", "rdf", "rdfs", "owl", "skos")
+
+
+def starter_query(index: EntityIndex) -> str:
+    """A starter query: PREFIX lines for the file's own namespaces + a SELECT skeleton, so
+    entity completions like ``:Animal`` run without the user hand-writing the prefix."""
+    lines = [
+        f"PREFIX {pfx}: <{index.prefixes[pfx]}>"
+        for pfx in _STARTER_PREFIXES
+        if index.prefixes.get(pfx)
+    ]
+    header = ("\n".join(lines) + "\n\n") if lines else ""
+    return f"{header}SELECT ?s ?p ?o\nWHERE {{ ?s ?p ?o }}\nLIMIT 50\n"
+
+
 def run(tax: Taxonomy, sparql: str) -> QueryResult:
     """Run *sparql* against *tax* in memory, returning a normalised ``QueryResult``."""
     return run_query_on_graph(taxonomy_to_graph(tax), sparql)

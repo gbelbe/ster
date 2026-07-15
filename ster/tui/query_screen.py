@@ -14,21 +14,25 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static, TextArea
 
 from ster.model import Taxonomy
-from ster.sparql_query import QueryResult
+from ster.sparql_query import SPARQL_KEYWORDS, QueryResult
 
 from . import query
 from .picker_modal import PickerModal
+from .sparql_complete import Completion, replace_start, suggest
+from .sparql_editor import SparqlEditor
 
 
 class QueryScreen(Screen[None]):
     """SPARQL editor over a results table. Runs against the live taxonomy."""
 
     DEFAULT_CSS = """
-    QueryScreen { background: $surface; }
+    QueryScreen { background: $surface; layers: base popup; }
     #query-box { padding: 1 2; }
     #query-editor { height: 45%; border: round $primary; }
     #query-status { height: 1; color: $text-muted; padding: 0 1; }
     #query-results { height: 1fr; border: round $primary; }
+    #ac-popup { layer: popup; width: auto; max-height: 10; border: round $accent;
+                background: $panel; }
     """
 
     BINDINGS = [
@@ -40,14 +44,24 @@ class QueryScreen(Screen[None]):
     def __init__(self, tax: Taxonomy) -> None:
         super().__init__()
         self._tax = tax
+        self._index = query.build_entity_index(tax)  # entities for autocomplete
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
 
     def compose(self) -> ComposeResult:
         with Vertical(id="query-box"):
-            yield TextArea(query.DEFAULT_QUERY, id="query-editor")
+            yield SparqlEditor(
+                query.starter_query(self._index), suggest_fn=self._suggest, id="query-editor"
+            )
             yield Static("", id="query-status")
             yield DataTable(id="query-results")
         yield Footer()
+
+    def _suggest(self, text: str, cursor: int) -> tuple[list[Completion], int]:
+        """Adapt the pure completion logic for the editor: completions + the replace start."""
+        prefixes = set(self._index.prefixes)
+        return suggest(text, cursor, self._index, SPARQL_KEYWORDS), replace_start(
+            text, cursor, prefixes
+        )
 
     def on_mount(self) -> None:
         editor = self.query_one("#query-editor", TextArea)

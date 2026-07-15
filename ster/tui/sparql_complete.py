@@ -105,7 +105,7 @@ def keyword_candidates(word: str, keywords: list[str]) -> list[str]:
 
 
 def _line_indent(text: str, pos: int) -> int:
-    line = text[: pos].rsplit("\n", 1)[-1]
+    line = text[:pos].rsplit("\n", 1)[-1]
     return len(line) - len(line.lstrip(" \t"))
 
 
@@ -194,6 +194,15 @@ def _keyword_completions(
         insert, caret = keyword_insertion(kw, indent)
         out.append(Completion(insert, kw, "keyword", caret))
     return out[:limit]
+
+
+def replace_start(text: str, cursor: int, prefixes: set[str]) -> int:
+    """The index where an accepted completion should start replacing: the partial local
+    name (keeping ``prefix:``) inside a known qname, else the start of the current word."""
+    qn = qname_at_cursor(text, cursor, prefixes)
+    if qn is not None:
+        return cursor - len(qn[1])  # replace only the partial local, keep 'prefix:'
+    return current_word(text, cursor)[1]
 
 
 def suggest(
