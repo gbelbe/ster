@@ -1617,7 +1617,10 @@ def test_tree_populates_and_focuses() -> None:
             await pilot.pause()
             # 7 classes + 3 individuals + 2 local properties + 3 used-but-undeclared
             # ontology header predicates (rdfs:label, dcterms:title, dcterms:description).
-            assert len(app._uri_nodes) == 15  # every class/individual/property node indexed
+            entity_nodes = [u for u in app._uri_nodes if "://" in u]
+            assert len(entity_nodes) == 15  # every class/individual/property node indexed
+            # plus the focusable section nodes: Ontology, Taxonomy + 3 property sections.
+            assert {"__ster:overview__", "__ster:taxonomy__"} <= set(app._uri_nodes)
             assert isinstance(app.focused, Tree)  # tree gets focus on mount
 
     _run(scenario)
@@ -2816,5 +2819,141 @@ def test_cancelling_a_value_delete_keeps_the_value_and_row_focus(tmp_path) -> No
                 await pilot.pause()
             assert app.tax.owl_individuals[ZOO + "Rex"].property_values  # value kept
             assert isinstance(app.focused, DetailRow) and app.focused.field.key == key
+
+    _run(scenario)
+
+
+# ── delete lands the cursor on the entity's parent (kept unfolded) ─────────────
+
+_SKOS_TTL = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix : <https://ex/sk/> .
+:Scheme a skos:ConceptScheme ; skos:prefLabel "Scheme"@en ; skos:hasTopConcept :Top .
+:Top a skos:Concept ; skos:inScheme :Scheme ; skos:topConceptOf :Scheme ;
+    skos:prefLabel "Top"@en ; skos:narrower :Child .
+:Child a skos:Concept ; skos:inScheme :Scheme ; skos:prefLabel "Child"@en ; skos:broader :Top .
+"""
+
+_SUBPROP_TTL = """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://ex/p/> .
+:parentProp a owl:ObjectProperty .
+:childProp a owl:ObjectProperty ; rdfs:subPropertyOf :parentProp .
+"""
+
+
+def _app_on(tmp_path, ttl: str):
+    src = tmp_path / "o.ttl"
+    src.write_text(ttl, encoding="utf-8")
+    return OntologyApp(store.load(src), source="o.ttl", path=src)
+
+
+async def _delete(app, pilot, uri: str, action: str, mode: str) -> None:  # noqa: ANN001
+    """Show *uri*, run its delete action, and confirm *mode* in the choice modal."""
+    from ster.nav.logic import DetailField
+
+    app._show(uri)
+    await pilot.pause()
+    app._run_field_action(
+        DetailField("ctx", "", "", editable=False, meta={"type": "action", "action": action})
+    )
+    await pilot.pause()
+    await pilot.click(f"#opt-{mode}")
+    for _ in range(3):
+        await pilot.pause()
+
+
+def test_delete_subclass_lands_cursor_on_superclass(tmp_path) -> None:
+    async def scenario() -> None:
+        app = _app_on(tmp_path, DEMO.read_text(encoding="utf-8"))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, ZOO + "Dog", "delete_class", "keep_all")
+            assert app._detail_uri == ZOO + "Mammal"  # Dog's super-class
+
+    _run(scenario)
+
+
+def test_delete_root_class_lands_cursor_on_ontology(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app_on(tmp_path, DEMO.read_text(encoding="utf-8"))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, ZOO + "Animal", "delete_class", "cascade_subclasses")
+            assert app._detail_uri == detail.OVERVIEW_URI  # the "Ontology" node
+
+    _run(scenario)
+
+
+def test_delete_individual_lands_on_class_and_keeps_it_unfolded(tmp_path) -> None:
+    async def scenario() -> None:
+        app = _app_on(tmp_path, DEMO.read_text(encoding="utf-8"))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, ZOO + "Rex", "delete_individual", "delete")
+            assert app._detail_uri == ZOO + "Dog"  # Rex's class
+            assert app._uri_nodes[ZOO + "Dog"].is_expanded  # class stays unfolded
+
+    _run(scenario)
+
+
+def test_delete_property_lands_on_its_section(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui.app import _prop_section_key
+
+        app = _app_on(tmp_path, DEMO.read_text(encoding="utf-8"))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, ZOO + "hasOwner", "delete_property", "decl")
+            assert app._detail_uri == _prop_section_key("ObjectProperty")  # Object Properties
+
+    _run(scenario)
+
+
+def test_delete_subproperty_lands_on_parent_property(tmp_path) -> None:
+    async def scenario() -> None:
+        app = _app_on(tmp_path, _SUBPROP_TTL)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, "https://ex/p/childProp", "delete_property", "decl")
+            assert app._detail_uri == "https://ex/p/parentProp"
+
+    _run(scenario)
+
+
+def test_delete_subconcept_lands_on_broader(tmp_path) -> None:
+    async def scenario() -> None:
+        app = _app_on(tmp_path, _SKOS_TTL)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, "https://ex/sk/Child", "delete", "keep")
+            assert app._detail_uri == "https://ex/sk/Top"  # broader concept
+
+    _run(scenario)
+
+
+def test_delete_top_concept_lands_on_scheme(tmp_path) -> None:
+    async def scenario() -> None:
+        app = _app_on(tmp_path, _SKOS_TTL)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, "https://ex/sk/Top", "delete", "cascade")
+            assert app._detail_uri == "https://ex/sk/Scheme"
+
+    _run(scenario)
+
+
+def test_delete_scheme_lands_on_taxonomy(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        app = _app_on(tmp_path, _SKOS_TTL)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _delete(app, pilot, "https://ex/sk/Scheme", "delete_scheme", "scheme_only")
+            assert app._detail_uri == detail.TAXONOMY_URI  # the "Taxonomy" node
 
     _run(scenario)

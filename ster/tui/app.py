@@ -80,6 +80,14 @@ def _add_prop_uri(prop_type: str) -> str:
     return f"{_ADD_PROP_PREFIX}{prop_type}{_ACTION_SUFFIX}"
 
 
+def _prop_section_key(prop_type: str) -> str:
+    """Stable focus key for a property-tree section (Object / Datatype / …), so a deleted
+    top-level property can land the cursor on its section. The three OWL kinds map straight
+    across; anything else falls to the 'Untyped Properties' section."""
+    known = {"ObjectProperty", "DatatypeProperty", "AnnotationProperty"}
+    return f"__ster:propsection:{prop_type if prop_type in known else 'Property'}__"
+
+
 def _parse_add_prop(uri: str | None) -> str | None:
     """The property type of an "add property here" section sentinel, else None."""
     if uri and uri.startswith(_ADD_PROP_PREFIX) and uri.endswith(_ACTION_SUFFIX):
@@ -833,6 +841,7 @@ class OntologyApp(App):
 
         # ── Ontology section (OWL classes) ────────────────────────────────────
         ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
+        self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
         ont_sec.add_leaf("＋ Add class", data=_action_uri("create_owl_class"))
         for uri in data.class_roots(tax, self.lang):
             self._add_class(ont_sec, uri)
@@ -847,6 +856,7 @@ class OntologyApp(App):
 
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
         tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)
+        self._index(detail.TAXONOMY_URI, tax_sec)  # focusable (e.g. after deleting a scheme)
         tax_sec.add_leaf("＋ Add concept scheme", data=_action_uri("add_scheme"))
         for s_uri in data.scheme_roots(tax, self.lang):
             sec = tax_sec.add(
@@ -870,6 +880,7 @@ class OntologyApp(App):
         if not tax.owl_properties and not tax.ontology_annotations:
             return
         obj_title = dict(data.PROPERTY_CATEGORIES)["ObjectProperty"]
+        kind_by_title = {title: kind for kind, title in data.PROPERTY_CATEGORIES}
         for title, local, external in data.property_groups(tax, self.lang):
             label = (
                 f"[orange1]{title}[/orange1]" if title == data.UNTYPED_PROPERTIES_TITLE else title
@@ -878,6 +889,8 @@ class OntologyApp(App):
             # left-click / Enter still just expands it.
             sec_data = _add_prop_uri("ObjectProperty") if title == obj_title else None
             sec = tree.root.add(label, data=sec_data)
+            # Index the section under a focus key so a deleted property can land on it.
+            self._index(_prop_section_key(kind_by_title.get(title, "Property")), sec)
             for uri in local:
                 self._leaf(sec, uri, "property")
             for uri in external:
@@ -1768,17 +1781,45 @@ class OntologyApp(App):
         )
 
     def _confirm_delete(self, field: DetailField, uri: str, path: Path) -> None:
-        """Ask for the delete mode, then run the destructive command + navigate away."""
+        """Ask for the delete mode, then run the delete and land the cursor on the deleted
+        entity's parent (its super-class / broader / super-property / section / Ontology …)."""
         action = field.meta.get("action", "")
         prompt = f"Delete «{data.label_of(self.tax, uri, self.lang)}»?"
 
         def _on_choice(mode: str | None) -> None:
             if mode is None:
                 return
+            target = self._delete_focus_target(uri)  # capture before the tree is rebuilt
             self._run_or_warn(edits.delete_command(action, uri, path, mode))
-            self._show(None)  # the entity is gone — clear the detail pane
+            self._focus_after_delete(target)
 
         self.push_screen(ChoiceModal(prompt, edits.DELETE_CHOICES[action], danger=True), _on_choice)
+
+    def _delete_focus_target(self, uri: str) -> str | None:
+        """The tree node to focus after *uri* is deleted: its parent in the hierarchy. The
+        property tree is flat, so a sub-property points at its parent property and a
+        top-level property at its section; everything else uses its tree parent (which is
+        the super-class / broader concept / scheme / Ontology / Taxonomy node)."""
+        prop = self.tax.owl_properties.get(uri)
+        if prop is not None:
+            for parent_prop in prop.sub_property_of:  # a sub-property → its parent property
+                if parent_prop in self._uri_nodes:
+                    return parent_prop
+            return _prop_section_key(prop.prop_type)  # top-level → its section
+        node = self._uri_nodes.get(uri)
+        parent = node.parent if node is not None else None
+        return parent.data if parent is not None else None
+
+    def _focus_after_delete(self, target: str | None) -> None:
+        """Move the cursor onto *target* (the deleted entity's parent), keeping it expanded so
+        the former-sibling list stays unfolded; clear the pane when there is no parent."""
+        node = self._uri_nodes.get(target) if target else None
+        if node is None:
+            self._show(None)
+            return
+        node.expand()  # keep the (former sibling) list unfolded — e.g. a class's individuals
+        self._reveal_in_tree(target, focus=True)  # type: ignore[arg-type]
+        self._show(target)
 
     def _confirm_convert(self, field: DetailField, uri: str, path: Path) -> None:
         """Confirm a class↔individual punning conversion, then run it (URI is kept)."""
@@ -2071,9 +2112,7 @@ class OntologyApp(App):
         node = self._uri_nodes.get(uri)
         if node is None:
             return False
-        # Properties live in their own pane; everything else in the main tree.
-        tree_id = "#prop-tree" if uri in self.tax.owl_properties else "#tree"
-        tree = self.query_one(tree_id, Tree)
+        tree = node.tree  # the pane the node lives in (main tree or the property tree)
         parent = node.parent
         while parent is not None:
             parent.expand()
