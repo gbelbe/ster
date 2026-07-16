@@ -210,7 +210,6 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
-_AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
@@ -710,7 +709,6 @@ def _multi_file_picker(
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
-        (_AI_CONFIG_SENTINEL, "⚙  Setup / Options"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
     n_files = len(found)
@@ -727,10 +725,9 @@ def _multi_file_picker(
         console.print("  [cyan]5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
         console.print("  [cyan]6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
         console.print("  [cyan]7[/cyan]  [green]📦 Version & Publish LD[/green]")
-        console.print("  [cyan]8[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan]9[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan]8[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–9)", default="1")
+        choice = Prompt.ask("Action (1–8)", default="1")
         s = choice.strip().lower()
         if s in ("1", "all"):
             return list(found)
@@ -741,8 +738,7 @@ def _multi_file_picker(
             "5": _HTML_SENTINEL,
             "6": _GIT_LOG_SENTINEL,
             "7": _PUBLISH_SENTINEL,
-            "8": _AI_CONFIG_SENTINEL,
-            "9": _QUIT_SENTINEL,
+            "8": _QUIT_SENTINEL,
         }
         return fallback.get(s, list(found))  # type: ignore[return-value]
 
@@ -778,8 +774,6 @@ def _multi_file_picker(
             return "\033[33m"  # yellow
         if sentinel == _QUIT_SENTINEL:
             return RE
-        if sentinel == _AI_CONFIG_SENTINEL:
-            return CY
         if sentinel == _QUERY_SENTINEL:
             return GR  # green
         if sentinel == _EXT_ONT_SENTINEL:
@@ -922,15 +916,6 @@ def _load_workspace(
 # ──────────────────────────── AI config launcher ─────────────────────────────
 
 
-def _launch_setup(found: list[Path]) -> None:  # noqa: ARG001
-    """Open the standalone Setup / Options configuration screen."""
-    from .config_screen import run_config_screen
-
-    project = Project.load(Path.cwd())
-    lang = project.lang if project else "en"
-    run_config_screen(lang=lang)
-
-
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
 
@@ -953,7 +938,6 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _GIT_LOG_SENTINEL: lambda f: launch_git_log(path=f[0] if f else None),
         _HTML_SENTINEL: _run_html_export_interactive,
         _GRAPH_SENTINEL: _run_graph_viz_interactive,
-        _AI_CONFIG_SENTINEL: _launch_setup,
         _QUERY_SENTINEL: _launch_query,
         _EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _PUBLISH_SENTINEL: _run_publish_interactive,

@@ -11,8 +11,8 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from ster.cli import (
-    _AI_CONFIG_SENTINEL,
     _EXT_ONT_SENTINEL,
+    _QUIT_SENTINEL,
     _dispatch_menu_action,
     _launch_query,
     _multi_file_picker,
@@ -126,11 +126,11 @@ def test_picker_fallback_selects_import_external(tmp_path, monkeypatch):
         assert _multi_file_picker(files) == _EXT_ONT_SENTINEL
 
 
-def test_picker_fallback_other_actions(tmp_path, monkeypatch):
+def test_picker_fallback_selects_quit(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Setup / Options
-        assert _multi_file_picker(files) == _AI_CONFIG_SENTINEL
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (last action)
+        assert _multi_file_picker(files) == _QUIT_SENTINEL
 
 
 def test_show_command_opens_the_new_tui():
