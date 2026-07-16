@@ -7,9 +7,24 @@ taxonomy (``taxonomy_to_graph``) so unsaved edits are reflected.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ster.model import Taxonomy
 from ster.sparql_query import PRESET_QUERIES, PresetQuery, QueryResult, run_query_on_graph
 from ster.store import taxonomy_to_graph
+
+from .sparql_complete import EntityIndex
+
+if TYPE_CHECKING:
+    import rdflib
+
+# Well-known local names to offer under the standard prefixes even when unused in the file.
+_STANDARD: dict[str, dict[str, list[str]]] = {
+    "owl": {"classes": ["Class", "Thing", "Nothing", "NamedIndividual"]},
+    "rdfs": {"classes": ["Class", "Resource"], "properties": ["label", "comment", "subClassOf"]},
+    "rdf": {"properties": ["type", "Property"]},
+    "skos": {"classes": ["Concept", "ConceptScheme"], "properties": ["prefLabel", "broader"]},
+}
 
 # A starter query: the common prefixes plus a SELECT skeleton to edit.
 DEFAULT_QUERY = """\
@@ -29,6 +44,134 @@ def presets() -> list[PresetQuery]:
     return list(PRESET_QUERIES)
 
 
+# Prefixes worth declaring in the starter query when the file binds them ("" = the file's
+# own default namespace, so `:Local` resolves without the user adding a PREFIX line).
+_STARTER_PREFIXES = ("", "rdf", "rdfs", "owl", "skos")
+
+
+def main_prefix(index: EntityIndex) -> str:
+    """The file's own prefix name — instance data (individuals / concepts) is weighted far
+    above classes/properties so the file's namespace wins over standard-prefix boilerplate
+    (owl:Class …). Empty string when nothing qualifies."""
+
+    def score(prefix: str) -> int:
+        return (
+            (len(index.individuals.get(prefix, [])) + len(index.concepts.get(prefix, []))) * 1000
+            + len(index.classes.get(prefix, [])) * 10
+            + len(index.properties.get(prefix, []))
+        )
+
+    best = max(index.prefixes, key=score, default="")
+    return best if score(best) else ""
+
+
+def starter_query(index: EntityIndex) -> str:
+    """A starter query: PREFIX lines for the file's namespaces + a sample query listing
+    instances of the file's first few classes (so it is useful and runnable out of the box),
+    falling back to ``SELECT ?s ?p ?o`` when the file declares no classes."""
+    pfx = main_prefix(index)
+    wanted = list(dict.fromkeys([pfx, *_STARTER_PREFIXES]))  # the file's own prefix first
+    lines = [f"PREFIX {p}: <{index.prefixes[p]}>" for p in wanted if index.prefixes.get(p)]
+    header = ("\n".join(lines) + "\n\n") if lines else ""
+    classes = index.classes.get(pfx, [])[:5]  # the first five classes of the file's namespace
+    if not classes:
+        return f"{header}SELECT ?s ?p ?o\nWHERE {{ ?s ?p ?o }}\nLIMIT 50\n"
+    values = " ".join(f"{pfx}:{name}" for name in classes)
+    return (
+        f"{header}# sample: instances of the first {len(classes)} classes\n"
+        "SELECT ?class ?instance WHERE {\n"
+        "  ?instance a ?class .\n"
+        f"  VALUES ?class {{ {values} }}\n"
+        "}\nORDER BY ?class\nLIMIT 25\n"
+    )
+
+
+def build_graph(tax: Taxonomy) -> rdflib.Graph:
+    """The rdflib graph for *tax* — built once per query session and reused for the entity
+    index and every run, so a large ontology isn't re-serialised on each query."""
+    return taxonomy_to_graph(tax)
+
+
 def run(tax: Taxonomy, sparql: str) -> QueryResult:
     """Run *sparql* against *tax* in memory, returning a normalised ``QueryResult``."""
     return run_query_on_graph(taxonomy_to_graph(tax), sparql)
+
+
+def run_on_graph(graph: rdflib.Graph, sparql: str) -> QueryResult:
+    """Run *sparql* against an already-built *graph* (reuses the session graph)."""
+    return run_query_on_graph(graph, sparql)
+
+
+def _split_namespace(uri: str) -> str | None:
+    """The namespace part of *uri* (up to and including the last ``#`` or ``/``)."""
+    cut = max(uri.rfind("#"), uri.rfind("/"))
+    return uri[: cut + 1] if cut >= 0 else None
+
+
+def _primary_namespace(tax: Taxonomy, bound: set[str]) -> str | None:
+    """The ontology's own namespace — the most common *unbound* entity namespace. Files
+    that declare it as the default ``:`` prefix lose it on load (store drops ``""``), so we
+    recover it here to make the file's own entities qname-completable."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for uri in (*tax.owl_classes, *tax.owl_individuals, *tax.owl_properties, *tax.concepts):
+        ns = _split_namespace(uri)
+        if ns and ns not in bound:
+            counts[ns] += 1
+    return counts.most_common(1)[0][0] if counts else None
+
+
+def build_entity_index(tax: Taxonomy, graph: rdflib.Graph | None = None) -> EntityIndex:
+    """Build the autocomplete index from *tax* via rdflib: the graph's namespace manager
+    splits each entity URI into ``prefix:local`` (rdflib's qname logic), and the model
+    classifies it (class / individual / property / concept). Reuses *graph* when given."""
+    graph = graph if graph is not None else taxonomy_to_graph(tax)
+    _rebind_default_namespace(tax, graph)
+    index = EntityIndex(prefixes={p: str(ns) for p, ns in graph.namespaces()})
+    _classify_entities(tax, graph.namespace_manager, index)
+    _merge_standard(index)
+    for bucket in (index.classes, index.individuals, index.properties, index.concepts):
+        for prefix, locals_ in bucket.items():
+            bucket[prefix] = sorted(dict.fromkeys(locals_))  # dedupe + sort
+    return index
+
+
+def _rebind_default_namespace(tax: Taxonomy, graph: rdflib.Graph) -> None:
+    """Re-bind the file's default (``:``) namespace, which store drops on load, so its
+    entities are qname-completable."""
+    bound_ns = {str(ns) for _, ns in graph.namespaces()}
+    base = _primary_namespace(tax, bound_ns)
+    if base is not None:
+        graph.namespace_manager.bind("", base, override=True, replace=True)
+
+
+def _classify_entities(tax: Taxonomy, nm: object, index: EntityIndex) -> None:
+    """Bucket each entity's ``prefix:local`` (via rdflib's namespace manager) by model kind."""
+
+    def add(uri: str, bucket: dict[str, list[str]]) -> None:
+        try:
+            prefix, _, local = nm.compute_qname(uri, generate=False)  # type: ignore[attr-defined]
+        except (ValueError, KeyError):
+            return  # no bound prefix for this namespace → not qname-completable
+        if local:
+            bucket.setdefault(prefix, []).append(local)
+
+    for entities, bucket in (
+        (tax.owl_classes, index.classes),
+        (tax.owl_individuals, index.individuals),
+        (tax.owl_properties, index.properties),
+        (tax.concepts, index.concepts),
+    ):
+        for uri in entities:
+            add(uri, bucket)
+
+
+def _merge_standard(index: EntityIndex) -> None:
+    """Fold the well-known standard-prefix names into the index (owl:Thing, rdf:type, …)."""
+    buckets = {"classes": index.classes, "properties": index.properties}
+    for prefix, kinds in _STANDARD.items():
+        if prefix not in index.prefixes:
+            continue
+        for kind, locals_ in kinds.items():
+            buckets[kind].setdefault(prefix, []).extend(locals_)

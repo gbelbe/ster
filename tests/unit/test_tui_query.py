@@ -58,6 +58,68 @@ def test_presets_are_exposed() -> None:
     assert ps and all(p.label and p.sparql for p in ps)
 
 
+# ── entity index (rdflib-powered) ─────────────────────────────────────────────
+
+
+def _tax_with_bindings() -> Taxonomy:
+    from ster.model import OWLIndividual, OWLProperty
+
+    t = Taxonomy()
+    t.ontology_uri = BASE.rstrip("/")
+    t.namespace_bindings = {"kai": BASE, "skos": "http://www.w3.org/2004/02/skos/core#"}
+    t.owl_classes[BASE + "Person"] = RDFClass(uri=BASE + "Person", labels=[Label("en", "Person")])
+    t.owl_individuals[BASE + "alice"] = OWLIndividual(uri=BASE + "alice")
+    t.owl_properties[BASE + "hasOwner"] = OWLProperty(
+        uri=BASE + "hasOwner", prop_type="ObjectProperty"
+    )
+    from ster.model import Concept
+
+    t.concepts[BASE + "Term1"] = Concept(uri=BASE + "Term1")  # a concept in the file's own ns
+    return t
+
+
+def test_build_entity_index_classifies_and_prefixes_entities() -> None:
+    idx = query.build_entity_index(_tax_with_bindings())
+    assert "kai" in idx.prefixes
+    assert idx.classes.get("kai") == ["Person"]  # only the file's own class under kai:
+    assert "alice" in idx.individuals.get("kai", [])
+    assert "hasOwner" in idx.properties.get("kai", [])
+    assert "Term1" in idx.concepts.get("kai", [])
+
+
+def test_build_entity_index_includes_standard_wellknown_names() -> None:
+    idx = query.build_entity_index(_tax_with_bindings())
+    # standard names are offered under their prefix even if unused in the file
+    assert "type" in idx.properties.get("rdf", []) or "rdf" not in idx.prefixes
+    assert "Concept" in idx.classes.get("skos", [])
+
+
+def test_graph_is_built_once_and_reused_for_index_and_run() -> None:
+    """The session graph is reused: the index built from it and run_on_graph agree, without
+    re-serialising the taxonomy each time."""
+    tax = _tax_with_bindings()
+    graph = query.build_graph(tax)
+    idx = query.build_entity_index(tax, graph=graph)  # reuses the graph
+    assert "Person" in idx.classes.get("kai", [])
+    res = query.run_on_graph(
+        graph, "SELECT ?c WHERE { ?c a <http://www.w3.org/2002/07/owl#Class> }"
+    )
+    assert BASE + "Person" in {r[0] for r in res.rows}
+
+
+def test_engine_graph_cache_still_hits(tmp_path) -> None:
+    """The former engine's file-keyed cache is intact: a second load returns the same object."""
+    import ster.sparql_query as sq
+
+    src = tmp_path / "o.ttl"
+    src.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix : <https://ex/> .\n:A a owl:Class .\n",
+        encoding="utf-8",
+    )
+    assert sq.load_graph_cached([src]) is sq.load_graph_cached([src])  # warm cache hit
+
+
 # ── screen ──────────────────────────────────────────────────────────────────
 
 
@@ -81,6 +143,32 @@ def test_screen_prefills_editor_with_a_starter_query() -> None:
             assert app.screen.query_one("#query-results", DataTable) is not None
 
     _run(scenario)
+
+
+def test_screen_shows_a_trigger_hint_naming_the_files_prefix() -> None:
+    from textual.widgets import Static
+
+    tax = _tax_with_bindings()  # entities under the 'kai' prefix
+    screen = QueryScreen(tax)
+    assert screen._example_prefix() == "kai:"  # the file's most-populated prefix
+    hint = screen._trigger_hint()
+    assert "kai:" in hint and "?" in hint and "keywords" in hint
+
+    async def scenario() -> None:
+        app = _Host()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            assert app.screen.query_one("#query-hint", Static) is not None  # rendered
+
+    _run(scenario)
+
+
+def test_starter_query_lists_the_files_classes_and_declares_their_prefix() -> None:
+    tax = _tax_with_bindings()  # class 'Person' under 'kai'
+    q = query.starter_query(query.build_entity_index(tax))
+    assert "PREFIX kai:" in q  # the prefix is declared so the query runs
+    assert "kai:Person" in q and "VALUES ?class" in q
 
 
 def test_running_a_select_populates_the_results_table() -> None:

@@ -14,21 +14,26 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static, TextArea
 
 from ster.model import Taxonomy
-from ster.sparql_query import QueryResult
+from ster.sparql_query import SPARQL_KEYWORDS, QueryResult
 
 from . import query
 from .picker_modal import PickerModal
+from .sparql_complete import Completion, replace_start, suggest
+from .sparql_editor import SparqlEditor
 
 
 class QueryScreen(Screen[None]):
     """SPARQL editor over a results table. Runs against the live taxonomy."""
 
     DEFAULT_CSS = """
-    QueryScreen { background: $surface; }
+    QueryScreen { background: $surface; layers: base popup; }
     #query-box { padding: 1 2; }
     #query-editor { height: 45%; border: round $primary; }
     #query-status { height: 1; color: $text-muted; padding: 0 1; }
     #query-results { height: 1fr; border: round $primary; }
+    #query-hint { height: 1; color: $text-muted; padding: 0 1; text-style: dim; }
+    #ac-popup { layer: popup; width: auto; max-height: 10; border: round $accent;
+                background: $panel; }
     """
 
     BINDINGS = [
@@ -40,14 +45,41 @@ class QueryScreen(Screen[None]):
     def __init__(self, tax: Taxonomy) -> None:
         super().__init__()
         self._tax = tax
+        # Build the graph once and reuse it for the index and every run — a large ontology
+        # is otherwise re-serialised on each query. The screen is modal (no editing while
+        # open), so the graph stays valid for the session.
+        self._graph = query.build_graph(tax)
+        self._index = query.build_entity_index(tax, graph=self._graph)
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
 
     def compose(self) -> ComposeResult:
         with Vertical(id="query-box"):
-            yield TextArea(query.DEFAULT_QUERY, id="query-editor")
+            yield SparqlEditor(
+                query.starter_query(self._index), suggest_fn=self._suggest, id="query-editor"
+            )
             yield Static("", id="query-status")
             yield DataTable(id="query-results")
+            yield Static(self._trigger_hint(), id="query-hint")
         yield Footer()
+
+    def _example_prefix(self) -> str:
+        """The file's own prefix (with the colon) — the one the user most likely completes."""
+        return f"{query.main_prefix(self._index)}:" if query.main_prefix(self._index) else "prefix:"
+
+    def _trigger_hint(self) -> str:
+        """The bottom hint line: how to trigger each kind of autocomplete for this file."""
+        pfx = self._example_prefix()
+        return (
+            f"autocomplete —  [b]{pfx}[/b] entities · [b]?[/b]var variables · [b]word[/b] keywords"
+            "     ↑↓ move · ⏎/tab accept · esc close popup"
+        )
+
+    def _suggest(self, text: str, cursor: int) -> tuple[list[Completion], int]:
+        """Adapt the pure completion logic for the editor: completions + the replace start."""
+        prefixes = set(self._index.prefixes)
+        return suggest(text, cursor, self._index, SPARQL_KEYWORDS), replace_start(
+            text, cursor, prefixes
+        )
 
     def on_mount(self) -> None:
         editor = self.query_one("#query-editor", TextArea)
@@ -56,9 +88,9 @@ class QueryScreen(Screen[None]):
         editor.focus()
 
     def action_run(self) -> None:
-        """Execute the editor's query and render its result (inline — small ontologies)."""
+        """Execute the editor's query against the session graph and render its result."""
         text = self.query_one("#query-editor", TextArea).text
-        self._show_result(query.run(self._tax, text))
+        self._show_result(query.run_on_graph(self._graph, text))
 
     def _show_result(self, result: QueryResult) -> None:
         self._last_result = result
