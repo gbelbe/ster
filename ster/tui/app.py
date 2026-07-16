@@ -42,10 +42,7 @@ from .picker_modal import PickerModal
 from .theme import STER_THEME, THEME_CYCLE
 from .uri_modal import UriModal
 
-# Sentinel URI prefix for tree action nodes (create class/scheme/concept).
-# Format:  "__action:<action>[:<extra>]__"
-# The <extra> field carries context (e.g. the scheme URI for add_top_concept).
-_ACTION_PREFIX = "__action:"
+# Shared suffix for the tree's sentinel node data (property-header "add" sentinels).
 _ACTION_SUFFIX = "__"
 
 # Human-readable resource type shown in the detail-pane title (e.g. "Person (Class)").
@@ -56,19 +53,6 @@ _KIND_TITLE = {
     "scheme": "Concept scheme",
     "concept": "Concept",
 }
-
-
-def _action_uri(action: str, extra: str = "") -> str:
-    return f"{_ACTION_PREFIX}{action}:{extra}{_ACTION_SUFFIX}"
-
-
-def _parse_action_uri(uri: str) -> tuple[str, str] | None:
-    """Return (action, extra) if *uri* is an action sentinel, else None."""
-    if uri.startswith(_ACTION_PREFIX) and uri.endswith(_ACTION_SUFFIX):
-        inner = uri[len(_ACTION_PREFIX) : -len(_ACTION_SUFFIX)]
-        action, _, extra = inner.partition(":")
-        return action, extra
-    return None
 
 
 # A property-section header's ``data``: distinct from an action sentinel so left-click /
@@ -193,9 +177,13 @@ class OntologyTree(Tree):
             self.cursor_line = self._LAST_LINE  # clamped to the last visible line
 
     def on_click(self, event: events.Click) -> None:
-        """Right-click a node → open its context menu (left-click is Tree's default)."""
-        if event.button != 3:  # 3 = right button
+        """Right-click a node → open its context menu, and suppress the default toggle so
+        right-click never folds/unfolds the tree. ``prevent_default`` stops the base
+        ``Tree._on_click`` (which would otherwise toggle/select) from running; left-click
+        doesn't prevent it, so it keeps the default expand/collapse + select behaviour."""
+        if event.button != 3:  # 3 = right button — left-click is Tree's default
             return
+        event.prevent_default()  # right-click must not reach Tree._on_click (no toggle/select)
         style = getattr(event, "style", None)
         line = style.meta.get("line") if style is not None else None  # the clicked tree line
         if line is None:
@@ -205,15 +193,6 @@ class OntologyTree(Tree):
         if uri:
             self.cursor_line = line  # select the right-clicked node visually
             self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
-
-    async def _on_click(self, event: events.Click) -> None:
-        """Right-click must not fold/unfold the tree — it only fires the context menu
-        (see :meth:`on_click`). Textual's default ``_on_click`` toggles/selects on any
-        button, so swallow the right-click here; left-click keeps the default expand /
-        collapse + select behaviour."""
-        if event.button == 3:  # right button → context menu only, never toggle
-            return
-        await super()._on_click(event)
 
     def watch_hover_line(self, previous_line: int, line: int) -> None:
         """Show a property's rdfs:comment as a tooltip while the mouse hovers its row."""
@@ -892,7 +871,6 @@ class OntologyApp(App):
         # ── Ontology section (OWL classes) ────────────────────────────────────
         ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
         self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
-        ont_sec.add_leaf("＋ Add class", data=_action_uri("create_owl_class"))
         for uri in data.class_roots(tax, self.lang):
             self._add_class(ont_sec, uri)
         ont_sec.expand()
@@ -907,13 +885,11 @@ class OntologyApp(App):
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
         tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)
         self._index(detail.TAXONOMY_URI, tax_sec)  # focusable (e.g. after deleting a scheme)
-        tax_sec.add_leaf("＋ Add concept scheme", data=_action_uri("add_scheme"))
         for s_uri in data.scheme_roots(tax, self.lang):
             sec = tax_sec.add(
                 f"{data.ICON['scheme']} {data.label_of(tax, s_uri, self.lang)}", data=s_uri
             )
             self._index(s_uri, sec)
-            sec.add_leaf("＋ Add concept", data=_action_uri("add_top_concept", s_uri))
             for c_uri in data.concept_children(tax, s_uri, self.lang):
                 self._add_concept(sec, c_uri)
             sec.expand()
@@ -2177,10 +2153,10 @@ class OntologyApp(App):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         uri = event.node.data
-        # Action sentinel nodes (＋ Add class / scheme / concept) have no detail
-        # panel — clear the pane so the user sees the placeholder until they press Enter.
-        if uri and (_parse_action_uri(uri) is not None or _parse_add_prop(uri) is not None):
-            self._show(None)  # action / add-property section headers have no detail
+        # Property-tree headers ("Object/Datatype/Annotation Properties") carry an add
+        # sentinel and have no detail panel — clear the pane so the placeholder shows.
+        if uri and _parse_add_prop(uri) is not None:
+            self._show(None)
             return
         if uri == self._detail_uri:
             # Re-highlighting the entity already shown (e.g. a programmatic cursor move
@@ -2188,41 +2164,6 @@ class OntologyApp(App):
             # _restore_focus just placed on a row. The explicit _show already refreshed it.
             return
         self._show(uri)
-
-    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Enter / click: fire the tree action for sentinel nodes."""
-        uri = event.node.data
-        if not uri:
-            return
-        parsed = _parse_action_uri(uri)
-        if parsed is None:
-            return  # real entity — NodeHighlighted already showed its detail
-        action, extra = parsed
-        self._dispatch_tree_action(action, extra)
-
-    def _dispatch_tree_action(self, action: str, extra: str) -> None:
-        """Run the creation flow for a tree action node."""
-        path = self._path
-        if path is None:
-            self.notify("No file path — save the taxonomy first.", severity="warning")
-            return
-        # Reuse the exact same field/uri pair as the overview action rows did,
-        # so the existing _route_action / _open_input / _create_scheme machinery
-        # handles everything without new code.
-        synthetic_field = DetailField(
-            key=f"tree_action:{action}",
-            display=action,
-            value="",
-            editable=False,
-            meta={"action": action},
-        )
-        # For add_top_concept the extra is the scheme URI (the parent).
-        uri = extra if extra else detail.OVERVIEW_URI
-        opener = self._route_action(action)
-        if opener is not None:
-            opener(synthetic_field, uri, path)
-        else:
-            self.notify(f"Action not wired: {action}", severity="warning")
 
     def jump_to(self, uri: str) -> None:
         """Expand ancestors, move the cursor to *uri* (focusing the tree), show its detail."""

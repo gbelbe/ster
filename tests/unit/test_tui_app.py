@@ -1615,7 +1615,11 @@ def test_right_click_opens_context_menu_left_click_does_not() -> None:
             await pilot.pause()
             assert not menu.has_class("open")
             # right → menu opens as an overlay (the TUI stays visible — not a screen swap)
-            tree.on_click(types.SimpleNamespace(button=3, screen_x=5, screen_y=3))
+            tree.on_click(
+                types.SimpleNamespace(
+                    button=3, screen_x=5, screen_y=3, prevent_default=lambda *a: None
+                )
+            )
             await pilot.pause()
             assert menu.has_class("open")
             actions = [a for _, a in menu._items]
@@ -1911,10 +1915,10 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            # Navigate past the Ontology section header and ＋Add class into the first class.
-            await pilot.press("down", "down", "down")
+            # Down from the Ontology section header lands on the first (root) class.
+            await pilot.press("down")
             await pilot.pause()
-            # Detail panel must be showing some OWL class (action nodes show placeholder).
+            # Detail panel must be showing some OWL class.
             assert "owl:Class" in app._detail_text
 
     _run(scenario)
@@ -1962,31 +1966,59 @@ def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> Non
     _run(scenario)
 
 
-def test_right_click_on_a_tree_node_does_not_fold_or_unfold_it() -> None:
-    """Right-click fires the context menu only — it must never toggle a node's expansion.
-    Left-click still folds/unfolds (the default Tree behaviour)."""
+def test_highlighting_a_property_header_clears_the_detail_pane() -> None:
+    """A property-tree header ("Object/Datatype/Annotation Properties") has no detail —
+    highlighting it clears the pane so the placeholder shows (no stale entity detail)."""
 
     async def scenario() -> None:
-        import types
-
         from textual.widgets import Tree
+
+        from ster.tui.app import _parse_add_prop
 
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
-            node = next(n for n in tree.root.children if n.children and n.is_expanded)
-            meta = types.SimpleNamespace(meta={"line": node.line, "toggle": True})
-
-            # right-click on the toggle → the node stays expanded (no fold)
-            await tree._on_click(types.SimpleNamespace(button=3, style=meta))
+            app._show(ZOO + "Person")  # put some entity in the detail pane
             await pilot.pause()
-            assert node.is_expanded  # right-click did not fold it
+            assert app._detail_uri == ZOO + "Person"
+            prop_tree = app.query_one("#prop-tree", Tree)
+            header = next(
+                n for n in prop_tree.root.children if n.data and _parse_add_prop(n.data) is not None
+            )
+            app.on_tree_node_highlighted(Tree.NodeHighlighted(header))
+            assert app._detail_uri is None  # header highlight cleared the detail pane
 
-            # left-click on the toggle → folds it (proves the toggle mechanism is real)
-            await tree._on_click(types.SimpleNamespace(button=1, style=meta))
+    _run(scenario)
+
+
+def test_real_right_click_opens_the_menu_and_does_not_fold_the_tree() -> None:
+    """Regression: a *real* right-click (routed through Textual's dispatch, not a direct
+    on_click call) must open the context menu AND leave the node's expansion untouched.
+
+    Guards two bugs: (1) an `_on_click` override in the same class silently shadows the
+    public `on_click` (killing the menu), and (2) without `prevent_default`, the base
+    `Tree._on_click` still toggles the node on right-click. Direct on_click() calls miss
+    both — only real dispatch exercises them."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.context_menu import ContextMenu
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            assert not node.is_expanded  # left-click folds
+            tree = app.query_one("#tree")
+            ont = app._uri_nodes[detail.OVERVIEW_URI]  # the Ontology header (expanded)
+            assert ont.is_expanded
+            tree.hover_line = ont.line
+            # a genuine right-click through the event system
+            await pilot.click("#tree", offset=(4, ont.line - tree.scroll_offset.y), button=3)
+            await pilot.pause()
+
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")  # the menu actually opened on right-click
+            assert "create_owl_class" in [a for _, a in menu._items]
+            assert ont.is_expanded  # right-click did not fold the section
 
     _run(scenario)
 

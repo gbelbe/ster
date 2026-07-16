@@ -137,14 +137,14 @@ Feature: Editing the ontology in the New-TUI
     Then the individual "Eagle" exists
     And the class "Eagle" no longer exists
 
-  # Phase 9 — create entities from the tree action nodes
+  # Phase 9 — create entities from a section header's right-click context menu
 
-  Scenario: Create a top-level OWL class from the tree
+  Scenario: Create a top-level OWL class from the Ontology header
     Given the zoo ontology is open for editing
     When I create the OWL class "Reptile" from the tree
     Then the class "Reptile" exists
 
-  Scenario: Create a SKOS concept scheme from the tree
+  Scenario: Create a SKOS concept scheme from the Taxonomy header
     Given the zoo ontology is open for editing
     When I create the scheme "Habitats" titled "Habitats" from the tree
     Then the scheme "Habitats" exists
@@ -231,12 +231,7 @@ Feature: Editing the ontology in the New-TUI
     Then no class rows appear in the overview
     And no property rows appear in the overview
 
-  # Phase 16 — create entities from section-header context menus (New-TUI)
-
-  Scenario: Add a class from the Ontology header context menu
-    Given the zoo ontology is open for editing
-    When I add a class "Vehicle" from the Ontology header context menu
-    Then the class "Vehicle" exists
+  # Phase 16 — create properties from their section-header context menus (New-TUI)
 
   Scenario: Add a datatype property from its header context menu
     Given the zoo ontology is open for editing

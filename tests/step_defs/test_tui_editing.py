@@ -350,21 +350,6 @@ _HEADER_CREATE_ACTION = {
 }
 
 
-@when(parsers.parse('I add a class "{frag}" from the Ontology header context menu'))
-def when_add_class_from_header(ctx: dict, frag: str) -> None:
-    async def do(app, pilot):  # noqa: ANN001
-        from ster.tui import detail
-        from ster.tui.context_menu import ContextMenu
-
-        app.open_context_menu(detail.OVERVIEW_URI)  # right-click the Ontology header
-        await pilot.pause()
-        app.on_context_menu_chosen(ContextMenu.Chosen("create_owl_class"))
-        await pilot.pause()
-        await _submit_text(app, pilot, ZOO + frag)
-
-    _edit(ctx, do)
-
-
 @when(parsers.parse('I add a "{prop_type}" named "{frag}" from its properties header context menu'))
 @when(
     parsers.parse('I add an "{prop_type}" named "{frag}" from its properties header context menu')
@@ -698,30 +683,15 @@ def then_no_class_at(ctx: dict, full_uri: str) -> None:
 
 
 async def _select_tree_action(app, pilot, action: str) -> None:  # noqa: ANN001
-    """Select the tree action node, firing NodeSelected to trigger its flow."""
-    from textual.widgets.tree import TreeNode
+    """Trigger a section-header create action via its right-click context menu (the
+    former ＋Add tree leaves were removed once the headers became right-clickable)."""
+    from ster.tui import detail
+    from ster.tui.context_menu import ContextMenu
 
-    from ster.tui.app import _action_uri
-
-    target_data = _action_uri(action)
-    tree = app.query_one("#tree")
-
-    def _find(node: TreeNode) -> TreeNode | None:  # type: ignore[type-arg]
-        if node.data == target_data:
-            return node
-        for child in node.children:
-            found = _find(child)
-            if found is not None:
-                return found
-        return None
-
-    # Expand the full tree so all action nodes are reachable.
-    tree.root.expand_all()
+    anchor = {"create_owl_class": detail.OVERVIEW_URI, "add_scheme": detail.TAXONOMY_URI}[action]
+    app.open_context_menu(anchor)  # right-click the Ontology / Taxonomy header
     await pilot.pause()
-    node = _find(tree.root)
-    assert node is not None, f"Tree action node not found: {action}"
-    # select_node moves cursor AND fires NodeSelected → triggers _dispatch_tree_action.
-    tree.select_node(node)
+    app.on_context_menu_chosen(ContextMenu.Chosen(action))
     await pilot.pause()
     await pilot.pause()  # extra pause so the modal has time to appear
 
