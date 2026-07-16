@@ -397,9 +397,10 @@ class OwlSetIndividualLiteral:
 
 
 @dataclass(frozen=True)
-class OwlCreateObjectProperty:
-    """Create an ``owl:ObjectProperty`` with its rdfs:label / rdfs:comment (per
-    language), domain and range in one step. Empty label/comment values are skipped."""
+class OwlCreateProperty:
+    """Create an OWL property of *prop_type* (``ObjectProperty`` / ``DatatypeProperty`` /
+    ``AnnotationProperty``) with its rdfs:label / rdfs:comment (per language), and optional
+    domain / range, in one step. Empty label/comment values are skipped."""
 
     target_path: Path
     prop_uri: str
@@ -407,13 +408,14 @@ class OwlCreateObjectProperty:
     comments: _LangPairs = ()
     domain_uri: str | None = None
     range_uri: str | None = None
+    prop_type: str = "ObjectProperty"
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         if self.prop_uri not in taxonomy.owl_properties:
             add_owl_property(
                 taxonomy,
                 self.prop_uri,
-                "ObjectProperty",
+                self.prop_type,
                 "",  # labels are set below (one per language)
                 "en",
                 self.domain_uri,

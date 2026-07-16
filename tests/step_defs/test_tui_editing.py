@@ -341,6 +341,55 @@ def then_class_gone(ctx: dict, name: str) -> None:
     assert ZOO + name not in ctx["saved"].owl_classes
 
 
+# ── when (section-header context menus) ─────────────────────────────────────────
+
+_HEADER_CREATE_ACTION = {
+    "ObjectProperty": "create_object_property",
+    "DatatypeProperty": "create_datatype_property",
+    "AnnotationProperty": "create_annotation_property",
+}
+
+
+@when(parsers.parse('I add a class "{frag}" from the Ontology header context menu'))
+def when_add_class_from_header(ctx: dict, frag: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        from ster.tui import detail
+        from ster.tui.context_menu import ContextMenu
+
+        app.open_context_menu(detail.OVERVIEW_URI)  # right-click the Ontology header
+        await pilot.pause()
+        app.on_context_menu_chosen(ContextMenu.Chosen("create_owl_class"))
+        await pilot.pause()
+        await _submit_text(app, pilot, ZOO + frag)
+
+    _edit(ctx, do)
+
+
+@when(parsers.parse('I add a "{prop_type}" named "{frag}" from its properties header context menu'))
+@when(
+    parsers.parse('I add an "{prop_type}" named "{frag}" from its properties header context menu')
+)
+def when_add_property_from_header(ctx: dict, prop_type: str, frag: str) -> None:
+    async def do(app, pilot):  # noqa: ANN001
+        from ster.tui.app import _add_prop_uri
+        from ster.tui.context_menu import ContextMenu
+
+        app.open_context_menu(_add_prop_uri(prop_type))  # right-click the header
+        await pilot.pause()
+        app.on_context_menu_chosen(ContextMenu.Chosen(_HEADER_CREATE_ACTION[prop_type]))
+        await pilot.pause()
+        await _submit_text(app, pilot, ZOO + frag)
+
+    _edit(ctx, do)
+
+
+@then(parsers.parse('the property "{frag}" is a "{prop_type}"'))
+def then_property_is_type(ctx: dict, frag: str, prop_type: str) -> None:
+    for tax in (ctx["tax"], ctx["saved"]):  # in memory and persisted
+        prop = tax.owl_properties.get(ZOO + frag)
+        assert prop is not None and prop.prop_type == prop_type
+
+
 @then(parsers.parse('the class "{name}" has the label "{label}"'))
 def then_class_label(ctx: dict, name: str, label: str) -> None:
     labels = {lbl.value for lbl in ctx["tax"].owl_classes[ZOO + name].labels}

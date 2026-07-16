@@ -1,10 +1,10 @@
-"""Unit tests for the composite OwlCreateObjectProperty command."""
+"""Unit tests for the composite OwlCreateProperty command."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from ster.core.commands import OwlCreateObjectProperty
+from ster.core.commands import OwlCreateProperty
 from ster.model import OWLProperty, Taxonomy
 
 _P = Path("o.ttl")
@@ -21,7 +21,7 @@ def _comments(prop: OWLProperty) -> dict[str, str]:
 
 def test_create_object_property_sets_type_labels_comments_domain_range() -> None:
     t = Taxonomy()
-    cmd = OwlCreateObjectProperty(
+    cmd = OwlCreateProperty(
         _P,
         NS + "hasOwner",
         labels=(("en", "has owner"), ("fr", "a pour propriétaire")),
@@ -39,9 +39,29 @@ def test_create_object_property_sets_type_labels_comments_domain_range() -> None
     assert prop.ranges == [NS + "Person"]
 
 
+def test_create_datatype_property_sets_its_type() -> None:
+    t = Taxonomy()
+    OwlCreateProperty(_P, NS + "age", labels=(("en", "age"),), prop_type="DatatypeProperty").apply(
+        t
+    )
+    prop = t.owl_properties[NS + "age"]
+    assert prop.prop_type == "DatatypeProperty"
+    assert _labels(prop) == {"en": "age"}
+
+
+def test_create_annotation_property_sets_its_type() -> None:
+    t = Taxonomy()
+    OwlCreateProperty(
+        _P, NS + "editorialNote", labels=(("en", "editorial note"),), prop_type="AnnotationProperty"
+    ).apply(t)
+    prop = t.owl_properties[NS + "editorialNote"]
+    assert prop.prop_type == "AnnotationProperty"
+    assert _labels(prop) == {"en": "editorial note"}
+
+
 def test_create_object_property_without_domain_range_or_extra_langs() -> None:
     t = Taxonomy()
-    OwlCreateObjectProperty(_P, NS + "relatedTo", labels=(("en", "related to"),)).apply(t)
+    OwlCreateProperty(_P, NS + "relatedTo", labels=(("en", "related to"),)).apply(t)
     prop = t.owl_properties[NS + "relatedTo"]
     assert prop.prop_type == "ObjectProperty"
     assert _labels(prop) == {"en": "related to"}
@@ -50,7 +70,7 @@ def test_create_object_property_without_domain_range_or_extra_langs() -> None:
 
 def test_create_object_property_skips_blank_label_and_comment_values() -> None:
     t = Taxonomy()
-    OwlCreateObjectProperty(
+    OwlCreateProperty(
         _P,
         NS + "p",
         labels=(("en", "P"), ("fr", "")),  # blank fr → no fr label
@@ -65,7 +85,7 @@ def test_save_property_renames_and_sets_labels_domain_range() -> None:
     from ster.core.commands import OwlSaveProperty
 
     t = Taxonomy()
-    OwlCreateObjectProperty(
+    OwlCreateProperty(
         _P,
         NS + "hasOwner",
         labels=(("en", "has owner"),),
@@ -92,7 +112,7 @@ def test_save_property_without_rename_replaces_domain_range() -> None:
     from ster.core.commands import OwlSaveProperty
 
     t = Taxonomy()
-    OwlCreateObjectProperty(
+    OwlCreateProperty(
         _P, NS + "p", labels=(("en", "P"),), domain_uri=NS + "A", range_uri=NS + "B"
     ).apply(t)
     OwlSaveProperty(_P, NS + "p", NS + "p", labels=(("en", "P"),), domains=(), ranges=()).apply(t)

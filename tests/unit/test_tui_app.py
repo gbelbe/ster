@@ -1921,13 +1921,15 @@ def test_arrow_keys_drive_the_detail_panel() -> None:
 
 
 def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> None:
-    """The Object Properties section header carries an add-sentinel; right-clicking it
-    opens the full modal, whose submission creates the object property (labels + domain)."""
+    """The Object Properties section header carries an add-sentinel; right-clicking it opens
+    a context menu whose 'Add object property' item opens the full modal, whose submission
+    creates the object property (labels + domain)."""
 
     async def scenario() -> None:
         from textual.widgets import Tree
 
         from ster.tui.app import _add_prop_uri
+        from ster.tui.context_menu import ContextMenu
         from ster.tui.object_property_modal import ObjectPropertyModal
 
         src = tmp_path / "o.ttl"
@@ -1938,7 +1940,9 @@ def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> Non
             sentinel = _add_prop_uri("ObjectProperty")
             prop_tree = app.query_one("#prop-tree", Tree)
             assert sentinel in [n.data for n in prop_tree.root.children]  # header is wired
-            app.open_context_menu(sentinel)  # simulate the right-click
+            app.open_context_menu(sentinel)  # simulate the right-click → context menu
+            await pilot.pause()
+            app.on_context_menu_chosen(ContextMenu.Chosen("create_object_property"))
             await pilot.pause()
             assert isinstance(app.screen, ObjectPropertyModal)
             modal = app.screen
@@ -1956,6 +1960,136 @@ def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> Non
             assert "livesIn" in src.read_text(encoding="utf-8")  # persisted
 
     _run(scenario)
+
+
+def test_right_click_on_a_tree_node_does_not_fold_or_unfold_it() -> None:
+    """Right-click fires the context menu only — it must never toggle a node's expansion.
+    Left-click still folds/unfolds (the default Tree behaviour)."""
+
+    async def scenario() -> None:
+        import types
+
+        from textual.widgets import Tree
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#tree", Tree)
+            node = next(n for n in tree.root.children if n.children and n.is_expanded)
+            meta = types.SimpleNamespace(meta={"line": node.line, "toggle": True})
+
+            # right-click on the toggle → the node stays expanded (no fold)
+            await tree._on_click(types.SimpleNamespace(button=3, style=meta))
+            await pilot.pause()
+            assert node.is_expanded  # right-click did not fold it
+
+            # left-click on the toggle → folds it (proves the toggle mechanism is real)
+            await tree._on_click(types.SimpleNamespace(button=1, style=meta))
+            await pilot.pause()
+            assert not node.is_expanded  # left-click folds
+
+    _run(scenario)
+
+
+def test_ontology_header_right_click_offers_add_class(tmp_path) -> None:
+    """Right-clicking the Ontology section → a context menu whose 'Add class' item opens
+    the standard class modal."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.class_modal import ClassModal
+        from ster.tui.context_menu import ContextMenu
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_context_menu(detail.OVERVIEW_URI)  # right-click the Ontology header
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert "create_owl_class" in [a for _, a in menu._items]
+            app.on_context_menu_chosen(ContextMenu.Chosen("create_owl_class"))
+            await pilot.pause()
+            assert isinstance(app.screen, ClassModal)
+
+    _run(scenario)
+
+
+def test_taxonomy_header_right_click_offers_add_concept_scheme(tmp_path) -> None:
+    """Right-clicking the Taxonomy section → a context menu whose 'Add concept scheme' item
+    opens the scheme-title modal."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.edit_modal import EditModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_context_menu(detail.TAXONOMY_URI)  # right-click the Taxonomy header
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert "add_scheme" in [a for _, a in menu._items]
+            app.on_context_menu_chosen(ContextMenu.Chosen("add_scheme"))
+            await pilot.pause()
+            assert isinstance(app.screen, EditModal)  # scheme-title input
+
+    _run(scenario)
+
+
+def _create_property_via_header(prop_type: str, action: str, frag: str, tmp_path):
+    """Drive: right-click a property header → context menu → its create item → the
+    lightweight modal → submit → returns (app, src) after the property is created."""
+
+    async def scenario() -> None:
+        from ster.tui.app import _add_prop_uri
+        from ster.tui.context_menu import ContextMenu
+        from ster.tui.entity_form import EntityFormModal
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_context_menu(_add_prop_uri(prop_type))  # right-click the header
+            await pilot.pause()
+            menu = app.query_one("#ctx-menu", ContextMenu)
+            assert menu.has_class("open")
+            assert action in [a for _, a in menu._items]
+            app.on_context_menu_chosen(ContextMenu.Chosen(action))
+            await pilot.pause()
+            assert isinstance(app.screen, EntityFormModal)
+            modal = app.screen
+            modal._uri.value = ZOO + frag
+            modal._label_inputs[app.lang].value = frag
+            modal._submit()
+            for _ in range(3):
+                await pilot.pause()
+            prop = app.tax.owl_properties.get(ZOO + frag)
+            assert prop is not None and prop.prop_type == prop_type
+            assert {lbl.value for lbl in prop.labels} == {frag}
+            await app.workers.wait_for_complete()
+            assert frag in src.read_text(encoding="utf-8")  # persisted
+
+    _run(scenario)
+
+
+def test_datatype_header_right_click_creates_a_datatype_property(tmp_path) -> None:
+    """Datatype Properties header → menu → lightweight modal → creates a DatatypeProperty."""
+    _create_property_via_header("DatatypeProperty", "create_datatype_property", "age", tmp_path)
+
+
+def test_annotation_header_right_click_creates_an_annotation_property(tmp_path) -> None:
+    """Annotation Properties header → menu → lightweight modal → creates an AnnotationProperty."""
+    _create_property_via_header(
+        "AnnotationProperty", "create_annotation_property", "editorialNote", tmp_path
+    )
 
 
 def test_renaming_a_property_keeps_the_highlight_on_it_regression(tmp_path) -> None:

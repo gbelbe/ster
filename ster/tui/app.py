@@ -95,6 +95,34 @@ def _parse_add_prop(uri: str | None) -> str | None:
     return None
 
 
+# The three OWL property kinds a header can create (the catch-all "Untyped Properties"
+# group cannot). Object properties open the full modal; the other two a lightweight one.
+# prop_type → (menu title, add-item label, create action, modal title).
+_PROP_MENU: dict[str, tuple[str, str, str, str]] = {
+    "ObjectProperty": (
+        "Object properties",
+        "＋ Add object property",
+        "create_object_property",
+        "New object property",
+    ),
+    "DatatypeProperty": (
+        "Datatype properties",
+        "＋ Add datatype property",
+        "create_datatype_property",
+        "New datatype property",
+    ),
+    "AnnotationProperty": (
+        "Annotation properties",
+        "＋ Add annotation property",
+        "create_annotation_property",
+        "New annotation property",
+    ),
+}
+_CREATABLE_PROP_KINDS = frozenset(_PROP_MENU)
+# create action → prop_type (reverse lookup for the context-menu dispatch).
+_PROP_CREATE_ACTIONS: dict[str, str] = {row[2]: kind for kind, row in _PROP_MENU.items()}
+
+
 class OntologyTree(Tree):
     """The left-pane tree. `right` jumps into the detail pane; up/down wrap around."""
 
@@ -177,6 +205,15 @@ class OntologyTree(Tree):
         if uri:
             self.cursor_line = line  # select the right-clicked node visually
             self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
+
+    async def _on_click(self, event: events.Click) -> None:
+        """Right-click must not fold/unfold the tree — it only fires the context menu
+        (see :meth:`on_click`). Textual's default ``_on_click`` toggles/selects on any
+        button, so swallow the right-click here; left-click keeps the default expand /
+        collapse + select behaviour."""
+        if event.button == 3:  # right button → context menu only, never toggle
+            return
+        await super()._on_click(event)
 
     def watch_hover_line(self, previous_line: int, line: int) -> None:
         """Show a property's rdfs:comment as a tooltip while the mouse hovers its row."""
@@ -879,24 +916,31 @@ class OntologyApp(App):
         tax = self.tax
         if not tax.owl_properties and not tax.ontology_annotations:
             return
-        obj_title = dict(data.PROPERTY_CATEGORIES)["ObjectProperty"]
         kind_by_title = {title: kind for kind, title in data.PROPERTY_CATEGORIES}
         for title, local, external in data.property_groups(tax, self.lang):
             label = (
                 f"[orange1]{title}[/orange1]" if title == data.UNTYPED_PROPERTIES_TITLE else title
             )
-            # The Object Properties header is right-clickable to add one (sentinel data);
-            # left-click / Enter still just expands it.
-            sec_data = _add_prop_uri("ObjectProperty") if title == obj_title else None
-            sec = tree.root.add(label, data=sec_data)
+            # Each typed header (Object / Datatype / Annotation) is right-clickable to add a
+            # property of that kind (sentinel data); left-click / Enter still just expands it.
+            kind = kind_by_title.get(title)
+            sec = tree.root.add(label, data=self._prop_header_data(kind))
             # Index the section under a focus key so a deleted property can land on it.
-            self._index(_prop_section_key(kind_by_title.get(title, "Property")), sec)
+            self._index(_prop_section_key(kind or "Property"), sec)
             for uri in local:
                 self._leaf(sec, uri, "property")
             for uri in external:
                 self._leaf(sec, uri, "property", suffix="  [dim](ext)[/dim]")
             sec.expand()
         self._strip_childless_arrows(tree.root)
+
+    @staticmethod
+    def _prop_header_data(kind: str | None) -> str | None:
+        """The right-click 'add property' sentinel for a creatable header kind (Object /
+        Datatype / Annotation), or None for the catch-all Untyped Properties group."""
+        if kind is not None and kind in _CREATABLE_PROP_KINDS:
+            return _add_prop_uri(kind)
+        return None
 
     @staticmethod
     def _strip_childless_arrows(root: TreeNode) -> None:
@@ -1324,8 +1368,18 @@ class OntologyApp(App):
         quick actions. *anchor* is the cursor position; the menu pops up there
         (centred when None).
         """
-        if _parse_add_prop(uri) is not None:  # right-clicked the Object Properties header
-            self._open_object_property_create()
+        prop_type = _parse_add_prop(uri)
+        if prop_type is not None:  # a property-tree header → "＋ Add <kind> property"
+            title, add_label, action, _modal = _PROP_MENU[prop_type]
+            self.query_one("#ctx-menu", ContextMenu).show(title, [(add_label, action)], anchor)
+            return
+        if uri == detail.OVERVIEW_URI:  # the Ontology section → "＋ Add class"
+            self._show_section_menu(uri, "Ontology", ("＋ Add class", "create_owl_class"), anchor)
+            return
+        if uri == detail.TAXONOMY_URI:  # the Taxonomy section → "＋ Add concept scheme"
+            self._show_section_menu(
+                uri, "Taxonomy", ("＋ Add concept scheme", "add_scheme"), anchor
+            )
             return
         items = self._filter_plugin_actions(edits.context_actions(data.kind_of(self.tax, uri)))
         items = self._filter_class_actions(uri, items)
@@ -1334,6 +1388,14 @@ class OntologyApp(App):
         self._show(uri)  # select it, so the actions target this entity
         label = data.label_of(self.tax, uri, self.lang)
         self.query_one("#ctx-menu", ContextMenu).show(label, items, anchor)
+
+    def _show_section_menu(
+        self, uri: str, title: str, item: tuple[str, str], anchor: tuple[int, int] | None
+    ) -> None:
+        """Select a section node (Ontology / Taxonomy) so its create action has the right
+        target, then pop its single-item context menu."""
+        self._show(uri)
+        self.query_one("#ctx-menu", ContextMenu).show(title, [item], anchor)
 
     #: context-menu actions that belong to an opt-in plugin feature (SHACL enforce).
     _ENFORCE_ACTIONS = frozenset({"enforce_shacl", "unenforce_shacl"})
@@ -1376,6 +1438,11 @@ class OntologyApp(App):
             menu_field, self._row_menu_field = self._row_menu_field, None
             label = menu_field.display if menu_field is not None else delete_field.display
             self._apply_row_delete(delete_field, label=label)
+            return
+
+        prop_type = _PROP_CREATE_ACTIONS.get(message.action)
+        if prop_type is not None:  # "＋ Add <kind> property" from a property-tree header
+            self._open_property_create(prop_type)
             return
 
         uri = self._detail_uri
@@ -1494,10 +1561,50 @@ class OntologyApp(App):
     def _class_langs(self) -> list[str]:
         return self.configured_langs or [self.lang]
 
+    def _open_property_create(self, prop_type: str) -> None:
+        """Open the create modal for a property-tree header. Object properties get the full
+        modal (domain + range pickers); datatype / annotation get the lightweight one."""
+        if prop_type == "ObjectProperty":
+            self._open_object_property_create()
+        else:
+            self._open_simple_property_create(prop_type)
+
+    def _open_simple_property_create(self, prop_type: str) -> None:
+        """Datatype / annotation properties → a lightweight modal (URI + labels/comments;
+        no domain/range — add those afterwards via the property's own menu) → create command."""
+        from ster.core.commands import OwlCreateProperty
+
+        from .entity_form import EntityFormModal
+
+        path = self._path
+        if self._service is None or path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return
+        base = uri_edit.mint_base(self.tax, "create_owl_property", detail.OVERVIEW_URI)
+        modal_title = _PROP_MENU[prop_type][3]
+
+        def _on_submit(result: dict | None) -> None:
+            if result:
+                self._apply_command(
+                    OwlCreateProperty(
+                        path,
+                        result["uri"],
+                        tuple(result["labels"].items()),
+                        tuple(result["comments"].items()),
+                        prop_type=prop_type,
+                    ),
+                    select=result["uri"],
+                )
+
+        self.push_screen(
+            EntityFormModal(prefix=base, langs=self._class_langs(), title=modal_title),
+            _on_submit,
+        )
+
     def _open_object_property_create(self) -> None:
         """Right-click on the Object Properties header → full add modal (URI + labels /
         comments per configured language + domain + range) → create command."""
-        from ster.core.commands import OwlCreateObjectProperty
+        from ster.core.commands import OwlCreateProperty
 
         from .object_property_modal import ObjectPropertyModal
 
@@ -1514,7 +1621,7 @@ class OntologyApp(App):
         def _on_submit(result: dict | None) -> None:
             if result:
                 self._apply_command(
-                    OwlCreateObjectProperty(
+                    OwlCreateProperty(
                         path,
                         result["uri"],
                         tuple(result["labels"].items()),

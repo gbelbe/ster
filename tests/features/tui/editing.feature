@@ -230,3 +230,20 @@ Feature: Editing the ontology in the New-TUI
     When I open the ontology overview
     Then no class rows appear in the overview
     And no property rows appear in the overview
+
+  # Phase 16 — create entities from section-header context menus (New-TUI)
+
+  Scenario: Add a class from the Ontology header context menu
+    Given the zoo ontology is open for editing
+    When I add a class "Vehicle" from the Ontology header context menu
+    Then the class "Vehicle" exists
+
+  Scenario: Add a datatype property from its header context menu
+    Given the zoo ontology is open for editing
+    When I add a "DatatypeProperty" named "age" from its properties header context menu
+    Then the property "age" is a "DatatypeProperty"
+
+  Scenario: Add an annotation property from its header context menu
+    Given the zoo ontology is open for editing
+    When I add an "AnnotationProperty" named "editorialNote" from its properties header context menu
+    Then the property "editorialNote" is a "AnnotationProperty"
