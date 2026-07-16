@@ -242,3 +242,17 @@ Feature: Editing the ontology in the New-TUI
     Given the zoo ontology is open for editing
     When I add an "AnnotationProperty" named "editorialNote" from its properties header context menu
     Then the property "editorialNote" is a "AnnotationProperty"
+
+  # Phase 17 — responsive edits (targeted rebuild + busy indicator)
+
+  Scenario: An edit keeps the tree consistent with the taxonomy
+    Given the zoo ontology is open for editing
+    When I add a subclass "Reptile" under the class "Animal"
+    Then the class "Reptile" exists
+    And the tree still matches the taxonomy
+
+  Scenario: A property edit keeps the tree consistent
+    Given the zoo ontology is open for editing
+    When I add a "DatatypeProperty" named "weight" from its properties header context menu
+    Then the property "weight" is a "DatatypeProperty"
+    And the tree still matches the taxonomy

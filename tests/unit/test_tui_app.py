@@ -3355,3 +3355,229 @@ def test_compute_lint_returns_none_without_a_file_path() -> None:
     """A read-only session (no file) has nothing to lint — _compute_lint short-circuits."""
     app = OntologyApp(store.load(DEMO), source="demo.ttl")  # no path=
     assert app._compute_lint() is None
+
+
+# ── responsive edits: targeted-pane rebuild + busy indicator ───────────────────
+
+
+def _entity_uris(tax) -> set[str]:
+    """Every real entity URI in a taxonomy (across all panes)."""
+    return (
+        set(tax.owl_classes)
+        | set(tax.owl_individuals)
+        | set(tax.owl_properties)
+        | set(tax.schemes)
+        | set(tax.concepts)
+    )
+
+
+def _tree_entity_uris(app) -> set[str]:
+    """Every entity URI that appears as a node across both tree panes (section/sentinel
+    nodes are excluded by intersecting with the taxonomy's entities)."""
+    from textual.widgets import Tree
+
+    entities = _entity_uris(app.tax)
+    out: set[str] = set()
+
+    def walk(node):  # noqa: ANN001
+        if node.data in entities:
+            out.add(node.data)
+        for child in node.children:
+            walk(child)
+
+    for tid in ("#tree", "#prop-tree"):
+        walk(app.query_one(tid, Tree).root)
+    return out
+
+
+def test_targeted_rebuild_keeps_the_tree_consistent_with_the_taxonomy(tmp_path) -> None:
+    """The safety invariant for the per-pane (targeted) rebuild: after *every* mutation the
+    set of entity nodes across both panes must exactly equal the taxonomy's entities — so a
+    partial rebuild can never leave the tree drifted from the model."""
+
+    async def scenario() -> None:
+        from ster.core.commands import (
+            OwlCreateIndividual,
+            OwlCreateProperty,
+            OwlCreateSubclass,
+            OwlDeleteClass,
+            OwlDeleteIndividual,
+            OwlDeleteProperty,
+            OwlSetLabel,
+        )
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+
+            async def apply(cmd, select=None):  # noqa: ANN001, ANN202
+                app._apply_command(cmd, select=select)
+                for _ in range(3):
+                    await pilot.pause()
+
+            def invariant(label: str) -> None:
+                assert _tree_entity_uris(app) == _entity_uris(app.tax), f"tree drift after {label}"
+
+            invariant("initial load")
+            # a property create → only the prop pane rebuilds
+            await apply(
+                OwlCreateProperty(src, ZOO + "livesIn", prop_type="ObjectProperty"), ZOO + "livesIn"
+            )
+            invariant("create object property")
+            # a subclass + an individual → main pane
+            await apply(OwlCreateSubclass(src, ZOO + "Reptile", ZOO + "Animal"), ZOO + "Reptile")
+            invariant("create subclass")
+            await apply(OwlCreateIndividual(src, ZOO + "Spot", ZOO + "Dog"), ZOO + "Spot")
+            invariant("create individual")
+            # label edits (class + property) — stay in their own pane
+            await apply(OwlSetLabel(src, ZOO + "Dog", "en", "Doggo"))
+            invariant("relabel a class")
+            await apply(OwlSetLabel(src, ZOO + "hasOwner", "en", "owned by"))
+            invariant("relabel a property")
+            # deletes → classified as 'both' (URI gone) → full rebuild, still consistent
+            await apply(OwlDeleteIndividual(src, ZOO + "Felix"))
+            invariant("delete individual")
+            await apply(OwlDeleteProperty(src, ZOO + "hasAge", clear_values=True))
+            invariant("delete property")
+            await apply(OwlDeleteClass(src, ZOO + "Eagle", "keep_all"))
+            invariant("delete class")
+
+    _run(scenario)
+
+
+def test_affected_panes_classifies_each_kind(tmp_path) -> None:
+    """The pane classifier routes a mutation to the right pane and falls back to *both* when
+    a URI can't be classified (deleted / unknown) — so a wrong guess never drops a pane."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app._affected_panes((ZOO + "hasOwner",), None) == {"prop"}  # a property
+            assert app._affected_panes((ZOO + "Rex",), None) == {"main"}  # an individual
+            assert app._affected_panes((ZOO + "Dog",), None) == {"main"}  # a class
+            assert app._affected_panes((), None) == {"main", "prop"}  # nothing → both
+            assert app._affected_panes(("https://gone/x",), None) == {"main", "prop"}  # deleted
+            # a mix (property + class) → both
+            assert app._affected_panes((ZOO + "hasOwner", ZOO + "Dog"), None) == {"main", "prop"}
+
+    _run(scenario)
+
+
+def test_property_mutation_leaves_the_main_pane_nodes_untouched(tmp_path) -> None:
+    """A property edit rebuilds only the prop pane — the (large) main-pane node objects keep
+    their identity, proving they weren't rebuilt."""
+
+    async def scenario() -> None:
+        from ster.core.commands import OwlCreateProperty
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            dog_node_before = app._uri_nodes[ZOO + "Dog"]
+            app._apply_command(
+                OwlCreateProperty(src, ZOO + "livesIn", prop_type="ObjectProperty"),
+                select=ZOO + "livesIn",
+            )
+            for _ in range(3):
+                await pilot.pause()
+            assert app._uri_nodes[ZOO + "Dog"] is dog_node_before  # main pane not rebuilt
+            assert ZOO + "livesIn" in app._uri_nodes  # new property added to the prop pane
+
+
+def _busy_text(app) -> str:
+    from textual.widgets import Static
+
+    w = app.query_one("#busy", Static)
+    return str(w.render()) if w.display else ""
+
+
+def test_busy_indicator_shows_a_message_while_an_activity_runs_and_clears() -> None:
+    """The busy overlay appears with a labelled spinner while a job runs, and hides once it
+    ends."""
+
+    async def scenario() -> None:
+        from textual.widgets import Static
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            busy = app.query_one("#busy", Static)
+            assert busy.display is False  # nothing running
+            app._begin_activity("save", "Saving")
+            assert busy.display is True and "Saving" in _busy_text(app)
+            app._end_activity("save")
+            assert busy.display is False  # cleared
+
+    _run(scenario)
+
+
+def test_busy_indicator_combines_concurrent_activities() -> None:
+    """Two overlapping jobs (save + lint) both show; ending one keeps the other visible."""
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._begin_activity("save", "Saving")
+            app._begin_activity("lint", "Checking")
+            text = _busy_text(app)
+            assert "Saving" in text and "Checking" in text
+            app._end_activity("save")
+            assert "Checking" in _busy_text(app) and "Saving" not in _busy_text(app)
+            app._end_activity("lint")
+            from textual.widgets import Static
+
+            assert app.query_one("#busy", Static).display is False
+
+    _run(scenario)
+
+
+def test_a_save_shows_then_clears_the_saving_indicator(tmp_path) -> None:
+    """Scheduling a save begins the 'Saving' activity; the worker clears it when done."""
+
+    async def scenario() -> None:
+        from ster.core.commands import OwlSetLabel
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._apply_command(OwlSetLabel(src, ZOO + "Dog", "en", "Doggo"))
+            assert "save" in app._activities  # 'Saving' shown immediately on the edit
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "save" not in app._activities  # cleared once the save worker finished
+
+    _run(scenario)
+
+
+def test_the_background_lint_shows_then_clears_the_checking_indicator(
+    tmp_path, monkeypatch, semanticlint_enabled
+) -> None:
+    """The background lint worker begins the 'Checking' activity and clears it when it lands."""
+
+    async def scenario() -> None:
+        from ster.plugins.semanticlint import lint_cache, runner
+
+        monkeypatch.setattr(lint_cache, "_cache_path", lambda: tmp_path / "lint_cache.json")
+        monkeypatch.setattr(
+            runner, "lint_overview", lambda p: ({"error": 0, "warning": 0, "info": 0}, [])
+        )
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._refresh_lint_async()  # kick off the background check
+            assert "lint" in app._activities  # 'Checking' spinner shown
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "lint" not in app._activities  # cleared once results landed
+
+    _run(scenario)

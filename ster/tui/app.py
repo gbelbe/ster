@@ -335,6 +335,18 @@ class OntologyApp(App):
         color: $text-muted;
         padding: 0 1;
     }
+    /* Bottom-left busy overlay: a spinner + what's happening (Saving… / Checking…). */
+    #busy {
+        layer: overlay;
+        dock: bottom;
+        width: auto;
+        height: 1;
+        background: $surface;
+        color: $accent;
+        text-style: bold;
+        padding: 0 1;
+        display: none;   /* shown only while an activity is running */
+    }
     FooterKey { background: $surface; color: $foreground; }
     FooterKey:hover { background: $boost; }
     /* Footer key hints read as actionable (and are clickable). */
@@ -423,6 +435,9 @@ class OntologyApp(App):
         self._save_lock = threading.Lock()
         self._save_dirty = False
         self._lint_timer: Timer | None = None  # debounce handle for the heavy re-lint
+        self._activities: dict[str, str] = {}  # running background jobs → label (Saving/Checking)
+        self._busy_timer: Timer | None = None  # spinner animation handle
+        self._spinner_frame = 0
         # The detail row (by field key) that was being edited, so focus lands back on it
         # after a mutation rebuilds the pane — not on the first row / tree.
         self._pending_focus_key: str | None = None
@@ -704,6 +719,7 @@ class OntologyApp(App):
             yield DetailView(id="detail")
         yield Footer()
         yield Static("", id="lang-indicator")  # bottom-right status: selected language
+        yield Static("", id="busy")  # bottom-left status: Saving… / Checking… spinner
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
@@ -1046,6 +1062,7 @@ class OntologyApp(App):
         if self._path is None or not semanticlint.is_active():
             self._set_lint(None)
             return
+        self._begin_activity("lint", "Checking")  # spinner while the background check runs
         self.run_worker(
             self._lint_worker, thread=True, exclusive=True, group="lint", name="ster-lint"
         )
@@ -1060,6 +1077,7 @@ class OntologyApp(App):
         The debounced lint lands a second or two *after* an edit, when focus is back on a
         detail row. ``_show`` rebuilds (and so destroys) that row, which would drop focus to
         the tree — so we remember the focused row and restore it after the rebuild."""
+        self._end_activity("lint")  # the background check finished → clear its spinner
         self._set_lint(result)
         focused = self.focused
         keep_key = focused.field.key if isinstance(focused, DetailRow) else None
@@ -1096,14 +1114,97 @@ class OntologyApp(App):
     # ── mutation pipeline ───────────────────────────────────────────────────────
 
     def _rebuild_tree(self) -> None:
-        self._sync_lint_features()  # cache icon-colour on/off once for this build
-        self._uri_nodes = {}
+        """Rebuild both panes (a full refresh — used on load and whenever a mutation could
+        have touched either pane)."""
+        self._rebuild_main_tree()
+        self._rebuild_prop_tree()
+
+    def _rebuild_main_tree(self) -> None:
+        """Rebuild only the main pane (classes / individuals / schemes / concepts). Its
+        ``_uri_nodes`` entries are dropped and re-added; the prop pane is left untouched."""
+        self._sync_lint_features()
         main = self.query_one("#tree", Tree)
+        self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree is not main}
         main.root.remove_children()
         self._build_main_tree(main)
+
+    def _rebuild_prop_tree(self) -> None:
+        """Rebuild only the property pane, leaving the (large) main pane untouched — so a
+        property edit doesn't pay to rebuild every class/individual node."""
+        self._sync_lint_features()
         props = self.query_one("#prop-tree", Tree)
+        self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree is not props}
         props.root.remove_children()
         self._build_prop_tree(props)
+
+    #: entity kinds that live in each pane — used to rebuild only the pane a mutation touched.
+    _MAIN_KINDS = frozenset({"class", "individual", "scheme", "concept"})
+
+    def _affected_panes(self, affected_uris: tuple[str, ...], select: str | None) -> set[str]:
+        """Which tree pane(s) a mutation touched → subset of ``{"main", "prop"}``.
+
+        Classifies each affected/selected URI by kind. Falls back to **both** panes whenever
+        a URI can't be classified (a deleted URI is gone from the taxonomy → kind 'section';
+        a rename cascade) — so the tree can never drift from the model on a wrong guess; the
+        worst case is simply a full rebuild, exactly as before."""
+        candidates = [u for u in (*affected_uris, select) if u]
+        if not candidates:
+            return {"main", "prop"}
+        panes: set[str] = set()
+        for uri in candidates:
+            kind = data.kind_of(self.tax, uri)
+            if kind == "property":
+                panes.add("prop")
+            elif kind in self._MAIN_KINDS:
+                panes.add("main")
+            else:  # unknown / deleted → can't tell which pane changed; rebuild both (safe)
+                return {"main", "prop"}
+        return panes
+
+    def _rebuild_affected(self, affected_uris: tuple[str, ...], select: str | None) -> None:
+        """Rebuild only the pane(s) a mutation touched (both when uncertain)."""
+        panes = self._affected_panes(affected_uris, select)
+        if "main" in panes:
+            self._rebuild_main_tree()
+        if "prop" in panes:
+            self._rebuild_prop_tree()
+
+    # ── busy indicator (Saving… / Checking…) ──────────────────────────────────
+    _SPINNER = "⣾⣽⣻⢿⡿⣟⣯⣷"
+
+    def _begin_activity(self, name: str, label: str) -> None:
+        """Show a spinner + *label* (e.g. 'Saving') for a running background job *name*."""
+        self._activities[name] = label
+        self._refresh_busy()
+
+    def _end_activity(self, name: str) -> None:
+        """Clear a finished background job; hides the overlay when none remain."""
+        if self._activities.pop(name, None) is not None:
+            self._refresh_busy()
+
+    def _refresh_busy(self) -> None:
+        """Match the busy overlay + spinner timer to the set of running jobs."""
+        try:
+            widget = self.query_one("#busy", Static)
+        except Exception:  # noqa: BLE001 — a job scheduled before the UI mounts
+            return
+        if not self._activities:
+            widget.display = False
+            widget.update("")
+            if self._busy_timer is not None:
+                self._busy_timer.stop()
+                self._busy_timer = None
+            return
+        widget.display = True
+        self._render_busy()
+        if self._busy_timer is None:  # animate while off-thread work runs (UI thread is free)
+            self._busy_timer = self.set_interval(0.1, self._render_busy)
+
+    def _render_busy(self) -> None:
+        """Paint the current spinner frame + every running job's label."""
+        self._spinner_frame = (self._spinner_frame + 1) % len(self._SPINNER)
+        labels = " · ".join(f"{lbl}…" for lbl in self._activities.values())
+        self.query_one("#busy", Static).update(f"{self._SPINNER[self._spinner_frame]} {labels}")
 
     def _apply_command(
         self, command: object, select: str | None = None, *, focus_tree: bool = False
@@ -1130,7 +1231,7 @@ class OntologyApp(App):
         self.tax = self._workspace.taxonomies[self._path]
         self.search_rows = data.search_rows(self.tax, self.lang)
         self._invalidate_lint()  # the edit may fix/introduce issues
-        self._rebuild_tree()
+        self._rebuild_affected(result.affected_uris, select)  # rebuild only the touched pane(s)
         # A freshly created entity (select) is revealed; anything else keeps the
         # highlight on the current entity — following it if the edit renamed its URI.
         target = select if (select is not None and select in self._uri_nodes) else self._detail_uri
@@ -1152,6 +1253,7 @@ class OntologyApp(App):
         if self._service is None or self._path is None:
             return
         self._save_dirty = True
+        self._begin_activity("save", "Saving")  # spinner until the worker finishes
         self.run_worker(
             self._save_worker, thread=True, exclusive=True, group="ster-save", name="ster-save"
         )
@@ -1159,11 +1261,14 @@ class OntologyApp(App):
     def _save_worker(self) -> None:
         from ster import store
 
-        with self._save_lock:
-            self._save_dirty = False  # cleared first: a concurrent edit re-marks it
-            tax, path = self.tax, self._path
-            if path is not None:
-                store.save(tax, path)
+        try:
+            with self._save_lock:
+                self._save_dirty = False  # cleared first: a concurrent edit re-marks it
+                tax, path = self.tax, self._path
+                if path is not None:
+                    store.save(tax, path)
+        finally:
+            self.call_from_thread(self._end_activity, "save")  # clear the spinner on the UI thread
 
     def _flush_save(self) -> None:
         """Synchronously persist any unsaved edit — called on quit so a backgrounded save

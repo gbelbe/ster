@@ -52,6 +52,33 @@ def ctx(tmp_path: Path) -> dict:
 EditCoro = Callable[[OntologyApp, object], Awaitable[None]]
 
 
+def _entity_uris(tax) -> set:  # noqa: ANN001
+    return (
+        set(tax.owl_classes)
+        | set(tax.owl_individuals)
+        | set(tax.owl_properties)
+        | set(tax.schemes)
+        | set(tax.concepts)
+    )
+
+
+def _tree_entity_uris(app) -> set:  # noqa: ANN001
+    from textual.widgets import Tree
+
+    entities = _entity_uris(app.tax)
+    out: set = set()
+
+    def walk(node):  # noqa: ANN001
+        if node.data in entities:
+            out.add(node.data)
+        for child in node.children:
+            walk(child)
+
+    for tid in ("#tree", "#prop-tree"):
+        walk(app.query_one(tid, Tree).root)
+    return out
+
+
 def _edit(ctx: dict, do: EditCoro) -> None:
     async def scenario() -> None:
         app = OntologyApp(store.load(ctx["src"]), source="zoo.ttl", path=ctx["src"])
@@ -60,6 +87,8 @@ def _edit(ctx: dict, do: EditCoro) -> None:
             await do(app, pilot)
             for _ in range(4):
                 await pilot.pause()
+            ctx["tree_uris"] = _tree_entity_uris(app)  # tree nodes after the (targeted) rebuild
+            ctx["tax_entities"] = _entity_uris(app.tax)
             app._flush_save()  # edits persist on a background worker → flush before reading disk
             ctx["tax"] = app.tax
             ctx["saved"] = store.load(ctx["src"])
@@ -373,6 +402,11 @@ def then_property_is_type(ctx: dict, frag: str, prop_type: str) -> None:
     for tax in (ctx["tax"], ctx["saved"]):  # in memory and persisted
         prop = tax.owl_properties.get(ZOO + frag)
         assert prop is not None and prop.prop_type == prop_type
+
+
+@then("the tree still matches the taxonomy")
+def then_tree_matches_taxonomy(ctx: dict) -> None:
+    assert ctx["tree_uris"] == ctx["tax_entities"]  # targeted rebuild left no drift
 
 
 @then(parsers.parse('the class "{name}" has the label "{label}"'))
