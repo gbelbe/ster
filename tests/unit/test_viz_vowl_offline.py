@@ -160,27 +160,6 @@ def test_await_uvicorn_started_false_on_timeout() -> None:
     assert result is False
 
 
-# ── viewer graph-opened status ─────────────────────────────────────────────────
-
-
-def test_graph_opened_status_live_server(monkeypatch) -> None:
-    from ster.nav.viewer import TaxonomyViewer
-
-    monkeypatch.setattr(vv, "_api_app", object())  # is_live_server() → True
-    msg = TaxonomyViewer._graph_opened_status("http://localhost:8765")
-    assert "static snapshot" not in msg
-    assert "Graph opened in browser" in msg
-
-
-def test_graph_opened_status_static_fallback(monkeypatch) -> None:
-    from ster.nav.viewer import TaxonomyViewer
-
-    monkeypatch.setattr(vv, "_api_app", None)  # is_live_server() → False
-    msg = TaxonomyViewer._graph_opened_status("file:///tmp/graph.html")
-    assert "static snapshot" in msg
-    assert "no live server" in msg
-
-
 # ── html title escaping (XSS) ─────────────────────────────────────────────────
 
 

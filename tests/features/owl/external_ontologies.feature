@@ -19,8 +19,3 @@ Feature: Adding and managing external ontology namespaces
     When I add namespace "http://xmlns.com/foaf/0.1/" with prefix "foaf"
     Then "foaf" maps to "http://xmlns.com/foaf/0.1/" in namespace_bindings
     And namespace_bindings has exactly 1 entry
-
-  Scenario: Class parent picker includes external browse option
-    Given a viewer with a local taxonomy
-    When I build owl class candidates for "kai:Person"
-    Then the candidates include the "__BROWSE_EXT__" sentinel

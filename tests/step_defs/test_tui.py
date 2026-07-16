@@ -152,24 +152,19 @@ def when_arrow_navigate(ctx):
     _session(ctx, act)
 
 
-@when(parsers.parse('I run "ster new-tui" on the zoo ontology'))
+@when(parsers.parse('I run "ster show" on the zoo ontology'))
 def when_run_cli(ctx):
     from typer.testing import CliRunner
 
     from ster.cli import app as cli_app
 
-    with patch("ster.tui.launch") as launch:
-        result = CliRunner().invoke(cli_app, ["new-tui", str(DEMO)])
+    with (
+        patch("ster.tui.launch") as launch,
+        patch("ster.git.manager.GitManager") as gm,
+    ):
+        gm.return_value.is_enabled.return_value = False  # skip the git commit/push flow
+        result = CliRunner().invoke(cli_app, ["show", str(DEMO)])
     ctx["cli_result"] = result
-    ctx["launch"] = launch
-
-
-@when('I choose "New-TUI" in the home-screen menu')
-def when_choose_menu(ctx):
-    from ster.cli import _NEW_TUI_SENTINEL, _dispatch_menu_action
-
-    with patch("ster.tui.launch") as launch:
-        ctx["handled"] = _dispatch_menu_action(_NEW_TUI_SENTINEL, [DEMO])
     ctx["launch"] = launch
 
 
@@ -307,9 +302,3 @@ def then_cli_launched(ctx):
     (taxonomy,), kwargs = ctx["launch"].call_args
     assert kwargs.get("source") == "demo.ttl"
     assert taxonomy.owl_classes
-
-
-@then("the browser is launched with the selected files")
-def then_menu_launched(ctx):
-    assert ctx["handled"] is True
-    ctx["launch"].assert_called_once()

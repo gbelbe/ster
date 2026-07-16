@@ -38,8 +38,8 @@ def test_listening_pid_none_when_lsof_missing(monkeypatch) -> None:
 
 def test_port_holder_returns_pid_and_command(monkeypatch) -> None:
     monkeypatch.setattr(vv, "_listening_pid", lambda port: 60130)
-    monkeypatch.setattr(vv, "_process_name", lambda pid: "ster new-tui x.ttl")
-    assert vv.port_holder(host="127.0.0.1", port=8765) == (60130, "ster new-tui x.ttl")
+    monkeypatch.setattr(vv, "_process_name", lambda pid: "ster show x.ttl")
+    assert vv.port_holder(host="127.0.0.1", port=8765) == (60130, "ster show x.ttl")
 
 
 def test_port_holder_none_when_free(monkeypatch) -> None:

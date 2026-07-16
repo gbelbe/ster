@@ -1,7 +1,7 @@
 """``ster.tui`` — the Textual ontology browser & editor (the "New-TUI").
 
 A modern, mouse- and keyboard-driven tree browser/editor for taxonomies, reached
-via ``ster new-tui`` or the home-screen menu. It reuses ``ster.store`` + the model
+via ``ster show`` or the home-screen menu. It reuses ``ster.store`` + the model
 and renders through Textual; pure view-model adapters live in :mod:`ster.tui.data`
 (no Textual import) so they stay terminal-free and easily testable.
 """

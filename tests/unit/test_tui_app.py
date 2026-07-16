@@ -39,6 +39,23 @@ def _run(scenario: Callable[..., Awaitable[None]]) -> None:
     asyncio.run(scenario())
 
 
+async def _settle(pilot, predicate: Callable[[], bool], *, tries: int = 60) -> None:
+    """Pump the event loop until ``predicate`` holds (or give up after ``tries``).
+
+    Robust replacement for the fixed ``for _ in range(n): await pilot.pause()``
+    idiom, which can under-wait when the suite is under scheduling load and a
+    modal submit / command dispatch needs a few extra event-loop turns to land.
+    Deterministic waits (condition met) return immediately; the cap only bites
+    when the state genuinely never arrives, letting the following assertion fail
+    against the freshest state instead of on a stale, half-processed frame.
+    """
+    for _ in range(tries):
+        if predicate():
+            return
+        await pilot.pause()
+    await pilot.pause()  # one more so a failing assert sees the latest state
+
+
 @pytest.fixture
 def semanticlint_enabled(tmp_path, monkeypatch):
     """Enable the semanticlint plugin against isolated prefs + quality.json so lint UI
@@ -123,8 +140,13 @@ def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
             assert app.screen.__class__.__name__ == "EditModal"
             app.screen.query_one("#edit-input", Input).value = "Human"
             await pilot.press("enter")  # submit the modal
-            for _ in range(3):
-                await pilot.pause()
+            await _settle(
+                pilot,
+                lambda: any(
+                    lbl.lang == "en" and lbl.value == "Human"
+                    for lbl in app.tax.owl_classes[ZOO + "Person"].labels
+                ),
+            )
             # committed in memory …
             labels = {lbl.lang: lbl.value for lbl in app.tax.owl_classes[ZOO + "Person"].labels}
             assert labels.get("en") == "Human"
@@ -1894,8 +1916,7 @@ def test_action_row_creates_a_subclass_and_saves(tmp_path) -> None:
             modal._uri.value = ZOO + "Worker"  # the new fragment
             modal._label_inputs[app.lang].value = "Worker"  # also set a label in one go
             modal._submit()
-            for _ in range(3):
-                await pilot.pause()
+            await _settle(pilot, lambda: ZOO + "Worker" in app.tax.owl_classes)
             cls = app.tax.owl_classes.get(ZOO + "Worker")
             assert cls is not None and ZOO + "Person" in cls.sub_class_of  # created under Person
             assert {lbl.value for lbl in cls.labels} == {"Worker"}  # label set at creation
@@ -1928,8 +1949,7 @@ def test_delete_class_via_choice_modal_and_saves(tmp_path) -> None:
             await pilot.pause()
             assert app.screen.__class__.__name__ == "ChoiceModal"
             await pilot.click("#opt-delete_all")  # pick a mode
-            for _ in range(3):
-                await pilot.pause()
+            await _settle(pilot, lambda: ZOO + "Cat" not in app.tax.owl_classes)
             assert ZOO + "Cat" not in app.tax.owl_classes  # gone in memory
             await app.workers.wait_for_complete()  # let the background save flush
             assert ZOO + "Cat" not in store.load(src).owl_classes  # gone on disk
@@ -1957,8 +1977,9 @@ def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
             idx = next(i for i, (_, uri) in enumerate(modal._options) if uri == ZOO + "Person")
             modal.query_one(OptionList).highlighted = idx
             await pilot.press("enter")  # select Person as an additional superclass
-            for _ in range(3):
-                await pilot.pause()
+            await _settle(
+                pilot, lambda: ZOO + "Person" in app.tax.owl_classes[ZOO + "Cat"].sub_class_of
+            )
             assert ZOO + "Person" in app.tax.owl_classes[ZOO + "Cat"].sub_class_of  # in memory
             await app.workers.wait_for_complete()  # let the background save flush
             assert ZOO + "Person" in store.load(src).owl_classes[ZOO + "Cat"].sub_class_of  # disk
@@ -1978,8 +1999,7 @@ def test_command_palette_search_jumps_end_to_end() -> None:
             for _ in range(3):
                 await pilot.pause()  # let the async provider search settle
             await pilot.press("enter")  # pick the top hit
-            for _ in range(3):
-                await pilot.pause()
+            await _settle(pilot, lambda: "Rex" in app._detail_text)
             assert app.screen.__class__.__name__ == "Screen"  # palette closed
             assert "Rex" in app._detail_text and "Alice" in app._detail_text  # jumped + detail
 
@@ -2438,9 +2458,7 @@ def test_show_graph_warns_when_the_live_server_port_is_held() -> None:
             await pilot.pause()
             with (
                 patch.object(viz_vowl, "is_live_server", return_value=False),
-                patch.object(
-                    viz_vowl, "port_holder", return_value=(999, "python ster new-tui x.ttl")
-                ),
+                patch.object(viz_vowl, "port_holder", return_value=(999, "python ster show x.ttl")),
             ):
                 app._show_graph(None)
                 await pilot.pause()

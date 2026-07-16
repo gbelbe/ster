@@ -253,8 +253,6 @@ def _run_picker(files, item_values, initial_sel, input_bytes, preselect=None):
             initial_sel,
             preselect,
             False,
-            None,
-            len(files) + 1,
         )
 
 

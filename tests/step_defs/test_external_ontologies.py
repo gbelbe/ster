@@ -76,34 +76,3 @@ def given_foaf_already_bound(ctx):
 @then("namespace_bindings has exactly 1 entry")
 def then_one_binding(ctx):
     assert len(ctx["taxonomy"].namespace_bindings) == 1
-
-
-# ── Class parent picker ───────────────────────────────────────────────────────
-
-
-@given("a viewer with a local taxonomy")
-def given_viewer_taxonomy(ctx):
-    from unittest.mock import MagicMock
-
-    from ster.model import RDFClass, Taxonomy
-    from ster.nav.viewer import TaxonomyViewer
-
-    t = Taxonomy()
-    t.owl_classes[_KAI_PERSON] = RDFClass(uri=_KAI_PERSON)
-    viewer = TaxonomyViewer.__new__(TaxonomyViewer)
-    viewer.taxonomy = t
-    viewer.lang = "en"
-    viewer._tree = MagicMock()
-    viewer._tree.flat = []
-    ctx["viewer"] = viewer
-
-
-@when('I build owl class candidates for "kai:Person"')
-def when_build_candidates(ctx):
-    ctx["result"] = ctx["viewer"]._build_owl_class_candidates(_KAI_PERSON)
-
-
-@then('the candidates include the "__BROWSE_EXT__" sentinel')
-def then_browse_ext_present(ctx):
-    uris = [uri for uri, _ in ctx["result"]]
-    assert "__BROWSE_EXT__" in uris

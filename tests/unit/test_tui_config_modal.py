@@ -36,6 +36,11 @@ def _isolate_prefs(tmp_path, monkeypatch):
     from ster.plugins.semanticlint import config as sl_config
 
     monkeypatch.setattr(sl_config, "_config_path", lambda: tmp_path / "quality.json")
+    # Guarantee the plugin starts disabled (these tests assume off-by-default); prevents a
+    # cross-test flake where a prior test leaves semanticlint enabled in the shared prefs.
+    from ster import plugins
+
+    plugins.set_enabled("semanticlint", False)
 
 
 def _run(coro_factory) -> None:  # noqa: ANN001

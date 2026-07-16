@@ -1,7 +1,7 @@
 Feature: New-TUI — the Textual ontology browser
 
   A modern, keyboard- and mouse-driven tree browser for ontologies, reached via
-  `ster new-tui` or the home-screen menu. It shows classes (with their
+  `ster show` or the home-screen menu. It shows classes (with their
   individuals nested), properties and SKOS schemes, with a fuzzy search palette
   and a progressive-disclosure detail panel.
 
@@ -54,9 +54,5 @@ Feature: New-TUI — the Textual ontology browser
     And selecting the concept "Cat" shows its definition "A small feline."
 
   Scenario: Launching the New-TUI from the command line
-    When I run "ster new-tui" on the zoo ontology
+    When I run "ster show" on the zoo ontology
     Then the browser is launched with that ontology
-
-  Scenario: Launching the New-TUI from the home-screen menu
-    When I choose "New-TUI" in the home-screen menu
-    Then the browser is launched with the selected files

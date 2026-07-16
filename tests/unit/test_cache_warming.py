@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,7 +9,6 @@ import pytest
 import rdflib
 
 import ster.sparql_query as _sq
-from ster import store
 from ster.sparql_query import (
     _cache_key,
     _graph_cache,
@@ -83,74 +81,6 @@ def test_run_query_hits_cache_after_warm(tmp_path: Path) -> None:
     with patch("ster.sparql_query.load_graph") as mock_load:
         run_query([ttl], "SELECT ?s WHERE { ?s a ?t }")
     mock_load.assert_not_called()
-
-
-# ── wiring: Viewer.__init__ ───────────────────────────────────────────────────
-
-
-def _join_warm_threads(threads: list[threading.Thread], timeout: float = 5.0) -> None:
-    for t in threads:
-        t.join(timeout=timeout)
-
-
-def test_viewer_init_spawns_background_warm(tmp_path: Path) -> None:
-    """Viewer.__init__ must start a ster-cache-warm thread that populates the cache."""
-    from ster.nav.viewer import TaxonomyViewer as Viewer
-
-    ttl = tmp_path / "test.ttl"
-    ttl.write_text(_VALID_TTL, encoding="utf-8")
-    tax = store.load(ttl)
-
-    warm_threads: list[threading.Thread] = []
-    orig_start = threading.Thread.start
-
-    def _capture(self: threading.Thread, *a: object, **kw: object) -> None:
-        if self.name == "ster-cache-warm":
-            warm_threads.append(self)
-        orig_start(self, *a, **kw)
-
-    with patch.object(threading.Thread, "start", _capture):
-        Viewer(taxonomy=tax, file_path=ttl)
-
-    assert warm_threads, "Viewer.__init__ must spawn at least one ster-cache-warm thread"
-    _join_warm_threads(warm_threads)
-    assert _cache_key([ttl]) in _graph_cache
-
-
-# ── wiring: _save_file ────────────────────────────────────────────────────────
-
-
-def test_save_file_spawns_background_warm(tmp_path: Path) -> None:
-    """_save_file must start a ster-cache-warm thread that re-populates the cache."""
-    from ster.nav.viewer import TaxonomyViewer as Viewer
-
-    ttl = tmp_path / "test.ttl"
-    ttl.write_text(_VALID_TTL, encoding="utf-8")
-    tax = store.load(ttl)
-
-    # Create viewer (startup warm runs and populates cache)
-    viewer = Viewer(taxonomy=tax, file_path=ttl)
-    # Wait for startup warm to finish before clearing
-    _join_warm_threads(
-        [t for t in threading.enumerate() if t.name == "ster-cache-warm"], timeout=5.0
-    )
-    _graph_cache.clear()
-    _uri_index_cache.clear()
-
-    warm_threads: list[threading.Thread] = []
-    orig_start = threading.Thread.start
-
-    def _capture(self: threading.Thread, *a: object, **kw: object) -> None:
-        if self.name == "ster-cache-warm":
-            warm_threads.append(self)
-        orig_start(self, *a, **kw)
-
-    with patch.object(threading.Thread, "start", _capture):
-        viewer._save_file()
-
-    assert warm_threads, "_save_file must spawn a ster-cache-warm thread"
-    _join_warm_threads(warm_threads)
-    assert _cache_key([ttl]) in _graph_cache
 
 
 # ── plugin pre-load ───────────────────────────────────────────────────────────

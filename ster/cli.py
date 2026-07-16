@@ -187,7 +187,6 @@ def _print_welcome() -> None:
 _SUBCOMMANDS = frozenset(
     {
         "show",
-        "new-tui",
         "add",
         "remove",
         "move",
@@ -198,7 +197,6 @@ _SUBCOMMANDS = frozenset(
         "init",
         "handles",
         "validate",
-        "nav",
         "log",
         "init-ci",
         "convert",
@@ -212,7 +210,6 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
-_NEW_TUI_SENTINEL: Path = Path(".__ster_new_tui__")
 _AI_CONFIG_SENTINEL: Path = Path(".__ster_ai_config__")
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
@@ -424,8 +421,6 @@ def _pick_file_interactive(
                 initial_sel,
                 preselect,
                 show_log_option,
-                LOG_IDX,
-                CREATE_IDX,
             )
         except ImportError:
             pass  # Windows or restricted environment → fall through
@@ -495,8 +490,6 @@ def _arrow_file_picker(
     initial_sel: int,
     preselect: Path | None,
     show_log_option: bool,
-    log_idx: int | None,
-    create_idx: int,
 ) -> Path | None:
     """Arrow-key file picker using raw terminal I/O + ANSI codes.
 
@@ -709,8 +702,7 @@ def _multi_file_picker(
 
     # Action items — cursor lives here only
     _ACTIONS: list[tuple[object, str]] = [
-        (True, "↵  Open Tree View"),  # True = "open" sentinel
-        (_NEW_TUI_SENTINEL, "🖥  Open New-TUI (Textual)"),
+        (True, "🖥  Open Browser (New-TUI)"),  # True = "open" sentinel → the Textual New-TUI
         (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
@@ -727,31 +719,29 @@ def _multi_file_picker(
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         for f in found:
             console.print(f"  ✓  {f.name}")
-        console.print("  [cyan] 1[/cyan]  ↵  Open Tree View")
-        console.print("  [cyan] 2[/cyan]  [bold cyan]🖥  Open New-TUI (Textual)[/bold cyan]")
-        console.print("  [cyan] 3[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
-        console.print("  [cyan] 4[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
-        console.print("  [cyan] 5[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
-        console.print("  [cyan] 6[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
-        console.print("  [cyan] 7[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print("  [cyan] 8[/cyan]  [green]📦 Version & Publish LD[/green]")
-        console.print("  [cyan] 9[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
-        console.print("  [cyan]10[/cyan]  [red]✕  Quit[/red]")
+        console.print("  [cyan]1[/cyan]  [bold cyan]🖥  Open Browser (New-TUI)[/bold cyan]")
+        console.print("  [cyan]2[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
+        console.print("  [cyan]3[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
+        console.print("  [cyan]4[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
+        console.print("  [cyan]5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
+        console.print("  [cyan]6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
+        console.print("  [cyan]7[/cyan]  [green]📦 Version & Publish LD[/green]")
+        console.print("  [cyan]8[/cyan]  [cyan]⚙  Setup / Options[/cyan]")
+        console.print("  [cyan]9[/cyan]  [red]✕  Quit[/red]")
         console.print()
-        choice = Prompt.ask("Action (1–10)", default="1")
+        choice = Prompt.ask("Action (1–9)", default="1")
         s = choice.strip().lower()
         if s in ("1", "all"):
             return list(found)
         fallback: dict[str, Path] = {
-            "2": _NEW_TUI_SENTINEL,
-            "3": _GRAPH_SENTINEL,
-            "4": _QUERY_SENTINEL,
-            "5": _EXT_ONT_SENTINEL,
-            "6": _HTML_SENTINEL,
-            "7": _GIT_LOG_SENTINEL,
-            "8": _PUBLISH_SENTINEL,
-            "9": _AI_CONFIG_SENTINEL,
-            "10": _QUIT_SENTINEL,
+            "2": _GRAPH_SENTINEL,
+            "3": _QUERY_SENTINEL,
+            "4": _EXT_ONT_SENTINEL,
+            "5": _HTML_SENTINEL,
+            "6": _GIT_LOG_SENTINEL,
+            "7": _PUBLISH_SENTINEL,
+            "8": _AI_CONFIG_SENTINEL,
+            "9": _QUIT_SENTINEL,
         }
         return fallback.get(s, list(found))  # type: ignore[return-value]
 
@@ -777,8 +767,8 @@ def _multi_file_picker(
     action_cursor = 0
 
     def _action_colour(sentinel: object) -> str:
-        if sentinel == _NEW_TUI_SENTINEL:
-            return BCY  # bright cyan — the modern browser
+        if sentinel is True:
+            return BCY  # bright cyan — the New-TUI browser (the primary "open" action)
         if sentinel == _GIT_LOG_SENTINEL:
             return MG
         if sentinel == _HTML_SENTINEL:
@@ -961,7 +951,6 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
     actions: dict[Path, Callable[[list[Path]], None]] = {
         _GIT_LOG_SENTINEL: lambda f: launch_git_log(path=f[0] if f else None),
         _HTML_SENTINEL: _run_html_export_interactive,
-        _NEW_TUI_SENTINEL: _launch_new_tui,
         _GRAPH_SENTINEL: _run_graph_viz_interactive,
         _AI_CONFIG_SENTINEL: _launch_setup,
         _QUERY_SENTINEL: _launch_query,
@@ -973,20 +962,6 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         return False
     action(found)
     return True
-
-
-def _launch_new_tui(found: list[Path]) -> None:
-    """Home-menu action: open the New-TUI (Textual ontology browser)."""
-    if not found:
-        err.print("[red]No taxonomy files to open.[/red]")
-        return
-    primary = found[0]
-    taxonomy = _load_safe(primary)
-    if taxonomy is None:
-        return
-    from .tui import launch
-
-    launch(taxonomy, source=primary.name, path=primary)
 
 
 def _launch_query(found: list[Path]) -> None:
@@ -1006,15 +981,10 @@ def _launch_query(found: list[Path]) -> None:
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
 
-def _open_viewer(
-    taxonomy_file: Path,
-    lang: str = "en",
-    jump_concept: str | None = None,
-    workspace: TaxonomyWorkspace | None = None,
-) -> None:
-    """Open the interactive taxonomy viewer for *taxonomy_file* and handle git."""
+def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
+    """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit."""
     from .git.manager import GitManager, render_diff
-    from .nav import TaxonomyViewer
+    from .tui import launch
 
     taxonomy = _load_safe(taxonomy_file)
     if taxonomy is None:
@@ -1042,21 +1012,7 @@ def _open_viewer(
 
             threading.Thread(target=_do_fetch, daemon=True).start()
 
-    viewer = TaxonomyViewer(
-        taxonomy,
-        taxonomy_file,
-        lang=lang,
-        git_manager=gm,
-        workspace=workspace,
-    )
-
-    if jump_concept:
-        uri = _resolve(taxonomy, jump_concept)
-        for i, line in enumerate(viewer._tree.flat):
-            if line.uri == uri:
-                viewer._tree.cursor = i
-                break
-    viewer.run()
+    launch(taxonomy, source=taxonomy_file.name, lang=lang, path=taxonomy_file)
 
     if gm.is_enabled() and gm.is_configured():
         if fetch_event is not None:
@@ -1100,7 +1056,7 @@ def cmd_show(
         "--concept",
         "-c",
         metavar="HANDLE",
-        help="Open interactive viewer at this concept.",
+        help="With --plain, root the printed tree at this concept.",
     ),
     lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
     handles: bool = typer.Option(
@@ -1113,10 +1069,14 @@ def cmd_show(
         help="Print static tree and exit (no interactive viewer).",
     ),
 ) -> None:
-    """Open the interactive taxonomy viewer.
+    """Open the interactive taxonomy browser (the Textual New-TUI) and commit on exit.
 
-    Navigate with ↑↓, open detail with → or Enter, go back with ←,
-    edit fields with i, delete with d, quit with Esc or q.
+    A mouse- and keyboard-driven tree of classes / individuals / properties with a
+    fuzzy search palette (press ``/``) and a live detail panel. Fully editable:
+    create / rename / re-link / delete classes, individuals, properties, concepts
+    and schemes — every change is validated and saved. Arrow keys move between the
+    tree and the detail rows; Enter edits (or runs) the focused row; ``s`` opens the
+    SPARQL query screen. On quit, the git commit/push flow runs.
 
     Pass --plain to print the tree non-interactively and exit.
     """
@@ -1134,29 +1094,7 @@ def cmd_show(
             console.print(render_tree(taxonomy, lang=lang))
         return
 
-    _open_viewer(taxonomy_file, lang=lang, jump_concept=concept)
-
-
-@app.command("new-tui")
-def cmd_new_tui(
-    file: Path | None = typer.Argument(
-        None, help="Taxonomy file (.ttl / .rdf / .jsonld). Auto-detected if omitted."
-    ),
-    lang: str = typer.Option("en", "--lang", "-l", help="Label language."),
-) -> None:
-    """Open the New-TUI — the modern Textual ontology browser & editor.
-
-    A mouse- and keyboard-driven tree of classes / individuals / properties with a
-    fuzzy search palette (press ``/``) and a live detail panel. Fully editable:
-    create / rename / re-link / delete classes, individuals, properties, concepts
-    and schemes — every change is validated and saved to the file. Arrow keys move
-    between the tree and the detail rows; Enter edits (or runs) the focused row.
-    """
-    from .tui import launch
-
-    taxonomy_file = _resolve_file(file)
-    taxonomy = _load(taxonomy_file)
-    launch(taxonomy, source=taxonomy_file.name, lang=lang, path=taxonomy_file)
+    _open_viewer(taxonomy_file, lang=lang)
 
 
 # ──────────────────────────── add ────────────────────────────────────────────
@@ -1433,40 +1371,6 @@ def cmd_log(
 
 
 # ──────────────────────────── ai config ──────────────────────────────────────
-
-
-# ──────────────────────────── nav (bash-like REPL) ───────────────────────────
-
-
-@app.command("nav")
-def cmd_nav(
-    lang: str = typer.Option("en", "--lang", "-l", help="Display language."),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
-) -> None:
-    """Start a bash-like REPL for taxonomy navigation and editing.
-
-    Commands: ls  cd  pwd  show  info  add  mv  rm  label  define  quit\n
-
-    For the full-screen interactive viewer use: ster show
-    """
-    from .nav import TaxonomyShell
-
-    taxonomy_file = _resolve_file(file)
-    taxonomy = _load(taxonomy_file)
-    pre_hash = store.file_hash(taxonomy_file) if _converted_from else ""
-
-    console.print(
-        f"\n[bold cyan]ster nav[/bold cyan]  [dim]{taxonomy_file.name}[/dim]  "
-        f"[dim]{len(taxonomy.concepts)} concepts[/dim]\n"
-        "[dim]Commands: ls  cd  pwd  show  info  add  mv  rm  label  define  quit[/dim]\n"
-        "[dim]Tip: use 'ster show' for the full interactive tree viewer.[/dim]\n"
-    )
-
-    shell = TaxonomyShell(taxonomy, taxonomy_file, lang=lang)
-    shell.cmdloop()
-
-    if _converted_from:
-        _maybe_backconvert(taxonomy_file, pre_hash, _converted_from)
 
 
 # ──────────────────────────── handles ────────────────────────────────────────
@@ -2385,9 +2289,9 @@ def _home_screen(initial_file: Path | None = None) -> None:
         except Exception:
             pass  # non-fatal if .ster/ can't be written
 
-        # ── Load workspace (with broken-mapping resolution) ───────────────────
+        # ── Validate the workspace (raises on broken mappings) ────────────────
         try:
-            workspace = _load_workspace(selected, found)
+            _load_workspace(selected, found)
         except Exception as exc:
             err.print(f"[red]Failed to load workspace: {exc}[/red]")
             continue
@@ -2397,7 +2301,7 @@ def _home_screen(initial_file: Path | None = None) -> None:
         _save_session(primary)
         _session_file = primary
         try:
-            _open_viewer(primary, lang=updated_project.lang, workspace=workspace)
+            _open_viewer(primary, lang=updated_project.lang)
         except Exception as exc:
             err.print(f"[red]Viewer error: {exc}[/red]")
         continue  # return to home after viewer

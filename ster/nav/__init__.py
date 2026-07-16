@@ -1,4 +1,10 @@
-"""TUI navigator and REPL shell for ster taxonomy editing."""
+"""Shared taxonomy detail/flatten logic + curses drawing helpers.
+
+The old full-screen curses viewer and REPL shell were removed once the Textual
+New-TUI (:mod:`ster.tui`) reached parity; what remains here is reused by the
+New-TUI (:mod:`~ster.nav.logic` detail builders, :mod:`~ster.nav.prefs`,
+:mod:`~ster.nav.ai_model_picker`) and by the git-log viewer (:mod:`~ster.nav.draw`).
+"""
 
 from __future__ import annotations
 
@@ -26,20 +32,15 @@ from .logic import (  # noqa: F401
     _sep,
     build_concept_detail,
     build_detail_fields,
-    build_file_fields,
     build_global_fields,
     build_individual_detail,
     build_ontology_overview_fields,
     build_promoted_detail,
     build_property_detail,
     build_rdf_class_detail,
-    build_scheme_dashboard_fields,
     build_scheme_detail,
     build_scheme_fields,
     flatten_mixed_tree,
     flatten_ontology_tree,
     flatten_tree,
 )
-from .query_logic import _ac_matches  # noqa: F401
-from .shell import TaxonomyShell  # noqa: F401
-from .viewer import TaxonomyViewer  # noqa: F401
