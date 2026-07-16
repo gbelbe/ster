@@ -11,6 +11,8 @@ See docs/architecture/textual-tui-refactor.md.
 
 from __future__ import annotations
 
+import webbrowser
+
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
@@ -93,11 +95,14 @@ _ACTION_HELP = {
 
 def _row_tooltip(field: DetailField) -> str | None:
     """Hover help for a row: an explicit tooltip (e.g. a property's rdfs:comment),
-    else a per-action description or a run hint. Plain editable rows get no hint —
-    the ✎ affordance icon already signals they can be edited."""
+    else a per-action description or a run hint. Plain editable rows and markdown value
+    rows get no hint — the ✎ affordance icon already signals they can be edited, and a
+    markdown value may hold a clickable link that an "Edit this…" tooltip would misdescribe."""
     tooltip = field.meta.get("tooltip")
     if tooltip:
         return tooltip
+    if _renders_markdown(field):
+        return None
     action = field.meta.get("action")
     if not action:
         return None
@@ -268,17 +273,39 @@ class DetailRow(Static):
             self.post_message(self.ActionRequested(self.field))
 
     def on_click(self, event: events.Click) -> None:
-        """Open a clicked hyperlink in the browser; otherwise edit / run the row.
+        """Open a clicked hyperlink; otherwise edit / run the row.
 
         Markdown value rows render links as Rich hyperlinks, so a click landing on one
-        carries its URL in ``event.style.link``. We open it via ``App.open_url`` so it
-        works despite Textual's mouse capture (which swallows the terminal's own OSC-8
-        link handling); non-link clicks keep the normal activate behaviour."""
+        carries its URL in ``event.style.link``; non-link clicks keep the normal
+        activate behaviour."""
         link = event.style.link
         if link:
-            self.app.open_url(link)
+            self._open_link(link)
         else:
             self.action_activate()
+
+    def _open_link(self, url: str) -> None:
+        """Open a value's hyperlink in the browser, with visible feedback.
+
+        Uses ``webbrowser.open`` directly — the same call the graph viewer makes, which
+        works in this app's context — rather than ``App.open_url``, whose driver
+        indirection silently no-ops here. ``webbrowser.open`` returns ``False`` when no
+        browser is reachable (remote/SSH, tmux, a broken ``$BROWSER``); in that case, and
+        on error, we surface the URL in a toast so the click is never a silent nothing and
+        the address is there to copy/cmd-click."""
+        try:
+            opened = webbrowser.open(url)
+        except Exception as exc:  # no browser / misconfigured $BROWSER — surface, don't swallow
+            self.app.notify(
+                f"{url}\n{exc}", title="Couldn't open link", severity="error", timeout=8
+            )
+            return
+        if opened:
+            self.app.notify(url, title="Opening link…", timeout=5)
+        else:
+            self.app.notify(
+                url, title="No browser available — copy the link", severity="warning", timeout=8
+            )
 
 
 def _section_widgets(sec: DetailSection) -> list[Widget]:

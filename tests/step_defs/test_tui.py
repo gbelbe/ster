@@ -203,10 +203,12 @@ def when_click_url_in_comment(ctx):
         }
         assert url in links  # the row genuinely contains a clickable link
 
+        import webbrowser
+
         opened: list[str] = []
-        app.open_url = lambda u, **_: opened.append(u)  # capture the browser open
         # a click landing on the link carries its URL in event.style.link
-        row.on_click(types.SimpleNamespace(style=Style(link=url)))
+        with patch.object(webbrowser, "open", lambda u, *a, **k: opened.append(u) or True):
+            row.on_click(types.SimpleNamespace(style=Style(link=url)))
         ctx["opened"] = opened
 
     _session(ctx, act)

@@ -811,12 +811,39 @@ def test_detail_row_tooltip_prefers_explicit_comment() -> None:
     assert row.tooltip == "The name."
 
 
-def test_clicking_a_link_row_opens_the_url_in_the_browser() -> None:
-    """A click landing on a rendered hyperlink opens it via App.open_url; a click on
-    plain text keeps the normal edit/run activate path."""
+def test_markdown_value_rows_have_no_edit_tooltip() -> None:
+    """A markdown-rendered value row (e.g. a literal property value, which may hold a
+    clickable link) shows no 'Edit this literal value' hover tooltip — the ✎ icon already
+    signals editability, and the tooltip would misdescribe a link."""
+    from ster.nav.logic import DetailField
+    from ster.tui.detail_view import DetailRow
+
+    lit = DetailRow(
+        DetailField(
+            "ind_litval:x::v",
+            "→ note",
+            "See https://example.org",
+            editable=True,
+            meta={
+                "type": "ind_lit_val",
+                "action": "edit_literal_value",
+                "prop_uri": "x",
+                "val_str": "See https://example.org",
+                "lang_or_dt": "@en",
+            },
+        )
+    )
+    assert lit.tooltip is None  # no "Edit this literal value" hint on a markdown value row
+
+
+def test_clicking_a_link_row_opens_the_url_in_the_browser(monkeypatch) -> None:
+    """A click on a rendered hyperlink opens it via webbrowser.open (the same call the
+    graph viewer uses) and raises a visible toast (so the click is never a silent no-op);
+    a click on plain text keeps the normal edit/run activate path."""
 
     async def scenario() -> None:
         import types
+        import webbrowser
 
         from rich.style import Style
 
@@ -830,19 +857,88 @@ def test_clicking_a_link_row_opens_the_url_in_the_browser() -> None:
             row = next(iter(app.query(DetailRow)))
 
             opened: list[str] = []
+            notes: list[str] = []
             activated: list[bool] = []
-            app.open_url = lambda url, **_: opened.append(url)  # type: ignore[method-assign]
+            monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: opened.append(url) or True)
+            app.notify = lambda msg, **_: notes.append(msg)  # type: ignore[method-assign]
             row.action_activate = lambda: activated.append(True)  # type: ignore[method-assign]
 
-            # click on a hyperlink → open it, do not activate the row
+            # click on a hyperlink → open it + confirm with a toast, do not activate
             row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
             assert opened == ["https://example.org"]
+            assert notes == ["https://example.org"]  # URL surfaced in the toast
             assert activated == []
 
             # click on plain text (no link) → normal activate, no URL opened
             row.on_click(types.SimpleNamespace(style=Style()))
             assert activated == [True]
             assert opened == ["https://example.org"]  # unchanged
+
+    _run(scenario)
+
+
+def test_clicking_a_link_warns_when_no_browser_is_available(monkeypatch) -> None:
+    """Regression: when webbrowser.open returns False (no reachable browser — remote/SSH,
+    tmux, broken $BROWSER) the click surfaces the URL in a warning toast rather than
+    silently doing nothing."""
+
+    async def scenario() -> None:
+        import types
+        import webbrowser
+
+        from rich.style import Style
+
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(iter(app.query(DetailRow)))
+
+            monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: False)  # no browser
+            notes: list[tuple[str, str]] = []
+            app.notify = lambda msg, **kw: notes.append((msg, kw.get("severity")))  # type: ignore[method-assign]
+
+            row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
+            assert len(notes) == 1
+            msg, severity = notes[0]
+            assert "https://example.org" in msg and severity == "warning"  # URL surfaced
+
+    _run(scenario)
+
+
+def test_clicking_a_link_surfaces_a_toast_even_when_the_browser_raises(monkeypatch) -> None:
+    """Regression: when webbrowser.open raises, the click still surfaces the URL in an
+    error toast rather than silently doing nothing or crashing the UI."""
+
+    async def scenario() -> None:
+        import types
+        import webbrowser
+
+        from rich.style import Style
+
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")
+            await pilot.pause()
+            row = next(iter(app.query(DetailRow)))
+
+            def _boom(url, *a, **k):
+                raise RuntimeError("no browser")
+
+            monkeypatch.setattr(webbrowser, "open", _boom)
+            notes: list[tuple[str, str]] = []
+            app.notify = lambda msg, **kw: notes.append((msg, kw.get("severity")))  # type: ignore[method-assign]
+
+            row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
+            assert len(notes) == 1
+            msg, severity = notes[0]
+            assert "https://example.org" in msg and severity == "error"  # URL + error surfaced
 
     _run(scenario)
 
