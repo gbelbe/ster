@@ -776,12 +776,13 @@ def test_focus_restored_after_modal_edit(tmp_path) -> None:
 
 
 def test_detail_row_tooltips() -> None:
-    """Editable rows hint 'Enter to edit'; action rows describe the action; stats none."""
+    """Editable rows carry no hint (the ✎ icon signals it); action rows describe the
+    action; stats none."""
     from ster.nav.logic import DetailField
     from ster.tui.detail_view import DetailRow
 
     editable = DetailRow(DetailField("k", "label", "v", editable=True, meta={"type": "rdf_label"}))
-    assert editable.tooltip == "Enter to edit"
+    assert editable.tooltip is None  # "Enter to edit" removed — redundant with the ✎ affordance
     action = DetailRow(
         DetailField(
             "k", "⊘ Delete", "", editable=False, meta={"type": "action", "action": "delete_class"}
@@ -808,6 +809,42 @@ def test_detail_row_tooltip_prefers_explicit_comment() -> None:
         )
     )
     assert row.tooltip == "The name."
+
+
+def test_clicking_a_link_row_opens_the_url_in_the_browser() -> None:
+    """A click landing on a rendered hyperlink opens it via App.open_url; a click on
+    plain text keeps the normal edit/run activate path."""
+
+    async def scenario() -> None:
+        import types
+
+        from rich.style import Style
+
+        from ster.tui.detail_view import DetailRow
+
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show(ZOO + "Person")  # populate the detail pane
+            await pilot.pause()
+            row = next(iter(app.query(DetailRow)))
+
+            opened: list[str] = []
+            activated: list[bool] = []
+            app.open_url = lambda url, **_: opened.append(url)  # type: ignore[method-assign]
+            row.action_activate = lambda: activated.append(True)  # type: ignore[method-assign]
+
+            # click on a hyperlink → open it, do not activate the row
+            row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
+            assert opened == ["https://example.org"]
+            assert activated == []
+
+            # click on plain text (no link) → normal activate, no URL opened
+            row.on_click(types.SimpleNamespace(style=Style()))
+            assert activated == [True]
+            assert opened == ["https://example.org"]  # unchanged
+
+    _run(scenario)
 
 
 def test_clicking_blank_pane_space_selects_the_window() -> None:

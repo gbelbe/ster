@@ -168,6 +168,50 @@ def when_run_cli(ctx):
     ctx["launch"] = launch
 
 
+@when("I click the URL in an individual's comment")
+def when_click_url_in_comment(ctx):
+    url = "https://example.org/zoo/handbook"
+
+    async def act(app, pilot):
+        import types
+
+        from rich.console import Console
+        from rich.style import Style
+
+        from ster.tui.detail_view import DetailRow, _markdown_row_content, _renders_markdown
+
+        # give an individual a comment with a bare URL, then render its detail pane
+        app.tax.owl_individuals[ZOO + "Rex"].comments.append(
+            Definition(lang="en", value=f"See {url} for details")
+        )
+        app._show(ZOO + "Rex")
+        await pilot.pause()
+
+        # the comment row renders as Markdown carrying the URL as a Rich hyperlink
+        row = next(
+            r
+            for r in app.query(DetailRow)
+            if isinstance(r.field.value, str)
+            and url in r.field.value
+            and _renders_markdown(r.field)
+        )
+        con = Console(force_terminal=True)
+        links = {
+            seg.style.link
+            for seg in con.render(_markdown_row_content(row.field, actionable=True))
+            if seg.style and seg.style.link
+        }
+        assert url in links  # the row genuinely contains a clickable link
+
+        opened: list[str] = []
+        app.open_url = lambda u, **_: opened.append(u)  # capture the browser open
+        # a click landing on the link carries its URL in event.style.link
+        row.on_click(types.SimpleNamespace(style=Style(link=url)))
+        ctx["opened"] = opened
+
+    _session(ctx, act)
+
+
 # ── Then ──────────────────────────────────────────────────────────────────────
 
 
@@ -293,6 +337,11 @@ def then_concept_definition(ctx, name, defn):
 
     _session(ctx, act)
     assert defn in ctx["detail"]
+
+
+@then("that URL is opened in the system browser")
+def then_url_opened(ctx):
+    assert ctx["opened"] == ["https://example.org/zoo/handbook"]
 
 
 @then("the browser is launched with that ontology")

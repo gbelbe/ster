@@ -14,6 +14,7 @@ from __future__ import annotations
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
+from textual import events
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
@@ -48,7 +49,7 @@ def _insert_issue_sections(
 
 
 # Hover help for action rows (mouse + keyboard discoverability). Anything not
-# listed falls back to a generic hint; editable rows say "Enter to edit".
+# listed falls back to a generic "Enter to run" hint.
 _ACTION_HELP = {
     "new_subclass": "Create a child class under this one",
     "add_individual": "Create an instance (individual) of this class",
@@ -92,12 +93,11 @@ _ACTION_HELP = {
 
 def _row_tooltip(field: DetailField) -> str | None:
     """Hover help for a row: an explicit tooltip (e.g. a property's rdfs:comment),
-    else an edit hint, a per-action description, or a run hint."""
+    else a per-action description or a run hint. Plain editable rows get no hint —
+    the ✎ affordance icon already signals they can be edited."""
     tooltip = field.meta.get("tooltip")
     if tooltip:
         return tooltip
-    if field.editable:
-        return "Enter to edit"
     action = field.meta.get("action")
     if not action:
         return None
@@ -267,8 +267,18 @@ class DetailRow(Static):
         elif self.field.meta.get("action"):
             self.post_message(self.ActionRequested(self.field))
 
-    def on_click(self) -> None:
-        self.action_activate()
+    def on_click(self, event: events.Click) -> None:
+        """Open a clicked hyperlink in the browser; otherwise edit / run the row.
+
+        Markdown value rows render links as Rich hyperlinks, so a click landing on one
+        carries its URL in ``event.style.link``. We open it via ``App.open_url`` so it
+        works despite Textual's mouse capture (which swallows the terminal's own OSC-8
+        link handling); non-link clicks keep the normal activate behaviour."""
+        link = event.style.link
+        if link:
+            self.app.open_url(link)
+        else:
+            self.action_activate()
 
 
 def _section_widgets(sec: DetailSection) -> list[Widget]:

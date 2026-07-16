@@ -53,6 +53,10 @@ Feature: New-TUI — the Textual ontology browser
     Then the tree contains the scheme "Animals"
     And selecting the concept "Cat" shows its definition "A small feline."
 
+  Scenario: Clicking a link in a rendered value opens it in the browser
+    When I click the URL in an individual's comment
+    Then that URL is opened in the system browser
+
   Scenario: Launching the New-TUI from the command line
     When I run "ster show" on the zoo ontology
     Then the browser is launched with that ontology
