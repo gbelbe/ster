@@ -253,7 +253,14 @@ def test_load_warns_on_format_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "console",
-        type("C", (), {"print": lambda self, *a, **k: output.append(str(a[0]))})(),
+        type(
+            "C",
+            (),
+            {
+                "print": lambda self, *a, **k: output.append(str(a[0])),
+                "status": lambda self, *a, **k: __import__("contextlib").nullcontext(),
+            },
+        )(),
     )
     taxonomy = _load(f)
     assert taxonomy is not None

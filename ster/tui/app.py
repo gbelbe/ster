@@ -402,6 +402,7 @@ class OntologyApp(App):
     ) -> None:
         super().__init__()
         self._open_query_on_start = open_query
+        self._browser_ready = False  # overview shown + first lint computed + tree recoloured
         self.register_theme(STER_THEME)  # available alongside every built-in theme
         from ster.nav.prefs import _load_prefs
 
@@ -747,19 +748,31 @@ class OntologyApp(App):
         self._update_lang_indicator()
 
     def _initial_show(self) -> None:
-        """Show the overview (which computes the first lint result), then recolour the
-        tree once now that the uri→severity index is populated."""
+        """First paint. Opening straight into the query workspace skips the browser's
+        overview + lint + tree-recolour (none of it is needed to run SPARQL) — that runs
+        lazily the first time the browser is actually shown, so the query screen appears
+        without waiting on a full semanticlint pass over a large ontology."""
+        if self._open_query_on_start:  # home-menu "Query" opens straight into the query screen
+            self.action_open_query()
+            return
+        self._ensure_browser_ready()
+
+    def _ensure_browser_ready(self) -> None:
+        """Show the overview (which computes the first lint result), then recolour the tree.
+        Idempotent — the browser's first paint, deferred when we open into the query screen."""
+        if self._browser_ready:
+            return
+        self._browser_ready = True
         self._show(detail.OVERVIEW_URI)
         if self._lint_icons_on:
             self._rebuild_tree()
-        if self._open_query_on_start:  # home-menu "Query" opens straight into the query screen
-            self.action_open_query()
 
     def action_open_query(self) -> None:
-        """Open the SPARQL query workspace over the live taxonomy."""
+        """Open the SPARQL query workspace over the live taxonomy. On close, make sure the
+        browser behind it is painted (it may have been deferred when we opened into query)."""
         from .query_screen import QueryScreen
 
-        self.push_screen(QueryScreen(self.tax))
+        self.push_screen(QueryScreen(self.tax), lambda _result: self._ensure_browser_ready())
 
     def _update_lang_indicator(self) -> None:
         """Refresh the bottom-right status with the current display language."""
@@ -1015,12 +1028,18 @@ class OntologyApp(App):
         return self._lint_cache
 
     def _compute_lint(self) -> tuple[dict, list] | None:
-        """Run semanticlint on the file (blocking). ``None`` on any failure — a lint
-        error must never break the view."""
+        """Return the semanticlint result, from the md5+config disk cache when the file is
+        unchanged, else compute (blocking, ~2 s on a large ontology) and cache it. ``None``
+        on any failure — a lint error must never break the view."""
+        from ster.plugins.semanticlint import config, lint_cache
         from ster.plugins.semanticlint.runner import lint_overview
 
+        path = self._path
+        if path is None:
+            return None
         try:
-            return lint_overview(self._path)  # type: ignore[arg-type]
+            cfg_hash = lint_cache.config_hash(config.load_config())
+            return lint_cache.get_or_compute(path, cfg_hash, compute=lambda: lint_overview(path))
         except Exception:  # noqa: BLE001
             return None
 

@@ -3224,3 +3224,102 @@ def test_delete_scheme_lands_on_taxonomy(tmp_path) -> None:
             assert app._detail_uri == detail.TAXONOMY_URI  # the "Taxonomy" node
 
     _run(scenario)
+
+
+def test_opening_into_the_query_screen_defers_the_browser_paint(tmp_path) -> None:
+    """Launching straight into the query workspace (home-menu 'Query') must not paint the
+    browser behind it — the overview + first semanticlint pass are deferred so the query
+    screen appears without waiting on a lint of a large ontology."""
+
+    async def scenario() -> None:
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src, open_query=True)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(15):
+                await pilot.pause()
+                if app.screen.__class__.__name__ == "QueryScreen":
+                    break
+            assert app.screen.__class__.__name__ == "QueryScreen"
+            assert app._browser_ready is False  # browser paint (overview + lint) deferred
+            assert app._detail_uri is None  # overview not shown yet
+
+    _run(scenario)
+
+
+def test_closing_the_query_screen_paints_the_deferred_browser(tmp_path) -> None:
+    """When a directly-opened query screen closes, the browser behind it paints: the
+    overview is shown and it is marked ready (so the lint runs then, not on open)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src, open_query=True)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(15):
+                await pilot.pause()
+                if app.screen.__class__.__name__ == "QueryScreen":
+                    break
+            await pilot.press("escape")  # close the query screen (action_close → dismiss)
+            for _ in range(15):
+                await pilot.pause()
+                if app._browser_ready:
+                    break
+            assert app._browser_ready
+            assert app._detail_uri == detail.OVERVIEW_URI  # overview now painted
+
+    _run(scenario)
+
+
+def test_normal_browser_open_paints_immediately(tmp_path) -> None:
+    """Without open_query, the browser paints on mount (overview shown, marked ready)."""
+
+    async def scenario() -> None:
+        from ster.tui import detail
+
+        src = tmp_path / "o.ttl"
+        src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)  # no open_query
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(15):
+                await pilot.pause()
+                if app._browser_ready:
+                    break
+            assert app._browser_ready
+            assert app._detail_uri == detail.OVERVIEW_URI
+
+    _run(scenario)
+
+
+def test_lint_is_served_from_the_disk_cache_on_reopen(tmp_path, monkeypatch, semanticlint_enabled):
+    """Opening an unchanged file a second time serves its semanticlint result from the
+    md5 disk cache — lint_overview runs once across both opens, not twice."""
+    from ster.plugins.semanticlint import lint_cache, runner
+
+    monkeypatch.setattr(lint_cache, "_cache_path", lambda: tmp_path / "lint_cache.json")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        runner,
+        "lint_overview",
+        lambda p: calls.append(1) or ({"error": 0, "warning": 0, "info": 0}, []),
+    )
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+
+    async def open_once() -> None:
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _settle(pilot, lambda: app._lint_computed)
+            assert app._lint_cache is not None  # lint result present (from compute or cache)
+
+    _run(open_once)  # first open → computes + caches
+    _run(open_once)  # second open, file unchanged → cache hit
+    assert calls == [1]  # lint_overview ran exactly once across both opens
+
+
+def test_compute_lint_returns_none_without_a_file_path() -> None:
+    """A read-only session (no file) has nothing to lint — _compute_lint short-circuits."""
+    app = OntologyApp(store.load(DEMO), source="demo.ttl")  # no path=
+    assert app._compute_lint() is None

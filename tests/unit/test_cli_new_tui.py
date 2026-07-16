@@ -161,3 +161,61 @@ def test_home_screen_opens_selected_file_in_the_new_tui(tmp_path, monkeypatch):
         _home_screen(initial_file=src)  # 1st loop opens the file
     load_workspace.assert_called_once()  # workspace validated
     open_viewer.assert_called_once()  # opened in the New-TUI
+
+
+def test_prewarm_lint_caches_then_skips_recompute(tmp_path, monkeypatch):
+    """`_prewarm_lint` computes + caches the lint on first call (cache miss), then serves
+    the cache on the second call for an unchanged file (no recompute)."""
+    from ster import plugins
+    from ster.cli import _prewarm_lint
+    from ster.nav import prefs
+    from ster.plugins.semanticlint import config, lint_cache, runner
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
+    monkeypatch.setattr(lint_cache, "_cache_path", lambda: tmp_path / "lint_cache.json")
+    plugins.set_enabled("semanticlint", True)
+
+    calls: list[int] = []
+    monkeypatch.setattr(runner, "lint_overview", lambda p: calls.append(1) or ({"error": 0}, []))
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+
+    _prewarm_lint(src)
+    assert calls == [1]  # first open → computed + cached
+    _prewarm_lint(src)
+    assert calls == [1]  # unchanged file → cache hit, not recomputed
+
+
+def test_prewarm_lint_is_a_noop_when_semanticlint_is_off(tmp_path, monkeypatch):
+    """With semanticlint disabled, pre-warming does nothing (no lint, no crash)."""
+    from ster import plugins
+    from ster.cli import _prewarm_lint
+    from ster.nav import prefs
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    plugins.set_enabled("semanticlint", False)
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    _prewarm_lint(src)  # must not raise
+
+
+def test_prewarm_lint_swallows_lint_errors(tmp_path, monkeypatch):
+    """A failure during pre-warm (e.g. lint raises) must never block opening the file."""
+    from ster import plugins
+    from ster.cli import _prewarm_lint
+    from ster.nav import prefs
+    from ster.plugins.semanticlint import config, lint_cache, runner
+
+    monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
+    monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
+    monkeypatch.setattr(lint_cache, "_cache_path", lambda: tmp_path / "lint_cache.json")
+    plugins.set_enabled("semanticlint", True)
+
+    def _boom(_p):
+        raise RuntimeError("lint blew up")
+
+    monkeypatch.setattr(runner, "lint_overview", _boom)
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    _prewarm_lint(src)  # must not raise

@@ -636,7 +636,8 @@ def _load_safe(path: Path) -> Taxonomy | None:
             f"   [dim]Rename the file or use [bold]ster convert[/bold] to fix this.[/dim]"
         )
     try:
-        return store.load(path)
+        with console.status(f"Loading {path.name}…"):
+            return store.load(path)
     except Exception as exc:
         err.print(f"[red]{store.format_parse_error(exc, path)}[/red]")
         return None
@@ -981,6 +982,29 @@ def _launch_query(found: list[Path]) -> None:
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
 
+def _prewarm_lint(path: Path) -> None:
+    """Compute + cache the semanticlint result before the browser opens, so its first
+    paint is instant instead of blocking on a ~2 s pyshacl pass. A "Checking…" status
+    shows only on a cache miss (first open / after an edit); an unchanged file is a cache
+    hit and stays silent. Best-effort — the TUI lints lazily if this fails. Skipped for
+    the query workspace, which doesn't use lint at all."""
+    try:
+        from .plugins import semanticlint
+
+        if not semanticlint.is_active():
+            return
+        from .plugins.semanticlint import config, lint_cache
+        from .plugins.semanticlint.runner import lint_overview
+
+        cfg_hash = lint_cache.config_hash(config.load_config())
+        if lint_cache.get_cached(path, cfg_hash) is not None:
+            return  # unchanged since last open → already cached, nothing to do
+        with console.status(f"Checking {path.name}…"):
+            lint_cache.get_or_compute(path, cfg_hash, compute=lambda: lint_overview(path))
+    except Exception:  # noqa: BLE001 — pre-warming must never block opening the file
+        pass
+
+
 def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
     """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit."""
     from .git.manager import GitManager, render_diff
@@ -989,6 +1013,7 @@ def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
     taxonomy = _load_safe(taxonomy_file)
     if taxonomy is None:
         return
+    _prewarm_lint(taxonomy_file)  # populate the lint cache so the browser paints instantly
     pre_hash = store.file_hash(taxonomy_file) if _converted_from else ""
 
     gm = GitManager(taxonomy_file)
