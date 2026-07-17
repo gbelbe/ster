@@ -348,25 +348,25 @@ def test_git_log_sentinel_unique():
     assert _GIT_LOG_SENTINEL.suffix not in {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 
 
-# ── _multi_file_picker input-flush regression ─────────────────────────────────
+# ── _home_action_menu input-flush regression ──────────────────────────────────
 
 
-def test_multi_file_picker_flushes_stdin_before_reading(tmp_path, monkeypatch):
+def test_home_action_menu_flushes_stdin_before_reading(tmp_path, monkeypatch):
     """Stray bytes buffered from a previous curses session are discarded before
-    the picker starts reading.
+    the action menu starts reading.
 
     Regression: pressing Escape twice quickly in the tree view left a \\x1b byte
-    in the OS input buffer.  _multi_file_picker read it, blocked on the next
-    byte, consumed the user's Enter as the continuation, and then exited as
-    _QUIT_SENTINEL — terminating the program instead of opening the tree view.
+    in the OS input buffer.  The menu read it, blocked on the next byte, consumed
+    the user's Enter as the continuation, and then exited as _QUIT_SENTINEL —
+    terminating the program instead of opening the tree view.
     """
     import sys
 
     termios = pytest.importorskip("termios")
     pytest.importorskip("tty")  # skip on Windows
-    from ster.cli import _multi_file_picker
+    from ster.cli import _home_action_menu
 
-    found = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    selected = tmp_path / "a.ttl"
     flush_calls: list[int] = []
 
     class _FakeBuffer:
@@ -399,7 +399,7 @@ def test_multi_file_picker_flushes_stdin_before_reading(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeSysStdin())
     monkeypatch.setattr(sys, "stdout", _FakeSysStdout())
 
-    _multi_file_picker(found)
+    _home_action_menu(selected, allow_change=True)
 
     assert termios.TCIFLUSH in flush_calls
 
@@ -1010,3 +1010,64 @@ def test_cmd_publish_blocked_without_ontology_uri(tmp_path):
     )
     result = _runner.invoke(app, ["publish", str(ttl), "--dir", str(tmp_path / "ontology")])
     assert result.exit_code == 1
+
+
+def _fake_tty(monkeypatch, keys: list[bytes]):
+    """Wire sys.stdin/stdout + termios/tty so a raw-tty menu reads *keys* in order."""
+    import sys
+
+    termios = pytest.importorskip("termios")
+    pytest.importorskip("tty")
+    it = iter(keys)
+
+    class _Buf:
+        def read(self, n: int) -> bytes:
+            return next(it, b"\r")  # default to Enter if the script runs out
+
+    class _In:
+        def isatty(self) -> bool:
+            return True
+
+        def fileno(self) -> int:
+            return 0
+
+        buffer = _Buf()
+
+    class _Out:
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, s: str) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(termios, "tcgetattr", lambda fd: [])
+    monkeypatch.setattr(termios, "tcsetattr", lambda fd, w, a: None)
+    monkeypatch.setattr(termios, "tcflush", lambda fd, q: None)
+    monkeypatch.setattr("tty.setraw", lambda fd: None)
+    monkeypatch.setattr(sys, "stdin", _In())
+    monkeypatch.setattr(sys, "stdout", _Out())
+
+
+def test_run_arrow_menu_navigates_down_and_selects(tmp_path, monkeypatch):
+    from ster.cli import _run_arrow_menu
+
+    _fake_tty(monkeypatch, [b"\x1b", b"[", b"B", b"\r"])  # down-arrow then Enter
+    actions = [(True, "Open"), (object(), "Two"), (object(), "Three")]
+    assert _run_arrow_menu(tmp_path / "f.ttl", actions) == 1
+
+
+def test_run_arrow_menu_quit_returns_none(tmp_path, monkeypatch):
+    from ster.cli import _run_arrow_menu
+
+    _fake_tty(monkeypatch, [b"q"])
+    assert _run_arrow_menu(tmp_path / "f.ttl", [(True, "Open"), (object(), "Two")]) is None
+
+
+def test_run_arrow_menu_bare_escape_quits(tmp_path, monkeypatch):
+    from ster.cli import _run_arrow_menu
+
+    _fake_tty(monkeypatch, [b"\x1b", b"x"])  # Esc not followed by '[' → quit
+    assert _run_arrow_menu(tmp_path / "f.ttl", [(True, "Open"), (object(), "Two")]) is None

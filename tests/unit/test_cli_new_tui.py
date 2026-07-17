@@ -6,16 +6,18 @@ Textual app never actually starts.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from ster.cli import (
+    _CHANGE_FILE_SENTINEL,
     _EXT_ONT_SENTINEL,
     _QUIT_SENTINEL,
     _dispatch_menu_action,
+    _home_action_menu,
     _launch_query,
-    _multi_file_picker,
+    _select_home_file,
     app,
 )
 
@@ -110,27 +112,58 @@ def _no_tty(monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
 
 
-def test_picker_fallback_open_browser_is_option_one(tmp_path, monkeypatch):
-    """Option 1 (the primary 'open') now opens the New-TUI browser — the separate
-    'Open New-TUI' menu link was removed as redundant."""
+def test_action_menu_option_one_opens_the_selected_file(tmp_path, monkeypatch):
+    """Option 1 (Open Browser) returns the selected file to open — the actions all act on it."""
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="1"):
+        assert _home_action_menu(f, allow_change=False) == [f]
+
+
+def test_action_menu_selects_import_external(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Import External Ontology
+        assert _home_action_menu(f, allow_change=False) == _EXT_ONT_SENTINEL
+
+
+def test_action_menu_selects_quit(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (no 'Change file' for 1 file)
+        assert _home_action_menu(f, allow_change=False) == _QUIT_SENTINEL
+
+
+def test_action_menu_offers_change_file_only_with_multiple_files(tmp_path, monkeypatch):
+    """With >1 file, a 'Change file' action appears (option 8, before Quit at 9)."""
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Change file when allow_change
+        assert _home_action_menu(f, allow_change=True) == _CHANGE_FILE_SENTINEL
+    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit when allow_change
+        assert _home_action_menu(f, allow_change=True) == _QUIT_SENTINEL
+
+
+def test_select_home_file_returns_the_only_file_without_prompting(tmp_path, monkeypatch):
+    """A single file is auto-selected — no picker shown."""
+    _no_tty(monkeypatch)
+    f = tmp_path / "only.ttl"
+    with patch("ster.cli.Prompt.ask", side_effect=AssertionError("should not prompt")):
+        assert _select_home_file([f]) == f
+
+
+def test_select_home_file_picks_from_multiple(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl", tmp_path / "c.ttl"]
+    with patch("ster.cli.Prompt.ask", return_value="2"):  # pick the 2nd file
+        assert _select_home_file(files) == files[1]
+
+
+def test_select_home_file_quit_returns_none(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="1"):
-        assert _multi_file_picker(files) == files
-
-
-def test_picker_fallback_selects_import_external(tmp_path, monkeypatch):
-    _no_tty(monkeypatch)
-    files = [tmp_path / "a.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Import External Ontology
-        assert _multi_file_picker(files) == _EXT_ONT_SENTINEL
-
-
-def test_picker_fallback_selects_quit(tmp_path, monkeypatch):
-    _no_tty(monkeypatch)
-    files = [tmp_path / "a.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (last action)
-        assert _multi_file_picker(files) == _QUIT_SENTINEL
+    with patch("ster.cli.Prompt.ask", return_value="3"):  # 3 = Quit (last, after 2 files)
+        assert _select_home_file(files) is None
 
 
 def test_show_command_opens_the_new_tui():
@@ -155,12 +188,40 @@ def test_home_screen_opens_selected_file_in_the_new_tui(tmp_path, monkeypatch):
     with (
         patch("ster.cli._open_viewer") as open_viewer,
         patch("ster.cli._load_workspace") as load_workspace,
-        patch("ster.cli._multi_file_picker", return_value=_QUIT_SENTINEL),  # 2nd loop → quit
+        patch("ster.cli._home_action_menu", return_value=_QUIT_SENTINEL),  # 2nd loop → quit
         patch("ster.cli._print_welcome"),
     ):
         _home_screen(initial_file=src)  # 1st loop opens the file
     load_workspace.assert_called_once()  # workspace validated
     open_viewer.assert_called_once()  # opened in the New-TUI
+
+
+def test_home_screen_actions_use_the_chosen_file_not_the_first(tmp_path, monkeypatch):
+    """The user picks the 2nd file, then a menu action (Query) → it dispatches with THAT file,
+    not found[0] — the whole point of selecting the file first."""
+    from ster.cli import _QUERY_SENTINEL, _QUIT_SENTINEL, _home_screen
+
+    a = tmp_path / "a.ttl"
+    b = tmp_path / "b.ttl"
+    for f in (a, b):
+        f.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    dispatched: list[list] = []
+
+    def _fake_dispatch(action, found):
+        dispatched.append([action, list(found)])
+        return True  # handled → loop continues
+
+    # first the action menu returns Query, then Quit to end the loop
+    with (
+        patch("ster.cli._select_home_file", return_value=b),  # user chose the 2nd file
+        patch("ster.cli._home_action_menu", side_effect=[_QUERY_SENTINEL, _QUIT_SENTINEL]),
+        patch("ster.cli._dispatch_menu_action", side_effect=_fake_dispatch),
+        patch("ster.cli._print_welcome"),
+    ):
+        _home_screen()
+    assert dispatched == [[_QUERY_SENTINEL, [b]]]  # Query dispatched with the chosen file b
 
 
 def test_prewarm_lint_caches_then_skips_recompute(tmp_path, monkeypatch):
@@ -219,3 +280,123 @@ def test_prewarm_lint_swallows_lint_errors(tmp_path, monkeypatch):
     src = tmp_path / "o.ttl"
     src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     _prewarm_lint(src)  # must not raise
+
+
+def test_select_home_file_uses_the_arrow_picker_in_a_tty(tmp_path, monkeypatch):
+    from ster.cli import _QUIT_SENTINEL, _select_home_file
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    with patch("ster.cli._arrow_file_picker", return_value=files[1]):
+        assert _select_home_file(files) == files[1]
+    with patch("ster.cli._arrow_file_picker", return_value=_QUIT_SENTINEL):
+        assert _select_home_file(files) is None  # Quit → None
+
+
+def test_home_screen_exits_when_no_files(tmp_path, monkeypatch, capsys):
+    from ster.cli import _home_screen
+
+    monkeypatch.chdir(tmp_path)  # empty folder
+    with patch("ster.cli._print_welcome"):
+        _home_screen()  # no taxonomy files → prints a note and returns
+    assert "No taxonomy files" in capsys.readouterr().out
+
+
+def test_home_screen_change_file_reselects(tmp_path, monkeypatch):
+    from ster.cli import _CHANGE_FILE_SENTINEL, _QUIT_SENTINEL, _home_screen
+
+    a, b = tmp_path / "a.ttl", tmp_path / "b.ttl"
+    for f in (a, b):
+        f.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    select = MagicMock(side_effect=[a, b])
+    with (
+        patch("ster.cli._select_home_file", select),
+        patch("ster.cli._home_action_menu", side_effect=[_CHANGE_FILE_SENTINEL, _QUIT_SENTINEL]),
+        patch("ster.cli._print_welcome"),
+    ):
+        _home_screen()
+    assert select.call_count == 2  # picked a file, chose 'Change file', picked again, quit
+
+
+def test_open_selected_in_viewer_reports_a_workspace_error(tmp_path, monkeypatch):
+    from ster.cli import _open_selected_in_viewer
+
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._load_workspace", side_effect=RuntimeError("bad mapping")),
+        patch("ster.cli._open_viewer") as open_viewer,
+    ):
+        _open_selected_in_viewer([src], [src], None)
+    open_viewer.assert_not_called()  # a workspace error aborts before opening the viewer
+
+
+def test_select_home_file_non_numeric_defaults_to_first(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    with patch("ster.cli.Prompt.ask", return_value="abc"):  # ValueError → default to first
+        assert _select_home_file(files) == files[0]
+
+
+def test_action_menu_non_numeric_defaults_to_open(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="abc"):  # ValueError → default idx 0 = Open
+        assert _home_action_menu(f, allow_change=False) == [f]
+
+
+def test_action_menu_out_of_range_defaults_to_open(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="99"):  # out of range → default idx 0
+        assert _home_action_menu(f, allow_change=False) == [f]
+
+
+def test_home_screen_runs_the_intro_and_ci_check_once(tmp_path, monkeypatch):
+    import ster.cli as cli_module
+    from ster.cli import _QUIT_SENTINEL, _home_screen
+
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "_ci_check_done", False)
+    with (
+        patch("ster.cli._select_home_file", return_value=src),
+        patch("ster.cli._home_action_menu", return_value=_QUIT_SENTINEL),
+        patch("ster.cli._print_welcome") as welcome,
+        patch("ster.init_ci.prompt_if_missing", return_value=False),
+    ):
+        _home_screen()
+    welcome.assert_called_once()
+    assert cli_module._ci_check_done is True  # the one-time CI check ran
+
+
+def test_home_screen_quits_when_no_file_selected(tmp_path, monkeypatch):
+    from ster.cli import _home_screen
+
+    for name in ("a.ttl", "b.ttl"):
+        (tmp_path / name).write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._select_home_file", return_value=None),  # user quit at file selection
+        patch("ster.cli._home_action_menu") as menu,
+        patch("ster.cli._print_welcome"),
+    ):
+        _home_screen()
+    menu.assert_not_called()  # quitting at file selection never reaches the action menu
+
+
+def test_open_selected_in_viewer_reports_a_viewer_error(tmp_path, monkeypatch):
+    from ster.cli import _open_selected_in_viewer
+
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._load_workspace"),
+        patch("ster.cli._open_viewer", side_effect=RuntimeError("boom")),
+    ):
+        _open_selected_in_viewer([src], [src], None)  # a viewer error is caught, not raised

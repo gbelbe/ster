@@ -210,10 +210,24 @@ _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 _GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
+_CHANGE_FILE_SENTINEL: Path = Path(".__ster_change_file__")  # home menu → reselect the file
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
+
+# Home action-menu row colours (ANSI), keyed by sentinel; ``True`` = the "open" action.
+_MENU_COLOURS: dict[object, str] = {
+    True: "\033[1;36m",  # bright cyan — Open Browser (the primary action)
+    _GRAPH_SENTINEL: "\033[33m",  # yellow
+    _QUERY_SENTINEL: "\033[32m",  # green
+    _EXT_ONT_SENTINEL: "\033[35m",  # magenta
+    _HTML_SENTINEL: "\033[34m",  # blue
+    _GIT_LOG_SENTINEL: "\033[35m",  # magenta
+    _PUBLISH_SENTINEL: "\033[32m",  # green
+    _CHANGE_FILE_SENTINEL: "\033[36m",  # cyan
+    _QUIT_SENTINEL: "\033[31m",  # red
+}
 
 _session_file: Path | None = None  # in-process cache
 _ci_check_done: bool = False  # guard: prompt at most once per process
@@ -679,29 +693,46 @@ def _run(fn, *args, **kwargs):
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
 
 
-def _multi_file_picker(
-    found: list[Path],
-) -> list[Path] | Path | None:
-    """File list display + action menu picker.
+def _select_home_file(found: list[Path]) -> Path | None:
+    """Step 1 of the home menu: pick the single file every action will operate on.
 
-    Shows all taxonomy files with ✓ checkmarks (read-only display).
-    The navigable cursor is placed directly on the action menu items.
-
-    Returns:
-      list[Path]         — all found files (user chose Open Tree View)
-      _GIT_LOG_SENTINEL  — user chose Browse git history
-      _HTML_SENTINEL     — user chose Generate webpage
-      _QUIT_SENTINEL     — user chose Quit
-    Ctrl+C / plain Esc also returns _QUIT_SENTINEL.
-    Falls back to a plain prompt in non-interactive terminals.
+    One file → return it (nothing to choose). Otherwise arrow-select it (a plain numbered
+    prompt in a non-interactive terminal). Returns the chosen file, or None on Quit / Ctrl+C.
     """
     import sys
 
-    if not found:
-        return []
+    if len(found) == 1:
+        return found[0]
 
-    # Action items — cursor lives here only
-    _ACTIONS: list[tuple[object, str]] = [
+    console.print("[bold]Select a taxonomy file:[/bold]\n")
+    item_values: list[Path | None] = [*found, _QUIT_SENTINEL]
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import termios as _t  # noqa: F401 — availability probe
+            import tty as _tt  # noqa: F401
+
+            chosen = _arrow_file_picker(found, item_values, 0, None, False)
+            return None if chosen == _QUIT_SENTINEL else chosen
+        except ImportError:
+            pass
+
+    for i, f in enumerate(found, 1):
+        console.print(f"  [cyan]{i}[/cyan]  {f.name}")
+    console.print(f"  [cyan]{len(found) + 1}[/cyan]  [red]✕  Quit[/red]")
+    choice = Prompt.ask(f"File (1–{len(found) + 1})", default="1")
+    try:
+        idx = int(choice.strip()) - 1
+    except ValueError:
+        return found[0]
+    if idx == len(found):
+        return None  # Quit
+    return found[idx] if 0 <= idx < len(found) else found[0]
+
+
+def _home_actions(allow_change: bool) -> list[tuple[object, str]]:
+    """The home action rows: the fixed actions, an optional 'Change file', then Quit."""
+    actions: list[tuple[object, str]] = [
         (True, "🖥  Open Browser (New-TUI)"),  # True = "open" sentinel → the Textual New-TUI
         (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
@@ -709,153 +740,120 @@ def _multi_file_picker(
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
-        (_QUIT_SENTINEL, "✕  Quit"),
     ]
-    n_files = len(found)
-    n_actions = len(_ACTIONS)
+    if allow_change:  # only meaningful when there's more than one file to switch between
+        actions.append((_CHANGE_FILE_SENTINEL, "🔀 Change file"))
+    actions.append((_QUIT_SENTINEL, "✕  Quit"))
+    return actions
 
-    # ── Non-TTY fallback ──────────────────────────────────────────────────────
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        for f in found:
-            console.print(f"  ✓  {f.name}")
-        console.print("  [cyan]1[/cyan]  [bold cyan]🖥  Open Browser (New-TUI)[/bold cyan]")
-        console.print("  [cyan]2[/cyan]  [yellow]◈  Open Graph Viz[/yellow]")
-        console.print("  [cyan]3[/cyan]  [green]🔍 Query Graph SPARQL[/green]")
-        console.print("  [cyan]4[/cyan]  [magenta]📥 Import External Ontology[/magenta]")
-        console.print("  [cyan]5[/cyan]  [blue]🌐 Generate Web-Documentation[/blue]")
-        console.print("  [cyan]6[/cyan]  [magenta]⎇  Browse git history[/magenta]")
-        console.print("  [cyan]7[/cyan]  [green]📦 Version & Publish LD[/green]")
-        console.print("  [cyan]8[/cyan]  [red]✕  Quit[/red]")
-        console.print()
-        choice = Prompt.ask("Action (1–8)", default="1")
-        s = choice.strip().lower()
-        if s in ("1", "all"):
-            return list(found)
-        fallback: dict[str, Path] = {
-            "2": _GRAPH_SENTINEL,
-            "3": _QUERY_SENTINEL,
-            "4": _EXT_ONT_SENTINEL,
-            "5": _HTML_SENTINEL,
-            "6": _GIT_LOG_SENTINEL,
-            "7": _PUBLISH_SENTINEL,
-            "8": _QUIT_SENTINEL,
-        }
-        return fallback.get(s, list(found))  # type: ignore[return-value]
 
+def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> object:
+    """Non-TTY action menu: a plain numbered prompt. Returns the chosen action sentinel."""
+    console.print(f"  [green]✓[/green]  [bold]{selected.name}[/bold]\n")
+    for i, (_s, label) in enumerate(actions, 1):
+        console.print(f"  [cyan]{i}[/cyan]  {label}")
+    console.print()
+    choice = Prompt.ask(f"Action (1–{len(actions)})", default="1")
     try:
-        import termios
-        import tty
-    except ImportError:
-        return list(found)
+        idx = int(choice.strip()) - 1
+    except ValueError:
+        idx = -1
+    if not (0 <= idx < len(actions)):
+        idx = 0  # default → Open Browser
+    return actions[idx][0]
 
-    R = "\033[0m"
-    B = "\033[1m"
-    D = "\033[2m"
-    CY = "\033[36m"
-    GR = "\033[32m"
-    MG = "\033[35m"
-    RE = "\033[31m"
-    INV = "\033[7m"
-    BCY = "\033[1;36m"
-    CLEAR = "\r\033[2K"
-    NL = "\r\n"
 
-    # Cursor operates only on action items (0-based index into _ACTIONS)
-    action_cursor = 0
+def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | None:
+    """Arrow-key action menu for *selected*. Returns the chosen index, or None on Quit/Esc."""
+    import sys
+    import termios
+    import tty
 
-    def _action_colour(sentinel: object) -> str:
-        if sentinel is True:
-            return BCY  # bright cyan — the New-TUI browser (the primary "open" action)
-        if sentinel == _GIT_LOG_SENTINEL:
-            return MG
-        if sentinel == _HTML_SENTINEL:
-            return "\033[34m"  # blue
-        if sentinel == _GRAPH_SENTINEL:
-            return "\033[33m"  # yellow
-        if sentinel == _QUIT_SENTINEL:
-            return RE
-        if sentinel == _QUERY_SENTINEL:
-            return GR  # green
-        if sentinel == _EXT_ONT_SENTINEL:
-            return MG  # magenta
-        if sentinel == _PUBLISH_SENTINEL:
-            return GR  # green
-        return CY  # "open tree view"
+    R, B, D, CY, GR, INV, BCY = (
+        "\033[0m",
+        "\033[1m",
+        "\033[2m",
+        "\033[36m",
+        "\033[32m",
+        "\033[7m",
+        "\033[1;36m",
+    )
+    CLEAR, NL = "\r\033[2K", "\r\n"
+    n = len(actions)
+    cursor = 0
 
     def render(first: bool = False) -> None:
-        total_lines = n_files + 1 + n_actions + 1  # files + blank sep + actions + hint
         if not first:
-            sys.stdout.write(f"\033[{total_lines}A")
-
-        # File rows — static display with ✓, no cursor
-        for f in found:
-            row = f"       {GR}✓{R}  {f.name}"
+            sys.stdout.write(f"\033[{n + 3}A")  # file row + blank + n actions + hint
+        sys.stdout.write(f"{CLEAR}  {GR}✓{R}  {B}{selected.name}{R}{NL}{CLEAR}{NL}")
+        for j, (sentinel, label) in enumerate(actions):
+            col = _MENU_COLOURS.get(sentinel, CY)
+            num = f"{j + 1:>2}"
+            row = (
+                f"  {BCY}{INV} {num} {R}  {col}{B}{label}{R}"
+                if j == cursor
+                else f"    {CY}{num}{R}  {col}{label}{R}"
+            )
             sys.stdout.write(f"{CLEAR}{row}{NL}")
-
-        # Blank separator line
-        sys.stdout.write(f"{CLEAR}{NL}")
-
-        # Action rows — cursor navigates here
-        for j, (sentinel, label) in enumerate(_ACTIONS):
-            col = _action_colour(sentinel)
-            num_s = f"{j + 1:>2}"
-            if j == action_cursor:
-                row = f"  {BCY}{INV} {num_s} {R}  {col}{B}{label}{R}"
-            else:
-                row = f"    {CY}{num_s}{R}  {col}{label}{R}"
-            sys.stdout.write(f"{CLEAR}{row}{NL}")
-
-        # Hint line
         sys.stdout.write(f"{CLEAR}  {D}↑↓ navigate  Enter: select{R}{NL}")
         sys.stdout.flush()
 
     render(first=True)
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    result: list[Path] | Path | None = _QUIT_SENTINEL
-
+    result: int | None = None
     try:
         tty.setraw(fd)
-        # Discard any bytes left in the OS input buffer from a previous curses
-        # session (e.g. a second Escape pressed quickly while quitting the tree
-        # view). Without this flush the stray \x1b is read here and interpreted
-        # as Quit, causing the picker to exit immediately.
+        # Discard bytes left in the OS buffer from a previous curses session (a stray
+        # Escape would otherwise be read as Quit and exit the menu immediately).
         termios.tcflush(fd, termios.TCIFLUSH)
         while True:
             ch = sys.stdin.buffer.read(1)
-
             if ch in (b"\r", b"\n"):
-                sentinel, _ = _ACTIONS[action_cursor]
-                if sentinel is True:
-                    result = list(found)
-                else:
-                    result = sentinel  # type: ignore[assignment]
+                result = cursor
                 break
-
-            elif ch in (b"q", b"Q", b"\x03"):
-                result = _QUIT_SENTINEL
-                break
-
-            elif ch == b"\x1b":
+            if ch in (b"q", b"Q", b"\x03"):
+                break  # → None (quit)
+            if ch == b"\x1b":
                 nxt = sys.stdin.buffer.read(1)
-                if nxt == b"[":
-                    code = sys.stdin.buffer.read(1)
-                    if code == b"A":
-                        action_cursor = (action_cursor - 1) % n_actions
-                    elif code == b"B":
-                        action_cursor = (action_cursor + 1) % n_actions
-                else:
-                    result = _QUIT_SENTINEL
-                    break
-
+                if nxt != b"[":
+                    break  # bare Esc → quit
+                code = sys.stdin.buffer.read(1)
+                cursor = (cursor + (1 if code == b"B" else -1 if code == b"A" else 0)) % n
             render()
-
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         sys.stdout.write(NL)
         sys.stdout.flush()
-
     return result
+
+
+def _home_action_menu(selected: Path, allow_change: bool) -> list[Path] | Path | None:
+    """Step 2 of the home menu: the action menu for the *selected* file.
+
+    Every action operates on *selected*. Returns:
+      [selected]             — Open Browser (the file to open)
+      <action sentinel>      — Graph / Query / Import / HTML / git-log / Publish
+      _CHANGE_FILE_SENTINEL  — reselect the file (offered only when >1 file exists)
+      _QUIT_SENTINEL         — Quit / Ctrl+C / plain Esc
+    Falls back to a plain numbered prompt in non-interactive terminals.
+    """
+    import sys
+
+    actions = _home_actions(allow_change)
+
+    def _chosen(sentinel: object) -> list[Path] | Path:
+        return [selected] if sentinel is True else sentinel  # type: ignore[return-value]
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _chosen(_home_menu_fallback(selected, actions))
+    try:
+        import termios  # noqa: F401 — availability probe for the raw-tty menu
+        import tty  # noqa: F401
+    except ImportError:
+        return [selected]  # no raw-tty UI available → default to opening the file
+    idx = _run_arrow_menu(selected, actions)
+    return _QUIT_SENTINEL if idx is None else _chosen(actions[idx][0])
 
 
 def _resolve_broken_mappings_at_load(
@@ -2215,105 +2213,106 @@ def main() -> None:
     _home_screen()
 
 
+def _found_taxonomy_files() -> list[Path]:
+    """Every taxonomy file in the current folder, sorted and de-duplicated."""
+    found: list[Path] = []
+    for pattern in _TAXONOMY_GLOBS:
+        found.extend(Path.cwd().glob(pattern))
+    return sorted(set(found))
+
+
+def _print_home_intro() -> None:
+    """Welcome banner + the one-time CI-workflow prompt."""
+    global _ci_check_done
+    _print_welcome()
+    if _ci_check_done:
+        return
+    _ci_check_done = True
+    from .init_ci import prompt_if_missing
+    from .project import _git_root as _find_git_root
+
+    _root = _find_git_root(Path.cwd())
+    if _root and prompt_if_missing(_root):
+        console.print(
+            "[green]✓[/green] .github/workflows/taxonomy-ci.yml — commit and push to activate CI\n"
+        )
+
+
+def _open_selected_in_viewer(
+    selected: list[Path], found: list[Path], project: Project | None
+) -> None:
+    """Persist the project, validate the workspace, then open the primary file in the viewer."""
+    global _session_file
+    git_root = _git_root(Path.cwd()) or Path.cwd()
+    updated_project = Project(root=git_root, files=[], lang=project.lang if project else "en")
+    for f in selected:
+        updated_project.add_file(f)
+    try:
+        updated_project.save()
+    except Exception:
+        pass  # non-fatal if .ster/ can't be written
+    try:
+        _load_workspace(selected, found)  # raises on broken mappings
+    except Exception as exc:
+        err.print(f"[red]Failed to load workspace: {exc}[/red]")
+        return
+    primary = selected[0]
+    _save_session(primary)
+    _session_file = primary
+    try:
+        _open_viewer(primary, lang=updated_project.lang)
+    except Exception as exc:
+        err.print(f"[red]Viewer error: {exc}[/red]")
+
+
 def _home_screen(initial_file: Path | None = None) -> None:
     """Interactive home-screen loop (bare ``ster``).
 
-    When *initial_file* is given (``ster PATH/file.ttl``) it is opened in the
-    workspace viewer first; on exit the normal file/action menu takes over, so
-    the experience matches bare ``ster`` run inside the file's folder.
+    Two steps: pick a single taxonomy file, then choose an action for it — every action
+    (open / graph / query / …) operates on that file, with a "Change file" entry to switch.
+    ``ster PATH/file.ttl`` opens that file directly first; on exit the menu takes over.
     """
-    global _ci_check_done, _session_file
-
     pending_open = initial_file
+    selected_file: Path | None = None
     while True:
         try:
-            if pending_open is None:
-                _print_welcome()
-
-                if not _ci_check_done:
-                    _ci_check_done = True
-                    from .init_ci import prompt_if_missing
-                    from .project import _git_root as _find_git_root
-
-                    _root = _find_git_root(Path.cwd())
-                    if _root and prompt_if_missing(_root):
-                        console.print(
-                            "[green]✓[/green] .github/workflows/taxonomy-ci.yml — "
-                            "commit and push to activate CI\n"
-                        )
-
-            found: list[Path] = []
-            for pattern in _TAXONOMY_GLOBS:
-                found.extend(Path.cwd().glob(pattern))
-            found = sorted(set(found))
-
-            # ── No files in folder → inform user and exit ─────────────────────
+            found = _found_taxonomy_files()
             if not found:
                 console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
                 break
-
-            # ── Load project for lang preference ──────────────────────────────
             project = Project.load(Path.cwd())
 
-            # ── Open the command-line file first, otherwise show the menu ──────
-            selected: list[Path] | Path | None
-            if pending_open is not None:
-                selected = pending_open
+            action: list[Path] | Path | None
+            if pending_open is not None:  # ster PATH/file.ttl → open that file directly
+                selected_file = pending_open
                 pending_open = None
+                action = [selected_file]
             else:
-                console.print("[bold]Taxonomy files in this folder:[/bold]\n")
-                try:
-                    selected = _multi_file_picker(found)
-                except (KeyboardInterrupt, EOFError):
-                    console.print()
-                    break
+                _print_home_intro()
+                # Step 1: choose the file (once, then remembered until "Change file").
+                if selected_file is None or selected_file not in found:
+                    selected_file = _select_home_file(found)
+                    if selected_file is None:  # Quit / cancel
+                        break
+                # Step 2: the action menu for that file.
+                action = _home_action_menu(selected_file, allow_change=len(found) > 1)
         except (KeyboardInterrupt, EOFError):
             console.print()
             break
 
-        if selected is _QUIT_SENTINEL or selected is None:
+        if action is _QUIT_SENTINEL or action is None:
             break
-
-        if _dispatch_menu_action(selected, found):
+        if action is _CHANGE_FILE_SENTINEL:  # go back to file selection
+            selected_file = None
             continue
 
-        if not selected:
+        assert selected_file is not None  # set above before any menu is shown
+        if _dispatch_menu_action(action, [selected_file]):  # actions act on the chosen file
             continue
 
-        # Normalise: _multi_file_picker may return a single Path or list[Path]
-        if isinstance(selected, Path):
-            selected = [selected]
-
-        # ── Save / update project ─────────────────────────────────────────────
-        git_root = _git_root(Path.cwd()) or Path.cwd()
-        updated_project = Project(
-            root=git_root,
-            files=[],
-            lang=project.lang if project else "en",
-        )
-        for f in selected:
-            updated_project.add_file(f)
-        try:
-            updated_project.save()
-        except Exception:
-            pass  # non-fatal if .ster/ can't be written
-
-        # ── Validate the workspace (raises on broken mappings) ────────────────
-        try:
-            _load_workspace(selected, found)
-        except Exception as exc:
-            err.print(f"[red]Failed to load workspace: {exc}[/red]")
-            continue
-
-        # ── Open viewer ───────────────────────────────────────────────────────
-        primary = selected[0]
-        _save_session(primary)
-        _session_file = primary
-        try:
-            _open_viewer(primary, lang=updated_project.lang)
-        except Exception as exc:
-            err.print(f"[red]Viewer error: {exc}[/red]")
-        continue  # return to home after viewer
+        # action is [selected_file] → open the viewer for the chosen file
+        selected = action if isinstance(action, list) else [selected_file]
+        _open_selected_in_viewer(selected, found, project)
 
 
 if __name__ == "__main__":
