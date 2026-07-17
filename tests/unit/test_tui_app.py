@@ -2746,28 +2746,23 @@ def test_bottom_bar_shows_the_selected_language() -> None:
 # ── graph web view: port-conflict warning + offer to close the holder ───────────
 
 
-def test_show_graph_warns_when_the_live_server_port_is_held() -> None:
-    """When the port is taken by another process (and our server isn't live), the graph
-    action pops a confirmation naming the holder instead of silently going offline."""
+def test_compute_lint_degrades_to_none_when_the_semanticlint_import_fails() -> None:
+    """Regression: a present-but-unimportable semanticlint (find_spec succeeds, import
+    raises) used to crash the app a few seconds after opening — the lint worker's
+    ``_compute_lint`` imported the runner *outside* its try. It must return None, never
+    raise, so a broken plugin degrades to "no lint" instead of a crash loop."""
+    import sys
     from unittest.mock import patch
 
-    from ster import viz_vowl
-    from ster.tui.choice_modal import ChoiceModal
+    from ster.plugins.semanticlint import deps
 
-    async def scenario() -> None:
-        app = _app()
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            with (
-                patch.object(viz_vowl, "is_live_server", return_value=False),
-                patch.object(viz_vowl, "port_holder", return_value=(999, "python ster show x.ttl")),
-            ):
-                app._show_graph(None)
-                await pilot.pause()
-            assert isinstance(app.screen, ChoiceModal)
-            assert "999" in app.screen._prompt and "already in use" in app.screen._prompt
-
-    _run(scenario)
+    app = OntologyApp(store.load(DEMO), source="demo.ttl", path=DEMO)
+    with (
+        patch.object(deps, "is_installed", return_value=True),  # slips past is_active
+        patch.dict(sys.modules, {"semanticlint": None}),  # `import semanticlint` now raises
+    ):
+        sys.modules.pop("ster.plugins.semanticlint.runner", None)  # force a re-import
+        assert app._compute_lint() is None  # degraded, not crashed
 
 
 def test_show_graph_opens_directly_when_the_port_is_free() -> None:
@@ -2794,10 +2789,12 @@ def test_show_graph_opens_directly_when_the_port_is_free() -> None:
     _run(scenario)
 
 
-def test_port_conflict_close_frees_the_port_then_opens() -> None:
+def test_port_conflict_reclaims_the_port_then_opens_no_prompt() -> None:
+    """A held port is reclaimed (previous process closed) and the graph opens — no modal."""
     from unittest.mock import patch
 
     from ster import viz_vowl
+    from ster.tui.choice_modal import ChoiceModal
 
     async def scenario() -> None:
         app = _app()
@@ -2806,16 +2803,22 @@ def test_port_conflict_close_frees_the_port_then_opens() -> None:
             freed: list = []
             opened: list = []
             with (
-                patch.object(viz_vowl, "free_port", lambda pid: freed.append(pid) or True),
+                patch.object(viz_vowl, "is_live_server", return_value=False),
+                patch.object(viz_vowl, "port_holder", return_value=(999, "old ster")),
+                patch.object(viz_vowl, "free_port", lambda pid, **kw: freed.append(pid) or True),
                 patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
             ):
-                app._on_port_conflict("close", 999, None)
-            assert freed == [999] and opened == [None]  # killed then opened the live graph
+                app._show_graph(None)
+                await pilot.pause()
+            assert freed == [999] and opened == [None]  # closed then opened, straight through
+            assert not isinstance(app.screen, ChoiceModal)  # no prompt
 
     _run(scenario)
 
 
-def test_port_conflict_close_failure_reports_and_does_not_open() -> None:
+def test_port_conflict_opens_a_snapshot_when_the_port_cannot_be_freed() -> None:
+    """If the holder won't die, the graph still opens (open_graph_now → offline snapshot);
+    the view never hangs waiting on a prompt."""
     from unittest.mock import patch
 
     from ster import viz_vowl
@@ -2826,34 +2829,14 @@ def test_port_conflict_close_failure_reports_and_does_not_open() -> None:
             await pilot.pause()
             opened: list = []
             with (
-                patch.object(viz_vowl, "free_port", lambda pid: False),
+                patch.object(viz_vowl, "is_live_server", return_value=False),
+                patch.object(viz_vowl, "port_holder", return_value=(999, "old ster")),
+                patch.object(viz_vowl, "free_port", lambda pid, **kw: False),
                 patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
             ):
-                app._on_port_conflict("close", 999, None)
-            assert opened == []  # port never freed → don't open (user is notified of the error)
-
-    _run(scenario)
-
-
-def test_port_conflict_snapshot_opens_without_killing_and_cancel_does_nothing() -> None:
-    from unittest.mock import patch
-
-    from ster import viz_vowl
-
-    async def scenario() -> None:
-        app = _app()
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            freed: list = []
-            opened: list = []
-            with (
-                patch.object(viz_vowl, "free_port", lambda pid: freed.append(pid) or True),
-                patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
-            ):
-                app._on_port_conflict("snapshot", 999, None)  # offline snapshot, no kill
-                app._on_port_conflict("cancel", 999, None)  # nothing
-                app._on_port_conflict(None, 999, None)  # dismissed → nothing
-            assert opened == [None] and freed == []
+                app._show_graph(None)
+                await pilot.pause()
+            assert opened == [None]  # opened anyway (snapshot fallback), not blocked
 
     _run(scenario)
 

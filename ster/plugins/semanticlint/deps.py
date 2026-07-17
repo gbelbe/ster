@@ -8,6 +8,7 @@ not core ster, owns it. Nothing here imports the library at module load; callers
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import subprocess
 import sys
@@ -17,8 +18,20 @@ REQUIREMENT = "semanticlint>=0.2"
 
 
 def is_installed() -> bool:
-    """True when the ``semanticlint`` library is importable in the current env."""
-    return importlib.util.find_spec("semanticlint") is not None
+    """True when the ``semanticlint`` library can actually be **imported** in this env.
+
+    A mere ``find_spec`` isn't enough: a present-but-broken install (the package is
+    found, but importing it raises — e.g. a missing transitive dependency) must count
+    as *not usable*, or ``is_active()`` goes True and the lint path crashes on the
+    import. So confirm the spec exists (cheap) and that the import succeeds.
+    """
+    if importlib.util.find_spec("semanticlint") is None:
+        return False
+    try:
+        importlib.import_module("semanticlint")
+        return True
+    except Exception:  # noqa: BLE001 — any import failure means "not usable"
+        return False
 
 
 def install(requirement: str = REQUIREMENT) -> tuple[bool, str]:

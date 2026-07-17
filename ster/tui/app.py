@@ -1023,13 +1023,16 @@ class OntologyApp(App):
         """Return the semanticlint result, from the md5+config disk cache when the file is
         unchanged, else compute (blocking, ~2 s on a large ontology) and cache it. ``None``
         on any failure — a lint error must never break the view."""
-        from ster.plugins.semanticlint import config, lint_cache
-        from ster.plugins.semanticlint.runner import lint_overview
-
         path = self._path
         if path is None:
             return None
         try:
+            # Imported inside the try: a present-but-broken semanticlint (import raises)
+            # must degrade to "no lint", never crash the view — the import itself can
+            # fail, not just the computation.
+            from ster.plugins.semanticlint import config, lint_cache
+            from ster.plugins.semanticlint.runner import lint_overview
+
             cfg_hash = lint_cache.config_hash(config.load_config())
             return lint_cache.get_or_compute(path, cfg_hash, compute=lambda: lint_overview(path))
         except Exception:  # noqa: BLE001
@@ -2331,16 +2334,17 @@ class OntologyApp(App):
         """Open (or update) the VOWL graph in the browser — focused on *target* when
         given, else the whole ontology.
 
-        A view, not a mutation. When the live-server port is already taken by another
-        process, warn and offer to close it (rather than silently opening a read-only
-        snapshot) — see :meth:`_prompt_port_conflict`.
+        A view, not a mutation. When the live-server port is already held by a previous
+        graph window/process, reclaim it (close that process) and open — no prompt, since
+        re-opening the graph should simply replace the old window — see
+        :meth:`_reclaim_port_and_open`.
         """
         from ster import viz_vowl
 
         if not viz_vowl.is_live_server():
             holder = viz_vowl.port_holder()
             if holder is not None:
-                self._prompt_port_conflict(holder, target)
+                self._reclaim_port_and_open(holder, target)
                 return
         self._open_graph_now(target)
 
@@ -2358,47 +2362,23 @@ class OntologyApp(App):
         except Exception as exc:  # surfacing beats crashing the UI for a view action
             self.notify(f"Couldn't open the graph: {exc}", severity="error")
 
-    def _prompt_port_conflict(self, holder: tuple[int, str], target: str | None) -> None:
-        """Warn that the graph's live-server port is taken and offer to close the process
-        holding it (then open the live graph), open a read-only snapshot, or cancel."""
-        from ster.api_server import load_server_config
-
-        pid, desc = holder
-        _url, port = load_server_config()
-        short = desc if len(desc) <= 70 else desc[:69] + "…"
-        prompt = (
-            f"Port {port} is already in use by another application (or another ster "
-            f"instance):\n  {short}  (PID {pid})\n\n"
-            "ster can't start the live graph server there. Close that process and open "
-            "the live graph?"
-        )
-        options = [
-            ("Close it & open the live graph", "close"),
-            ("Open a read-only snapshot instead", "snapshot"),
-            ("Cancel", "cancel"),
-        ]
-        self.push_screen(
-            ChoiceModal(prompt, options, danger=True),
-            lambda choice: self._on_port_conflict(choice, pid, target),
-        )
-
-    def _on_port_conflict(self, choice: str | None, pid: int, target: str | None) -> None:
-        """Act on the port-conflict choice: close the process then open the live graph,
-        open the offline snapshot, or do nothing."""
+    def _reclaim_port_and_open(self, holder: tuple[int, str], target: str | None) -> None:
+        """A previous graph window/process holds the live-server port — close it, then
+        open the graph. No prompt: re-opening the graph just replaces the old window. If
+        the process can't be closed, ``_open_graph_now`` still opens a read-only snapshot
+        (the port is busy), so the view always appears — it never hangs on a modal."""
         from ster import viz_vowl
 
-        if choice in (None, "cancel"):
-            return
-        if choice == "snapshot":
-            self._open_graph_now(target)  # port still busy → static offline snapshot
-            return
+        pid, _desc = holder
         if viz_vowl.free_port(pid):
-            self.notify(f"Closed the process on the port (PID {pid}).")
-            self._open_graph_now(target)
+            self.notify(f"Closed the previous graph window (PID {pid}).")
         else:
             self.notify(
-                f"Couldn't free the port — PID {pid} may still be running.", severity="error"
+                f"Couldn't close the previous graph process (PID {pid}) — "
+                "opening a read-only snapshot instead.",
+                severity="warning",
             )
+        self._open_graph_now(target)
 
     def _open_lint(self, severity: str | None = None) -> None:
         """Open a modal listing the semanticlint issues of *severity* (a read-only
