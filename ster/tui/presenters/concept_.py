@@ -14,6 +14,7 @@ from ster.nav.logic import (
     _concept_completion_fields,
     _subtree_concept_uris,
     build_concept_detail,
+    concept_subtree_has_tagged_individuals,
 )
 
 from .base import EntityPresenter
@@ -47,8 +48,8 @@ class ConceptPresenter(EntityPresenter):
             self.tax, self.uri, self.lang, configured_langs=self.ctx.configured_langs
         )
         concept = self.tax.concepts.get(self.uri)
-        if concept is None or not concept.narrower:
-            return base  # leaf concept (no narrower) → no Quality & Coverage box
+        if concept is None or not concept_subtree_has_tagged_individuals(self.tax, self.uri):
+            return base  # no individuals tagged (dct:subject) to this concept → box not useful
         # Relocate the inline per-property completion bars into the bordered group.
         base = strip_sections(base, prefixes={"Completion —"})
         coverage = _concept_completion_fields(self.tax, self.uri)

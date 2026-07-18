@@ -1,0 +1,82 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+@prefix gear: <https://example.org/gear#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outdoor Gear — a mixed SKOS + OWL demo
+#
+# What to try in ster:
+#   • The Taxonomy shows a theme scheme; puns (Tent, Backpack) render ◉ with their
+#     OWL subclasses bridged in under them. Pure classes (Jacket) stay in Ontology.
+#   • Right-click a plain concept (Camping / Waterproof) → "Promote to class".
+#   • Right-click a pun (Tent) → "Demote to concept".
+#   • Right-click an individual → "Tag with concept…" (try the untagged Summit 50L).
+#   • Right-click a concept (Waterproof) → "Tag individuals…" to bulk-tag several.
+# ─────────────────────────────────────────────────────────────────────────────
+
+gear: a owl:Ontology ;
+    rdfs:label "Outdoor Gear — mixed SKOS + OWL demo"@en ;
+    rdfs:comment "Blends a SKOS theme taxonomy with an OWL product ontology: puns, a bridged class hierarchy, and individuals tagged by theme."@en .
+
+# ── SKOS taxonomy: browsable product themes ──────────────────────────────────
+gear:themes a skos:ConceptScheme ;
+    skos:prefLabel "Product Themes"@en ;
+    skos:hasTopConcept gear:Outdoor .
+
+gear:Outdoor a skos:Concept ;
+    skos:prefLabel "Outdoor"@en ;
+    skos:topConceptOf gear:themes ;
+    skos:narrower gear:Camping, gear:Hiking, gear:WaterSports, gear:Waterproof .
+
+gear:Camping a skos:Concept ; skos:prefLabel "Camping"@en ; skos:broader gear:Outdoor .
+gear:Hiking a skos:Concept ; skos:prefLabel "Hiking"@en ; skos:broader gear:Outdoor .
+gear:WaterSports a skos:Concept ; skos:prefLabel "Water Sports"@en ; skos:broader gear:Outdoor .
+gear:Waterproof a skos:Concept ; skos:prefLabel "Waterproof"@en ; skos:broader gear:Outdoor .
+
+# ── Puns: a theme that is ALSO a formal product class ────────────────────────
+# Both a skos:Concept (a browsable category) and an owl:Class (a type with
+# subclasses + individuals). These render ◉ and merge the two hierarchies.
+gear:Tent a skos:Concept, owl:Class ;
+    skos:prefLabel "Tent"@en ; rdfs:label "Tent"@en ;
+    skos:broader gear:Camping ;
+    rdfs:subClassOf gear:Product .
+
+gear:Backpack a skos:Concept, owl:Class ;
+    skos:prefLabel "Backpack"@en ; rdfs:label "Backpack"@en ;
+    skos:broader gear:Hiking ;
+    rdfs:subClassOf gear:Product .
+
+# ── OWL ontology: the product class hierarchy ────────────────────────────────
+gear:Product a owl:Class ; rdfs:label "Product"@en .
+
+# Pure subclasses of the puns — these bridge up under Tent / Backpack in the tree.
+gear:DomeTent a owl:Class ; rdfs:label "Dome Tent"@en ; rdfs:subClassOf gear:Tent .
+gear:TunnelTent a owl:Class ; rdfs:label "Tunnel Tent"@en ; rdfs:subClassOf gear:Tent .
+gear:DayPack a owl:Class ; rdfs:label "Day Pack"@en ; rdfs:subClassOf gear:Backpack .
+
+# A pure class with no concept twin — stays in the Ontology section.
+gear:Jacket a owl:Class ; rdfs:label "Jacket"@en ; rdfs:subClassOf gear:Product .
+
+# ── Individuals: actual products, typed by class + tagged by theme ───────────
+gear:tent-aeon2 a owl:NamedIndividual, gear:DomeTent ;
+    rdfs:label "Aeon 2P Dome"@en ;
+    dct:subject gear:Camping, gear:Waterproof .
+
+gear:tent-vega4 a owl:NamedIndividual, gear:TunnelTent ;
+    rdfs:label "Vega 4P Tunnel"@en ;
+    dct:subject gear:Camping .
+
+gear:pack-trail30 a owl:NamedIndividual, gear:DayPack ;
+    rdfs:label "Trail 30L"@en ;
+    dct:subject gear:Hiking .
+
+gear:jacket-storm a owl:NamedIndividual, gear:Jacket ;
+    rdfs:label "Storm Shell"@en ;
+    dct:subject gear:Waterproof, gear:Hiking .
+
+# An untagged product — use it to try the "Tag with concept…" action.
+gear:pack-summit50 a owl:NamedIndividual, gear:DayPack ;
+    rdfs:label "Summit 50L"@en .

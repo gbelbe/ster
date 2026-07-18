@@ -101,7 +101,123 @@ def test_dispatch_ext_ontologies_sentinel():
 def test_dispatch_non_sentinel_returns_false(tmp_path):
     # A real file selection (not a sentinel) is not handled here.
     assert _dispatch_menu_action(tmp_path / "x.ttl", []) is False
-    assert _dispatch_menu_action([tmp_path / "x.ttl"], []) is False
+
+
+# ── load-demo home action ───────────────────────────────────────────────────--
+
+
+def test_bundled_demo_is_a_valid_mixed_taxonomy():
+    """The shipped sample loads and actually contains puns (concept+class) to showcase."""
+    from ster import store
+    from ster.cli import _DEMO_FILE
+
+    tax = store.load(_DEMO_FILE)
+    assert [u for u in tax.concepts if u in tax.owl_classes]  # has puns
+    assert tax.owl_individuals  # has individuals to tag
+
+
+def test_load_demo_resets_to_a_fresh_copy_each_time(tmp_path, monkeypatch):
+    """The demo is a throwaway sandbox — reloading discards edits and restores pristine."""
+    from ster.cli import _DEMO_FILE, _load_demo_into_cwd
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)  # non-interactive → silent reset
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    dest = _load_demo_into_cwd()
+    assert dest == tmp_path / "mixed-gear-demo.ttl"
+    assert dest.read_text(encoding="utf-8") == _DEMO_FILE.read_text(encoding="utf-8")
+
+    dest.write_text("EDITED", encoding="utf-8")  # a local edit
+    _load_demo_into_cwd()  # reload → reset
+    assert dest.read_text(encoding="utf-8") == _DEMO_FILE.read_text(encoding="utf-8")  # discarded
+
+
+def test_load_demo_offers_to_save_edits_before_resetting(tmp_path, monkeypatch):
+    """When the local demo has edits, reloading offers to keep them under a new .ttl."""
+    from ster.cli import _DEMO_FILE, _load_demo_into_cwd
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+
+    dest = _load_demo_into_cwd()  # fresh (no prompt — nothing to keep yet)
+    dest.write_text("MY EDITS", encoding="utf-8")
+    with (
+        patch("rich.prompt.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", return_value="my-work.ttl"),
+    ):
+        _load_demo_into_cwd()  # edits present → save-as, then reset
+    assert (tmp_path / "my-work.ttl").read_text(encoding="utf-8") == "MY EDITS"  # kept
+    assert dest.read_text(encoding="utf-8") == _DEMO_FILE.read_text(encoding="utf-8")  # reset
+
+
+def test_home_action_menu_offers_load_demo():
+    from ster.cli import _DEMO_SENTINEL, _home_actions
+
+    assert any(s is _DEMO_SENTINEL for s, _label in _home_actions(allow_change=False))
+
+
+def test_dispatch_demo_sentinel_loads_and_opens_the_demo(tmp_path, monkeypatch):
+    from ster.cli import _DEMO_SENTINEL
+
+    monkeypatch.chdir(tmp_path)
+    with patch("ster.cli._open_viewer") as open_viewer:
+        handled = _dispatch_menu_action(_DEMO_SENTINEL, [])
+    assert handled is True
+    open_viewer.assert_called_once()
+    assert open_viewer.call_args[0][0] == tmp_path / "mixed-gear-demo.ttl"
+
+
+def test_offer_demo_when_empty_loads_on_confirm_else_none(tmp_path, monkeypatch):
+    from ster.cli import _offer_demo_when_empty
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    with patch("rich.prompt.Confirm.ask", return_value=True):
+        assert _offer_demo_when_empty() == tmp_path / "mixed-gear-demo.ttl"
+    (tmp_path / "mixed-gear-demo.ttl").unlink()
+    with patch("rich.prompt.Confirm.ask", return_value=False):
+        assert _offer_demo_when_empty() is None
+
+
+def test_offer_demo_when_empty_is_noop_without_a_tty(tmp_path, monkeypatch):
+    from ster.cli import _offer_demo_when_empty
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert _offer_demo_when_empty() is None  # never blocks a pipe / CI run
+
+
+# ── graph: free a busy port by default (no phantom "install ster[api]") ─────────
+
+
+def test_free_graph_port_closes_a_previous_process(monkeypatch):
+    from ster import viz_vowl
+    from ster.cli import _free_graph_port
+
+    freed: list = []
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: (999, "old graph"))
+    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **k: freed.append(pid) or True)
+    _free_graph_port()
+    assert freed == [999]  # the leftover graph process on the port is closed
+
+
+def test_free_graph_port_is_a_noop_when_live_or_port_free(monkeypatch):
+    from ster import viz_vowl
+    from ster.cli import _free_graph_port
+
+    freed: list = []
+    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **k: freed.append(pid) or True)
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: True)  # our server is live → skip
+    _free_graph_port()
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)  # free → skip
+    _free_graph_port()
+    assert freed == []
 
 
 # ── non-interactive picker (covers the fallback action menu) ───────────────────
@@ -127,20 +243,29 @@ def test_action_menu_selects_import_external(tmp_path, monkeypatch):
         assert _home_action_menu(f, allow_change=False) == _EXT_ONT_SENTINEL
 
 
+def test_action_menu_selects_load_demo(tmp_path, monkeypatch):
+    from ster.cli import _DEMO_SENTINEL
+
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Load demo
+        assert _home_action_menu(f, allow_change=False) == _DEMO_SENTINEL
+
+
 def test_action_menu_selects_quit(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (no 'Change file' for 1 file)
+    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit (no 'Change file' for 1 file)
         assert _home_action_menu(f, allow_change=False) == _QUIT_SENTINEL
 
 
 def test_action_menu_offers_change_file_only_with_multiple_files(tmp_path, monkeypatch):
-    """With >1 file, a 'Change file' action appears (option 8, before Quit at 9)."""
+    """With >1 file, a 'Change file' action appears (option 9, before Quit at 10)."""
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Change file when allow_change
+    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Change file when allow_change
         assert _home_action_menu(f, allow_change=True) == _CHANGE_FILE_SENTINEL
-    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit when allow_change
+    with patch("ster.cli.Prompt.ask", return_value="10"):  # 10 = Quit when allow_change
         assert _home_action_menu(f, allow_change=True) == _QUIT_SENTINEL
 
 

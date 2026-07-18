@@ -146,6 +146,25 @@ def _with_subclass(tax, parent_uri, child):  # noqa: ANN001
     tax.owl_classes[child.uri] = child
 
 
+_DCT_SUBJECT = "http://purl.org/dc/terms/subject"
+
+
+def _with_instance(tax, class_uri, name="inst"):  # noqa: ANN001
+    """Add an individual typed to *class_uri* so its class Quality box has data to show."""
+    from ster.model import OWLIndividual
+
+    tax.owl_individuals[ZOO + name] = OWLIndividual(uri=ZOO + name, types=[class_uri])
+
+
+def _with_tagged_individual(tax, concept_uri, name="tagged"):  # noqa: ANN001
+    """Add an individual tagged (dct:subject) to *concept_uri* so its concept box shows."""
+    from ster.model import OWLIndividual
+
+    tax.owl_individuals[ZOO + name] = OWLIndividual(
+        uri=ZOO + name, property_values=[(_DCT_SUBJECT, concept_uri)]
+    )
+
+
 def test_class_completeness_shows_percent_and_missing_count() -> None:
     """A non-leaf class's Completeness rows carry both views of the metric: percent
     present and the count still missing (over its subtree) — no separate Health rows."""
@@ -160,7 +179,8 @@ def test_class_completeness_shows_percent_and_missing_count() -> None:
     _with_subclass(
         tax, parent, RDFClass(uri=ZOO + "Car", labels=[Label("en", "Car")])
     )  # no comment
-    fields = ClassPresenter(_ctx(tax), parent).render()  # non-leaf → has the box
+    _with_instance(tax, ZOO + "Car")  # a subtree instance → the box has data
+    fields = ClassPresenter(_ctx(tax), parent).render()  # non-leaf w/ instance → has the box
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
     assert seps[:3] == ["Identity", "Quality & Coverage", "Completeness"]
     by_key = _health_by_key(fields)
@@ -197,37 +217,45 @@ def test_class_completeness_is_complete_when_subtree_is_clean() -> None:
             uri=ZOO + "TidyChild", labels=[Label("en", "C")], comments=[Definition("en", "c")]
         ),
     )
+    _with_instance(tax, ZOO + "TidyChild")  # a subtree instance → the box has data
     by_key = _health_by_key(ClassPresenter(_ctx(tax), parent).render())
     assert by_key["cls:label_cov"].value.endswith("complete")
     assert by_key["cls:comment_cov"].value.endswith("complete")
     assert by_key["cls:comment_cov"].meta["color"] == "green"
 
 
-def test_no_quality_box_on_first_order_classes_or_leaf_concepts() -> None:
-    """The box is dropped on a first-order (leaf) class and a leaf concept; it appears
-    once they gain a subclass / narrower (the check is live)."""
-    from ster.model import Concept, Label
+def test_quality_box_shows_only_when_the_subtree_has_individuals(tmp_path) -> None:
+    """The box appears only where there's data to assess: a class with instances, a
+    concept with dct:subject-tagged individuals — hidden otherwise (leaf or not)."""
+    from ster import store as _store
     from ster.tui.presenters.class_ import ClassPresenter
     from ster.tui.presenters.concept_ import ConceptPresenter
 
-    tax = store.load(DEMO)
+    e = "https://ex.org/"
+    src = tmp_path / "o.ttl"
+    src.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+        "@prefix dct: <http://purl.org/dc/terms/> .\n"
+        "@prefix ex: <https://ex.org/> .\n"
+        "ex:scheme a skos:ConceptScheme ; skos:hasTopConcept ex:Tagged .\n"
+        'ex:Tagged a skos:Concept ; skos:prefLabel "Tagged"@en ; skos:topConceptOf ex:scheme .\n'
+        'ex:Untagged a skos:Concept ; skos:prefLabel "Untagged"@en ; skos:topConceptOf ex:scheme .\n'
+        'ex:WithInst a owl:Class ; rdfs:label "WithInst"@en .\n'
+        'ex:NoInst a owl:Class ; rdfs:label "NoInst"@en .\n'
+        "ex:i1 a owl:NamedIndividual, ex:WithInst ; dct:subject ex:Tagged .\n",
+        encoding="utf-8",
+    )
+    tax = _store.load(src)
 
     def has_box(fields):  # noqa: ANN001, ANN202
         return any(f.meta.get("type") == "separator_group" for f in fields)
 
-    assert not has_box(ClassPresenter(_ctx(tax), ZOO + "Eagle").render())  # leaf class
-    assert has_box(ClassPresenter(_ctx(tax), ZOO + "Animal").render())  # has subclasses
-
-    leaf = ZOO + "Wild"
-    tax.concepts[leaf] = Concept(uri=leaf, labels=[Label("en", "Wild")])
-    assert not has_box(ConceptPresenter(_ctx(tax), leaf).render())  # leaf concept
-    # give it a narrower child → the box appears (dynamic)
-    tax.concepts[ZOO + "WildChild"] = Concept(uri=ZOO + "WildChild", labels=[Label("en", "WC")])
-    tax.concepts[leaf] = Concept(
-        uri=leaf, labels=[Label("en", "Wild")], narrower=[ZOO + "WildChild"]
-    )
-    # also need it discoverable as a class? no — concept dispatch is by tax.concepts
-    assert has_box(ConceptPresenter(_ctx(tax), leaf).render())
+    assert has_box(ClassPresenter(_ctx(tax), e + "WithInst").render())  # instance → box
+    assert not has_box(ClassPresenter(_ctx(tax), e + "NoInst").render())  # no instance → hidden
+    assert has_box(ConceptPresenter(_ctx(tax), e + "Tagged").render())  # tagged → box
+    assert not has_box(ConceptPresenter(_ctx(tax), e + "Untagged").render())  # untagged → hidden
 
 
 # ── P3: PropertyPresenter Health section ──────────────────────────────────────
@@ -295,6 +323,7 @@ def test_concept_quality_box_is_subtree_scoped() -> None:
         definitions=[Definition("en", "Where things live.")],
         narrower=[child],
     )
+    _with_tagged_individual(tax, child)  # a tagged individual in the subtree → the box shows
     fields = ConceptPresenter(_ctx(tax), root).render()
     seps = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
     assert seps[:3] == ["Identity", "Quality & Coverage", "Health & Issues"]
@@ -342,7 +371,8 @@ def test_languages_section_is_shared_across_overview_classes_concepts() -> None:
     tax.concepts[ZOO + "C"] = Concept(
         uri=ZOO + "C", labels=[Label("en", "C")], narrower=[ZOO + "Cc"]
     )
-    con = ConceptPresenter(cctx, ZOO + "C").render()  # non-leaf concept → has the box
+    _with_tagged_individual(tax, ZOO + "Cc")  # a tagged individual in the subtree → the box shows
+    con = ConceptPresenter(cctx, ZOO + "C").render()  # non-leaf concept w/ tag → has the box
     assert "Languages" in [f.display for f in con if f.meta.get("type") == "separator"]
     assert any(f.key == "concept:lang_cov:en" for f in con)
 

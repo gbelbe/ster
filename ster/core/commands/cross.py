@@ -8,9 +8,12 @@ from pathlib import Path
 from ...model import Taxonomy
 from ...operations import (
     add_schema_media,
+    demote_pun_to_concept,
+    promote_concept_to_class,
     remove_language,
     remove_schema_media,
     rename_entity_uri,
+    tag_individual_with_concept,
 )
 
 
@@ -58,6 +61,47 @@ class RemoveSchemaMedia:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         remove_schema_media(taxonomy, self.uri, self.kind, self.url)
         return (self.uri,)
+
+
+@dataclass(frozen=True)
+class PromoteConceptToClass:
+    """Give a concept an ``owl:Class`` facet (concept → pun) — see
+    ``operations.promote_concept_to_class``."""
+
+    target_path: Path
+    uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        promote_concept_to_class(taxonomy, self.uri)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class DemotePunToConcept:
+    """Remove a pun's ``owl:Class`` facet (pun → concept) — see
+    ``operations.demote_pun_to_concept``."""
+
+    target_path: Path
+    uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        demote_pun_to_concept(taxonomy, self.uri)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class TagIndividuals:
+    """Tag many individuals with one concept in a single step (bulk ``dct:subject`` →
+    *concept_uri*). One command = one undo/save unit; bad targets are skipped."""
+
+    target_path: Path
+    ind_uris: tuple[str, ...]
+    concept_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        for ind_uri in self.ind_uris:
+            tag_individual_with_concept(taxonomy, ind_uri, self.concept_uri)
+        return self.ind_uris
 
 
 @dataclass(frozen=True)

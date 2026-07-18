@@ -9,9 +9,62 @@ from __future__ import annotations
 
 from ..exceptions import ConceptNotFoundError, HandleNotFoundError, URIAlreadyExistsError
 from ..handles import assign_handles
-from ..model import Taxonomy
-from .owl import count_owl_uri_references, rename_owl_uri
+from ..model import Label, LabelType, RDFClass, Taxonomy
+from .owl import (
+    _scrub_class_references,
+    count_owl_uri_references,
+    rename_owl_uri,
+    set_individual_property_value,
+)
 from .skos import count_concept_uri_references, rename_uri
+
+# Dublin Core "subject" — the standard predicate for "this resource is *about* this
+# concept". Tagging an individual with a concept indexes the instance without touching
+# its rdf:type (SKOS's core subject-indexing use).
+DCT_SUBJECT = "http://purl.org/dc/terms/subject"
+
+
+def tag_individual_with_concept(taxonomy: Taxonomy, ind_uri: str, concept_uri: str) -> None:
+    """Add a ``dct:subject`` → *concept* link to an individual (idempotent). No-op unless
+    both the individual and the concept exist — so a bulk tag silently skips bad targets."""
+    if ind_uri not in taxonomy.owl_individuals or concept_uri not in taxonomy.concepts:
+        return
+    set_individual_property_value(taxonomy, ind_uri, DCT_SUBJECT, concept_uri)
+
+
+def promote_concept_to_class(taxonomy: Taxonomy, uri: str) -> None:
+    """Give a ``skos:Concept`` an ``owl:Class`` facet (punning). No-op unless *uri*
+    is a concept that is not already a class.
+
+    The concept keeps every SKOS relation; the new class carries the concept's
+    prefLabels as ``rdfs:label`` so its display name survives (``label_of`` reads
+    the class facet first). The OWL hierarchy is intentionally left empty — the
+    SKOS ``broader`` spine stays authoritative; subclasses are added deliberately.
+    """
+    concept = taxonomy.concepts.get(uri)
+    if concept is None or uri in taxonomy.owl_classes:
+        return
+    taxonomy.owl_classes[uri] = RDFClass(
+        uri=uri,
+        labels=[Label(lbl.lang, lbl.value) for lbl in concept.labels if lbl.type == LabelType.PREF],
+    )
+
+
+def demote_pun_to_concept(taxonomy: Taxonomy, uri: str) -> None:
+    """Remove a pun's ``owl:Class`` facet, leaving the ``skos:Concept``. No-op unless
+    *uri* is a pun (both a concept and a class).
+
+    Non-destructive and integrity-preserving: subclasses re-root (their now-dangling
+    ``subClassOf`` link to *uri* is dropped, along with any property domain/range use),
+    and individuals typed as *uri* drop that type but are kept.
+    """
+    if uri not in taxonomy.concepts or uri not in taxonomy.owl_classes:
+        return
+    del taxonomy.owl_classes[uri]
+    _scrub_class_references(taxonomy, uri)
+    for ind in taxonomy.owl_individuals.values():
+        if uri in ind.types:
+            ind.types.remove(uri)
 
 
 def resolve(taxonomy: Taxonomy, handle_or_name: str) -> str:

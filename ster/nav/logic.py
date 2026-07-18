@@ -1023,6 +1023,26 @@ def _subtree_class_uris(taxonomy: Taxonomy, root_uri: str) -> list[str]:
     return result
 
 
+def class_subtree_has_instances(taxonomy: Taxonomy, uri: str) -> bool:
+    """True when any individual is typed to a class in *uri*'s subtree — i.e. the class's
+    Quality & Coverage box (instance count + property fill) has data to report."""
+    subtree = set(_subtree_class_uris(taxonomy, uri))
+    return any(subtree & set(ind.types) for ind in taxonomy.owl_individuals.values())
+
+
+def concept_subtree_has_tagged_individuals(taxonomy: Taxonomy, uri: str) -> bool:
+    """True when any individual is tagged (``dct:subject``) to a concept in *uri*'s subtree
+    — the concept-side notion of "has individuals" (see the clustering link)."""
+    from ster.operations import DCT_SUBJECT  # noqa: PLC0415
+
+    subtree = set(_subtree_concept_uris(taxonomy, uri))
+    return any(
+        pred == DCT_SUBJECT and val in subtree
+        for ind in taxonomy.owl_individuals.values()
+        for pred, val in ind.property_values
+    )
+
+
 def _class_quality_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[DetailField]:
     """Quality stats (label/comment coverage, instances, property fill) for a class subtree."""
     if uri not in taxonomy.owl_classes:
@@ -2439,6 +2459,22 @@ def _individual_membership_fields(taxonomy: Taxonomy, individual, lang: str) -> 
     return fields
 
 
+def _value_target_label(taxonomy: Taxonomy, uri: str, lang: str) -> tuple[str, bool]:
+    """The display label for an object-value target and whether it is navigable — resolved
+    across individuals, concepts and classes (so a ``dct:subject`` → concept tag shows the
+    concept's label, not a raw URI). Falls back to the URI itself when unknown."""
+    ind = taxonomy.owl_individuals.get(uri)
+    if ind is not None:
+        return ind.label(lang) or uri, True
+    concept = taxonomy.concepts.get(uri)
+    if concept is not None:
+        return concept.pref_label(lang) or uri, True
+    cls = taxonomy.owl_classes.get(uri)
+    if cls is not None:
+        return cls.label(lang) or cls.local_name, True
+    return uri, False
+
+
 def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -> list[DetailField]:  # type: ignore[no-untyped-def]
     """Asserted object-property values, each editable via ✎ (pick a new target) with a
     folded Delete. Grouped by predicate so multi-valued properties sit together."""
@@ -2451,8 +2487,7 @@ def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -
         prop = taxonomy.owl_properties.get(p_uri)
         prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
         for val_uri in [vu for pu, vu in individual.property_values if pu == p_uri]:
-            target = taxonomy.owl_individuals.get(val_uri)
-            val_lbl = target.label(lang) if target else val_uri
+            val_lbl, navigable = _value_target_label(taxonomy, val_uri, lang)
             fields.append(
                 DetailField(
                     f"ind_propval:{p_uri}::{val_uri}",
@@ -2464,7 +2499,7 @@ def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -
                         "action": "edit_prop_value",
                         "prop_uri": p_uri,
                         "val_uri": val_uri,
-                        "nav": bool(target),
+                        "nav": navigable,
                     },
                 )
             )

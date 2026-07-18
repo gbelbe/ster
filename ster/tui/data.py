@@ -7,15 +7,21 @@ their output into ``Tree`` nodes, a detail panel, and the search palette.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass, field
+
 from ster.model import Taxonomy
 
 # Clean geometric glyphs per node kind (monospace-friendly; sharper than emoji).
+# Kinds are visually distinct so a merged SKOS+OWL tree stays legible: a filled
+# class ● vs a hollow concept ○ vs a punned ◉ (both) vs a diamond individual ◆.
 ICON = {
     "class": "●",
-    "individual": "⬥",
+    "concept": "○",
+    "promoted": "◉",  # a pun — skos:Concept *and* owl:Class
+    "individual": "◆",
     "property": "■",
-    "concept": "●",
-    "scheme": "◉",
+    "scheme": "⬢",
     "section": "▸",
 }
 
@@ -188,6 +194,82 @@ def concept_children(tax: Taxonomy, uri: str, lang: str = "en") -> list[str]:
         c = tax.concepts.get(uri)
         kids = list(c.narrower) if c else []
     return _by_label(tax, [u for u in kids if u in tax.concepts], lang)
+
+
+# ── integrated (paradigm-agnostic) tree ───────────────────────────────────────
+# One tree that merges the SKOS spine and the OWL class hierarchy, so the same
+# builder serves a pure ontology, a pure taxonomy, a disjoint mix, or a punned
+# mix — no "mode" flag. The SKOS spine is authoritative: a pun (skos:Concept +
+# owl:Class) hangs by ``broader``/scheme, and its OWL subclasses are pulled up
+# under it (the one-way bridge — subClassOf feeds broader, never the reverse).
+
+# Anchor node for top-level OWL classes and loose (untyped) individuals — the
+# implicit ``owl:Thing`` root. A sentinel URI, never a real ontology term.
+ONTOLOGY_ROOT = "ster:__owl_thing__"
+
+
+@dataclass(frozen=True)
+class IntegratedTree:
+    """A merged SKOS+OWL forest. ``parent`` maps each placed node to its parent
+    (another node, a scheme, or :data:`ONTOLOGY_ROOT`); ``children`` is the
+    inverse, label-sorted; ``roots`` are the top-level nodes (each scheme, then
+    the ontology root when any class/loose individual needs it)."""
+
+    parent: dict[str, str] = field(default_factory=dict)
+    children: dict[str, list[str]] = field(default_factory=dict)
+    roots: list[str] = field(default_factory=list)
+
+
+def _concept_parent(tax: Taxonomy, uri: str) -> str:
+    """Parent of a concept/pun on the SKOS spine: ``broader`` → scheme → root.
+    (``store`` keeps ``top_concept_of`` in sync with scheme membership, so a
+    scheme-less loose concept is the only case that reaches the root.)"""
+    c = tax.concepts[uri]
+    if c.broader:
+        return c.broader[0]  # primary parent (polyhierarchy: first wins for now)
+    if c.top_concept_of:
+        return c.top_concept_of
+    return ONTOLOGY_ROOT  # loose concept with no scheme — surfaced, never lost
+
+
+def effective_parent(tax: Taxonomy, uri: str) -> str:
+    """The node's single parent in the integrated tree, agnostic to paradigm.
+
+    Concepts and puns follow the SKOS spine; a *pure* class follows
+    ``subClassOf`` (landing under a pun when its superclass is one — the
+    bridge); an individual nests under its type. Anything with no home lands on
+    :data:`ONTOLOGY_ROOT` so nothing is dropped.
+    """
+    nt = tax.node_type(uri)
+    if nt in ("concept", "promoted"):
+        return _concept_parent(tax, uri)
+    if nt == "class":
+        parents = [p for p in tax.owl_classes[uri].sub_class_of if p in tax.owl_classes]
+        return parents[0] if parents else ONTOLOGY_ROOT
+    if nt == "individual":
+        typed = [t for t in tax.owl_individuals[uri].types if t in tax.owl_classes]
+        return typed[0] if typed else ONTOLOGY_ROOT
+    return ONTOLOGY_ROOT
+
+
+def integrated_tree(tax: Taxonomy, lang: str = "en") -> IntegratedTree:
+    """Build the merged SKOS+OWL forest for *tax* (see :class:`IntegratedTree`)."""
+    # Puns live in ``concepts`` already; add only the *pure* classes on top.
+    placed = (
+        list(tax.concepts)
+        + [u for u in tax.owl_classes if u not in tax.concepts]
+        + list(tax.owl_individuals)
+    )
+    parent = {uri: effective_parent(tax, uri) for uri in placed}
+    children: dict[str, list[str]] = defaultdict(list)
+    for uri in placed:
+        children[parent[uri]].append(uri)
+    sorted_children = {p: _by_label(tax, kids, lang) for p, kids in children.items()}
+
+    roots = _by_label(tax, list(tax.schemes), lang)
+    if ONTOLOGY_ROOT in children:
+        roots.append(ONTOLOGY_ROOT)
+    return IntegratedTree(parent=parent, children=sorted_children, roots=roots)
 
 
 # ── search index (for the command palette) ────────────────────────────────────

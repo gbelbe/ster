@@ -859,19 +859,20 @@ def _data_script(graph: dict, meta: dict, api_token: str) -> str:
 def _offline_banner(api_token: str) -> str:
     """Return an in-page notice shown only when no live server backs the page.
 
-    The explore / extend-relations hover actions are driven by the live API
-    server (keyed off the page token). Without it — ``ster[api]`` not installed,
-    or the configured port is busy — the page is a static snapshot and those
-    actions are unavailable. The banner says so, so the degraded mode is never
-    silent. When a real token is present (live server) nothing is shown.
+    The explore / extend-relations hover actions are driven by the live API server
+    (keyed off the page token). ``fastapi``/``uvicorn`` are core dependencies, so the
+    only thing that stops the live server is the configured port already being in use —
+    then the page is a static snapshot and those actions are unavailable. The banner
+    says so, so the degraded mode is never silent. When a real token is present (live
+    server) nothing is shown.
     """
     if api_token:
         return ""
     return (
         '<div id="offline-banner"><span>⚠ Live server not running — showing a '
-        "static snapshot; explore / extend relations is unavailable. Install the "
-        "<code>ster[api]</code> extra (and free the configured port) for the "
-        "interactive graph.</span>"
+        "static snapshot; explore / extend relations is unavailable. The configured "
+        "port is in use by another process — close it (or change the port in Config) "
+        "and reopen the graph.</span>"
         '<button id="offline-banner-close" title="Dismiss">×</button></div>'
     )
 
@@ -1243,8 +1244,9 @@ def open_in_browser(
 ) -> str:
     """Open the VOWL graph in the browser.
 
-    When ster[api] is installed, starts the live FastAPI server (SSE push refresh).
-    Falls back to a static HTTP server otherwise.
+    Starts the live FastAPI server (SSE push refresh) — ``fastapi``/``uvicorn`` are core
+    deps, so this works unless the configured port is busy, in which case it falls back
+    to a static HTTP server.
 
     *on_change_fn* (optional) is called after any API mutation (e.g. individual
     creation) so the caller can rebuild its display tree.

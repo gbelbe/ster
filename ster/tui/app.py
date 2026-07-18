@@ -79,6 +79,23 @@ def _parse_add_prop(uri: str | None) -> str | None:
     return None
 
 
+# A call-to-action leaf's ``data`` (e.g. "＋ Add class" shown under an *empty* Ontology
+# section): encodes the create action to run when it is activated (Enter / click). Distinct
+# from a real entity URI and from the header add-sentinel above.
+_CTA_PREFIX = "__cta:"
+
+
+def _cta_uri(action: str) -> str:
+    return f"{_CTA_PREFIX}{action}{_ACTION_SUFFIX}"
+
+
+def _parse_cta(uri: str | None) -> str | None:
+    """The create action of a call-to-action leaf sentinel, else None."""
+    if uri and uri.startswith(_CTA_PREFIX) and uri.endswith(_ACTION_SUFFIX):
+        return uri[len(_CTA_PREFIX) : -len(_ACTION_SUFFIX)]
+    return None
+
+
 # The three OWL property kinds a header can create (the catch-all "Untyped Properties"
 # group cannot). Object properties open the full modal; the other two a lightweight one.
 # prop_type → (menu title, add-item label, create action, modal title).
@@ -864,16 +881,24 @@ class OntologyApp(App):
         node = parent.add(f"{self._node_icon(uri, 'class')} {label}", data=uri)
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
-            self._add_class(node, sub)
+            if self.tax.node_type(sub) != "promoted":  # a pun subclass lives in the taxonomy spine
+                self._add_class(node, sub)
         for ind in data.individuals_of(self.tax, uri, self.lang):
             self._leaf(node, ind, "individual")
 
     def _add_concept(self, parent: TreeNode, uri: str) -> None:
         label = data.label_of(self.tax, uri, self.lang)
-        node = parent.add(f"{self._node_icon(uri, 'concept')} {label}", data=uri)
+        promoted = self.tax.node_type(uri) == "promoted"
+        node = parent.add(
+            f"{self._node_icon(uri, 'promoted' if promoted else 'concept')} {label}", data=uri
+        )
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)
+        if promoted:  # bridge: pull the pun's pure-OWL subclasses into the SKOS spine
+            for sub in data.subclasses(self.tax, uri, self.lang):
+                if self.tax.node_type(sub) == "class":
+                    self._add_class(node, sub)
 
     def _build_main_tree(self, tree: Tree) -> None:
         """Top pane: Ontology section (classes), Taxonomy section (schemes).
@@ -888,8 +913,8 @@ class OntologyApp(App):
         ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
         self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
         for uri in data.class_roots(tax, self.lang):
-            self._add_class(ont_sec, uri)
-        ont_sec.expand()
+            if tax.node_type(uri) != "promoted":  # a pun renders in the taxonomy spine, not here
+                self._add_class(ont_sec, uri)
 
         # Loose individuals (no class) are nested under the Ontology section.
         loose = data.untyped_individuals(tax, self.lang)
@@ -897,6 +922,9 @@ class OntologyApp(App):
             ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
             for uri in loose:
                 self._leaf(ind_sec, uri, "individual")
+        if not ont_sec.children:  # nothing here yet → nudge the user to start
+            self._cta(ont_sec, "＋ Add class", "create_owl_class")
+        ont_sec.expand()
 
         # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
         tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)
@@ -909,8 +937,15 @@ class OntologyApp(App):
             for c_uri in data.concept_children(tax, s_uri, self.lang):
                 self._add_concept(sec, c_uri)
             sec.expand()
+        if not tax_sec.children:  # no scheme yet → nudge the user to start
+            self._cta(tax_sec, "＋ Add concept scheme", "add_scheme")
         tax_sec.expand()
         self._strip_childless_arrows(root)
+
+    def _cta(self, parent: TreeNode, label: str, action: str) -> None:
+        """Add a dim call-to-action leaf under an *empty* section — activating it (Enter /
+        click) runs *action*'s create flow. Shown only while the section is empty."""
+        parent.add(f"[dim green]{label}[/dim green]", data=_cta_uri(action))
 
     def _build_prop_tree(self, tree: Tree) -> None:
         """Bottom pane: properties grouped by kind — Object / Datatype / Annotation
@@ -919,8 +954,6 @@ class OntologyApp(App):
         first, then predicates merely *used* on the ontology header (e.g.
         ``dcterms:creator``), each flagged with a small ``(ext)`` indicator."""
         tax = self.tax
-        if not tax.owl_properties and not tax.ontology_annotations:
-            return
         kind_by_title = {title: kind for kind, title in data.PROPERTY_CATEGORIES}
         for title, local, external in data.property_groups(tax, self.lang):
             label = (
@@ -936,6 +969,8 @@ class OntologyApp(App):
                 self._leaf(sec, uri, "property")
             for uri in external:
                 self._leaf(sec, uri, "property", suffix="  [dim](ext)[/dim]")
+            if kind in _CREATABLE_PROP_KINDS and not sec.children:  # empty type → nudge to add one
+                self._cta(sec, _PROP_MENU[kind][1], _PROP_MENU[kind][2])
             sec.expand()
         self._strip_childless_arrows(tree.root)
 
@@ -1414,6 +1449,9 @@ class OntologyApp(App):
         "edit_individual": "_open_individual_edit",  # full individual modal
         "enforce_shacl": "_enforce_shacl",  # write a mandatory SHACL rule, then re-lint
         "unenforce_shacl": "_unenforce_shacl",  # remove the property's SHACL rule
+        "promote": "_promote_concept",  # concept → pun (add an owl:Class facet)
+        "demote": "_demote_pun",  # pun → concept (drop the owl:Class facet)
+        "tag_individuals": "_tag_individuals",  # bulk-tag individuals with this concept
     }
 
     def _run_field_action(self, field: DetailField) -> None:
@@ -1453,6 +1491,39 @@ class OntologyApp(App):
             return True
         return False
 
+    def _promote_concept(self, uri: str, path: Path) -> None:
+        """Concept → pun: give it an owl:Class facet (no modal — an in-place toggle)."""
+        from ster.core.commands import PromoteConceptToClass
+
+        self._apply_command(PromoteConceptToClass(path, uri))
+
+    def _demote_pun(self, uri: str, path: Path) -> None:
+        """Pun → concept: drop the owl:Class facet (subclasses re-root, individuals keep)."""
+        from ster.core.commands import DemotePunToConcept
+
+        self._apply_command(DemotePunToConcept(path, uri))
+
+    def _tag_individuals(self, uri: str, path: Path) -> None:
+        """Bulk-tag: pick several individuals from a checklist, then dct:subject each to
+        the concept *uri*. No-op if there are no individuals to tag."""
+        from ster.core.commands import TagIndividuals
+        from ster.tui.multi_picker_modal import MultiPickerModal
+
+        individuals = sorted(
+            self.tax.owl_individuals, key=lambda u: data.label_of(self.tax, u, self.lang).lower()
+        )
+        options = [(data.label_of(self.tax, u, self.lang), u) for u in individuals]
+        if not options:
+            self.notify("No individuals to tag yet.", severity="warning")
+            return
+        label = data.label_of(self.tax, uri, self.lang)
+
+        def _on_pick(chosen: list[str] | None) -> None:
+            if chosen:
+                self._apply_command(TagIndividuals(path, tuple(chosen), uri))
+
+        self.push_screen(MultiPickerModal(f"Tag individuals with “{label}”", options), _on_pick)
+
     def action_context_menu(self) -> None:
         """'.' → open the context menu for the selected entity, at the tree cursor."""
         if self._detail_uri:
@@ -1484,7 +1555,7 @@ class OntologyApp(App):
                 uri, "Taxonomy", ("＋ Add concept scheme", "add_scheme"), anchor
             )
             return
-        items = self._filter_plugin_actions(edits.context_actions(data.kind_of(self.tax, uri)))
+        items = self._filter_plugin_actions(edits.context_actions(edits.menu_kind(self.tax, uri)))
         items = self._filter_class_actions(uri, items)
         if not items:
             return
@@ -2051,6 +2122,16 @@ class OntologyApp(App):
         """Pick a target entity for a relation action (add superclass/type/broader/related)."""
         action = field.meta.get("action", "")
         prompt, kind = edits.PICKER_ACTIONS[action]
+        # Tagging an individual needs a concept to point at — guide the user to make one
+        # first rather than showing an empty picker. (Concept-relation actions on concepts
+        # can't reach here with zero concepts, so this only bites the tag-an-individual case.)
+        if kind == "concept" and not self.tax.concepts:
+            self.notify(
+                "No concepts yet — create a concept scheme first "
+                "(right-click “Taxonomy” → Add concept scheme).",
+                severity="warning",
+            )
+            return
 
         def _on_pick(target: str | None) -> None:
             if target is not None:
@@ -2261,9 +2342,9 @@ class OntologyApp(App):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         uri = event.node.data
-        # Property-tree headers ("Object/Datatype/Annotation Properties") carry an add
-        # sentinel and have no detail panel — clear the pane so the placeholder shows.
-        if uri and _parse_add_prop(uri) is not None:
+        # Property-tree headers ("Object/Datatype/Annotation Properties") and empty-section
+        # call-to-action leaves carry a sentinel and have no detail panel — clear the pane.
+        if uri and (_parse_add_prop(uri) is not None or _parse_cta(uri) is not None):
             self._show(None)
             return
         if uri == self._detail_uri:
@@ -2272,6 +2353,27 @@ class OntologyApp(App):
             # _restore_focus just placed on a row. The explicit _show already refreshed it.
             return
         self._show(uri)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Activating (Enter / click) an empty-section call-to-action runs its create flow."""
+        action = _parse_cta(event.node.data)
+        if action is not None:
+            self._run_cta(action)
+
+    def _run_cta(self, action: str) -> None:
+        """Run a call-to-action's create flow. Property creates need no entity context; a
+        class / scheme create runs via _run_field_action, so anchor it on the always-present
+        section node (its uri is only a non-None target, unused by the top-level create)."""
+        prop_type = _PROP_CREATE_ACTIONS.get(action)
+        if prop_type is not None:
+            self._open_property_create(prop_type)
+            return
+        self._detail_uri = (
+            detail.OVERVIEW_URI if action == "create_owl_class" else detail.TAXONOMY_URI
+        )
+        self._run_field_action(
+            DetailField("cta", "", "", editable=False, meta={"type": "action", "action": action})
+        )
 
     def jump_to(self, uri: str) -> None:
         """Expand ancestors, move the cursor to *uri* (focusing the tree), show its detail."""
@@ -2331,13 +2433,13 @@ class OntologyApp(App):
         return None
 
     def _show_graph(self, target: str | None) -> None:
-        """Open (or update) the VOWL graph in the browser — focused on *target* when
-        given, else the whole ontology.
+        """Open (or update) the VOWL graph in the browser — focused on *target* when given.
 
         A view, not a mutation. When the live-server port is already held by a previous
-        graph window/process, reclaim it (close that process) and open — no prompt, since
+        graph process, reclaim it (close that process) and open — no prompt, since
         re-opening the graph should simply replace the old window — see
-        :meth:`_reclaim_port_and_open`.
+        :meth:`_reclaim_port_and_open`. (``fastapi``/``uvicorn`` are core deps, so the live
+        server itself is always available; the only blocker is a busy port.)
         """
         from ster import viz_vowl
 

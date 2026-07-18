@@ -63,7 +63,9 @@ from ster.core.commands import (
     SkosSetSchemeField,
     SkosSetScopeNote,
 )
+from ster.model import Taxonomy
 from ster.nav.logic import DetailField
+from ster.operations import DCT_SUBJECT
 
 # Ontology-overview metadata rows → OntoSetMetadata field_name.
 _ONTO_META = {"ont_title": "title", "ont_label": "label", "ont_description": "description"}
@@ -250,6 +252,7 @@ PICKER_ACTIONS: dict[str, tuple[str, str]] = {
     "link_broader": ("Link to a broader concept — pick a concept", "concept"),
     "move": ("Move under a different parent — pick a concept", "concept"),
     "add_related": ("Add a related concept — pick a concept", "concept"),
+    "tag_concept": ("Tag with a concept (dct:subject) — pick a concept", "concept"),
 }
 
 _RelationFactory = Callable[[str, Path, str], object]
@@ -263,6 +266,7 @@ _RELATION_REGISTRY: dict[str, _RelationFactory] = {
     "link_broader": lambda s, p, t: SkosMoveConcept(p, s, t, replace=False),  # extra parent
     "move": lambda s, p, t: SkosMoveConcept(p, s, t, replace=True),  # re-parent
     "add_related": lambda s, p, t: SkosAddRelated(p, s, t),
+    "tag_concept": lambda s, p, t: OwlSetIndividualValue(p, s, DCT_SUBJECT, t),
 }
 
 
@@ -371,6 +375,7 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
     "individual": [
         ("✎ Edit individual…", "edit_individual"),
         ("+ Add class membership…", "add_ind_type"),
+        ("🏷 Tag with concept…", "tag_concept"),  # dct:subject → a concept (theme index)
         ("+ Add property value…", "add_prop_value"),
         ("⇢ Change to class", "individual_to_class"),
         ("✎ Rename URI…", "rename"),
@@ -388,7 +393,24 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("+ Add narrower", "add_narrower"),
         ("~ Add related…", "add_related"),
         ("↷ Move under a different parent…", "move"),
+        ("🏷 Tag individuals…", "tag_individuals"),  # bulk dct:subject → this concept
+        ("⬆ Promote to class", "promote"),  # give it an owl:Class facet → a pun
         ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete"),
+    ],
+    # A pun (skos:Concept *and* owl:Class). Its menu carries both facets: the
+    # SKOS grouping fork ("Add narrower concept") and the OWL inheritance fork
+    # ("Add subclass"), so the two hierarchies can be grown from the one node.
+    "promoted": [
+        ("✎ Edit class…", "edit_class"),
+        ("↓ Add subclass", "new_subclass"),
+        ("+ Add narrower concept", "add_narrower"),
+        ("+ Add individual", "add_individual"),
+        ("~ Add related…", "add_related"),
+        ("↷ Move under a different parent…", "move"),
+        ("🏷 Tag individuals…", "tag_individuals"),  # bulk dct:subject → this pun
+        ("⬇ Demote to concept", "demote"),  # drop the owl:Class facet → back to a plain concept
+        ("⊙ Open graph", "view_focused_graph"),
         ("⊘ Delete…", "delete"),
     ],
     "scheme": [
@@ -402,6 +424,16 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
 def context_actions(kind: str) -> list[tuple[str, str]]:
     """The (label, action) entries for a right-click menu on a *kind* of node."""
     return _CONTEXT_ACTIONS.get(kind, [])
+
+
+def menu_kind(tax: Taxonomy, uri: str) -> str:
+    """The context-menu key for *uri*, keyed on RDF type so a pun resolves to
+    ``"promoted"`` (its combined menu) rather than the class-only menu that
+    ``data.kind_of`` — which checks ``owl_classes`` first — would return."""
+    if uri in tax.schemes:
+        return "scheme"
+    kind = tax.node_type(uri)
+    return kind if kind != "unknown" else "section"
 
 
 # ── meta-aware edits — change one existing individual value (row carries meta) ──

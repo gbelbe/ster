@@ -214,7 +214,11 @@ _CHANGE_FILE_SENTINEL: Path = Path(".__ster_change_file__")  # home menu → res
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
+_DEMO_SENTINEL: Path = Path(".__ster_demo__")  # home menu → load the bundled sample
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
+
+# The bundled mixed SKOS+OWL sample, shipped inside the package (ster/tui/).
+_DEMO_FILE: Path = Path(__file__).parent / "tui" / "mixed-gear-demo.ttl"
 
 # Home action-menu row colours (ANSI), keyed by sentinel; ``True`` = the "open" action.
 _MENU_COLOURS: dict[object, str] = {
@@ -225,6 +229,7 @@ _MENU_COLOURS: dict[object, str] = {
     _HTML_SENTINEL: "\033[34m",  # blue
     _GIT_LOG_SENTINEL: "\033[35m",  # magenta
     _PUBLISH_SENTINEL: "\033[32m",  # green
+    _DEMO_SENTINEL: "\033[32m",  # green
     _CHANGE_FILE_SENTINEL: "\033[36m",  # cyan
     _QUIT_SENTINEL: "\033[31m",  # red
 }
@@ -740,6 +745,7 @@ def _home_actions(allow_change: bool) -> list[tuple[object, str]]:
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
         (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
+        (_DEMO_SENTINEL, "🎒 Load demo ontology / taxonomy"),
     ]
     if allow_change:  # only meaningful when there's more than one file to switch between
         actions.append((_CHANGE_FILE_SENTINEL, "🔀 Change file"))
@@ -939,12 +945,77 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _QUERY_SENTINEL: _launch_query,
         _EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _PUBLISH_SENTINEL: _run_publish_interactive,
+        _DEMO_SENTINEL: _launch_demo,
     }
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:
         return False
     action(found)
     return True
+
+
+def _load_demo_into_cwd() -> Path:
+    """Drop a **fresh** copy of the bundled sample into the current folder and return its
+    path. The demo is a throwaway sandbox — every load resets it to pristine, so you can
+    always start clean. If a local copy has edits, offer to save them to a separate .ttl
+    first (so real work is kept, then the demo resets)."""
+    import shutil
+
+    dest = Path.cwd() / _DEMO_FILE.name
+    if dest.exists() and dest.read_bytes() != _DEMO_FILE.read_bytes():
+        _offer_keep_demo_edits(dest)  # the local copy diverged → let the user keep it
+    shutil.copyfile(_DEMO_FILE, dest)  # reset to a fresh demo every time
+    console.print(
+        f"[green]Loaded a fresh demo → {dest.name}[/green] "
+        "— a mixed SKOS + OWL sandbox (edits reset on reload)."
+    )
+    return dest
+
+
+def _offer_keep_demo_edits(dest: Path) -> None:
+    """The local demo has edits and is about to be reset — offer to save them under a new
+    .ttl name first. No-op (silent reset) in a non-interactive terminal."""
+    import shutil
+    import sys
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    from rich.prompt import Confirm, Prompt
+
+    if not Confirm.ask(
+        "The demo has your edits — save them to a new file before resetting?",
+        default=True,
+        console=console,
+    ):
+        return
+    name = Prompt.ask("Save your work as", default="my-ontology.ttl", console=console).strip()
+    if not name or Path(name).name == _DEMO_FILE.name:  # never clobber the demo itself
+        name = "my-ontology.ttl"
+    if not name.endswith(".ttl"):
+        name += ".ttl"
+    target = Path.cwd() / Path(name).name
+    shutil.copyfile(dest, target)
+    console.print(f"[green]Saved your work → {target.name}[/green]")
+
+
+def _launch_demo(found: list[Path]) -> None:
+    """Home-menu "Load demo": drop the sample into the folder and open it in the viewer."""
+    _open_viewer(_load_demo_into_cwd())
+
+
+def _offer_demo_when_empty() -> Path | None:
+    """No taxonomy files in the folder → offer to load the bundled demo. Returns the
+    demo path if the user accepts (interactive terminals only), else None."""
+    import sys
+
+    console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    from rich.prompt import Confirm
+
+    if Confirm.ask("🎒 Load the mixed SKOS + OWL demo to explore?", default=True, console=console):
+        return _load_demo_into_cwd()
+    return None
 
 
 def _launch_query(found: list[Path]) -> None:
@@ -1634,15 +1705,33 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
         return
     console.print(f"\n[dim]Opening graph for[/dim] [bold]{taxonomy_file.name}[/bold]…")
     try:
+        _free_graph_port()  # a leftover graph process on the port would force a static snapshot
         out = _viz.open_in_browser(taxonomy, taxonomy_file)
         console.print(f"  [green]✓[/green]  {out}")
         if not _viz.is_live_server():
             console.print(
-                "  [yellow]![/yellow]  Live server not running (ster[api] missing "
-                "or port busy) — static snapshot; explore-relations is disabled."
+                "  [yellow]![/yellow]  The configured port is busy — showing a static "
+                "snapshot (explore-relations disabled). Close the other process or change "
+                "the port in Config, then reopen."
             )
     except Exception as exc:
         err.print(f"[red]Graph error: {exc}[/red]")
+
+
+def _free_graph_port() -> None:
+    """Close a previous graph process still holding the live-server port, so the live
+    (interactive) graph can start instead of falling back to a static snapshot. No-op when
+    our own server is already live or the port is free."""
+    from . import viz_vowl as _viz
+
+    if _viz.is_live_server():
+        return
+    holder = _viz.port_holder()
+    if holder is None:
+        return
+    pid, _desc = holder
+    if _viz.free_port(pid):
+        console.print(f"  [dim]Closed a previous graph process (PID {pid}) holding the port.[/dim]")
 
 
 def _ensure_pylode() -> bool:
@@ -1871,14 +1960,12 @@ def cmd_serve(
 
     The browser view auto-refreshes when the file is edited via the ster CLI.
     API docs are available at http://<host>:<port>/docs.
-
-    Requires: pip install 'ster[api]'
     """
     try:
         from .api_server import serve
-    except ImportError:
+    except ImportError:  # fastapi/uvicorn are core deps — only a broken install lands here
         err.print(
-            "[red]The 'api' extras group is required:[/red] pip install 'ster[api]'",
+            "[red]The graph server (fastapi/uvicorn) failed to import — reinstall ster.[/red]"
         )
         raise typer.Exit(1)
     serve(file.resolve(), host=host, port=port)
@@ -1889,8 +1976,8 @@ def _open_dev_artifacts_in_browser(
 ) -> None:
     """Open the freshly-published dev TTL + HTML on the running graph server.
 
-    Ensures the server is up so the pages are served at /ontology/dev/...; if the
-    ster[api] extra is missing it falls back to opening the files via file://.
+    Ensures the server is up so the pages are served at /ontology/dev/...; if the live
+    server can't start (its port is busy) it falls back to opening the files via file://.
     """
     from . import viz_vowl as _viz
     from .publish import open_dev_artifacts
@@ -1903,7 +1990,7 @@ def _open_dev_artifacts_in_browser(
         console.print(f"[green]✓[/green]  Opened dev pages: {'  '.join(urls)}")
     else:
         console.print(
-            f"[yellow]![/yellow]  No live server (ster[api] not installed) — "
+            f"[yellow]![/yellow]  No live server (port busy) — "
             f"opened files directly: {'  '.join(urls)}"
         )
 
@@ -2265,6 +2352,41 @@ def _open_selected_in_viewer(
         err.print(f"[red]Viewer error: {exc}[/red]")
 
 
+def _home_obtain_action(
+    pending_open: Path | None, selected_file: Path | None, found: list[Path]
+) -> tuple[Path | None, list[Path] | Path | None]:
+    """One home-loop turn's ``(file, action)``: open a pending file directly, else run
+    step 1 (pick the file, remembered until "Change file") + step 2 (its action menu).
+    Returns ``action = _QUIT_SENTINEL`` when the user quits at file selection."""
+    if pending_open is not None:  # ster PATH/file.ttl → open that file directly
+        return pending_open, [pending_open]
+    _print_home_intro()
+    if selected_file is None or selected_file not in found:
+        selected_file = _select_home_file(found)
+        if selected_file is None:  # Quit / cancel
+            return None, _QUIT_SENTINEL
+    return selected_file, _home_action_menu(selected_file, allow_change=len(found) > 1)
+
+
+def _home_perform(
+    action: list[Path] | Path | None,
+    selected_file: Path | None,
+    found: list[Path],
+    project: Project | None,
+) -> str:
+    """Carry out a chosen home action → "quit", "change", or "continue"."""
+    if action is _QUIT_SENTINEL or action is None:
+        return "quit"
+    if action is _CHANGE_FILE_SENTINEL:  # go back to file selection
+        return "change"
+    assert selected_file is not None  # set before any menu is shown
+    if _dispatch_menu_action(action, [selected_file]):  # actions act on the chosen file
+        return "continue"
+    selected = action if isinstance(action, list) else [selected_file]
+    _open_selected_in_viewer(selected, found, project)
+    return "continue"
+
+
 def _home_screen(initial_file: Path | None = None) -> None:
     """Interactive home-screen loop (bare ``ster``).
 
@@ -2277,42 +2399,23 @@ def _home_screen(initial_file: Path | None = None) -> None:
     while True:
         try:
             found = _found_taxonomy_files()
-            if not found:
-                console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
-                break
+            if not found:  # empty folder → offer the bundled demo, else stop
+                pending_open = _offer_demo_when_empty()
+                if pending_open is None:
+                    break
+                continue
             project = Project.load(Path.cwd())
-
-            action: list[Path] | Path | None
-            if pending_open is not None:  # ster PATH/file.ttl → open that file directly
-                selected_file = pending_open
-                pending_open = None
-                action = [selected_file]
-            else:
-                _print_home_intro()
-                # Step 1: choose the file (once, then remembered until "Change file").
-                if selected_file is None or selected_file not in found:
-                    selected_file = _select_home_file(found)
-                    if selected_file is None:  # Quit / cancel
-                        break
-                # Step 2: the action menu for that file.
-                action = _home_action_menu(selected_file, allow_change=len(found) > 1)
+            selected_file, action = _home_obtain_action(pending_open, selected_file, found)
+            pending_open = None
         except (KeyboardInterrupt, EOFError):
             console.print()
             break
 
-        if action is _QUIT_SENTINEL or action is None:
+        outcome = _home_perform(action, selected_file, found, project)
+        if outcome == "quit":
             break
-        if action is _CHANGE_FILE_SENTINEL:  # go back to file selection
+        if outcome == "change":
             selected_file = None
-            continue
-
-        assert selected_file is not None  # set above before any menu is shown
-        if _dispatch_menu_action(action, [selected_file]):  # actions act on the chosen file
-            continue
-
-        # action is [selected_file] → open the viewer for the chosen file
-        selected = action if isinstance(action, list) else [selected_file]
-        _open_selected_in_viewer(selected, found, project)
 
 
 if __name__ == "__main__":

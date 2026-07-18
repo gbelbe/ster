@@ -16,7 +16,15 @@ import …`` regardless of which layer module a command lives in.
 from __future__ import annotations
 
 from .base import ChangeSet, Command
-from .cross import AddSchemaMedia, RemoveLanguage, RemoveSchemaMedia, RenameEntity
+from .cross import (
+    AddSchemaMedia,
+    DemotePunToConcept,
+    PromoteConceptToClass,
+    RemoveLanguage,
+    RemoveSchemaMedia,
+    RenameEntity,
+    TagIndividuals,
+)
 from .onto import (
     OntoRemoveAnnotation,
     OntoRenameUri,
@@ -75,6 +83,9 @@ from .skos import (
 
 __all__ = [
     "AddSchemaMedia",
+    "DemotePunToConcept",
+    "PromoteConceptToClass",
+    "TagIndividuals",
     "ChangeSet",
     "Command",
     "OntoRenameUri",
