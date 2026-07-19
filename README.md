@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/gbelbe/ster/actions/workflows/ci.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/ci.yml)
 [![Publish to PyPI](https://github.com/gbelbe/ster/actions/workflows/publish.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/publish.yml)
-[![codecov](https://codecov.io/gh/gbelbe/ster/graph/badge.svg)](https://codecov.io/gh/gbelbe/ster)
+[![codecov](https://codecov.io/gh/gbelbe/ster/branch/main/graph/badge.svg)](https://codecov.io/gh/gbelbe/ster/branch/main)
 [![PyPI](https://img.shields.io/pypi/v/ster)](https://pypi.org/project/ster/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
