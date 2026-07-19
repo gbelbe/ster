@@ -248,24 +248,24 @@ def test_action_menu_selects_load_demo(tmp_path, monkeypatch):
 
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Load demo
+    with patch("ster.cli.Prompt.ask", return_value="7"):  # 7 = Load demo
         assert _home_action_menu(f, allow_change=False) == _DEMO_SENTINEL
 
 
 def test_action_menu_selects_quit(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit (no 'Change file' for 1 file)
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (no 'Change file' for 1 file)
         assert _home_action_menu(f, allow_change=False) == _QUIT_SENTINEL
 
 
 def test_action_menu_offers_change_file_only_with_multiple_files(tmp_path, monkeypatch):
-    """With >1 file, a 'Change file' action appears (option 9, before Quit at 10)."""
+    """With >1 file, a 'Change file' action appears (option 8, before Quit at 9)."""
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Change file when allow_change
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Change file when allow_change
         assert _home_action_menu(f, allow_change=True) == _CHANGE_FILE_SENTINEL
-    with patch("ster.cli.Prompt.ask", return_value="10"):  # 10 = Quit when allow_change
+    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit when allow_change
         assert _home_action_menu(f, allow_change=True) == _QUIT_SENTINEL
 
 

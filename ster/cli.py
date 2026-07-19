@@ -207,7 +207,6 @@ _TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 _TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
 
 # Sentinels returned by _pick_file_interactive for special menu entries
-_GIT_LOG_SENTINEL: Path = Path(".__ster_log__")
 _HTML_SENTINEL: Path = Path(".__ster_html__")
 _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _CHANGE_FILE_SENTINEL: Path = Path(".__ster_change_file__")  # home menu → reselect the file
@@ -227,7 +226,6 @@ _MENU_COLOURS: dict[object, str] = {
     _QUERY_SENTINEL: "\033[32m",  # green
     _EXT_ONT_SENTINEL: "\033[35m",  # magenta
     _HTML_SENTINEL: "\033[34m",  # blue
-    _GIT_LOG_SENTINEL: "\033[35m",  # magenta
     _PUBLISH_SENTINEL: "\033[32m",  # green
     _DEMO_SENTINEL: "\033[32m",  # green
     _CHANGE_FILE_SENTINEL: "\033[36m",  # cyan
@@ -398,27 +396,21 @@ def _pick_file(files: list[Path]) -> Path:
 def _pick_file_interactive(
     files: list[Path],
     preselect: Path | None = None,
-    show_log_option: bool = False,
 ) -> Path | None:
     """Display numbered file list; return chosen Path or None for 'create new'.
 
     The last entry is always '+ Create new taxonomy'.
-    If *show_log_option* is True, a 'Browse git history' entry is shown just before it,
-    and selecting it returns _GIT_LOG_SENTINEL.
 
     Supports arrow-key navigation in interactive terminals; also accepts typed numbers
     and filename prefixes (original behaviour).
     """
     import sys
 
-    LOG_IDX = len(files) + 1 if show_log_option else None  # 1-based
-    CREATE_IDX = len(files) + (2 if show_log_option else 1)  # 1-based
-    QUIT_IDX = len(files) + (3 if show_log_option else 2)  # 1-based
+    CREATE_IDX = len(files) + 1  # 1-based
+    QUIT_IDX = len(files) + 2  # 1-based
 
     # Flat ordered list of return values matching the numbered items
     item_values: list[Path | None] = list(files)
-    if show_log_option:
-        item_values.append(_GIT_LOG_SENTINEL)
     item_values.append(None)  # "Create new taxonomy"
     item_values.append(_QUIT_SENTINEL)  # "Quit"
 
@@ -433,13 +425,7 @@ def _pick_file_interactive(
             import termios as _termios  # noqa: F401 – import tests availability on this platform
             import tty as _tty  # noqa: F401
 
-            return _arrow_file_picker(
-                files,
-                item_values,
-                initial_sel,
-                preselect,
-                show_log_option,
-            )
+            return _arrow_file_picker(files, item_values, initial_sel, preselect)
         except ImportError:
             pass  # Windows or restricted environment → fall through
 
@@ -451,10 +437,6 @@ def _pick_file_interactive(
             else ""
         )
         console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}{marker}")
-    if show_log_option:
-        console.print(
-            f"  [cyan]{LOG_IDX:>2}[/cyan]  [bold magenta]⎇  Browse git history[/bold magenta]"
-        )
     console.print(f"  [cyan]{CREATE_IDX:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]")
     console.print(f"  [cyan]{QUIT_IDX:>2}[/cyan]  [bold red]✕  Quit[/bold red]")
     console.print()
@@ -484,8 +466,6 @@ def _pick_file_interactive(
                 return _QUIT_SENTINEL
             if idx == CREATE_IDX:
                 return None
-            if show_log_option and idx == LOG_IDX:
-                return _GIT_LOG_SENTINEL
             if 1 <= idx <= len(files):
                 return files[idx - 1]
             err.print(f"[red]Enter a number between 1 and {QUIT_IDX}.[/red]")
@@ -507,7 +487,6 @@ def _arrow_file_picker(
     item_values: list[Path | None],
     initial_sel: int,
     preselect: Path | None,
-    show_log_option: bool,
 ) -> Path | None:
     """Arrow-key file picker using raw terminal I/O + ANSI codes.
 
@@ -524,7 +503,6 @@ def _arrow_file_picker(
     CY = "\033[36m"  # cyan
     BCY = "\033[1;36m"  # bold cyan
     GR = "\033[32m"  # green
-    MG = "\033[35m"  # magenta
     INV = "\033[7m"  # reverse video (readable on any background)
 
     # \r\033[2K: go to column 0 then erase entire line — works in both cooked
@@ -546,9 +524,6 @@ def _arrow_file_picker(
         elif val is None:
             plain = "+ Create new taxonomy"
             coloured = f"{GR}{plain}{R}"
-        elif val == _GIT_LOG_SENTINEL:
-            plain = "⎇  Browse git history"
-            coloured = f"{MG}{plain}{R}"
         else:
             last = "  ← last session" if preselect and val == preselect else ""
             plain = f"{val.name}{last}"  # type: ignore[union-attr]
@@ -717,7 +692,7 @@ def _select_home_file(found: list[Path]) -> Path | None:
             import termios as _t  # noqa: F401 — availability probe
             import tty as _tt  # noqa: F401
 
-            chosen = _arrow_file_picker(found, item_values, 0, None, False)
+            chosen = _arrow_file_picker(found, item_values, 0, None)
             return None if chosen == _QUIT_SENTINEL else chosen
         except ImportError:
             pass
@@ -743,7 +718,6 @@ def _home_actions(allow_change: bool) -> list[tuple[object, str]]:
         (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
-        (_GIT_LOG_SENTINEL, "⎇  Browse git history"),
         (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
         (_DEMO_SENTINEL, "🎒 Load demo ontology / taxonomy"),
     ]
@@ -839,7 +813,7 @@ def _home_action_menu(selected: Path, allow_change: bool) -> list[Path] | Path |
 
     Every action operates on *selected*. Returns:
       [selected]             — Open Browser (the file to open)
-      <action sentinel>      — Graph / Query / Import / HTML / git-log / Publish
+      <action sentinel>      — Graph / Query / Import / HTML / Publish
       _CHANGE_FILE_SENTINEL  — reselect the file (offered only when >1 file exists)
       _QUIT_SENTINEL         — Quit / Ctrl+C / plain Esc
     Falls back to a plain numbered prompt in non-interactive terminals.
@@ -936,10 +910,7 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
     A plain list/file selection (not a sentinel) returns False so the caller
     falls through to the open-file path.
     """
-    from .git.log import launch_git_log
-
     actions: dict[Path, Callable[[list[Path]], None]] = {
-        _GIT_LOG_SENTINEL: lambda f: launch_git_log(path=f[0] if f else None),
         _HTML_SENTINEL: _run_html_export_interactive,
         _GRAPH_SENTINEL: _run_graph_viz_interactive,
         _QUERY_SENTINEL: _launch_query,
@@ -1410,45 +1381,6 @@ def cmd_rename(
     _run(operations.rename_uri, taxonomy, old_uri, new_uri)
     console.print(f"[green]Renamed[/green]  {old_uri}  →  {new_uri}")
     _save(taxonomy, taxonomy_file)
-
-
-# ──────────────────────────── log (git history browser) ─────────────────────
-
-
-@app.command("log")
-def cmd_log(
-    file: Path | None = typer.Argument(
-        None, help="Taxonomy file to scope the diff view. Auto-detected if omitted."
-    ),
-    repo: Path | None = typer.Option(
-        None, "--repo", "-r", help="Git repository root. Detected from file path if omitted."
-    ),
-) -> None:
-    """Browse git commit history in an interactive split-pane viewer.
-
-    Left pane: commit graph with hash, author, and subject.
-    Right pane: diff for the selected commit.
-
-    Keys: ↑↓/jk navigate  Tab/d focus diff  r revert  o restore file  ? help  q quit
-    """
-    from .git.log import launch_git_log
-
-    # Auto-detect file if not given
-    if file is None:
-        found: list[Path] = []
-        for pattern in _TAXONOMY_GLOBS:
-            found.extend(Path.cwd().glob(pattern))
-        found = sorted(set(found))
-        saved = _load_session()
-        if saved and saved in found:
-            file = saved
-        elif len(found) == 1:
-            file = found[0]
-
-    launch_git_log(path=file, repo=repo)
-
-
-# ──────────────────────────── ai config ──────────────────────────────────────
 
 
 # ──────────────────────────── handles ────────────────────────────────────────

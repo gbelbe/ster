@@ -1,14 +1,13 @@
-"""Shared taxonomy detail/flatten logic + curses drawing helpers.
+"""Shared taxonomy detail/flatten logic for the New-TUI.
 
 The old full-screen curses viewer and REPL shell were removed once the Textual
 New-TUI (:mod:`ster.tui`) reached parity; what remains here is reused by the
 New-TUI (:mod:`~ster.nav.logic` detail builders, :mod:`~ster.nav.prefs`,
-:mod:`~ster.nav.ai_model_picker`) and by the git-log viewer (:mod:`~ster.nav.draw`).
+:mod:`~ster.nav.ai_model_picker`).
 """
 
 from __future__ import annotations
 
-from .draw import _draw_bar, _init_colors, render_tree_col  # noqa: F401
 from .logic import (  # noqa: F401
     _ACTION_ADD_SCHEME,
     _FILE_URI_PREFIX,

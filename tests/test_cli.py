@@ -130,7 +130,7 @@ def test_resolve_file_no_files_exits(tmp_path, monkeypatch):
 
 # ── _pick_file_interactive ────────────────────────────────────────────────────
 
-from ster.cli import _GIT_LOG_SENTINEL, _pick_file_interactive
+from ster.cli import _pick_file_interactive
 
 
 def test_pick_file_numeric_selection(tmp_path):
@@ -150,22 +150,14 @@ def test_pick_file_numeric_create_returns_none(tmp_path):
     assert result is None
 
 
-def test_pick_file_log_sentinel(tmp_path):
-    """Selecting the log option returns _GIT_LOG_SENTINEL."""
-    files = [tmp_path / "a.ttl"]
-    log_idx = str(len(files) + 1)  # log is before create when show_log_option=True
-    with patch("ster.cli.Prompt.ask", return_value=log_idx):
-        result = _pick_file_interactive(files, show_log_option=True)
-    assert result == _GIT_LOG_SENTINEL
-
-
-def test_pick_file_create_with_log_option(tmp_path):
-    """With log option, create is index len+2."""
-    files = [tmp_path / "a.ttl"]
-    create_idx = str(len(files) + 2)
-    with patch("ster.cli.Prompt.ask", return_value=create_idx):
-        result = _pick_file_interactive(files, show_log_option=True)
-    assert result is None
+def test_pick_file_delegates_to_arrow_picker_in_a_tty(tmp_path, monkeypatch):
+    """In an interactive terminal the selection uses the arrow-key picker."""
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    with patch("ster.cli._arrow_file_picker", return_value=files[1]) as arrow:
+        assert _pick_file_interactive(files) == files[1]
+    arrow.assert_called_once()
 
 
 def test_pick_file_filename_match(tmp_path):
@@ -247,13 +239,7 @@ def _run_picker(files, item_values, initial_sel, input_bytes, preselect=None):
         patch("termios.tcgetattr", return_value=[]),
         patch("termios.tcsetattr", return_value=None),
     ):
-        return _arrow_file_picker(
-            files,
-            item_values,
-            initial_sel,
-            preselect,
-            False,
-        )
+        return _arrow_file_picker(files, item_values, initial_sel, preselect)
 
 
 def test_arrow_picker_enter_selects_initial(tmp_path):
@@ -334,18 +320,6 @@ def test_arrow_picker_preselect_is_initial(tmp_path):
     # Enter immediately with initial_sel=1 → returns files[1]
     result = _run_picker(files, item_values, 1, b"\r", preselect=files[1])
     assert result == files[1]
-
-
-# ── _GIT_LOG_SENTINEL ─────────────────────────────────────────────────────────
-
-
-def test_git_log_sentinel_is_path():
-    assert isinstance(_GIT_LOG_SENTINEL, Path)
-
-
-def test_git_log_sentinel_unique():
-    """Sentinel should not match any real taxonomy file name."""
-    assert _GIT_LOG_SENTINEL.suffix not in {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
 
 
 # ── _home_action_menu input-flush regression ──────────────────────────────────
