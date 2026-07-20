@@ -28,7 +28,7 @@ from ster.nav.logic import DetailField
 
 from .detail import DetailSection, build_sections, field_markup, group_sections
 from .edits import is_long_text
-from .urls import autolink_urls
+from .urls import autolink_urls, link_kind
 
 PLACEHOLDER = "[dim]Select a class, individual or property…[/dim]"
 
@@ -287,12 +287,23 @@ class DetailRow(Static):
     def _open_link(self, url: str) -> None:
         """Open a value's hyperlink in the browser, with visible feedback.
 
-        Uses ``webbrowser.open`` directly — the same call the graph viewer makes, which
-        works in this app's context — rather than ``App.open_url``, whose driver
+        A malformed link (missing/typo'd scheme, host-less, unsupported) is rejected with
+        an error toast — ``webbrowser.open`` would otherwise 'succeed' and open nothing,
+        leaving a misleading "Opening link…". A URN is a valid identifier a browser can't
+        open, so it is surfaced to copy rather than errored.
+
+        Otherwise uses ``webbrowser.open`` directly — the same call the graph viewer makes,
+        which works in this app's context — rather than ``App.open_url``, whose driver
         indirection silently no-ops here. ``webbrowser.open`` returns ``False`` when no
         browser is reachable (remote/SSH, tmux, a broken ``$BROWSER``); in that case, and
-        on error, we surface the URL in a toast so the click is never a silent nothing and
-        the address is there to copy/cmd-click."""
+        on error, we surface the URL in a toast so the click is never a silent nothing."""
+        kind = link_kind(url)
+        if kind == "malformed":
+            self.app.notify(url, title="Malformed link — can't open", severity="error", timeout=8)
+            return
+        if kind == "urn":
+            self.app.notify(url, title="Identifier (not a web link) — copy it", timeout=6)
+            return
         try:
             opened = webbrowser.open(url)
         except Exception as exc:  # no browser / misconfigured $BROWSER — surface, don't swallow

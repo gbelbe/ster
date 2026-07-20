@@ -1366,6 +1366,22 @@ class OntologyApp(App):
         self._pending_focus_key = message.field.key  # refocus this row after the edit
         self._open_edit_modal(message.field, origin=self.focused)
 
+    def _warn_malformed_links(self, value: str) -> None:
+        """Warn (non-blocking) when a submitted value carries a Markdown link that won't
+        resolve — a missing/typo'd scheme, a host-less URL, etc. Runs on every create /
+        update so a broken link is caught at edit time, not silently saved. No-op when the
+        value has no links or they are all valid (web or URN)."""
+        from .urls import malformed_markdown_links
+
+        bad = malformed_markdown_links(value)
+        if bad:
+            self.notify(
+                "This value has a link that won't open:\n" + "\n".join(bad),
+                title="Malformed link",
+                severity="warning",
+                timeout=8,
+            )
+
     def _open_edit_modal(self, field: DetailField, origin: Widget | None = None) -> None:
         """Open the prefilled edit modal for *field* and apply the resulting command.
 
@@ -1389,6 +1405,7 @@ class OntologyApp(App):
             if command is None:
                 self.notify("This field isn't editable yet.", severity="warning")
                 return
+            self._warn_malformed_links(value)  # surface a broken Markdown link on update
             self._apply_command(command)
 
         # A URI value is renamed fragment-only: lock its namespace, edit the local name.
@@ -1715,6 +1732,7 @@ class OntologyApp(App):
 
         def _on_submit(value: str | None) -> None:
             if value:
+                self._warn_malformed_links(value)  # surface a broken Markdown link on create
                 self._run_or_warn(
                     edits.action_command(action, uri, path, value, self.lang),
                     select=value if mints else None,
