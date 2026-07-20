@@ -32,3 +32,16 @@ def worst_severity(issues: list[dict]) -> str | None:
 def worst_by_subject(issues: list[dict]) -> dict[str, str]:
     """Map each entity URI to the worst severity of the issues that name it."""
     return {uri: worst_severity(items) for uri, items in issues_by_subject(issues).items()}  # type: ignore[misc]
+
+
+def issue_summary(issues: list[dict]) -> str | None:
+    """A one-line count of the *error* and *warning* issues in *issues* — the red/orange
+    ones — e.g. ``"⊘ 2 errors · ⚠ 1 warning"``. ``None`` when there are none (empty or
+    info-only), matching the red/orange tree colouring. Used as a hover tooltip; the full
+    (possibly long) list lives in the detail panel, reached by clicking the node."""
+    parts: list[str] = []
+    for severity, glyph in (("error", "⊘"), ("warning", "⚠")):
+        n = sum(1 for i in issues if i.get("severity") == severity)
+        if n:
+            parts.append(f"{glyph} {n} {severity}{'s' if n != 1 else ''}")
+    return " · ".join(parts) if parts else None

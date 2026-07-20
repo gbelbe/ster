@@ -212,10 +212,20 @@ class OntologyTree(Tree):
             self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
 
     def watch_hover_line(self, previous_line: int, line: int) -> None:
-        """Show a property's rdfs:comment as a tooltip while the mouse hovers its row."""
+        """Tooltip while hovering a row: for a lint-flagged (red/orange) node, its issue
+        counts; otherwise a property's rdfs:comment."""
         node = self.get_node_at_line(line) if line is not None and line >= 0 else None
         uri = node.data if node is not None else None
-        self.tooltip = self._hover_comment(uri) if uri else None
+        self.tooltip = (self._hover_lint(uri) or self._hover_comment(uri)) if uri else None
+
+    def _hover_lint(self, uri: str) -> str | None:
+        """A one-line count of the entity's error/warning lint issues (the red/orange ones),
+        e.g. "⊘ 2 errors · ⚠ 1 warning" — click the node to see the full list. None when the
+        node has no such issues (or the plugin is off)."""
+        from ster.plugins.semanticlint import report
+
+        issues = self.app._lint_issues.get(uri, [])  # type: ignore[attr-defined]
+        return report.issue_summary(issues)
 
     def _hover_comment(self, uri: str) -> str | None:
         """The rdfs:comment of the property at *uri* (else None) — no tooltip for other kinds."""
@@ -449,6 +459,7 @@ class OntologyApp(App):
         self._lint_cache: tuple[dict, list] | None = None
         self._lint_computed = False
         self._lint_index: dict[str, str] = {}
+        self._lint_issues: dict[str, list[dict]] = {}  # uri → its issues (drives hover tooltip)
         self._lint_icons_on = False  # cached (plugin + 'icons' feature on)
         self._lint_detail_on = False  # cached (plugin + 'detail' feature on)
         self._lint_quality_on = False  # cached (plugin + 'quality_block' feature on)
@@ -1084,12 +1095,14 @@ class OntologyApp(App):
             return None
 
     def _set_lint(self, result: tuple[dict, list] | None) -> None:
-        """Store a fresh lint result + rebuild the uri→worst-severity index."""
+        """Store a fresh lint result + rebuild the uri→worst-severity index and the
+        uri→issues index (the latter drives the hover tooltip, O(1) per hover)."""
         from ster.plugins.semanticlint import report
 
         self._lint_cache = result
         self._lint_computed = True
         self._lint_index = report.worst_by_subject(result[1]) if result else {}
+        self._lint_issues = report.issues_by_subject(result[1]) if result else {}
 
     #: seconds of edit inactivity before the (heavy) re-lint fires — comfortably longer
     #: than a large-file background save, so the file-based lint reads the fresh state.
@@ -1337,6 +1350,7 @@ class OntologyApp(App):
         self._lint_cache = None
         self._lint_computed = False
         self._lint_index = {}
+        self._lint_issues = {}
 
     def _restore_focus(self) -> None:
         """Land focus back on the row that was being edited after a mutation rebuilt the
