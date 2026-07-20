@@ -933,7 +933,12 @@ def port_holder(host: str | None = None, port: int | None = None) -> tuple[int, 
     offer to close — when the graph's live-server port is already taken."""
     host, port = _server_host_port(host, port)
     pid = _listening_pid(port)
-    return (pid, _process_name(pid)) if pid is not None else None
+    # A port held by *this* process (our own in-process server thread) is not something to
+    # reclaim — returning it would make the caller SIGTERM our own PID, killing the TUI
+    # (the terminal is left in mouse-tracking mode → escape codes garble the screen).
+    if pid is None or pid == os.getpid():
+        return None
+    return (pid, _process_name(pid))
 
 
 def _port_is_free(host: str, port: int) -> bool:
@@ -958,6 +963,9 @@ def free_port(
     """Gracefully terminate *pid* (``SIGTERM``) and wait until the server port is free.
     Returns True once the port can be bound, False on timeout (or if it never frees)."""
     host, port = _server_host_port(host, port)
+    if pid == os.getpid():
+        # Never signal ourselves — SIGTERM to our own PID would kill the running TUI.
+        return _port_is_free(host, port)
     try:
         os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):

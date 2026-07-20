@@ -47,6 +47,17 @@ def test_port_holder_none_when_free(monkeypatch) -> None:
     assert vv.port_holder(host="127.0.0.1", port=8765) is None
 
 
+def test_port_holder_ignores_our_own_process(monkeypatch) -> None:
+    """Regression: when the graph port is held by *this* process (an in-process server
+    thread whose _api_app was reset), port_holder must return None — there is nothing
+    foreign to reclaim. Otherwise the caller would 'free' the port by SIGTERM-ing our own
+    PID, killing the TUI (terminal left in mouse-tracking mode → garbage on the screen)."""
+    import os
+
+    monkeypatch.setattr(vv, "_listening_pid", lambda port: os.getpid())
+    assert vv.port_holder(host="127.0.0.1", port=8765) is None
+
+
 # ── free_port (SIGTERM + wait for the port to free) ─────────────────────────────
 
 
@@ -63,6 +74,20 @@ def test_free_port_false_when_it_never_frees(monkeypatch) -> None:
     monkeypatch.setattr(vv.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(vv, "_port_is_free", lambda host, port: False)
     assert vv.free_port(60130, host="127.0.0.1", port=8765, timeout=0.0, poll=0) is False
+
+
+def test_free_port_never_signals_the_current_process(monkeypatch) -> None:
+    """Regression: free_port must refuse to signal our own PID — SIGTERM to self would kill
+    the TUI mid-session, leaving the terminal in raw/mouse-tracking mode (a white screen with
+    SGR mouse escape codes printing on every mouse move)."""
+    import os
+
+    killed: list = []
+    monkeypatch.setattr(vv.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(vv, "_port_is_free", lambda host, port: False)
+    result = vv.free_port(os.getpid(), host="127.0.0.1", port=8765)
+    assert killed == []  # os.kill was never called on ourselves
+    assert result is False  # the port is (still) ours — but we did not self-destruct
 
 
 def test_free_port_reports_port_state_when_kill_fails(monkeypatch) -> None:
