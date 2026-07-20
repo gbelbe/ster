@@ -271,6 +271,16 @@ class OntologyApp(App):
     Screen { layers: base overlay; }
     /* Left-align the header title (default is centred). */
     HeaderTitle { content-align: left middle; padding-left: 1; }
+
+    /* Checkboxes render a bracketed mark (ster.tui.check.Check): "[ ]" when unchecked,
+       "[✓]" when checked — instead of Textual's dim-"X" block whose off state reads like
+       a faint mark. These colour that mark app-wide: muted off, bold success on. */
+    ToggleButton > .toggle--button { color: $text-muted; }
+    ToggleButton.-on > .toggle--button { color: $text-success; text-style: bold; }
+    /* And drop the heavy `tall $border` Textual boxes a *focused* checkbox in — that purple
+       rectangle overflows inline / carded checkboxes and reads as broken. The focused label
+       already highlights (block cursor), which is enough to show which box has focus. */
+    ToggleButton:focus { border: none; }
     #body { height: 1fr; }
     #nav { width: 25%; min-width: 24; }
 

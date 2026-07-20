@@ -32,6 +32,7 @@ from textual.widgets import (
 from textual.widgets._collapsible import CollapsibleTitle
 
 from ster.metadata_coverage import MetaProp
+from ster.tui.check import Check
 
 from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup, FormGroup
@@ -115,7 +116,7 @@ def suggest_label(predicate: str) -> str:
     return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1] or predicate
 
 
-class _MetaCheckbox(Checkbox):
+class _MetaCheckbox(Check):
     """A registered ontology-metadata predicate as a checkbox (ticked = offered in
     "Add metadata"). Carries its predicate URI + display label."""
 
@@ -553,8 +554,8 @@ class ConfigModal(ModalBase[None]):
     /* Fixed label width so the fields align in a column right after the names (not pushed
        to the far right), keeping the name, its field and "required in:" visually close. */
     .cfg-sl-label { width: 38; content-align: left middle; }
-    .cfg-sl-num { width: 12; height: 1; border: none; padding: 0 1; background: $foreground 10%; }
-    .cfg-sl-pct { width: 2; height: 1; content-align: left middle; color: $text-muted; }
+    .cfg-sl-num { width: 6; height: 1; border: none; padding: 0 1; background: $foreground 10%; }
+    .cfg-sl-pct { width: auto; height: 1; content-align: left middle; color: $text-muted; margin-left: 1; }
     .cfg-sl-text { width: 1fr; }
     /* Per-language "required in:" row, tucked directly beneath its threshold. */
     .cfg-sl-langrow { height: 1; }
@@ -710,7 +711,7 @@ class ConfigModal(ModalBase[None]):
         )
         blocks = [
             Vertical(
-                Checkbox(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}"),
+                Check(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}"),
                 Static(spec.description, classes="cfg-plugin-desc"),
                 classes="cfg-plugin-block",
             )
@@ -781,7 +782,7 @@ class ConfigModal(ModalBase[None]):
         yield Horizontal(
             Static("required in:", classes="cfg-sl-langcaption"),
             *(
-                Checkbox(
+                Check(
                     lang,
                     value=(lang in required_set),
                     id=f"cfg-sllang-{lang_key}-{lang}",
@@ -814,7 +815,7 @@ class ConfigModal(ModalBase[None]):
             self._sl_section(
                 "Features",
                 *(
-                    Checkbox(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
+                    Check(label, value=cfg["features"].get(name, True), id=f"cfg-slfeat-{name}")
                     for name, label in self._SL_FEATURES
                 ),
             )
@@ -887,7 +888,7 @@ class ConfigModal(ModalBase[None]):
         with _LangGroup(id="cfg-langs"):
             with Vertical(id="cfg-boxes"):
                 for code in self._configured:
-                    yield Checkbox(code, value=True, id=f"cfg-chk-{code}")
+                    yield Check(code, value=True, id=f"cfg-chk-{code}")
             with Horizontal(id="cfg-add-row"):
                 yield Input(
                     placeholder="add languages, comma-separated — e.g. en, fr, es, de, zh, ar",

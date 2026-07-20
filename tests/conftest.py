@@ -26,6 +26,32 @@ def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
     monkeypatch.setattr("ster.analysis_cache._cache_path", lambda: cache)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_prefs(tmp_path_factory, monkeypatch):
+    """Redirect every on-disk preference file to a per-test tmp dir.
+
+    Without this, tests read (and *write*) the developer's real
+    ~/.config/ster/*.json — theme, configured languages, the metadata-property
+    catalogs, the plugin config. That both pollutes real config and makes tests
+    order-dependent: e.g. the annotation picker's options come from
+    ``load_metadata_props()``, so a leaked catalog changes what predicates are
+    offered. Isolating the prefs makes every test see the clean defaults.
+    """
+    from ster.nav import prefs
+    from ster.plugins.semanticlint import config as sl_config
+
+    d = tmp_path_factory.mktemp("ster-prefs")
+    for attr in (
+        "_prefs_path",
+        "_lang_prefs_path",
+        "_configured_langs_path",
+        "_metadata_props_path",
+        "_entity_metadata_props_path",
+    ):
+        monkeypatch.setattr(prefs, attr, lambda a=attr: d / f"{a}.json")
+    monkeypatch.setattr(sl_config, "_config_path", lambda: d / "quality.json")
+
+
 MINIMAL_TURTLE = """\
 @prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
