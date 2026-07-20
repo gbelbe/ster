@@ -373,7 +373,7 @@ def test_home_action_menu_flushes_stdin_before_reading(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeSysStdin())
     monkeypatch.setattr(sys, "stdout", _FakeSysStdout())
 
-    _home_action_menu(selected, allow_change=True)
+    _home_action_menu(selected)
 
     assert termios.TCIFLUSH in flush_calls
 

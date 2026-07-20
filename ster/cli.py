@@ -221,7 +221,7 @@ _DEMO_FILE: Path = Path(__file__).parent / "tui" / "mixed-gear-demo.ttl"
 
 # Home action-menu row colours (ANSI), keyed by sentinel; ``True`` = the "open" action.
 _MENU_COLOURS: dict[object, str] = {
-    True: "\033[1;36m",  # bright cyan — Open Browser (the primary action)
+    True: "\033[1;36m",  # bright cyan — TTL Viewer-Editor (the primary action)
     _GRAPH_SENTINEL: "\033[33m",  # yellow
     _QUERY_SENTINEL: "\033[32m",  # green
     _EXT_ONT_SENTINEL: "\033[35m",  # magenta
@@ -521,6 +521,9 @@ def _arrow_file_picker(
         if val == _QUIT_SENTINEL:
             plain = "✕  Quit"
             coloured = f"\033[31m{plain}{R}"  # red
+        elif val == _DEMO_SENTINEL:
+            plain = "🎒 Load demo ontology / taxonomy"
+            coloured = f"{GR}{plain}{R}"
         elif val is None:
             plain = "+ Create new taxonomy"
             coloured = f"{GR}{plain}{R}"
@@ -674,18 +677,16 @@ def _run(fn, *args, **kwargs):
 
 
 def _select_home_file(found: list[Path]) -> Path | None:
-    """Step 1 of the home menu: pick the single file every action will operate on.
-
-    One file → return it (nothing to choose). Otherwise arrow-select it (a plain numbered
-    prompt in a non-interactive terminal). Returns the chosen file, or None on Quit / Ctrl+C.
+    """Step 1 of the home menu: pick the file every action will operate on — from the local
+    files *plus* a 'Load demo' entry. Always shown (even for one file), so the demo is always
+    reachable. Returns the chosen file, ``_DEMO_SENTINEL`` (load a fresh demo), or ``None`` on
+    Quit / Ctrl+C.
     """
     import sys
 
-    if len(found) == 1:
-        return found[0]
-
-    console.print("[bold]Select a taxonomy file:[/bold]\n")
-    item_values: list[Path | None] = [*found, _QUIT_SENTINEL]
+    console.print("[bold]Select a file:[/bold]\n")
+    # Local files, then the (fresh-each-time) demo, then Quit.
+    item_values: list[Path | None] = [*found, _DEMO_SENTINEL, _QUIT_SENTINEL]
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
@@ -697,34 +698,44 @@ def _select_home_file(found: list[Path]) -> Path | None:
         except ImportError:
             pass
 
+    return _select_home_file_numeric(found)
+
+
+def _select_home_file_numeric(found: list[Path]) -> Path | None:
+    """Numbered-prompt fallback for :func:`_select_home_file` when no arrow-key TTY is
+    available. Files 1..n, then the demo, then Quit; a non-numeric reply picks the default
+    (first file, or the demo when the folder is empty)."""
     for i, f in enumerate(found, 1):
         console.print(f"  [cyan]{i}[/cyan]  {f.name}")
-    console.print(f"  [cyan]{len(found) + 1}[/cyan]  [red]✕  Quit[/red]")
-    choice = Prompt.ask(f"File (1–{len(found) + 1})", default="1")
+    demo_idx, quit_idx = len(found) + 1, len(found) + 2
+    console.print(f"  [cyan]{demo_idx}[/cyan]  [green]🎒 Load demo ontology / taxonomy[/green]")
+    console.print(f"  [cyan]{quit_idx}[/cyan]  [red]✕  Quit[/red]")
+    choice = Prompt.ask(f"Select (1–{quit_idx})", default=str(demo_idx if not found else 1))
     try:
         idx = int(choice.strip()) - 1
     except ValueError:
-        return found[0]
-    if idx == len(found):
+        return _DEMO_SENTINEL if not found else found[0]
+    if idx == quit_idx - 1:
         return None  # Quit
-    return found[idx] if 0 <= idx < len(found) else found[0]
+    if idx == demo_idx - 1:
+        return _DEMO_SENTINEL
+    return found[idx] if 0 <= idx < len(found) else _DEMO_SENTINEL
 
 
-def _home_actions(allow_change: bool) -> list[tuple[object, str]]:
-    """The home action rows: the fixed actions, an optional 'Change file', then Quit."""
-    actions: list[tuple[object, str]] = [
-        (True, "🖥  Open Browser (New-TUI)"),  # True = "open" sentinel → the Textual New-TUI
-        (_GRAPH_SENTINEL, "◈  Open Graph Viz"),
-        (_QUERY_SENTINEL, "🔍 Query Graph SPARQL"),
+def _home_actions() -> list[tuple[object, str]]:
+    """The home action rows for the selected file, in display order. 'Change file' returns
+    to the file list (which now holds the local files *and* the demo); True = the primary
+    'open' action (the Textual viewer)."""
+    return [
+        (_CHANGE_FILE_SENTINEL, "🔀 Change file"),
+        (True, "🖥  TTL Viewer-Editor"),  # True = "open" sentinel → the Textual viewer
+        (_QUERY_SENTINEL, "🔍 SPARQL Query"),
+        (_PUBLISH_SENTINEL, "📦 Linked Data Publish & Version"),
+        (_HTML_SENTINEL, "🌐 HTML Data Catalog"),
+        (_GRAPH_SENTINEL, "◈  Load Graph Viewer"),
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
-        (_HTML_SENTINEL, "🌐 Generate Web-Documentation"),
-        (_PUBLISH_SENTINEL, "📦 Version & Publish LD"),
-        (_DEMO_SENTINEL, "🎒 Load demo ontology / taxonomy"),
+        (_QUIT_SENTINEL, "✕  Quit"),
     ]
-    if allow_change:  # only meaningful when there's more than one file to switch between
-        actions.append((_CHANGE_FILE_SENTINEL, "🔀 Change file"))
-    actions.append((_QUIT_SENTINEL, "✕  Quit"))
-    return actions
 
 
 def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> object:
@@ -733,13 +744,14 @@ def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> ob
     for i, (_s, label) in enumerate(actions, 1):
         console.print(f"  [cyan]{i}[/cyan]  {label}")
     console.print()
-    choice = Prompt.ask(f"Action (1–{len(actions)})", default="1")
+    open_idx = next((i for i, (s, _) in enumerate(actions) if s is True), 0)
+    choice = Prompt.ask(f"Action (1–{len(actions)})", default=str(open_idx + 1))
     try:
         idx = int(choice.strip()) - 1
     except ValueError:
         idx = -1
     if not (0 <= idx < len(actions)):
-        idx = 0  # default → Open Browser
+        idx = open_idx  # default → TTL Viewer-Editor (open the file)
     return actions[idx][0]
 
 
@@ -760,7 +772,7 @@ def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | 
     )
     CLEAR, NL = "\r\033[2K", "\r\n"
     n = len(actions)
-    cursor = 0
+    cursor = next((i for i, (s, _) in enumerate(actions) if s is True), 0)  # start on "open"
 
     def render(first: bool = False) -> None:
         if not first:
@@ -808,19 +820,19 @@ def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | 
     return result
 
 
-def _home_action_menu(selected: Path, allow_change: bool) -> list[Path] | Path | None:
+def _home_action_menu(selected: Path) -> list[Path] | Path | None:
     """Step 2 of the home menu: the action menu for the *selected* file.
 
     Every action operates on *selected*. Returns:
-      [selected]             — Open Browser (the file to open)
-      <action sentinel>      — Graph / Query / Import / HTML / Publish
-      _CHANGE_FILE_SENTINEL  — reselect the file (offered only when >1 file exists)
+      [selected]             — TTL Viewer-Editor (the file to open)
+      <action sentinel>      — SPARQL / Publish / HTML / Graph / Import
+      _CHANGE_FILE_SENTINEL  — reselect the file (the file list holds files + the demo)
       _QUIT_SENTINEL         — Quit / Ctrl+C / plain Esc
     Falls back to a plain numbered prompt in non-interactive terminals.
     """
     import sys
 
-    actions = _home_actions(allow_change)
+    actions = _home_actions()
 
     def _chosen(sentinel: object) -> list[Path] | Path:
         return [selected] if sentinel is True else sentinel  # type: ignore[return-value]
@@ -916,7 +928,6 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _QUERY_SENTINEL: _launch_query,
         _EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _PUBLISH_SENTINEL: _run_publish_interactive,
-        _DEMO_SENTINEL: _launch_demo,
     }
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:
@@ -967,26 +978,6 @@ def _offer_keep_demo_edits(dest: Path) -> None:
     target = Path.cwd() / Path(name).name
     shutil.copyfile(dest, target)
     console.print(f"[green]Saved your work → {target.name}[/green]")
-
-
-def _launch_demo(found: list[Path]) -> None:
-    """Home-menu "Load demo": drop the sample into the folder and open it in the viewer."""
-    _open_viewer(_load_demo_into_cwd())
-
-
-def _offer_demo_when_empty() -> Path | None:
-    """No taxonomy files in the folder → offer to load the bundled demo. Returns the
-    demo path if the user accepts (interactive terminals only), else None."""
-    import sys
-
-    console.print("[dim]No taxonomy files found in this folder.[/dim]\n")
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return None
-    from rich.prompt import Confirm
-
-    if Confirm.ask("🎒 Load the mixed SKOS + OWL demo to explore?", default=True, console=console):
-        return _load_demo_into_cwd()
-    return None
 
 
 def _launch_query(found: list[Path]) -> None:
@@ -2058,7 +2049,7 @@ def _publish_stable_flow(taxonomy_file: Path, publish_dir: Path) -> None:  # pra
 
 
 def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
-    """Interactive Version & Publish LD screen from the home-screen menu."""
+    """Interactive Linked Data Publish & Version screen from the home-screen menu."""
     import webbrowser
 
     from rich.panel import Panel
@@ -2075,7 +2066,7 @@ def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - i
 
     console.print(
         Panel(
-            f"[bold]📦 Version & Publish LD[/bold]\n"
+            f"[bold]📦 Linked Data Publish & Version[/bold]\n"
             f"[dim]File: {taxonomy_file}[/dim]\n"
             f"[dim]Ontology URI: {taxonomy.ontology_uri}[/dim]"  # type: ignore[attr-defined]
             + (
@@ -2098,6 +2089,8 @@ def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - i
         if sel is None:
             return
         row = rows[sel]
+        if row.action == "back":  # explicit "← Back to menu" row (Esc does the same)
+            return
         if row.action == "publish_stable":
             _publish_stable_flow(taxonomy_file, publish_dir)
         elif row.url:
@@ -2294,10 +2287,14 @@ def _home_obtain_action(
         return pending_open, [pending_open]
     _print_home_intro()
     if selected_file is None or selected_file not in found:
-        selected_file = _select_home_file(found)
-        if selected_file is None:  # Quit / cancel
+        choice = _select_home_file(found)
+        if choice is None:  # Quit / cancel
             return None, _QUIT_SENTINEL
-    return selected_file, _home_action_menu(selected_file, allow_change=len(found) > 1)
+        if choice == _DEMO_SENTINEL:  # a fresh demo, opened directly
+            demo = _load_demo_into_cwd()
+            return demo, [demo]
+        selected_file = choice
+    return selected_file, _home_action_menu(selected_file)
 
 
 def _home_perform(
@@ -2331,11 +2328,8 @@ def _home_screen(initial_file: Path | None = None) -> None:
     while True:
         try:
             found = _found_taxonomy_files()
-            if not found:  # empty folder → offer the bundled demo, else stop
-                pending_open = _offer_demo_when_empty()
-                if pending_open is None:
-                    break
-                continue
+            # No `not found` special case: the file list always offers the demo (+ Quit),
+            # so an empty folder still gets a working picker — see _select_home_file.
             project = Project.load(Path.cwd())
             selected_file, action = _home_obtain_action(pending_open, selected_file, found)
             pending_open = None

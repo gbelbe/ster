@@ -136,10 +136,25 @@ def test_menu_lists_pages_as_full_urls(tmp_path):
         assert r.url.startswith("http://127.0.0.1:8765/ontology/")
 
 
-def test_menu_with_no_pages_only_has_action(tmp_path):
+def test_menu_with_no_pages_has_the_action_and_a_back_row(tmp_path):
     from ster.publish import build_publish_menu, discover_published_pages
 
     pub = tmp_path / "ontology"  # nothing published
     rows = build_publish_menu(discover_published_pages(pub), "http://h", pub)
-    assert len(rows) == 1
+    assert len(rows) == 2  # publish-stable + the "back" affordance
     assert rows[0].action == "publish_stable"
+    assert rows[-1].action == "back"
+
+
+def test_menu_last_row_is_a_visible_back_to_menu(tmp_path):
+    """Every publish screen offers an explicit way home — a '← Back to menu' row at the
+    bottom (in addition to Esc), so the user is never trapped in the submenu."""
+    from ster.publish import build_publish_menu, discover_published_pages
+
+    pub = tmp_path / "ontology"
+    _make_group(pub, "latest")  # with pages present, back is still the final row
+    rows = build_publish_menu(discover_published_pages(pub), "http://h", pub)
+    back = rows[-1]
+    assert back.label == "← Back to menu"
+    assert back.action == "back"
+    assert back.url is None and back.path is None

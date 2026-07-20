@@ -1,17 +1,18 @@
 # ster
 
+**Software**
 [![CI](https://github.com/gbelbe/ster/actions/workflows/ci.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/ci.yml)
-[![Publish to PyPI](https://github.com/gbelbe/ster/actions/workflows/publish.yml/badge.svg)](https://github.com/gbelbe/ster/actions/workflows/publish.yml)
 [![codecov](https://codecov.io/gh/gbelbe/ster/branch/main/graph/badge.svg)](https://codecov.io/gh/gbelbe/ster/branch/main)
-[![PyPI](https://img.shields.io/pypi/v/ster)](https://pypi.org/project/ster/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![PyPI](https://img.shields.io/pypi/v/ster)](https://pypi.org/project/ster/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[![rdflib](https://img.shields.io/pypi/v/rdflib?label=rdflib&color=orange)](https://pypi.org/project/rdflib/)
-[![typer](https://img.shields.io/pypi/v/typer?label=typer&color=brightgreen)](https://pypi.org/project/typer/)
-[![rich](https://img.shields.io/pypi/v/rich?label=rich&color=purple)](https://pypi.org/project/rich/)
-[![pylode](https://img.shields.io/pypi/v/pylode?label=pylode+%5Boptional%5D&color=blue)](https://pypi.org/project/pylode/)
+**Dependencies**
+[![rdflib](https://img.shields.io/pypi/v/rdflib?label=rdflib&color=orange)](https://github.com/RDFLib/rdflib)
+[![pyLODE](https://img.shields.io/pypi/v/pylode?label=pyLODE&color=blue)](https://github.com/RDFLib/pyLODE)
+[![semanticlint](https://img.shields.io/pypi/v/semanticlint?label=semanticlint&color=e56b6f)](https://pypi.org/project/semanticlint/)
+[![Cytoscape.js](https://img.shields.io/github/v/tag/cytoscape/cytoscape.js?label=Cytoscape.js&color=00a6a6)](https://github.com/cytoscape/cytoscape.js)
+[![Textual](https://img.shields.io/pypi/v/textual?label=Textual&color=5a4fcf)](https://github.com/textualize/textual)
 
 ```
    _____ ______ ______ ____
@@ -22,128 +23,54 @@
 
   [ Breton: "Meaning" or "Sense" ]
   [  Semantic Knowledge Editor  ]
-  v0.6.0
 ```
 
-**ster** is a terminal tool for building and exploring semantic knowledge bases.
-Edit [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and [OWL](https://www.w3.org/TR/owl2-overview/) ontologies in a full-screen TUI, explore them as VOWL-style interactive graphs in the browser, and export HTML documentation — all from your terminal, no database required.
+**ster** is a terminal editor for semantic knowledge bases. Build and explore
+[SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and
+[OWL](https://www.w3.org/TR/owl2-overview/) ontologies together in one
+full-screen TUI — then visualise them as interactive graphs, run SPARQL, and
+publish HTML documentation, all from your terminal. No database required.
 
-> *ster* is the Breton word for *meaning*, with homonyms for *river* and *star*.
-> Let it guide your semantic voyage, keeping the flow and always following your star.
+> *ster* is the Breton word for *meaning*, with homonyms for *river* and *star* —
+> keep the flow, and follow your star.
 
 ---
 
-## What's inside
+## The TUI
 
-| Layer | What ster does |
+The heart of ster is a [Textual](https://github.com/textualize/textual) terminal
+app that shows your **SKOS taxonomy and OWL ontology in a single tree**:
+
+- **One unified tree** — concept schemes, concepts, classes, named individuals,
+  and properties side by side. Create, rename, delete, and edit any entity
+  inline; every field is editable in a detail panel.
+- **Puns (class ⇔ concept)** — an entity can be both an OWL class and a SKOS
+  concept. **Promote** a concept to a class or **demote** it back with one action.
+- **Tag individuals with concepts** — link named individuals to SKOS concepts
+  (`dcterms:subject`), one at a time or in bulk from a checklist.
+- **Live quality & coverage** — a [semanticlint](https://pypi.org/project/semanticlint/)
+  pass colour-codes each tree node by its worst issue (🔴 error · 🟠 warning);
+  hover for a per-entity issue count, and open the node to see the full list and
+  its label/comment/property-fill coverage.
+- **Markdown notes** — attach rich notes to any entity with a full-screen editor
+  and a live rendered preview; markdown links are URL-checked when you open or edit them.
+- **Ontology overview** — editable title/description; opening a pure-OWL file
+  jumps straight to the overview.
+- **Bundled demo** — a mixed SKOS + OWL sandbox you can load from the file list
+  to try everything out (it resets on each load).
+
+## Beyond the tree
+
+Every capability below is reachable from the home menu, acting on the file you selected:
+
+| Menu action | What it does |
 |---|---|
-| **Edit** | Full-screen TUI for SKOS concepts and OWL classes / individuals / properties |
-| **Visualise** | VOWL-style interactive graph — classes as circles, property edges, per-class individual toggle, drag, zoom, detail panel |
-| **API server** | Local JSON/WebSocket server exposing the taxonomy for external tools; configurable host and port |
-| **AI assist** | LLM-powered concept suggestions (online or local via Ollama) |
-| **Git** | Stage, commit, push without leaving the terminal |
-| **Export** | pyLODE HTML documentation; SPARQL query runner |
-| **SPARQL** | Cache-warmed query engine — first query fires in milliseconds, not seconds |
-| **Notes** | Multiline markdown notes (`ns1:note`) on any OWL class, individual, or property — full-screen editor, live rendered preview |
-
----
-
-## Features
-
-### Interactive TUI — SKOS and OWL in one view
-
-- Full-screen tree browser for SKOS concept schemes and OWL class hierarchies
-- Inline concept creation, renaming, deletion, and label editing
-- Detail panel: view and edit all SKOS fields (labels, definitions, scope notes, related links…)
-- OWL layer: browse classes, named individuals, object/datatype properties, axioms
-- Visual `⇔` indicator for concepts with cross-scheme mapping links
-- Fold / unfold subtrees; hidden-concept count shown
-- Scheme dashboard: completion rates, quality issues, concept counts at a glance
-- **OWL class quality stats**: label/comment coverage, instance count, and property fill rates displayed inline on each class node
-- **Ontology root node**: selectable in the tree; opens the ontology overview panel with editable `dcterms:title` and `dcterms:description` fields (auto-prefilled from `rdfs:label` when absent)
-- **Smart startup**: opening a pure-OWL file goes directly to the ontology overview
-- **Markdown notes**: every OWL class, individual, and property has an editable `ns1:note` field — full-screen multiline editor with rendered preview; heading lines shown bold in the detail panel
-
-### VOWL graph visualisation
-
-Open any ontology or taxonomy as an interactive VOWL-style graph in the browser:
-
-- OWL classes as circles, datatype nodes as amber rectangles, SKOS schemes and concepts as circles
-- Object-property edges with floating label boxes; subClassOf rendered with a hollow arrowhead; datatype properties as amber dashed edges
-- Hierarchical layout auto-selected for OWL-only graphs; force layout for SKOS and mixed ontologies
-- Drag, zoom, and pin nodes; hover tooltips; highlight neighbourhoods on click
-- **Per-class individual toggle**: click the count badge on a class circle to show/hide its individuals; "Hide/show all individuals" button in the sidebar
-- **Cardinality labels**: functional properties display `0..1` on their edge box
-- **Closeable detail panel**: `×` button or Escape hides the right panel
-- **Link-type toggles**: `rdf:type`, `inScheme`, and `datatype` link families can be hidden/shown from the toolbar
-
-### Local API server
-
-Start a local JSON + WebSocket server to expose your taxonomy to external tools:
-
-```bash
-ster api my-taxonomy.ttl
-```
-
-- REST endpoints for querying concepts, classes, and properties
-- WebSocket push on every file change (live refresh for connected clients)
-- Host and port are configurable — set them once in **⚙ Setup / Options** and they persist across sessions
-- Bearer-token authentication (token generated on first launch, viewable in Setup / Options)
-
-### AI-assisted concept creation
-
-When adding a concept (`+` key), choose between entering a name manually or letting AI suggest up to 20 ordered concept names:
-
-- **AI Auto Suggest** — the AI acts as a professional taxonomist who knows your domain.
-  It proposes names ranked by relevance, you pick one (or ask for more), and the form is pre-filled.
-- Before generating, ster shows you the exact prompt so you can review and adjust it.
-- Supports any LLM via the [`llm`](https://llm.datasette.io/) library — including local models via [Ollama](https://ollama.com/).
-- Pull Ollama models directly from the **⚙ Setup / Options** wizard without leaving ster.
-- **Copy-paste mode** — no local LLM needed: ster displays the prompt, copies it to the clipboard, and you paste the model's response from any web AI (ChatGPT, Claude, Gemini…).
-
-### Setup / Options screen
-
-A dedicated full-screen settings panel, available from the main menu:
-
-```
-── Server Setup ─────────────────────────────────────────────
-  server URL          http://127.0.0.1
-  server port         8765
-  bearer token        ***
-  configure AI model  →
-── LLM Setup ────────────────────────────────────────────────
-  configure AI model  →
-  language            en
-```
-
-- Edit server URL and port inline; ster saves changes and shows a restart reminder
-- Toggle bearer token visibility to copy it when connecting external tools
-- Launch the AI model configuration wizard directly from this screen
-
-### Multi-file workspace
-
-- Open several `.ttl` files at once and see a merged taxonomy view
-- Edits are always written to the correct source file automatically
-
-### Cross-scheme mapping
-
-- Add `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch`, `relatedMatch` links between concepts in different files
-- Remove links from the detail view — works even when the target file has been deleted
-- Both source and target files are saved and staged in git on every change
-
-### Git integration
-
-- Stage, commit, and push changes without leaving the terminal
-- Browse full commit history with diffs inside the TUI
-
-### HTML export
-
-- Generate a browsable, wiki-style HTML page from any taxonomy via [pyLODE](https://github.com/RDFLib/pyLODE)
-- One HTML file per language detected in the taxonomy
-- Sticky language-switcher bar links between language versions
-- Sanitises the ontology before handing it to pyLODE: removes bare-namespace URI declarations that caused crashes, and injects `dcterms:title` / `dcterms:description` from `rdfs:label` when absent
-- Auto-installs pyLODE via `uv pip install` in uv-managed environments (no "No module named pip" error)
-- Available from the main menu or `ster export`
+| **TTL Viewer-Editor** | The unified SKOS + OWL tree editor described above |
+| **SPARQL Query** | In-TUI query editor with autocomplete and a cache-warmed engine (no cold-start delay); export results to CSV |
+| **Graph Viewer** | Opens an interactive [Cytoscape.js](https://js.cytoscape.org) VOWL-style graph in the browser — classes as circles, property edges, per-class individual toggle, drag / zoom / detail panel |
+| **HTML Data Catalog** | Generates browsable [pyLODE](https://github.com/RDFLib/pyLODE) documentation, one page per language |
+| **Import External Ontology** | Fetch and cache external vocabularies, binding their namespaces for reuse |
+| **Linked Data Publish & Version** | Semver-tagged releases served over a local Linked-Data server |
 
 ---
 
@@ -153,188 +80,37 @@ A dedicated full-screen settings panel, available from the main menu:
 pip install ster
 ```
 
-This ships everything: the TUI + editing, AI assist, HTML export, and the
-graph/publish server — no extras required. For AI features, configure your
-model from the main menu (**⚙ Setup / Options**); no model is needed if you use
-copy-paste mode.
-
-### From source
-
-```bash
-git clone https://github.com/gbelbe/ster.git
-cd ster
-pip install -e .           # everything (core)
-pip install -e ".[dev]"    # also install the test suite
-```
-
----
-
-## Dependencies
-
-| Group | Package | Purpose |
-|---|---|---|
-| core | `rdflib>=7.0` | RDF parsing and serialisation |
-| core | `typer[all]>=0.12` | CLI framework |
-| core | `rich>=13.0` | Terminal rendering, prompts, tables |
-| core | `llm>=0.19` | LLM abstraction layer (online & offline models) |
-| core | `fastapi[standard]>=0.110` | JSON + WebSocket API server |
-| core | `watchfiles>=0.21` | File-change watcher for live push |
-| core | `pylode>=3.0` | HTML generation from SKOS / OWL (VocPub / OntPub profiles) |
-| `[dev]` | `pytest>=9.0` | Test suite |
-| `[dev]` | `pytest-cov>=5.0` | Coverage reporting |
-
-All runtime features (AI assist, HTML export, graph/publish server) ship by default — no extras required.
-
----
+That's everything — TUI editing, graph viewer, SPARQL, HTML export, and the
+publish server, no extras required. AI-assisted concept suggestions are
+available via the [`llm`](https://llm.datasette.io/) library (online models,
+local [Ollama](https://ollama.com/) models, or a no-model copy-paste mode).
 
 ## Quick start
-
-### Launch the interactive editor
 
 ```bash
 ster
 ```
 
-The home screen lists all ontology and taxonomy files in the current directory.
-Use arrow keys to navigate the action menu, then press **Enter** to confirm.
+The home screen lists the ontology and taxonomy files in the current directory
+(plus a **Load demo** entry). Pick a file, then choose an action:
 
 ```
-       ✓  my-ontology.ttl
-       ✓  products.ttl
+  Select a file:
+    ☑  my-ontology.ttl
+    🎒 Load demo ontology / taxonomy
 
- ▶  1  ↵  Open Tree View
-    2  ◈  Open Graph Viz
-    3  🔍 Query Graph SPARQL
-    4  📥 Import External Ontology
-    5  🌐 Generate Web-Documentation
-    6  ⎇  Browse git history
-    7  ⚙  Setup / Options
-    8  ✕  Quit
+  ▶  🖥  TTL Viewer-Editor
+     🔍 SPARQL Query
+     📦 Linked Data Publish & Version
+     🌐 HTML Data Catalog
+     ◈  Load Graph Viewer
+     📥 Import External Ontology
+     ✕  Quit
 ```
 
-### Keyboard shortcuts (TUI)
-
-| Key | Action |
-|---|---|
-| `↑` `↓` | Navigate tree / fields |
-| `Enter` | Expand/collapse node or open detail |
-| `+` | Add concept — opens a menu: enter name manually or use AI Auto Suggest |
-| `d` | Delete selected concept |
-| `e` | Edit selected field in detail panel |
-| `m` | Add a mapping link to another concept |
-| `g` | Commit & push changes |
-| `?` | Help screen |
-| `q` / `Esc` | Back / quit |
-
-### AI Auto Suggest
-
-Press `+` on any concept or scheme, then select **✦ AI Auto Suggest**:
-
-1. ster renders the prompt and shows it for review — edit `prompts.py` to customise the wording
-2. Press **Enter** to generate; the AI suggests up to 20 concept names ranked by relevance
-3. Navigate the list and press **Enter** to pick a name (pre-fills the creation form)
-4. Select **Suggest more** to get a fresh batch with deduplication
-
-In copy-paste mode the prompt is displayed and copied to the clipboard; paste the model's response back and press **Enter** on an empty line.
-
-### Export to HTML
-
-```bash
-ster export my-taxonomy.ttl          # generates ./html/my-taxonomy_en.html …
-ster export my-taxonomy.ttl -l en,fr # specific languages only
-ster export my-taxonomy.ttl -o /tmp  # custom output directory
-```
-
-Or use the **🌐 Generate Web-Documentation** option from the main menu.
-
-### SPARQL query runner
-
-Query the loaded taxonomy or ontology with SPARQL directly from the TUI.
-Select **🔍 Query Graph SPARQL** from the main menu, type or paste a query,
-and press **F5** (or **Ctrl+R**) to run.
-
-```sparql
-SELECT ?class ?label WHERE {
-  ?class a owl:Class ;
-         rdfs:label ?label .
-  FILTER(LANG(?label) = "en")
-}
-ORDER BY ?label
-```
-
-Results appear in a scrollable table. Navigate rows with arrow keys, copy
-a cell with **Enter**, and export the full result set to a CSV file.
-
-#### Cache-warmed engine — zero cold-start delay
-
-ster builds a URI index and prefilled prefix map from your RDF files before
-you open the query screen.  After the index is ready, ster pre-fires a
-no-op SPARQL query (`SELECT * WHERE { ?s ?p ?o } LIMIT 0`) against the
-cached graph in the background.  This forces rdflib's plugin discovery system
-to resolve all importlib.metadata entry points once, so the first real query
-you run returns in milliseconds instead of the ~20-second delay that rdflib
-triggers on Python 3.13 without this warm-up.
-
-The warm-up runs asynchronously — it does not block the TUI.
-
-### Validate
-
-```bash
-ster validate my-taxonomy.ttl
-```
-
----
-
-## Annotating entities with rich media
-
-ster reads `schema:image`, `schema:video`, and `schema:url` triples and uses them in the graph visualiser's detail panel:
-
-```turtle
-@prefix schema: <https://schema.org/> .
-
-<https://example.org/MyClass> a owl:Class ;
-    rdfs:label "My Class"@en ;
-    schema:image <https://upload.wikimedia.org/wikipedia/commons/thumb/.../500px-image.png> ;
-    schema:video <https://www.youtube.com/watch?v=...> ;
-    schema:url   <https://en.wikipedia.org/wiki/My_Class> .
-```
-
-Images appear as thumbnails in the graph detail panel; videos open in a popup window; URLs render as link buttons in the detail panel.
-
----
-
-## Architecture
-
-```
-ster/
-├── model.py            — Pure dataclasses: Concept, ConceptScheme, Taxonomy, RDFClass, OWLIndividual…
-├── store.py            — RDF I/O via rdflib (.ttl / .rdf / .jsonld); loads SKOS + OWL layers
-├── operations.py       — All SKOS mutations (add, remove, move, relate…)
-├── workspace.py        — Multi-file workspace: merged view + per-file saves
-├── workspace_ops.py    — Cross-file mapping operations
-├── cli.py              — Typer entry-points (ster, ster export…)
-├── api_server.py       — FastAPI JSON + WebSocket server; host/port config persistence
-├── ai.py               — LLM abstraction: model routing, copy-paste mode, Ollama integration
-├── prompts.py          — All AI prompt templates (string.Template)
-├── config_screen.py    — Standalone curses Setup / Options screen
-├── ai_config_screen.py — Standalone curses AI model configuration wizard
-├── html_export.py      — pyLODE HTML export (VocPub / OntPub profiles); graph sanitiser for robust OntPub rendering
-├── viz.py              — Graph helpers: label formatters, node detail builders, metadata
-├── viz_vowl.py         — VOWL-style Cytoscape.js graph: writes self-contained HTML, opens in browser
-├── owl_analysis.py     — OWL axiom analysis and statistics
-├── sparql_query.py     — SPARQL query runner against the loaded taxonomy
-├── handles.py          — Short handle generation from camelCase URIs
-├── validator.py        — SKOS integrity checks
-└── nav/
-    ├── viewer.py       — Full-screen TUI (curses): tree, detail, inline edit; SKOS + OWL modes
-    ├── state.py        — Typed state machine: one dataclass per viewer mode
-    ├── logic.py        — Pure functions: tree flattening, field builders, OWL node rendering
-    ├── draw.py         — Curses drawing primitives and colour pair constants
-    └── …
-```
-
-Each layer depends only on the layers below it, keeping every module independently testable.
-AI prompts live in `prompts.py` as plain `string.Template` objects — edit them freely without touching any logic.
+Arrow keys navigate; **Enter** confirms. Inside the tree editor, press **?** for
+the full keymap — the essentials are `+` add, `d` delete, `e` edit,
+`Enter` expand/open, `Esc` back.
 
 ---
 
@@ -347,91 +123,36 @@ AI prompts live in `prompts.py` as plain `string.Template` objects — edit them
 | `.jsonld` / `.json` | JSON-LD |
 | `.owl` | OWL/XML |
 
+## Key dependencies
+
+| Package | Role |
+|---|---|
+| [rdflib](https://github.com/RDFLib/rdflib) | RDF parsing / serialisation and the SPARQL engine |
+| [Textual](https://github.com/textualize/textual) | The terminal UI framework |
+| [Cytoscape.js](https://github.com/cytoscape/cytoscape.js) | Browser graph rendering (VOWL viewer) |
+| [pyLODE](https://github.com/RDFLib/pyLODE) | HTML documentation export |
+
 ---
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow including branch
-conventions, commit style, and pull request process.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 ```bash
 git clone https://github.com/gbelbe/ster.git
 cd ster
 uv sync --extra dev
-bash scripts/install-hooks.sh   # install git pre-push hook (once per clone)
+bash scripts/install-hooks.sh   # git pre-push hook (once per clone)
+bash scripts/ci.sh              # full local gate: lint · types · security · tests · coverage
 ```
 
-### Run the local CI gate
+The local gate mirrors GitHub Actions (ruff · mypy · bandit + pip-audit ·
+pytest on Python 3.11 / 3.12 / 3.13), and a pre-push hook blocks any push
+without a passing run in the last 60 minutes. Coverage is reported to
+[Codecov](https://codecov.io/gh/gbelbe/ster).
 
-```bash
-bash scripts/ci.sh          # full run: lint + types + security + tests on 3.11/3.12/3.13
-bash scripts/ci.sh --fast   # current Python only (quick iteration)
-bash scripts/ci.sh --fix    # auto-fix ruff, then full gate
-```
+Release notes live in the [GitHub releases](https://github.com/gbelbe/ster/releases).
 
-The local gate mirrors the GitHub Actions pipeline exactly.  A git pre-push
-hook (installed by `scripts/install-hooks.sh`) blocks any `git push` that
-does not have a passing CI run from the last 60 minutes.
+## License
 
----
-
-## CI / CD
-
-Every push and pull request runs four parallel jobs via GitHub Actions:
-
-| Job | Tool | What it checks |
-|---|---|---|
-| **Lint** | [ruff](https://docs.astral.sh/ruff/) | Code style, import order, common bugs |
-| **Type check** | [mypy](https://mypy.readthedocs.io/) | Static type correctness |
-| **Security** | [bandit](https://bandit.readthedocs.io/) + [pip-audit](https://pypi.org/project/pip-audit/) | SAST + known CVEs in dependencies |
-| **Tests** | [pytest](https://pytest.org/) × Python 3.11 / 3.12 / 3.13 | Full test suite + coverage report |
-
-Coverage is uploaded to [Codecov](https://codecov.io/gh/gbelbe/ster) on every run.
-
----
-
-## Changelog
-
-### 0.6.0
-- **Markdown notes**: editable `ns1:note` annotation on OWL classes, individuals, and object properties — full-screen multiline editor (Ctrl+S to save, Esc to cancel) with a live rendered preview pane; heading lines shown bold, bullet lists converted to `•`, in the detail panel
-- **Ontology dcterms:title and dcterms:description**: both fields are now first-class editable fields in the ontology overview panel, positioned right after the label; auto-prefilled from `rdfs:label` on load when absent, and written to the TTL on save
-- **pyLODE HTML export — crash fixes**: a new graph sanitiser (`_sanitize_ontpub_graph`) runs before every OntPub call — it removes bare-namespace URI subjects (e.g. `ns1: a owl:ObjectProperty`) that caused pyLODE's fragment-ID generator to crash with `TypeError: can only concatenate str (not "NoneType") to str`, and injects `dcterms:title` / `dcterms:description` when missing
-- **pyLODE auto-install**: detection now uses `uv pip install --python <exe>` when `uv` is in PATH — fixes `No module named pip` in uv-managed tool environments; pip output is captured (spinner shown); `importlib.invalidate_caches()` called after install so the package is importable in the current process immediately
-- **Graph search autofocus**: the search box in the Cytoscape VOWL graph is focused automatically on page load — start typing without clicking
-
-### 0.5.0
-- **SPARQL predicate autocomplete**: typing `prefix:` at predicate position in a WHERE clause now filters suggestions to OWL properties only
-- **SPARQL subject autocomplete**: typing `prefix:` at subject position shows class roots and properties; expanding a class reveals its subclasses and individuals; leaf classes with only individuals now correctly show the expand arrow
-- **Fix**: creating a new OWL property from the Properties section panel now works (was silently discarded due to routing bug)
-
-### 0.4.6
-- **Cache-warmed SPARQL engine**: after building the URI index, ster pre-fires a no-op SPARQL query against the cached graph in the background, forcing rdflib's plugin discovery to complete before the user opens the query screen — eliminates the ~20-second first-query delay on Python 3.13
-- **Main menu reordered**: Query Graph SPARQL promoted to 3rd position (no longer labelled "Beta"); Import External Ontology 4th; Generate Web-Documentation 5th
-- **Git pre-push hook**: `scripts/install-hooks.sh` installs a standard git hook that blocks `git push` when CI has not passed in the last 60 minutes — works for all developers, not just inside Claude Code
-- **Local CI script** (`scripts/ci.sh`): mirrors the GitHub Actions pipeline exactly — lint, format, types, security, and pytest across Python 3.11, 3.12, and 3.13 in isolated per-version virtual environments
-- **CONTRIBUTING.md**: full contributor guide covering prerequisites, clone + hook setup, branching, local CI, commit conventions, PR process, and troubleshooting
-
-### 0.4.5
-- **Standalone Setup / Options screen**: replaced the tree-view panel with a dedicated full-screen curses settings page, accessible from the main menu — server URL, port, bearer token, and AI model configuration in one place
-- **AI model configuration wizard**: extracted from the tree-view modal into its own standalone curses module (`ai_config_screen.py`) — cleaner UX, no longer tied to the taxonomy viewer
-- **API server**: `ster api` command starts a local JSON + WebSocket server; host and port are persisted in `~/.config/ster/server_config.json` and read at startup — no more hardcoded address
-- **Bearer token management**: token is visible in Setup / Options (hidden by default, toggle with Enter); change server URL or port triggers an in-screen restart reminder
-- **Server startup from config**: `ster serve` / `ster api` now read host and port from the saved config rather than hardcoded defaults
-
-### 0.4.4
-- **Standalone Setup / Options screen**: replaced the tree-view panel with a dedicated full-screen curses settings page, accessible from the main menu — server URL, port, bearer token, and AI model configuration in one place
-- **AI model configuration wizard**: extracted from the tree-view modal into its own standalone curses module (`ai_config_screen.py`) — cleaner UX, no longer tied to the taxonomy viewer
-- **API server**: `ster api` command starts a local JSON + WebSocket server; host and port are persisted in `~/.config/ster/server_config.json` and read at startup — no more hardcoded address
-- **Bearer token management**: token is visible in Setup / Options (hidden by default, toggle with Enter); change server URL or port triggers an in-screen restart reminder
-- **Server startup from config**: `ster serve` / `ster api` now read host and port from the saved config rather than hardcoded defaults
-
-### 0.4.3
-- **VOWL graph visualisation**: replaced the old D3 force graph with a full VOWL-style renderer — classes as circles, object-property edges with floating label boxes, hollow subClassOf arrowhead, light theme
-- **Datatype properties**: amber dashed edges to amber rectangle nodes; functional properties show `0..1` cardinality on their edge box
-- **Per-class individual toggle**: click the count badge on a class circle to show/hide its individuals; "Hide/show all individuals" button in the sidebar; badge enlarges on hover to signal it is clickable
-- **Focused graph from tree view**: select any OWL class and choose "⊙ Open Graph Viz" to open a browser graph centred on that class, showing only its subclasses (transitive) and their individuals
-- **Graph overview panel**: counts (classes, individuals, properties) now reflect what is actually displayed in the current graph rather than the full ontology totals
-- **Hierarchical layout**: OWL-only graphs (full and focused) use a depth-based hierarchical lane layout; force layout for SKOS and mixed ontologies
-
-### 0.4.0
-- **OWL class quality stats**: label/comment coverage, instance count, and property fill rates shown inline on each class node in the OWL hierarchy — mirrors SKOS completion labels on concept trees
+[MIT](LICENSE)

@@ -456,6 +456,7 @@ def build_publish_menu(
     for pg in pages:
         url = page_url(base_url, publish_dir, pg.path)
         rows.append(PublishMenuRow(f"{pg.group} · {pg.kind}   {url}", "open", url, pg.path))
+    rows.append(PublishMenuRow("← Back to menu", "back"))  # always an explicit way home
     return rows
 
 

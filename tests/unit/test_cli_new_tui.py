@@ -152,43 +152,27 @@ def test_load_demo_offers_to_save_edits_before_resetting(tmp_path, monkeypatch):
     assert dest.read_text(encoding="utf-8") == _DEMO_FILE.read_text(encoding="utf-8")  # reset
 
 
-def test_home_action_menu_offers_load_demo():
-    from ster.cli import _DEMO_SENTINEL, _home_actions
+def test_select_home_file_offers_the_demo(tmp_path, monkeypatch):
+    """The file list includes a 'Load demo' entry (after the files); picking it → _DEMO_SENTINEL."""
+    from ster.cli import _DEMO_SENTINEL, _select_home_file
 
-    assert any(s is _DEMO_SENTINEL for s, _label in _home_actions(allow_change=False))
-
-
-def test_dispatch_demo_sentinel_loads_and_opens_the_demo(tmp_path, monkeypatch):
-    from ster.cli import _DEMO_SENTINEL
-
-    monkeypatch.chdir(tmp_path)
-    with patch("ster.cli._open_viewer") as open_viewer:
-        handled = _dispatch_menu_action(_DEMO_SENTINEL, [])
-    assert handled is True
-    open_viewer.assert_called_once()
-    assert open_viewer.call_args[0][0] == tmp_path / "mixed-gear-demo.ttl"
+    _no_tty(monkeypatch)
+    files = [tmp_path / "a.ttl"]
+    with patch(
+        "ster.cli.Prompt.ask", return_value=str(len(files) + 1)
+    ):  # demo is right after files
+        assert _select_home_file(files) == _DEMO_SENTINEL
 
 
-def test_offer_demo_when_empty_loads_on_confirm_else_none(tmp_path, monkeypatch):
-    from ster.cli import _offer_demo_when_empty
+def test_home_obtain_action_loads_a_fresh_demo_when_the_demo_is_picked(tmp_path, monkeypatch):
+    """Picking the demo in the file list loads a fresh copy and opens it directly."""
+    from ster.cli import _DEMO_SENTINEL, _home_obtain_action
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    with patch("rich.prompt.Confirm.ask", return_value=True):
-        assert _offer_demo_when_empty() == tmp_path / "mixed-gear-demo.ttl"
-    (tmp_path / "mixed-gear-demo.ttl").unlink()
-    with patch("rich.prompt.Confirm.ask", return_value=False):
-        assert _offer_demo_when_empty() is None
-
-
-def test_offer_demo_when_empty_is_noop_without_a_tty(tmp_path, monkeypatch):
-    from ster.cli import _offer_demo_when_empty
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
-    assert _offer_demo_when_empty() is None  # never blocks a pipe / CI run
+    with patch("ster.cli._select_home_file", return_value=_DEMO_SENTINEL):
+        selected, action = _home_obtain_action(None, None, [])
+    demo = tmp_path / "mixed-gear-demo.ttl"
+    assert selected == demo and action == [demo] and demo.exists()  # fresh demo, opened directly
 
 
 # ── graph: free a busy port by default (no phantom "install ster[api]") ─────────
@@ -228,52 +212,41 @@ def _no_tty(monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
 
 
-def test_action_menu_option_one_opens_the_selected_file(tmp_path, monkeypatch):
-    """Option 1 (Open Browser) returns the selected file to open — the actions all act on it."""
+def test_action_menu_change_file_is_first(tmp_path, monkeypatch):
+    """'Change file' is option 1 (the file list holds the local files + the demo)."""
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="1"):
-        assert _home_action_menu(f, allow_change=False) == [f]
+    with patch("ster.cli.Prompt.ask", return_value="1"):  # 1 = Change file
+        assert _home_action_menu(f) == _CHANGE_FILE_SENTINEL
+
+
+def test_action_menu_open_returns_the_selected_file(tmp_path, monkeypatch):
+    """Option 2 (TTL Viewer-Editor) returns the selected file to open."""
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value="2"):  # 2 = TTL Viewer-Editor
+        assert _home_action_menu(f) == [f]
 
 
 def test_action_menu_selects_import_external(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Import External Ontology
-        assert _home_action_menu(f, allow_change=False) == _EXT_ONT_SENTINEL
-
-
-def test_action_menu_selects_load_demo(tmp_path, monkeypatch):
-    from ster.cli import _DEMO_SENTINEL
-
-    _no_tty(monkeypatch)
-    f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="7"):  # 7 = Load demo
-        assert _home_action_menu(f, allow_change=False) == _DEMO_SENTINEL
+    with patch("ster.cli.Prompt.ask", return_value="7"):  # 7 = Import External Ontology
+        assert _home_action_menu(f) == _EXT_ONT_SENTINEL
 
 
 def test_action_menu_selects_quit(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (no 'Change file' for 1 file)
-        assert _home_action_menu(f, allow_change=False) == _QUIT_SENTINEL
+    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (last)
+        assert _home_action_menu(f) == _QUIT_SENTINEL
 
 
-def test_action_menu_offers_change_file_only_with_multiple_files(tmp_path, monkeypatch):
-    """With >1 file, a 'Change file' action appears (option 8, before Quit at 9)."""
-    _no_tty(monkeypatch)
-    f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Change file when allow_change
-        assert _home_action_menu(f, allow_change=True) == _CHANGE_FILE_SENTINEL
-    with patch("ster.cli.Prompt.ask", return_value="9"):  # 9 = Quit when allow_change
-        assert _home_action_menu(f, allow_change=True) == _QUIT_SENTINEL
-
-
-def test_select_home_file_returns_the_only_file_without_prompting(tmp_path, monkeypatch):
-    """A single file is auto-selected — no picker shown."""
+def test_select_home_file_single_file_still_shows_the_picker(tmp_path, monkeypatch):
+    """The picker always shows (so the demo is reachable); picking file 1 returns it."""
     _no_tty(monkeypatch)
     f = tmp_path / "only.ttl"
-    with patch("ster.cli.Prompt.ask", side_effect=AssertionError("should not prompt")):
+    with patch("ster.cli.Prompt.ask", return_value="1"):
         assert _select_home_file([f]) == f
 
 
@@ -287,7 +260,7 @@ def test_select_home_file_picks_from_multiple(tmp_path, monkeypatch):
 def test_select_home_file_quit_returns_none(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="3"):  # 3 = Quit (last, after 2 files)
+    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Quit (2 files, then demo at 3)
         assert _select_home_file(files) is None
 
 
@@ -419,13 +392,18 @@ def test_select_home_file_uses_the_arrow_picker_in_a_tty(tmp_path, monkeypatch):
         assert _select_home_file(files) is None  # Quit → None
 
 
-def test_home_screen_exits_when_no_files(tmp_path, monkeypatch, capsys):
+def test_home_screen_empty_folder_shows_the_picker_and_quits(tmp_path, monkeypatch):
+    """An empty folder no longer dead-ends: the file picker (demo + Quit) still shows;
+    quitting there returns cleanly."""
     from ster.cli import _home_screen
 
     monkeypatch.chdir(tmp_path)  # empty folder
-    with patch("ster.cli._print_welcome"):
-        _home_screen()  # no taxonomy files → prints a note and returns
-    assert "No taxonomy files" in capsys.readouterr().out
+    with (
+        patch("ster.cli._select_home_file", return_value=None) as select,  # user quits at picker
+        patch("ster.cli._print_welcome"),
+    ):
+        _home_screen()
+    select.assert_called_once()  # the picker was offered even with no local files
 
 
 def test_home_screen_change_file_reselects(tmp_path, monkeypatch):
@@ -470,14 +448,14 @@ def test_action_menu_non_numeric_defaults_to_open(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
     with patch("ster.cli.Prompt.ask", return_value="abc"):  # ValueError → default idx 0 = Open
-        assert _home_action_menu(f, allow_change=False) == [f]
+        assert _home_action_menu(f) == [f]
 
 
 def test_action_menu_out_of_range_defaults_to_open(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
     with patch("ster.cli.Prompt.ask", return_value="99"):  # out of range → default idx 0
-        assert _home_action_menu(f, allow_change=False) == [f]
+        assert _home_action_menu(f) == [f]
 
 
 def test_home_screen_runs_the_intro_and_ci_check_once(tmp_path, monkeypatch):
