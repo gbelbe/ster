@@ -76,8 +76,20 @@ Every capability below is reachable from the home menu, acting on the file you s
 
 ## Installation
 
+ster is a CLI app, so the cleanest install is as an isolated
+[uv](https://docs.astral.sh/uv/) tool — no virtualenv to manage, `ster` goes
+straight on your PATH:
+
 ```bash
-pip install ster
+uv tool install ster        # install
+uv tool upgrade ster        # update to the latest release
+uvx ster                    # or run once, without installing
+```
+
+Prefer pip? That works too:
+
+```bash
+pip install ster            # install / upgrade with: pip install -U ster
 ```
 
 That's everything — TUI editing, graph viewer, SPARQL, HTML export, and the
