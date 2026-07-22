@@ -2338,7 +2338,7 @@ wheels = [
 
 [[package]]
 name = "ster"
-version = "0.9.6"
+version = "0.9.7"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
