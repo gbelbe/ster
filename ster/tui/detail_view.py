@@ -206,10 +206,8 @@ class DetailRow(Static):
             rows[(rows.index(self) + delta) % len(rows)].focus()
 
     def action_focus_tree(self) -> None:
-        """Jump focus back to the tree (the left pane)."""
-        trees = list(self.app.query("#tree"))
-        if trees:
-            trees[0].focus()
+        """Jump focus back to the main pane the user was last in (the left pane)."""
+        self.app._focus_main_tree()  # type: ignore[attr-defined]
 
     class EditRequested(Message):
         """Posted when the user activates an edit-only value row (Enter)."""

@@ -87,8 +87,11 @@ def when_cursor_down_to(ctx, name):
     target = ZOO + name
 
     async def act(app, pilot):
+        tree = app.query_one("#ont-tree")  # classes live in the ontology pane
+        tree.focus()
+        await pilot.pause()
         for _ in range(20):
-            node = app.query_one("#tree").cursor_node
+            node = tree.cursor_node
             if node is not None and node.data == target:
                 break
             await pilot.press("down")
@@ -123,8 +126,13 @@ def when_select_class(ctx, name):
 
 @when("I expand the whole tree")
 def when_expand_all(ctx):
+    from textual.widgets import Tree
+
     async def act(app, pilot):
-        await pilot.press("e")
+        # Expand every pane (the class hierarchy now lives in its own #ont-tree pane).
+        for tid in ("#tree", "#ont-tree", "#prop-tree"):
+            app.query_one(tid, Tree).root.expand_all()
+        await pilot.pause()
 
     _session(ctx, act)
 
@@ -136,9 +144,9 @@ def when_arrow_navigate(ctx):
     from ster.tui.detail_view import DetailRow
 
     async def act(app, pilot):
-        app.jump_to(ZOO + "Person")  # populate the detail pane
+        app.jump_to(ZOO + "Person")  # populate the detail pane (a class → ontology pane)
         await pilot.pause()
-        app.query_one("#tree", Tree).focus()
+        app.query_one("#ont-tree", Tree).focus()  # Person lives in the ontology pane
         await pilot.pause()
         await pilot.press("right")  # tree → detail
         await pilot.pause()
@@ -147,7 +155,7 @@ def when_arrow_navigate(ctx):
         ctx["row_focused"] = isinstance(app.focused, DetailRow)
         await pilot.press("left")  # detail → tree
         await pilot.pause()
-        ctx["tree_focused"] = app.focused is app.query_one("#tree", Tree)
+        ctx["tree_focused"] = app.focused is app.query_one("#ont-tree", Tree)
 
     _session(ctx, act)
 
@@ -234,7 +242,10 @@ def when_inspect_panes(ctx):
         return out
 
     async def act(app, pilot):
-        ctx["main_uris"] = uris(app.query_one("#tree", Tree))
+        # The class hierarchy now spans the unified (#tree) and ontology (#ont-tree) panes.
+        ctx["main_uris"] = uris(app.query_one("#tree", Tree)) | uris(
+            app.query_one("#ont-tree", Tree)
+        )
         ctx["prop_uris"] = uris(app.query_one("#prop-tree", Tree))
 
     _session(ctx, act)

@@ -28,11 +28,12 @@ from ster.nav.logic import (
 
 from . import data
 from .presenters import PRESENTERS, EntityPresenter, LegacyPresenter, PresenterContext
-from .presenters.overview import OntologyOverviewPresenter
+from .presenters.overview import OntologyOverviewPresenter, PropertiesOverviewPresenter
 
 # Sentinel "uris" for the overview nodes (no real entity behind them).
 OVERVIEW_URI = "__ster:overview__"  # the Ontology (OWL) overview
 TAXONOMY_URI = "__ster:taxonomy__"  # the Taxonomy (SKOS) overview
+PROPERTIES_URI = "__ster:properties__"  # the Properties overview (all-properties stats + quality)
 
 # Field meta["type"] values that start a new section rather than render a row.
 _SEPARATORS = frozenset(
@@ -118,6 +119,8 @@ def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
     wrapping the kind's existing build_* function."""
     if uri == OVERVIEW_URI:
         return OntologyOverviewPresenter(ctx, uri)
+    if uri == PROPERTIES_URI:
+        return PropertiesOverviewPresenter(ctx, uri)
     if uri == TAXONOMY_URI:
         return LegacyPresenter(ctx, uri, _taxonomy_render)
     presenter_cls = PRESENTERS.get(data.kind_of(ctx.tax, uri))

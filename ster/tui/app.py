@@ -193,23 +193,80 @@ class OntologyTree(Tree):
         if self.cursor_line == before:  # already at the top → wrap to the bottom
             self.cursor_line = self._LAST_LINE  # clamped to the last visible line
 
-    def on_click(self, event: events.Click) -> None:
-        """Right-click a node → open its context menu, and suppress the default toggle so
-        right-click never folds/unfolds the tree. ``prevent_default`` stops the base
-        ``Tree._on_click`` (which would otherwise toggle/select) from running; left-click
-        doesn't prevent it, so it keeps the default expand/collapse + select behaviour."""
-        if event.button != 3:  # 3 = right button — left-click is Tree's default
-            return
-        event.prevent_default()  # right-click must not reach Tree._on_click (no toggle/select)
+    def _cursor_on_main(self, pid: str) -> bool:
+        """True when the cursor sits on this pane's main entity (its overview row) — the
+        'pane selected' state, as opposed to being down in the content."""
+        overview = self.app._PANEL_OVERVIEW.get(pid)  # type: ignore[attr-defined]
+        cur = self.cursor_node
+        return overview is not None and cur is not None and cur.data == overview
+
+    def on_key(self, event: events.Key) -> None:
+        """Two-layer pane navigation while this pane is focused:
+
+        * Tab / Shift-Tab — *select* the next / previous pane (cursor → its main entity).
+        * Enter / Space on a *selected* pane (cursor on the main entity, or a folded pane) —
+          toggle its size (full ⇄ 1/3) and enter its content.
+        * Escape from the content — pop back up and select the pane (cursor → main entity).
+
+        On a content node, Enter / Space / Escape keep their normal tree meaning."""
+        app = self.app
+        pid = self.id or "tree"
+        if event.key in ("tab", "shift+tab"):
+            app._select_adjacent_panel(pid, 1 if event.key == "tab" else -1)  # type: ignore[attr-defined]
+        elif event.key in ("enter", "space") and (
+            self.has_class("folded") or self._cursor_on_main(pid)
+        ):
+            app._enter_panel(pid)  # type: ignore[attr-defined]
+        elif (
+            event.key == "escape"
+            and app._PANEL_OVERVIEW.get(pid) is not None  # type: ignore[attr-defined]
+            and not self._cursor_on_main(pid)
+        ):
+            app._select_panel(pid)  # type: ignore[attr-defined]
+        else:
+            return  # not a pane command — leave the default tree behaviour
+        event.prevent_default()
+        event.stop()
+
+    def _clicked_line(self, event: events.Click) -> int | None:
+        """The tree line a click landed on (from the event style meta, else the hover line)."""
         style = getattr(event, "style", None)
-        line = style.meta.get("line") if style is not None else None  # the clicked tree line
-        if line is None:
-            line = self.hover_line
+        line = style.meta.get("line") if style is not None else None
+        return line if line is not None else self.hover_line
+
+    def on_click(self, event: events.Click) -> None:
+        """Separate the pane action from the tree action:
+
+        * Right-click a node → its context menu (never toggles the tree).
+        * Left-click the pane's main-entity (header) row → accordion the pane *only*; the base
+          ``Tree._on_click`` is prevented so the header's tree node does not also fold/unfold.
+        * Any other left-click keeps the default select / expand-collapse behaviour."""
+        line = self._clicked_line(event)
         node = self.get_node_at_line(line) if line is not None and line >= 0 else None
+        if event.button == 3:  # right-click → context menu
+            self._open_context_menu_at(node, line, event)
+        elif event.button == 1 and self._is_main_node(node):  # header → accordion only
+            self._accordion_click(line, event)
+
+    def _is_main_node(self, node: TreeNode | None) -> bool:
+        """True when *node* is this pane's main-entity (header/overview) row."""
+        overview = self.app._PANEL_OVERVIEW.get(self.id or "")  # type: ignore[attr-defined]
+        return node is not None and overview is not None and node.data == overview
+
+    def _open_context_menu_at(self, node: TreeNode | None, line: int | None, event) -> None:  # type: ignore[no-untyped-def]
+        event.prevent_default()  # must not reach Tree._on_click (no toggle/select)
         uri = node.data if node else None
-        if uri:
-            self.cursor_line = line  # select the right-clicked node visually
+        if uri and line is not None:
+            self.cursor_line = line
             self.app.open_context_menu(uri, (event.screen_x, event.screen_y))  # type: ignore[attr-defined]
+
+    def _accordion_click(self, line: int | None, event) -> None:  # type: ignore[no-untyped-def]
+        event.prevent_default()  # header click accordions the pane, not its tree node
+        if line is not None:
+            self.cursor_line = line  # select the header (highlight + show overview)
+        pid = self.id or "tree"
+        self.app._toggle_full(pid)  # type: ignore[attr-defined]
+        self.app._show(self.app._PANEL_OVERVIEW[pid])  # type: ignore[attr-defined]
 
     def watch_hover_line(self, previous_line: int, line: int) -> None:
         """Tooltip while hovering a row: for a lint-flagged (red/orange) node, its issue
@@ -296,18 +353,30 @@ class OntologyApp(App):
 
     /* Each pane is a rounded, titled box whose border lights up when focused —
        so you always see which pane you're in and what it holds. */
-    #tree, #prop-tree, #detail {
+    .main-tree, #prop-tree, #detail {
         border: round $foreground 40%;
         border-title-color: $foreground 70%;
         background: $surface;
         color: $foreground;
     }
-    #tree { height: 1fr; padding: 0 1; }
-    /* Properties keep their own pane (1/4 height) so they stay visible even when
-       the class hierarchy is fully expanded. */
-    #prop-tree { height: 25%; padding: 0 1; }
+    /* Accordion: the three left panes (Mixed SKOS/OWL, Ontology, Properties) share the
+       column — 1/3 each by default. Clicking a pane expands it and folds the other two to
+       their titled border bar; double-clicking a folded pane restores the 1/3 layout. A
+       folded pane hides its scrollbars (and the corner square) since it shows only its bar. */
+    .main-tree, #prop-tree { height: 1fr; padding: 0 1; }
+    #tree.folded, #ont-tree.folded, #prop-tree.folded {
+        height: 3;
+        overflow: hidden hidden;
+        scrollbar-size: 0 0;
+    }
     #detail { width: 1fr; padding: 1 2; }
-    #tree:focus-within, #prop-tree:focus-within, #detail:focus-within {
+    /* Hovering a left pane lights its border + title, cueing that it's clickable (its header
+       row accordions the pane). Focus-within (below) then takes over with the full accent. */
+    .main-tree:hover, #prop-tree:hover {
+        border: round $primary 60%;
+        border-title-color: $primary 80%;
+    }
+    .main-tree:focus-within, #prop-tree:focus-within, #detail:focus-within {
         border: round $primary;
         border-title-color: $primary;
     }
@@ -451,6 +520,8 @@ class OntologyApp(App):
         self._uri_nodes: dict[str, TreeNode] = {}
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
+        self._active_main_tree_id = "tree"  # last-focused main pane: "tree" (unified) or "ont-tree"
+        self._folded_panels: set[str] = set()  # left panes folded to their title bar
         self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
         self._activity_computed = False
         # Semanticlint result (counts, issues) + a uri→worst-severity index for O(1)
@@ -752,7 +823,10 @@ class OntologyApp(App):
         yield Header()
         with Horizontal(id="body"):
             with Vertical(id="nav"):
-                yield OntologyTree("ontology", id="tree")
+                # Top: the unified SKOS/OWL tree (#tree). Below it: the OWL ontology
+                # tree (#ont-tree). Both share `.main-tree` styling; Properties stays own pane.
+                yield OntologyTree("unified", id="tree", classes="main-tree")
+                yield OntologyTree("ontology", id="ont-tree", classes="main-tree")
                 yield OntologyTree("properties", id="prop-tree")
             yield DetailView(id="detail")
         yield Footer()
@@ -767,9 +841,11 @@ class OntologyApp(App):
             tree.show_root = False
             tree.guide_depth = 3
         self._sync_lint_features()  # cache icon-colour on/off before the first build
-        self._build_main_tree(self.query_one("#tree", Tree))
-        self._build_prop_tree(self.query_one("#prop-tree", Tree))
-        self.query_one("#tree", Tree).border_title = "Ontology"
+        self._build_prop_tree(self.query_one("#prop-tree", Tree))  # built early so it can fold
+        self._folded_panels = self._default_folded()  # pure SKOS / OWL opens the relevant panes
+        self._build_main_trees()
+        self.query_one("#tree", Tree).border_title = "Mixed SKOS/OWL"
+        self.query_one("#ont-tree", Tree).border_title = "Ontology"
         self.query_one("#prop-tree", Tree).border_title = "Properties"
         self.query_one("#detail", DetailView).border_title = "Details"
         self.query_one("#tree", Tree).focus()
@@ -867,7 +943,7 @@ class OntologyApp(App):
         (empty for the overview, or when the quality_block feature is off)."""
         if not (self._lint_quality_on and uri and self._lint_cache):
             return []
-        if uri in (detail.OVERVIEW_URI, detail.TAXONOMY_URI):
+        if uri in (detail.OVERVIEW_URI, detail.TAXONOMY_URI, detail.PROPERTIES_URI):
             return []  # the overview already carries the global Errors/Warnings rows
         from ster.plugins.semanticlint import report
         from ster.tui.plugins.semanticlint_ui import hooks
@@ -908,47 +984,47 @@ class OntologyApp(App):
             self._leaf(node, ind, "individual")
 
     def _add_concept(self, parent: TreeNode, uri: str) -> None:
+        kind = self.tax.node_type(uri)  # "concept", "promoted" (pun), or "linked" (foaf:focus)
+        glyph = kind if kind in ("promoted", "linked") else "concept"
         label = data.label_of(self.tax, uri, self.lang)
-        promoted = self.tax.node_type(uri) == "promoted"
-        node = parent.add(
-            f"{self._node_icon(uri, 'promoted' if promoted else 'concept')} {label}", data=uri
-        )
+        node = parent.add(f"{self._node_icon(uri, glyph)} {label}", data=uri)
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)
-        if promoted:  # bridge: pull the pun's pure-OWL subclasses into the SKOS spine
+        self._add_concept_owl_facet(node, uri, kind)
+        for ind in data.concept_tagged_individuals(self.tax, uri, self.lang):
+            self._leaf(node, ind, "individual")  # dct:subject-tagged individuals cluster here
+
+    def _add_concept_owl_facet(self, node: TreeNode, uri: str, kind: str) -> None:
+        """Render a concept's OWL facet beneath it: a pun's bridged pure-OWL subclasses, or
+        a linked concept's focus-class individuals."""
+        if kind == "promoted":  # bridge: pull the pun's pure-OWL subclasses into the SKOS spine
             for sub in data.subclasses(self.tax, uri, self.lang):
                 if self.tax.node_type(sub) == "class":
                     self._add_class(node, sub)
+        elif kind == "linked":  # a foaf:focus link surfaces the linked class's individuals here
+            focus = self.tax.concepts[uri].focus
+            assert focus is not None  # node_type == "linked" ⇒ focus is set
+            for ind in data.individuals_of(self.tax, focus, self.lang):
+                self._leaf(node, ind, "individual")
 
-    def _build_main_tree(self, tree: Tree) -> None:
-        """Top pane: Ontology section (classes), Taxonomy section (schemes).
+    def _build_main_trees(self) -> None:
+        """Build both stacked main panes — the unified SKOS/OWL tree (#tree) on top and
+        the OWL ontology tree (#ont-tree) below — then size them to their content.
 
-        The Ontology and Taxonomy section nodes carry the overview URI, so
-        highlighting either one shows the ontology overview in the detail pane
-        (there is no separate Overview leaf).
-        """
+        The unified pane is built first so that a pun (which renders in both panes) has its
+        ``_uri_nodes`` entry land on its **spine** node — the concept's natural home, where
+        selection/navigation should go (``_index`` keeps the first node seen for a URI)."""
+        self._build_unified_tree(self.query_one("#tree", Tree))
+        self._build_ontology_tree(self.query_one("#ont-tree", Tree))
+        self._apply_layout()
+
+    def _build_unified_tree(self, tree: Tree) -> None:
+        """Top pane: the unified SKOS/OWL spine — concept schemes with their concepts
+        (and puns, which hang on the SKOS spine). Its header node carries the taxonomy
+        overview URI, so selecting it shows the overview in the detail pane."""
         tax, root = self.tax, tree.root
-
-        # ── Ontology section (OWL classes) ────────────────────────────────────
-        ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
-        self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
-        for uri in data.class_roots(tax, self.lang):
-            if tax.node_type(uri) != "promoted":  # a pun renders in the taxonomy spine, not here
-                self._add_class(ont_sec, uri)
-
-        # Loose individuals (no class) are nested under the Ontology section.
-        loose = data.untyped_individuals(tax, self.lang)
-        if loose:
-            ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
-            for uri in loose:
-                self._leaf(ind_sec, uri, "individual")
-        if not ont_sec.children:  # nothing here yet → nudge the user to start
-            self._cta(ont_sec, "＋ Add class", "create_owl_class")
-        ont_sec.expand()
-
-        # ── Taxonomy section (SKOS concept schemes) ───────────────────────────
-        tax_sec = root.add("Taxonomy", data=detail.TAXONOMY_URI)
+        tax_sec = root.add("Unified tree (SKOS/OWL)", data=detail.TAXONOMY_URI)
         self._index(detail.TAXONOMY_URI, tax_sec)  # focusable (e.g. after deleting a scheme)
         for s_uri in data.scheme_roots(tax, self.lang):
             sec = tax_sec.add(
@@ -963,6 +1039,91 @@ class OntologyApp(App):
         tax_sec.expand()
         self._strip_childless_arrows(root)
 
+    def _build_ontology_tree(self, tree: Tree) -> None:
+        """Second pane: the full OWL class hierarchy (including puns — a promoted concept
+        appears here as a class as well as in the spine) plus loose, unclassified
+        individuals. Its header node carries the ontology overview URI."""
+        tax, root = self.tax, tree.root
+        ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
+        self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
+        for uri in data.class_roots(tax, self.lang):
+            self._add_class(ont_sec, uri)
+
+        loose = data.untyped_individuals(tax, self.lang)
+        if loose:
+            ind_sec = ont_sec.add(f"{data.ICON['section']} Individuals", data=None)
+            for uri in loose:
+                self._leaf(ind_sec, uri, "individual")
+        if not ont_sec.children:  # nothing here yet → nudge the user to start
+            self._cta(ont_sec, "＋ Add class", "create_owl_class")
+        ont_sec.expand()
+        self._strip_childless_arrows(root)
+
+    _PANEL_IDS = ("tree", "ont-tree", "prop-tree")
+    # The main-entity overview each pane shows when it becomes the active one.
+    _PANEL_OVERVIEW = {
+        "tree": detail.TAXONOMY_URI,
+        "ont-tree": detail.OVERVIEW_URI,
+        "prop-tree": detail.PROPERTIES_URI,
+    }
+
+    def _default_folded(self) -> set[str]:
+        """The opening fold state from the file's content: a pure taxonomy folds the ontology
+        and properties panes; a pure ontology folds the taxonomy pane; a mix opens all three."""
+        has_tax = data.has_taxonomy_content(self.tax)
+        has_ont = data.has_ontology_content(self.tax, self.lang)
+        if has_tax and not has_ont:
+            return {"ont-tree", "prop-tree"}
+        if has_ont and not has_tax:
+            return {"tree"}
+        return set()
+
+    def _apply_layout(self) -> None:
+        """Fold every pane in ``_folded_panels`` to its titled border bar; the rest share the
+        column equally (1fr each)."""
+        for pid in self._PANEL_IDS:
+            self.query_one(f"#{pid}", Tree).set_class(pid in self._folded_panels, "folded")
+
+    def _panel_main_node(self, pid: str) -> TreeNode | None:
+        """The pane's main-entity node — its overview row."""
+        overview = self._PANEL_OVERVIEW.get(pid)
+        return self._uri_nodes.get(overview) if overview else None
+
+    def _toggle_full(self, pid: str) -> None:
+        """Accordion toggle: make *pid* the only open pane (fold the other two), or — when it
+        already is — restore the balanced 1/3 layout."""
+        others = set(self._PANEL_IDS) - {pid}
+        self._folded_panels = set() if self._folded_panels == others else others
+        self._apply_layout()
+
+    def _select_panel(self, pid: str) -> None:
+        """Select a pane: focus it, land the cursor on its main entity, and print that pane's
+        overview in the detail view. The layout is unchanged."""
+        tree = self.query_one(f"#{pid}", Tree)
+        tree.focus()
+        node = self._panel_main_node(pid)
+        if node is not None:
+            tree.move_cursor(node)
+        overview = self._PANEL_OVERVIEW.get(pid)
+        if overview is not None:  # show it even when the cursor was already on the main entity
+            self._show(overview)
+
+    def _select_adjacent_panel(self, pid: str, step: int) -> None:
+        """Select the next (step=1) / previous (step=-1) pane — Tab / Shift-Tab."""
+        nxt = self._PANEL_IDS[(self._PANEL_IDS.index(pid) + step) % len(self._PANEL_IDS)]
+        self._select_panel(nxt)
+
+    def _enter_panel(self, pid: str) -> None:
+        """Enter/Space on a selected pane: toggle its size (full ⇄ 1/3) and dive into its
+        content. Full = this pane is the only one open (the others folded); 1/3 = all open."""
+        self._toggle_full(pid)
+        tree = self.query_one(f"#{pid}", Tree)
+        header = self._panel_main_node(pid)
+        if header is not None and header.children:
+            tree.move_cursor(header.children[0])
+        else:
+            tree.focus()
+
     def _cta(self, parent: TreeNode, label: str, action: str) -> None:
         """Add a dim call-to-action leaf under an *empty* section — activating it (Enter /
         click) runs *action*'s create flow. Shown only while the section is empty."""
@@ -975,6 +1136,10 @@ class OntologyApp(App):
         first, then predicates merely *used* on the ontology header (e.g.
         ``dcterms:creator``), each flagged with a small ``(ext)`` indicator."""
         tax = self.tax
+        # A "Properties" header node is the pane's main entity — selecting it shows the
+        # properties overview (all-properties stats + quality). The kind groups nest under it.
+        prop_sec = tree.root.add("Properties", data=detail.PROPERTIES_URI)
+        self._index(detail.PROPERTIES_URI, prop_sec)
         kind_by_title = {title: kind for kind, title in data.PROPERTY_CATEGORIES}
         for title, local, external in data.property_groups(tax, self.lang):
             label = (
@@ -983,7 +1148,7 @@ class OntologyApp(App):
             # Each typed header (Object / Datatype / Annotation) is right-clickable to add a
             # property of that kind (sentinel data); left-click / Enter still just expands it.
             kind = kind_by_title.get(title)
-            sec = tree.root.add(label, data=self._prop_header_data(kind))
+            sec = prop_sec.add(label, data=self._prop_header_data(kind))
             # Index the section under a focus key so a deleted property can land on it.
             self._index(_prop_section_key(kind or "Property"), sec)
             for uri in local:
@@ -993,6 +1158,7 @@ class OntologyApp(App):
             if kind in _CREATABLE_PROP_KINDS and not sec.children:  # empty type → nudge to add one
                 self._cta(sec, _PROP_MENU[kind][1], _PROP_MENU[kind][2])
             sec.expand()
+        prop_sec.expand()
         self._strip_childless_arrows(tree.root)
 
     @staticmethod
@@ -1163,6 +1329,8 @@ class OntologyApp(App):
             return "Ontology overview"
         if uri == detail.TAXONOMY_URI:
             return "Taxonomy overview"
+        if uri == detail.PROPERTIES_URI:
+            return "Properties overview"
         label = data.label_of(self.tax, uri, self.lang) or "Details"
         kind = data.kind_of(self.tax, uri)
         type_label = _KIND_TITLE.get(kind)
@@ -1181,13 +1349,16 @@ class OntologyApp(App):
         self._rebuild_prop_tree()
 
     def _rebuild_main_tree(self) -> None:
-        """Rebuild only the main pane (classes / individuals / schemes / concepts). Its
+        """Rebuild both main panes (classes / individuals / schemes / concepts). Their
         ``_uri_nodes`` entries are dropped and re-added; the prop pane is left untouched."""
         self._sync_lint_features()
-        main = self.query_one("#tree", Tree)
-        self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree is not main}
-        main.root.remove_children()
-        self._build_main_tree(main)
+        unified = self.query_one("#tree", Tree)
+        ont = self.query_one("#ont-tree", Tree)
+        mains = {unified, ont}
+        self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree not in mains}
+        unified.root.remove_children()
+        ont.root.remove_children()
+        self._build_main_trees()
 
     def _rebuild_prop_tree(self) -> None:
         """Rebuild only the property pane, leaving the (large) main pane untouched — so a
@@ -1490,8 +1661,9 @@ class OntologyApp(App):
         "edit_individual": "_open_individual_edit",  # full individual modal
         "enforce_shacl": "_enforce_shacl",  # write a mandatory SHACL rule, then re-lint
         "unenforce_shacl": "_unenforce_shacl",  # remove the property's SHACL rule
-        "promote": "_promote_concept",  # concept → pun (add an owl:Class facet)
+        "promote": "_promote_concept",  # concept → pun (new class) or foaf:focus link
         "demote": "_demote_pun",  # pun → concept (drop the owl:Class facet)
+        "unlink": "_unlink_concept",  # linked → concept (drop the foaf:focus link)
         "tag_individuals": "_tag_individuals",  # bulk-tag individuals with this concept
     }
 
@@ -1533,10 +1705,47 @@ class OntologyApp(App):
         return False
 
     def _promote_concept(self, uri: str, path: Path) -> None:
-        """Concept → pun: give it an owl:Class facet (no modal — an in-place toggle)."""
-        from ster.core.commands import PromoteConceptToClass
+        """Promote a concept — first pick *how*: mint a new same-URI class (a pun), or link
+        it to an existing OWL class via foaf:focus (which surfaces that class's individuals)."""
 
-        self._apply_command(PromoteConceptToClass(path, uri))
+        def _on_choice(mode: str | None) -> None:
+            if mode == "pun":
+                from ster.core.commands import PromoteConceptToClass
+
+                self._apply_command(PromoteConceptToClass(path, uri))
+            elif mode == "link":
+                self._link_concept_to_class(uri, path)
+
+        self.push_screen(
+            ChoiceModal(
+                f"Promote «{data.label_of(self.tax, uri, self.lang)}»",
+                [
+                    ("Create a new class (pun, same URI)", "pun"),
+                    ("Link to an existing class (foaf:focus)", "link"),
+                ],
+            ),
+            _on_choice,
+        )
+
+    def _link_concept_to_class(self, uri: str, path: Path) -> None:
+        """Pick an existing OWL class → foaf:focus link. No classes yet → guide the user."""
+        if not self.tax.owl_classes:
+            self.notify("Add a class in the Ontology section first.", severity="warning")
+            return
+
+        def _on_pick(target: str | None) -> None:
+            if target is not None:
+                from ster.core.commands import LinkConceptToClass
+
+                self._apply_command(LinkConceptToClass(path, uri, target), select=uri)
+
+        self._open_picker("Link to an existing class — pick a class", "class", uri, _on_pick)
+
+    def _unlink_concept(self, uri: str, path: Path) -> None:
+        """Linked concept → plain concept: drop the foaf:focus link (non-destructive)."""
+        from ster.core.commands import UnlinkConceptFromClass
+
+        self._apply_command(UnlinkConceptFromClass(path, uri))
 
     def _demote_pun(self, uri: str, path: Path) -> None:
         """Pun → concept: drop the owl:Class facet (subclasses re-root, individuals keep)."""
@@ -2383,6 +2592,8 @@ class OntologyApp(App):
         self.push_screen(EditModal(f"Scheme title [{self.lang}]", ""), _on_title)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        if event.node.tree.has_class("main-tree"):  # remember which main pane to return focus to
+            self._active_main_tree_id = event.node.tree.id or "tree"
         uri = event.node.data
         # Property-tree headers ("Object/Datatype/Annotation Properties") and empty-section
         # call-to-action leaves carry a sentinel and have no detail panel — clear the pane.
@@ -2468,10 +2679,13 @@ class OntologyApp(App):
 
     def _graph_focus_target(self) -> str | None:
         """The entity to centre the graph on for 'g': the selected class or individual,
-        else None (overview, property, concept or nothing → the global graph)."""
+        a linked concept's focus class, else None (→ the global graph)."""
         uri = self._detail_uri
         if uri and (uri in self.tax.owl_classes or uri in self.tax.owl_individuals):
             return uri
+        concept = self.tax.concepts.get(uri) if uri else None
+        if concept is not None and concept.focus:  # a foaf:focus-linked concept → its class
+            return concept.focus
         return None
 
     def _show_graph(self, target: str | None) -> None:
@@ -2615,12 +2829,18 @@ class OntologyApp(App):
         self.notify(f"Theme: {self.theme}", timeout=2)
 
     def _active_tree(self) -> Tree:
-        """The tree the expand/collapse shortcuts act on: the focused pane when it is
-        the properties tree, otherwise the main ontology tree."""
-        prop_tree = self.query_one("#prop-tree", Tree)
-        if self.focused is prop_tree:
-            return prop_tree
+        """The tree the expand/collapse shortcuts act on: whichever pane is focused
+        (unified, ontology, or properties), falling back to the unified main tree."""
+        focused = self.focused
+        for tree_id in ("#ont-tree", "#prop-tree"):
+            if focused is self.query_one(tree_id, Tree):
+                return focused  # type: ignore[return-value]
         return self.query_one("#tree", Tree)
+
+    def _focus_main_tree(self) -> None:
+        """Return focus to the main pane the user was last in (unified or ontology) —
+        e.g. after closing the context menu or stepping left out of the detail pane."""
+        self.query_one(f"#{self._active_main_tree_id}", Tree).focus()
 
     def action_expand_all(self) -> None:
         self._active_tree().root.expand_all()

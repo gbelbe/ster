@@ -19,11 +19,13 @@ from .base import ChangeSet, Command
 from .cross import (
     AddSchemaMedia,
     DemotePunToConcept,
+    LinkConceptToClass,
     PromoteConceptToClass,
     RemoveLanguage,
     RemoveSchemaMedia,
     RenameEntity,
     TagIndividuals,
+    UnlinkConceptFromClass,
 )
 from .onto import (
     OntoRemoveAnnotation,
@@ -84,8 +86,10 @@ from .skos import (
 __all__ = [
     "AddSchemaMedia",
     "DemotePunToConcept",
+    "LinkConceptToClass",
     "PromoteConceptToClass",
     "TagIndividuals",
+    "UnlinkConceptFromClass",
     "ChangeSet",
     "Command",
     "OntoRenameUri",

@@ -19,6 +19,7 @@ ICON = {
     "class": "●",
     "concept": "○",
     "promoted": "◉",  # a pun — skos:Concept *and* owl:Class
+    "linked": "◎",  # a concept foaf:focus-linked to an existing OWL class
     "individual": "◆",
     "property": "■",
     "scheme": "⬢",
@@ -187,6 +188,19 @@ def scheme_roots(tax: Taxonomy, lang: str = "en") -> list[str]:
     return _by_label(tax, list(tax.schemes), lang)
 
 
+def concept_tagged_individuals(tax: Taxonomy, concept_uri: str, lang: str = "en") -> list[str]:
+    """Individuals tagged with *concept_uri* via ``dct:subject`` — they cluster under the
+    concept in the tree (and drop away when untagged)."""
+    from ster.operations import DCT_SUBJECT
+
+    tagged = [
+        u
+        for u, ind in tax.owl_individuals.items()
+        if (DCT_SUBJECT, concept_uri) in ind.property_values
+    ]
+    return _by_label(tax, tagged, lang)
+
+
 def concept_children(tax: Taxonomy, uri: str, lang: str = "en") -> list[str]:
     if uri in tax.schemes:
         kids = list(tax.schemes[uri].top_concepts)
@@ -194,6 +208,26 @@ def concept_children(tax: Taxonomy, uri: str, lang: str = "en") -> list[str]:
         c = tax.concepts.get(uri)
         kids = list(c.narrower) if c else []
     return _by_label(tax, [u for u in kids if u in tax.concepts], lang)
+
+
+# ── left-pane accordion: which pane opens first ───────────────────────────────
+# The three left panes (Mixed SKOS/OWL, Ontology, Properties) form an accordion —
+# one expanded, the others folded to their title bar. On open, the pane with
+# content is expanded first (Mixed when there is any taxonomy, else Ontology).
+
+
+def has_taxonomy_content(tax: Taxonomy) -> bool:
+    """True when the unified (Mixed SKOS/OWL) pane has real content — any concept scheme
+    or concept (a pun counts: it lives on the SKOS spine)."""
+    return bool(tax.schemes) or bool(tax.concepts)
+
+
+def has_ontology_content(tax: Taxonomy, lang: str = "en") -> bool:
+    """True when there's a *real* OWL class (one that is not merely a pun — puns live on
+    the SKOS spine) or a loose, unclassified individual. Drives the pure-SKOS vs pure-OWL
+    opening layout."""
+    non_pun_classes = set(tax.owl_classes) - set(tax.concepts)
+    return bool(non_pun_classes) or bool(untyped_individuals(tax, lang))
 
 
 # ── integrated (paradigm-agnostic) tree ───────────────────────────────────────

@@ -9,11 +9,13 @@ from ...model import Taxonomy
 from ...operations import (
     add_schema_media,
     demote_pun_to_concept,
+    link_concept_to_class,
     promote_concept_to_class,
     remove_language,
     remove_schema_media,
     rename_entity_uri,
     tag_individual_with_concept,
+    unlink_concept_from_class,
 )
 
 
@@ -73,6 +75,33 @@ class PromoteConceptToClass:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         promote_concept_to_class(taxonomy, self.uri)
+        return (self.uri,)
+
+
+@dataclass(frozen=True)
+class LinkConceptToClass:
+    """Link a concept to an existing OWL class via ``foaf:focus`` — see
+    ``operations.link_concept_to_class``."""
+
+    target_path: Path
+    uri: str
+    class_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        link_concept_to_class(taxonomy, self.uri, self.class_uri)
+        return (self.uri, self.class_uri)
+
+
+@dataclass(frozen=True)
+class UnlinkConceptFromClass:
+    """Remove a concept's ``foaf:focus`` link (linked → plain concept) — see
+    ``operations.unlink_concept_from_class``."""
+
+    target_path: Path
+    uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        unlink_concept_from_class(taxonomy, self.uri)
         return (self.uri,)
 
 

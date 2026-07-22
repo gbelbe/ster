@@ -71,6 +71,26 @@ def class_completeness_section(
     ]
 
 
+def property_completeness_section(props: Sequence[_Labelled], prefix: str) -> list[DetailField]:
+    """The 'Completeness' section over *props* — labelled / documented coverage, mirroring
+    :func:`class_completeness_section` but for OWL properties (anything with ``.labels`` and
+    ``.comments``)."""
+    total = len(props)
+    if not total:
+        return []
+    present = {
+        "label_cov": sum(1 for p in props if is_labelled(p)),
+        "comment_cov": sum(1 for p in props if getattr(p, "comments", None)),
+    }
+    return [
+        _sep("Completeness"),
+        *(
+            _coverage_row(f"{prefix}:{key}", label, present[key], total, _COMPLETENESS_WIDTH)
+            for key, label in _COMPLETENESS_ROWS
+        ),
+    ]
+
+
 def languages_section(
     entities: Sequence[_Labelled], prefix: str, configured_langs: list[str] | None = None
 ) -> list[DetailField]:

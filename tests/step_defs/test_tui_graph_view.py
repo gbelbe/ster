@@ -71,9 +71,7 @@ def _open(ctx: dict) -> None:
 @when(parsers.parse('I select the class "{name}" in the tree and press "g"'))
 def _select_class(ctx: dict, monkeypatch, name: str) -> None:
     async def do(app: OntologyApp, pilot, tree_cls) -> None:  # type: ignore[no-untyped-def]
-        tree = app.query_one("#tree", tree_cls)
-        tree.move_cursor(app._uri_nodes[ZOO + name])
-        tree.focus()
+        app.jump_to(ZOO + name)  # select the class (reveals it in the ontology pane, sets detail)
         await pilot.pause()
         await pilot.press("g")
 
@@ -83,9 +81,7 @@ def _select_class(ctx: dict, monkeypatch, name: str) -> None:
 @when(parsers.parse('I select the individual "{name}" in the tree and press "g"'))
 def _select_individual(ctx: dict, monkeypatch, name: str) -> None:
     async def do(app: OntologyApp, pilot, tree_cls) -> None:  # type: ignore[no-untyped-def]
-        tree = app.query_one("#tree", tree_cls)
-        tree.move_cursor(app._uri_nodes[ZOO + name])
-        tree.focus()
+        app.jump_to(ZOO + name)  # select the individual (reveals it in the ontology pane)
         await pilot.pause()
         await pilot.press("g")
 

@@ -360,6 +360,34 @@ def _parse_property(g: Graph, uri: str, prop_type_name: str) -> OWLProperty:
     return prop
 
 
+def _parse_concept(g: Graph, uri: str) -> Concept:
+    """Build a :class:`Concept` from its triples (structured fields only) — mirrors
+    :func:`_parse_class`, so the read stays a dispatch table rather than an ``if/elif`` wall."""
+    c = Concept(uri=uri)
+    handlers: dict[str, Callable[[object], None]] = {
+        str(SKOS.prefLabel): lambda o: c.labels.append(_lang_label(o, LabelType.PREF)),
+        str(SKOS.altLabel): lambda o: c.labels.append(_lang_label(o, LabelType.ALT)),
+        str(SKOS.hiddenLabel): lambda o: c.labels.append(_lang_label(o, LabelType.HIDDEN)),
+        str(SKOS.definition): lambda o: c.definitions.append(_lang_def(o)),
+        str(SKOS.scopeNote): lambda o: c.scope_notes.append(_lang_def(o)),
+        str(SKOS.narrower): lambda o: c.narrower.append(str(o)),
+        str(SKOS.broader): lambda o: c.broader.append(str(o)),
+        str(SKOS.related): lambda o: c.related.append(str(o)),
+        str(SKOS.topConceptOf): lambda o: setattr(c, "top_concept_of", str(o)),
+        str(SKOS.broadMatch): lambda o: c.broad_match.append(str(o)),
+        str(SKOS.narrowMatch): lambda o: c.narrow_match.append(str(o)),
+        str(SKOS.relatedMatch): lambda o: c.related_match.append(str(o)),
+        str(SKOS.exactMatch): lambda o: c.exact_match.append(str(o)),
+        str(SKOS.closeMatch): lambda o: c.close_match.append(str(o)),
+        str(FOAF.focus): lambda o: setattr(c, "focus", str(o)),
+        str(SCHEMA.image): lambda o: c.schema_images.append(str(o)),
+        str(SCHEMA.video): lambda o: c.schema_videos.append(str(o)),
+        str(SCHEMA.url): lambda o: c.schema_urls.append(str(o)),
+    }
+    _dispatch_predicates(g, uri, handlers)
+    return c
+
+
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
     taxonomy = Taxonomy()
 
@@ -399,60 +427,7 @@ def graph_to_taxonomy(g: Graph) -> Taxonomy:
     # ── Concepts ─────────────────────────────────────────────────────────────
     for c_ref in g.subjects(RDF.type, SKOS.Concept):
         uri = str(c_ref)
-        concept = Concept(uri=uri)
-
-        for _, p, o in g.triples((c_ref, None, None)):
-            ps = str(p)
-            if ps == str(SKOS.prefLabel):
-                concept.labels.append(
-                    Label(
-                        lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.PREF
-                    )
-                )
-            elif ps == str(SKOS.altLabel):
-                concept.labels.append(
-                    Label(lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.ALT)
-                )
-            elif ps == str(SKOS.hiddenLabel):
-                concept.labels.append(
-                    Label(
-                        lang=getattr(o, "language", None) or "", value=str(o), type=LabelType.HIDDEN
-                    )
-                )
-            elif ps == str(SKOS.definition):
-                concept.definitions.append(
-                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
-                )
-            elif ps == str(SKOS.scopeNote):
-                concept.scope_notes.append(
-                    Definition(lang=getattr(o, "language", None) or "", value=str(o))
-                )
-            elif ps == str(SKOS.narrower):
-                concept.narrower.append(str(o))
-            elif ps == str(SKOS.broader):
-                concept.broader.append(str(o))
-            elif ps == str(SKOS.related):
-                concept.related.append(str(o))
-            elif ps == str(SKOS.topConceptOf):
-                concept.top_concept_of = str(o)
-            elif ps == str(SKOS.broadMatch):
-                concept.broad_match.append(str(o))
-            elif ps == str(SKOS.narrowMatch):
-                concept.narrow_match.append(str(o))
-            elif ps == str(SKOS.relatedMatch):
-                concept.related_match.append(str(o))
-            elif ps == str(SKOS.exactMatch):
-                concept.exact_match.append(str(o))
-            elif ps == str(SKOS.closeMatch):
-                concept.close_match.append(str(o))
-            elif ps == str(SCHEMA.image):
-                concept.schema_images.append(str(o))
-            elif ps == str(SCHEMA.video):
-                concept.schema_videos.append(str(o))
-            elif ps == str(SCHEMA.url):
-                concept.schema_urls.append(str(o))
-
-        taxonomy.concepts[uri] = concept
+        taxonomy.concepts[uri] = _parse_concept(g, uri)
 
     # ── RDF/OWL Classes ───────────────────────────────────────────────────────
     # Collect all class URIs: explicitly declared + inferred from usage.
@@ -599,6 +574,64 @@ def _serialize_labels_comments(
         g.add((ref, RDFS.comment, Literal(cmt.value, lang=cmt.lang or None)))
 
 
+_CONCEPT_LABEL_PREDS = {
+    LabelType.PREF: SKOS.prefLabel,
+    LabelType.ALT: SKOS.altLabel,
+    LabelType.HIDDEN: SKOS.hiddenLabel,
+}
+
+# Concept list-valued predicates, as (attribute, RDF predicate) — a table so the
+# serialiser is one loop instead of a dozen near-identical ones.
+_CONCEPT_LIST_PREDS: tuple[tuple[str, URIRef], ...] = (
+    ("narrower", SKOS.narrower),
+    ("broader", SKOS.broader),
+    ("related", SKOS.related),
+    ("broad_match", SKOS.broadMatch),
+    ("narrow_match", SKOS.narrowMatch),
+    ("related_match", SKOS.relatedMatch),
+    ("exact_match", SKOS.exactMatch),
+    ("close_match", SKOS.closeMatch),
+    ("schema_images", SCHEMA.image),
+    ("schema_videos", SCHEMA.video),
+    ("schema_urls", SCHEMA.url),
+)
+
+
+def _serialize_concept_scheme(g: Graph, ref: URIRef, taxonomy: Taxonomy, uri: str) -> None:
+    """Emit a concept's ``skos:inScheme`` — its own scheme, or all schemes if orphaned."""
+    s_uri = _concept_scheme_uri(taxonomy, uri)  # topConceptOf if set, else traverse up
+    if s_uri:
+        g.add((ref, SKOS.inScheme, URIRef(s_uri)))
+    else:  # orphan concept — add to all schemes as a fallback
+        for scheme_uri in taxonomy.schemes:
+            g.add((ref, SKOS.inScheme, URIRef(scheme_uri)))
+
+
+def _serialize_concept_literals(g: Graph, ref: URIRef, concept: Concept) -> None:
+    """Emit a concept's language-tagged literals: labels, definitions, scope notes."""
+    for lbl in concept.labels:
+        g.add((ref, _CONCEPT_LABEL_PREDS[lbl.type], Literal(lbl.value, lang=lbl.lang or None)))
+    for defn in concept.definitions:
+        g.add((ref, SKOS.definition, Literal(defn.value, lang=defn.lang or None)))
+    for note in concept.scope_notes:
+        g.add((ref, SKOS.scopeNote, Literal(note.value, lang=note.lang or None)))
+
+
+def _serialize_concept(g: Graph, uri: str, concept: Concept, taxonomy: Taxonomy) -> None:
+    """Emit a Concept's triples — the inverse of :func:`_parse_concept`."""
+    ref = URIRef(uri)
+    g.add((ref, RDF.type, SKOS.Concept))
+    _serialize_concept_scheme(g, ref, taxonomy, uri)
+    if concept.top_concept_of:
+        g.add((ref, SKOS.topConceptOf, URIRef(concept.top_concept_of)))
+    _serialize_concept_literals(g, ref, concept)
+    for attr, pred in _CONCEPT_LIST_PREDS:
+        for u in getattr(concept, attr):
+            g.add((ref, pred, URIRef(u)))
+    if concept.focus:
+        g.add((ref, FOAF.focus, URIRef(concept.focus)))
+
+
 def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass) -> None:
     ref = URIRef(uri)
     g.add((ref, RDF.type, OWL.Class))
@@ -684,54 +717,7 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 
     # ── Concepts ─────────────────────────────────────────────────────────────
     for uri, concept in taxonomy.concepts.items():
-        ref = URIRef(uri)
-        g.add((ref, RDF.type, SKOS.Concept))
-
-        # inScheme: use topConceptOf if set, otherwise traverse up the hierarchy
-        s_uri = _concept_scheme_uri(taxonomy, uri)
-        if s_uri:
-            g.add((ref, SKOS.inScheme, URIRef(s_uri)))
-        else:
-            # Orphan concept — add to all schemes as a fallback
-            for s_uri in taxonomy.schemes:
-                g.add((ref, SKOS.inScheme, URIRef(s_uri)))
-
-        if concept.top_concept_of:
-            g.add((ref, SKOS.topConceptOf, URIRef(concept.top_concept_of)))
-
-        _pred_map = {
-            LabelType.PREF: SKOS.prefLabel,
-            LabelType.ALT: SKOS.altLabel,
-            LabelType.HIDDEN: SKOS.hiddenLabel,
-        }
-        for lbl in concept.labels:
-            g.add((ref, _pred_map[lbl.type], Literal(lbl.value, lang=lbl.lang or None)))
-        for defn in concept.definitions:
-            g.add((ref, SKOS.definition, Literal(defn.value, lang=defn.lang or None)))
-        for note in concept.scope_notes:
-            g.add((ref, SKOS.scopeNote, Literal(note.value, lang=note.lang or None)))
-        for n_uri in concept.narrower:
-            g.add((ref, SKOS.narrower, URIRef(n_uri)))
-        for b_uri in concept.broader:
-            g.add((ref, SKOS.broader, URIRef(b_uri)))
-        for r_uri in concept.related:
-            g.add((ref, SKOS.related, URIRef(r_uri)))
-        for u in concept.broad_match:
-            g.add((ref, SKOS.broadMatch, URIRef(u)))
-        for u in concept.narrow_match:
-            g.add((ref, SKOS.narrowMatch, URIRef(u)))
-        for u in concept.related_match:
-            g.add((ref, SKOS.relatedMatch, URIRef(u)))
-        for u in concept.exact_match:
-            g.add((ref, SKOS.exactMatch, URIRef(u)))
-        for u in concept.close_match:
-            g.add((ref, SKOS.closeMatch, URIRef(u)))
-        for u in concept.schema_images:
-            g.add((ref, SCHEMA.image, URIRef(u)))
-        for u in concept.schema_videos:
-            g.add((ref, SCHEMA.video, URIRef(u)))
-        for u in concept.schema_urls:
-            g.add((ref, SCHEMA.url, URIRef(u)))
+        _serialize_concept(g, uri, concept, taxonomy)
 
     # ── OWL/RDFS Classes ─────────────────────────────────────────────────────
     for uri, rdf_class in taxonomy.owl_classes.items():

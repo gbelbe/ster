@@ -50,6 +50,9 @@ class Concept:
     narrower: list[str] = field(default_factory=list)  # URIs (same scheme)
     related: list[str] = field(default_factory=list)  # URIs (same scheme)
     top_concept_of: str | None = None  # scheme URI
+    # foaf:focus → the OWL class this concept corresponds to (a concept↔class link,
+    # distinct from punning). The class's individuals surface under the concept.
+    focus: str | None = None
     # SKOS mapping properties — used for cross-scheme links
     broad_match: list[str] = field(default_factory=list)
     narrow_match: list[str] = field(default_factory=list)
@@ -346,7 +349,7 @@ class Taxonomy:
         if in_concepts and in_classes:
             return "promoted"
         if in_concepts:
-            return "concept"
+            return "linked" if self.concepts[uri].focus else "concept"
         if in_classes:
             return "class"
         if uri in self.owl_individuals:

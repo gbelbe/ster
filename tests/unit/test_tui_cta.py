@@ -56,7 +56,11 @@ def test_empty_sections_show_add_call_to_actions(tmp_path) -> None:
         app = OntologyApp(store.load(src), source="empty.ttl")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            main = set(_cta_actions(app.query_one("#tree", Tree)))
+            # CTAs now span the two main panes: 'add_scheme' in the unified pane,
+            # 'create_owl_class' in the ontology pane.
+            main = set(_cta_actions(app.query_one("#tree", Tree))) | set(
+                _cta_actions(app.query_one("#ont-tree", Tree))
+            )
             props = set(_cta_actions(app.query_one("#prop-tree", Tree)))
             assert "create_owl_class" in main  # empty Ontology
             assert "add_scheme" in main  # empty Taxonomy
@@ -77,7 +81,9 @@ def test_populated_sections_hide_their_call_to_action() -> None:
         app = OntologyApp(store.load(DEMOMIX), source="mixed-gear-demo.ttl")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            main = set(_cta_actions(app.query_one("#tree", Tree)))
+            main = set(_cta_actions(app.query_one("#tree", Tree))) | set(
+                _cta_actions(app.query_one("#ont-tree", Tree))
+            )
             props = set(_cta_actions(app.query_one("#prop-tree", Tree)))
             assert "create_owl_class" not in main  # has classes
             assert "add_scheme" not in main  # has a scheme

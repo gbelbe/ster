@@ -15,12 +15,14 @@ from .domain.cross import count_uri_references as count_uri_references
 from .domain.cross import demote_pun_to_concept as demote_pun_to_concept
 from .domain.cross import expand_uri as expand_uri
 from .domain.cross import language_in_use as language_in_use
+from .domain.cross import link_concept_to_class as link_concept_to_class
 from .domain.cross import promote_concept_to_class as promote_concept_to_class
 from .domain.cross import remove_language as remove_language
 from .domain.cross import remove_schema_media as remove_schema_media
 from .domain.cross import rename_entity_uri as rename_entity_uri
 from .domain.cross import resolve as resolve
 from .domain.cross import tag_individual_with_concept as tag_individual_with_concept
+from .domain.cross import unlink_concept_from_class as unlink_concept_from_class
 
 # Re-export the ontology-metadata layer (moved to ster.domain.onto) so the ~37
 # call sites keep importing from ster.operations. See docs/architecture/module-layout.md.

@@ -32,6 +32,24 @@ def tag_individual_with_concept(taxonomy: Taxonomy, ind_uri: str, concept_uri: s
     set_individual_property_value(taxonomy, ind_uri, DCT_SUBJECT, concept_uri)
 
 
+def link_concept_to_class(taxonomy: Taxonomy, concept_uri: str, class_uri: str) -> None:
+    """Link a concept to an *existing* OWL class via ``foaf:focus`` — "this concept
+    corresponds to that class" (the standards-clean SKOS↔OWL bridge; VIAF pattern). The
+    class's individuals then surface under the concept. No-op unless both exist."""
+    if concept_uri not in taxonomy.concepts or class_uri not in taxonomy.owl_classes:
+        return
+    taxonomy.concepts[concept_uri].focus = class_uri
+
+
+def unlink_concept_from_class(taxonomy: Taxonomy, concept_uri: str) -> None:
+    """Remove a concept's ``foaf:focus`` link (the inverse of :func:`link_concept_to_class`).
+    Non-destructive: the class and its individuals are untouched. No-op unless *concept_uri*
+    is a linked concept."""
+    concept = taxonomy.concepts.get(concept_uri)
+    if concept is not None:
+        concept.focus = None
+
+
 def promote_concept_to_class(taxonomy: Taxonomy, uri: str) -> None:
     """Give a ``skos:Concept`` an ``owl:Class`` facet (punning). No-op unless *uri*
     is a concept that is not already a class.

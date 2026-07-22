@@ -74,7 +74,7 @@ def _tree_entity_uris(app) -> set:  # noqa: ANN001
         for child in node.children:
             walk(child)
 
-    for tid in ("#tree", "#prop-tree"):
+    for tid in ("#tree", "#ont-tree", "#prop-tree"):
         walk(app.query_one(tid, Tree).root)
     return out
 

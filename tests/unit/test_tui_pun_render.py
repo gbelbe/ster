@@ -93,18 +93,23 @@ def test_pun_owl_subclass_bridges_under_the_pun(tmp_path) -> None:
     _run(scenario)
 
 
-def test_pun_appears_only_in_the_taxonomy_not_duplicated_in_ontology(tmp_path) -> None:
+def test_pun_appears_in_both_the_spine_and_the_ontology_pane(tmp_path) -> None:
+    """A pun is both a concept and a class, so it shows in both panes: on the SKOS spine
+    (with its bridged subclass) *and* in the Ontology pane as a class."""
+
     async def scenario() -> None:
         app = _mixed_app(tmp_path)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
-            # the pun and its bridged subclass live under Taxonomy …
-            assert _section_of(tree, app._uri_nodes[E + "Animal"]) == detail.TAXONOMY_URI
-            assert _section_of(tree, app._uri_nodes[E + "Dog"]) == detail.TAXONOMY_URI
-            # … and the pun is not also sitting in the Ontology section
-            ont = next(n for n in tree.root.children if n.data == detail.OVERVIEW_URI)
-            assert E + "Animal" not in _descendant_uris(ont)
+            tree = app.query_one("#tree", Tree)  # unified pane holds the SKOS spine + puns
+            ont_tree = app.query_one("#ont-tree", Tree)  # ontology pane holds the OWL classes
+            tax_sec = next(n for n in tree.root.children if n.data == detail.TAXONOMY_URI)
+            ont_sec = next(n for n in ont_tree.root.children if n.data == detail.OVERVIEW_URI)
+            # the pun and its bridged subclass hang on the SKOS spine …
+            assert E + "Animal" in _descendant_uris(tax_sec)
+            assert E + "Dog" in _descendant_uris(tax_sec)
+            # … and the pun now also appears in the Ontology pane (promote → shown in ontology)
+            assert E + "Animal" in _descendant_uris(ont_sec)
 
     _run(scenario)
 
@@ -114,7 +119,7 @@ def test_pure_class_with_no_concept_twin_stays_in_ontology(tmp_path) -> None:
         app = _mixed_app(tmp_path)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
+            tree = app.query_one("#ont-tree", Tree)  # a pure class lives in the ontology pane
             assert _section_of(tree, app._uri_nodes[E + "Cat"]) == detail.OVERVIEW_URI
 
     _run(scenario)
@@ -143,6 +148,11 @@ def test_promoting_a_concept_re_renders_it_as_a_pun(tmp_path) -> None:
                 )
             )
             await pilot.pause()
+            # Promote now asks *how* — choose "Create a new class (pun, same URI)".
+            assert app.screen.__class__.__name__ == "ChoiceModal"
+            await pilot.click("#opt-pun")
+            for _ in range(3):
+                await pilot.pause()
 
             assert app.tax.node_type(E + "Mammal") == "promoted"
             after = tree.render_label(app._uri_nodes[E + "Mammal"], Style(), Style()).plain
@@ -241,3 +251,123 @@ def _descendant_uris(node) -> set:
         out.add(n.data)
         stack.extend(n.children)
     return out
+
+
+# ── foaf:focus link (concept → existing class) ────────────────────────────────
+
+_NO_CLASS = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://ex.org/> .
+ex:scheme a skos:ConceptScheme ; skos:hasTopConcept ex:Mammal .
+ex:Mammal a skos:Concept ; skos:topConceptOf ex:scheme ; skos:inScheme ex:scheme .
+"""
+
+
+def test_linked_concept_shows_the_classes_individuals_nested(tmp_path) -> None:
+    """A concept foaf:focus-linked to a class surfaces that class's individuals under it,
+    and renders with the linked (◎) glyph."""
+
+    async def scenario() -> None:
+        app = _mixed_app(tmp_path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.tax.concepts[E + "Mammal"].focus = E + "Dog"  # Dog owns individual rex
+            app._rebuild_main_tree()
+            await pilot.pause()
+            mammal = app._uri_nodes[E + "Mammal"]
+            assert E + "rex" in {c.data for c in mammal.children}  # the class's individual surfaced
+            label = app.query_one("#tree", Tree).render_label(mammal, Style(), Style()).plain
+            assert label[2:].startswith(data.ICON["linked"])  # ◎
+
+    _run(scenario)
+
+
+def test_promote_link_flow_sets_the_foaf_focus(tmp_path) -> None:
+    """Promote → 'Link to an existing class' → pick a class → the concept gains foaf:focus."""
+    from ster.nav.logic import DetailField
+
+    async def scenario() -> None:
+        src = tmp_path / "mixed.ttl"
+        src.write_text(MIXED, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="mixed.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._detail_uri = E + "Mammal"
+            app._run_field_action(
+                DetailField("ctx", "", "", editable=False, meta={"action": "promote"})
+            )
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "ChoiceModal"
+            await pilot.click("#opt-link")  # choose the foaf:focus path
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "PickerModal"
+            app.screen.dismiss(E + "Dog")  # pick the existing class Dog
+            for _ in range(3):
+                await pilot.pause()
+            assert app.tax.concepts[E + "Mammal"].focus == E + "Dog"
+            assert app.tax.node_type(E + "Mammal") == "linked"
+
+    _run(scenario)
+
+
+def test_promote_link_with_no_classes_warns_instead_of_an_empty_picker(tmp_path) -> None:
+    async def scenario() -> None:
+        src = tmp_path / "notax.ttl"
+        src.write_text(_NO_CLASS, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="notax.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            notes: list = []
+            app.notify = lambda msg, **k: notes.append((msg, k.get("severity")))  # type: ignore[method-assign]
+            app._link_concept_to_class(E + "Mammal", src)
+            await pilot.pause()
+            assert app.screen.__class__.__name__ != "PickerModal"  # no empty picker
+            assert any("Add a class" in m for m, _ in notes)
+
+    _run(scenario)
+
+
+def test_unlink_action_removes_the_focus(tmp_path) -> None:
+    from ster.nav.logic import DetailField
+
+    async def scenario() -> None:
+        src = tmp_path / "mixed.ttl"
+        src.write_text(MIXED, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="mixed.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.tax.concepts[E + "Mammal"].focus = E + "Dog"
+            app._rebuild_main_tree()
+            await pilot.pause()
+            app._detail_uri = E + "Mammal"
+            app._run_field_action(
+                DetailField("ctx", "", "", editable=False, meta={"action": "unlink"})
+            )
+            for _ in range(3):
+                await pilot.pause()
+            assert app.tax.concepts[E + "Mammal"].focus is None
+            assert app.tax.node_type(E + "Mammal") == "concept"
+
+    _run(scenario)
+
+
+def test_tagged_individuals_cluster_under_the_concept_and_drop_on_untag(tmp_path) -> None:
+    """An individual tagged with a concept (dct:subject) appears nested under it, and
+    disappears again when untagged."""
+    from ster.operations import DCT_SUBJECT
+
+    async def scenario() -> None:
+        app = _mixed_app(tmp_path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.tax.owl_individuals[E + "rex"].property_values.append((DCT_SUBJECT, E + "Mammal"))
+            app._rebuild_main_tree()
+            await pilot.pause()
+            assert E + "rex" in {c.data for c in app._uri_nodes[E + "Mammal"].children}
+
+            app.tax.owl_individuals[E + "rex"].property_values.remove((DCT_SUBJECT, E + "Mammal"))
+            app._rebuild_main_tree()
+            await pilot.pause()
+            assert E + "rex" not in {c.data for c in app._uri_nodes[E + "Mammal"].children}
+
+    _run(scenario)

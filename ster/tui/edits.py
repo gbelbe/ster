@@ -394,7 +394,19 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("~ Add related…", "add_related"),
         ("↷ Move under a different parent…", "move"),
         ("🏷 Tag individuals…", "tag_individuals"),  # bulk dct:subject → this concept
-        ("⬆ Promote to class", "promote"),  # give it an owl:Class facet → a pun
+        ("⬆ Promote to class…", "promote"),  # pick: new class (pun) or link to an existing class
+        ("✎ Rename URI…", "rename"),
+        ("⊘ Delete…", "delete"),
+    ],
+    # A concept foaf:focus-linked to an existing OWL class. The class's individuals
+    # surface under it; the link is removable ("Unlink"), non-destructively.
+    "linked": [
+        ("+ Add narrower", "add_narrower"),
+        ("~ Add related…", "add_related"),
+        ("↷ Move under a different parent…", "move"),
+        ("🏷 Tag individuals…", "tag_individuals"),
+        ("⊗ Unlink from class", "unlink"),  # drop the foaf:focus link → plain concept
+        ("⊙ Open graph", "view_focused_graph"),
         ("✎ Rename URI…", "rename"),
         ("⊘ Delete…", "delete"),
     ],

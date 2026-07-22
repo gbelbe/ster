@@ -168,9 +168,9 @@ def test_arrow_keys_navigate_panes_and_rows() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            app._show(ZOO + "Person")  # populate the detail pane
+            app._show(ZOO + "Person")  # populate the detail pane (a class → ontology pane)
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
+            tree = app.query_one("#ont-tree", Tree)  # Person lives in the ontology pane
             tree.focus()
             await pilot.pause()
 
@@ -282,9 +282,10 @@ def test_cursor_on_leaf_lights_parent_branch_column_not_the_leaf() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # classes/individuals live in the ontology pane
+            tree.focus()
             await pilot.press("e")  # expand all so Rex (a leaf individual) is visible
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             rex = app._uri_nodes[ZOO + "Rex"]  # individual under Dog
             tree.move_cursor(rex)
             await pilot.pause()
@@ -304,9 +305,10 @@ def test_branch_column_persists_when_moving_among_siblings() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # classes live in the ontology pane
+            tree.focus()
             await pilot.press("e")
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             cat = app._uri_nodes[ZOO + "Cat"]  # Cat and Dog are siblings under Mammal
             dog = app._uri_nodes[ZOO + "Dog"]
             mammal = app._uri_nodes[ZOO + "Mammal"]
@@ -330,9 +332,10 @@ def test_moving_across_branches_clears_the_previous_column() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # classes/individuals live in the ontology pane
+            tree.focus()
             await pilot.press("e")
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             rex = app._uri_nodes[ZOO + "Rex"]  # parent: Dog
             alice = app._uri_nodes[ZOO + "Alice"]  # parent: Person
             tree.move_cursor(rex)
@@ -466,7 +469,7 @@ def test_properties_live_in_their_own_pane() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            main = _tree_uris(app.query_one("#tree", Tree))
+            main = _tree_uris(app.query_one("#ont-tree", Tree))  # classes live in the ontology pane
             props = _tree_uris(app.query_one("#prop-tree", Tree))
             # properties only in the dedicated pane
             assert {ZOO + "hasOwner", ZOO + "hasAge"} <= props
@@ -498,7 +501,7 @@ def test_prop_tree_groups_properties_by_kind() -> None:
 
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            root = app.query_one("#prop-tree", Tree).root
+            root = app.query_one("#prop-tree", Tree).root.children[0]  # the "Properties" header
             groups = {node.label.plain: node for node in root.children}
             assert [n.label.plain for n in root.children][:3] == [
                 "Object Properties",
@@ -534,7 +537,8 @@ def test_prop_tree_leaf_shows_local_name_not_label() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             leaf = app._uri_nodes[ZOO + "hasOwner"]
-            assert leaf in app.query_one("#prop-tree", Tree).root.children[0].children
+            # under Properties → Object Properties
+            assert leaf in app.query_one("#prop-tree", Tree).root.children[0].children[0].children
             assert "hasOwner" in leaf.label.plain
             assert "has owner" not in leaf.label.plain
 
@@ -586,7 +590,7 @@ def test_prop_tree_lists_local_before_external_within_a_group() -> None:
         )
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            root = app.query_one("#prop-tree", Tree).root
+            root = app.query_one("#prop-tree", Tree).root.children[0]  # the "Properties" header
             ann = {n.label.plain: n for n in root.children}["Annotation Properties"]
             ordered = [(n.data, "(ext)" in n.label.plain) for n in ann.children]
             assert ordered[0] == (ZOO + "note", False)  # local first, no tag
@@ -656,7 +660,12 @@ def test_panels_have_border_titles() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            assert app.query_one("#tree", Tree).border_title == "Ontology"
+            # The two main panes are titled by their header row; Properties/Details by border.
+            assert (
+                app.query_one("#tree", Tree).root.children[0].label.plain
+                == "Unified tree (SKOS/OWL)"
+            )
+            assert app.query_one("#ont-tree", Tree).root.children[0].label.plain == "Ontology"
             assert app.query_one("#prop-tree", Tree).border_title == "Properties"
             app._show(ZOO + "Cat")
             await pilot.pause()
@@ -1397,11 +1406,11 @@ def test_g_focuses_the_graph_on_the_selected_class(monkeypatch) -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # classes live in the ontology pane
+            tree.focus()
             await pilot.press("e")
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
-            tree.focus()
             await pilot.pause()
             await pilot.press("g")
             await pilot.pause()
@@ -1420,11 +1429,11 @@ def test_g_focuses_the_graph_on_the_selected_individual(monkeypatch) -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # classes/individuals live in the ontology pane
+            tree.focus()
             await pilot.press("e")
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             tree.move_cursor(app._uri_nodes[ZOO + "Rex"])  # individual under Dog
-            tree.focus()
             await pilot.pause()
             await pilot.press("g")
             await pilot.pause()
@@ -1608,7 +1617,7 @@ def test_right_click_opens_context_menu_left_click_does_not() -> None:
             app.jump_to(ZOO + "Cat")
             for _ in range(3):
                 await pilot.pause()
-            tree = app.query_one("#tree", Tree)
+            tree = app.query_one("#ont-tree", Tree)  # Cat (a class) lives in the ontology pane
             menu = app.query_one("#ctx-menu", ContextMenu)
             tree.hover_line = tree.cursor_line  # cursor is on Cat after jump_to
             tree.on_click(types.SimpleNamespace(button=1))  # left → no menu
@@ -1912,9 +1921,12 @@ def test_cancel_edit_keeps_focus_in_detail_pane(tmp_path) -> None:
 
 def test_arrow_keys_drive_the_detail_panel() -> None:
     async def scenario() -> None:
+        from textual.widgets import Tree
+
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            app.query_one("#ont-tree", Tree).focus()  # the ontology pane holds the classes
             # Down from the Ontology section header lands on the first (root) class.
             await pilot.press("down")
             await pilot.pause()
@@ -1943,7 +1955,8 @@ def test_object_properties_header_is_right_clickable_to_add_one(tmp_path) -> Non
             await pilot.pause()
             sentinel = _add_prop_uri("ObjectProperty")
             prop_tree = app.query_one("#prop-tree", Tree)
-            assert sentinel in [n.data for n in prop_tree.root.children]  # header is wired
+            groups = prop_tree.root.children[0].children  # under the "Properties" header
+            assert sentinel in [n.data for n in groups]  # header is wired
             app.open_context_menu(sentinel)  # simulate the right-click → context menu
             await pilot.pause()
             app.on_context_menu_chosen(ContextMenu.Chosen("create_object_property"))
@@ -1982,9 +1995,8 @@ def test_highlighting_a_property_header_clears_the_detail_pane() -> None:
             await pilot.pause()
             assert app._detail_uri == ZOO + "Person"
             prop_tree = app.query_one("#prop-tree", Tree)
-            header = next(
-                n for n in prop_tree.root.children if n.data and _parse_add_prop(n.data) is not None
-            )
+            groups = prop_tree.root.children[0].children  # under the "Properties" header
+            header = next(n for n in groups if n.data and _parse_add_prop(n.data) is not None)
             app.on_tree_node_highlighted(Tree.NodeHighlighted(header))
             assert app._detail_uri is None  # header highlight cleared the detail pane
 
@@ -2007,12 +2019,12 @@ def test_real_right_click_opens_the_menu_and_does_not_fold_the_tree() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            tree = app.query_one("#tree")
+            tree = app.query_one("#ont-tree")  # the Ontology header lives in the ontology pane
             ont = app._uri_nodes[detail.OVERVIEW_URI]  # the Ontology header (expanded)
             assert ont.is_expanded
             tree.hover_line = ont.line
             # a genuine right-click through the event system
-            await pilot.click("#tree", offset=(4, ont.line - tree.scroll_offset.y), button=3)
+            await pilot.click("#ont-tree", offset=(4, ont.line - tree.scroll_offset.y), button=3)
             await pilot.pause()
 
             menu = app.query_one("#ctx-menu", ContextMenu)
@@ -2310,9 +2322,12 @@ def test_command_palette_search_jumps_end_to_end() -> None:
 
 def test_expand_collapse_keys_and_jump_to_deep_node() -> None:
     async def scenario() -> None:
+        from textual.widgets import Tree
+
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            app.query_one("#ont-tree", Tree).focus()  # deep classes live in the ontology pane
             await pilot.press("e")  # expand all
             await pilot.pause()
             assert app._uri_nodes[ZOO + "Dog"].line >= 0  # a deep node is now visible
@@ -2434,9 +2449,10 @@ def test_editing_keeps_tree_highlight_put_regression(tmp_path) -> None:
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # Dog (a class) lives in the ontology pane
+            tree.focus()
             await pilot.press("e")  # expand so Dog is a visible node
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
             app._show(ZOO + "Dog")  # detail pane on Dog
             await pilot.pause()
@@ -2477,9 +2493,10 @@ def test_renaming_a_class_follows_the_entity_regression(tmp_path) -> None:
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # Dog (a class) lives in the ontology pane
+            tree.focus()
             await pilot.press("e")
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
             tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
             app._show(ZOO + "Dog")
             await pilot.pause()
@@ -2529,7 +2546,9 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
                 await pilot.pause()
             created = ZOO + "Fido"
             assert created in app.tax.owl_individuals  # created
-            tree = app.query_one("#tree", Tree)
+            tree = app.query_one(
+                "#ont-tree", Tree
+            )  # Fido (typed by Dog) lives in the ontology pane
             # The new individual is revealed (highlight moved to it) …
             assert tree.cursor_node is app._uri_nodes[created]
             # … but focus stayed in the detail pane, not stolen to the tree.
@@ -3077,8 +3096,8 @@ def test_deleting_a_value_row_asks_to_confirm_then_focuses_the_tree(tmp_path) ->
                 await pilot.pause()
             # the value is gone …
             assert not app.tax.owl_individuals[ZOO + "Rex"].property_values
-            # … and focus landed on Rex's tree node, not a stale detail row
-            assert app.focused is app.query_one("#tree", Tree)
+            # … and focus landed on Rex's tree node (in the ontology pane), not a stale detail row
+            assert app.focused is app.query_one("#ont-tree", Tree)
 
     _run(scenario)
 
@@ -3184,13 +3203,17 @@ def test_delete_individual_lands_on_class_and_keeps_it_unfolded(tmp_path) -> Non
 
 def test_delete_property_lands_on_its_section(tmp_path) -> None:
     async def scenario() -> None:
+        from textual.widgets import Tree
+
         from ster.tui.app import _prop_section_key
 
         app = _app_on(tmp_path, DEMO.read_text(encoding="utf-8"))
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await _delete(app, pilot, ZOO + "hasOwner", "delete_property", "decl")
-            assert app._detail_uri == _prop_section_key("ObjectProperty")  # Object Properties
+            # the cursor lands on the Object Properties section (its header clears the detail)
+            section = app._uri_nodes[_prop_section_key("ObjectProperty")]
+            assert app.query_one("#prop-tree", Tree).cursor_node is section
 
     _run(scenario)
 
@@ -3368,7 +3391,7 @@ def _tree_entity_uris(app) -> set[str]:
         for child in node.children:
             walk(child)
 
-    for tid in ("#tree", "#prop-tree"):
+    for tid in ("#tree", "#ont-tree", "#prop-tree"):
         walk(app.query_one(tid, Tree).root)
     return out
 

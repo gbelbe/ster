@@ -42,10 +42,11 @@ def test_hovering_a_flagged_node_shows_its_issue_counts() -> None:
         app = OntologyApp(store.load(DEMO), source="demo.ttl")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)  # Dog (a class) lives in the ontology pane
+            tree.focus()
             await pilot.press("e")  # expand every node so each has a real line
             await pilot.pause()
             app._lint_issues = {ZOO + "Dog": [_iss("error"), _iss("warning")]}
-            tree = app.query_one("#tree", Tree)
 
             tree.hover_line = app._uri_nodes[ZOO + "Dog"].line
             await pilot.pause()

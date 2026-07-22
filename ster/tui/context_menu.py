@@ -85,9 +85,7 @@ class ContextMenu(OptionList):
 
     def action_close(self) -> None:
         self.close()
-        trees = list(self.app.query("#tree"))
-        if trees:
-            trees[0].focus()  # Esc → return focus to the tree
+        self.app._focus_main_tree()  # type: ignore[attr-defined]  # Esc → return focus to the main pane
 
     def on_blur(self) -> None:
         self.close()  # click / focus away dismisses the menu

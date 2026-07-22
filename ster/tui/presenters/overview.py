@@ -25,7 +25,11 @@ from ster.nav.logic import (
 )
 
 from .base import EntityPresenter
-from .coverage import class_completeness_section, languages_section
+from .coverage import (
+    class_completeness_section,
+    languages_section,
+    property_completeness_section,
+)
 from .health import gap_row as _gap_row
 
 
@@ -123,3 +127,50 @@ class OntologyOverviewPresenter(EntityPresenter):
 
     def actions(self) -> list[DetailField]:
         return _ontology_activity_fields(self.ctx.activity)
+
+
+class PropertiesOverviewPresenter(EntityPresenter):
+    """The all-properties dashboard shown for the Properties pane's main entity:
+    Structure (counts by kind) + a bordered Quality & Coverage box (lint issues,
+    missing domain/range, label/comment coverage, per-language coverage)."""
+
+    def render(self) -> list[DetailField]:
+        fields = [*self.structure()]
+        if self.ctx.quality_block:
+            fields += [*self.health(), *self.completeness()]
+        return fields
+
+    def structure(self) -> list[DetailField]:
+        props = list(self.tax.owl_properties.values())
+        by_kind: dict[str, int] = {}
+        for p in props:
+            by_kind[p.prop_type] = by_kind.get(p.prop_type, 0) + 1
+        return [
+            _sep("Structure"),
+            _stat("pr:total", "properties", str(len(props))),
+            _stat("pr:object", "object properties", str(by_kind.get("ObjectProperty", 0))),
+            _stat("pr:datatype", "datatype properties", str(by_kind.get("DatatypeProperty", 0))),
+            _stat(
+                "pr:annotation", "annotation properties", str(by_kind.get("AnnotationProperty", 0))
+            ),
+        ]
+
+    def health(self) -> list[DetailField]:
+        lint = self.ctx.lint
+        fields = [_sep_group("Quality & Coverage"), _sep("Health & Issues")]
+        if lint is not None:
+            fields.append(_lint_count_field("error", "Errors", lint.get("error", 0)))
+            fields.append(_lint_count_field("warning", "Warnings", lint.get("warning", 0)))
+        fields.append(
+            _gap_row(
+                "pr:incomplete", "properties missing domain/range", _missing_domain_range(self.tax)
+            )
+        )
+        return fields
+
+    def completeness(self) -> list[DetailField]:
+        props = list(self.tax.owl_properties.values())
+        fields = property_completeness_section(props, "pr") or [_sep("Completeness")]
+        fields.extend(languages_section(props, "pr", self.ctx.configured_langs))
+        fields.append(_sep_group_end())
+        return fields

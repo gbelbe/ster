@@ -26,3 +26,7 @@ node_modules/
 # Claude Code personal permissions
 .claude/settings.local.json
 snapshot_report.html
+
+# ster runtime/session artifacts (never commit)
+.ster/
+/mixed-gear-demo.ttl
