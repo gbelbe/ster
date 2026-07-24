@@ -41,6 +41,11 @@ _HELP = """\
   action rows  ✎ edit · + add · ↓ subclass · ↑ link · ⊘ delete · ⇢ convert
   in a modal   enter confirm / select · esc cancel
 
+[bold]Clipboard[/bold]
+  ctrl+c       copy the focused element — a URI, label, … — to the clipboard
+               (or the mouse selection in the detail pane). Use ctrl+c, not
+               cmd+c: macOS terminals grab cmd+c for their own copy.
+
 [bold]Panes[/bold]
   Ontology     classes (with their individuals) · overview · schemes
   Properties   every property — its own pane, always visible

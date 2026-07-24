@@ -252,6 +252,9 @@ def test_nav_hint_strings_match_the_layer() -> None:
     assert "switch" in _nav_hint("panel") and "open" in _nav_hint("panel")
     assert "detail" in _nav_hint("item") and "panels" in _nav_hint("item")
     assert "edit" in _nav_hint("detail") and "panels" in _nav_hint("detail")
+    # the copy shortcut is surfaced where there's a value to copy (item + detail, not panel)
+    assert "copy" in _nav_hint("item") and "copy" in _nav_hint("detail")
+    assert "copy" not in _nav_hint("panel")
     assert _nav_hint(None) == "" and _nav_hint("nope") == ""
 
 

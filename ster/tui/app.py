@@ -129,8 +129,8 @@ _PROP_CREATE_ACTIONS: dict[str, str] = {row[2]: kind for kind, row in _PROP_MENU
 # border; the full cheat-sheet is the ? help screen.
 _NAV_HINTS: dict[str, str] = {
     "panel": "↑↓ switch · ↵ open · ␣ fold",
-    "item": "↑↓ nav · → detail · ␛ panels",
-    "detail": "↑↓ rows · ↵ edit · ␛ panels",
+    "item": "↑↓ nav · → detail · ^C copy · ␛ panels",
+    "detail": "↑↓ rows · ↵ edit · ^C copy · ␛ panels",
 }
 
 
@@ -557,6 +557,8 @@ class OntologyApp(App):
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
+        # Ctrl+C / Cmd+C copy the selection or the focused value (quit stays on q / Ctrl+Q).
+        Binding("ctrl+c,super+c", "copy", "Copy", show=False),
         Binding("q", "quit", "Quit"),
     ]
     COMMANDS = App.COMMANDS | {EntitySearch}
@@ -2843,6 +2845,34 @@ class OntologyApp(App):
     def action_help(self) -> None:
         """Open the keys-and-actions help overlay."""
         self.push_screen(HelpScreen())
+
+    def action_copy(self) -> None:
+        """Ctrl+C / Cmd+C: copy the current text selection, or — with nothing selected — the
+        value under the focus (a tree node's URI, or a detail row's value). Copies to the
+        system clipboard (OSC 52, so it works over SSH too) and confirms with a toast."""
+        text = self.screen.get_selected_text() or self._focused_copy_value()
+        if not text:
+            return
+        from .clipboard import copy_to_system_clipboard
+
+        self.copy_to_clipboard(text)  # OSC 52 — reaches the *client* clipboard over SSH
+        local = copy_to_system_clipboard(text)  # local OS clipboard — when OSC 52 is ignored
+        shown = text if len(text) <= 60 else text[:57] + "…"
+        where = "" if local else "  (OSC 52 — enable clipboard access in your terminal)"
+        self.notify(f"Copied: {shown}{where}", timeout=3)
+
+    def _focused_copy_value(self) -> str | None:
+        """The value worth copying under the focus: a detail row's value, or a tree node's
+        URI (sentinels / headers have no copyable value)."""
+        focused = self.focused
+        if isinstance(focused, DetailRow):
+            return focused.field.value or None
+        if isinstance(focused, OntologyTree):
+            node = focused.cursor_node
+            data = node.data if node is not None else None
+            if isinstance(data, str) and data.startswith(("http://", "https://")):
+                return data
+        return None
 
     def _open_graph(self, action: str, field: DetailField) -> None:
         """Detail-pane / context-menu graph action → the shared graph opener."""
