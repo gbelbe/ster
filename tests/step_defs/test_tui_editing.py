@@ -803,7 +803,7 @@ def when_add_narrower(ctx: dict, child: str, name: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(SK + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("add_narrower"))
+        await _menu_action(app, pilot, "add_narrower")  # structural edit → context menu
         await _submit_text(app, pilot, SK + child)
 
     _edit(ctx, do)
@@ -814,7 +814,7 @@ def when_relate(ctx: dict, name: str, other: str) -> None:
     async def do(app, pilot):  # noqa: ANN001
         app._show(SK + name)
         await pilot.pause()
-        await _activate(app, pilot, _by_action("add_related"))
+        await _menu_action(app, pilot, "add_related")  # structural edit → context menu
         await _pick(app, pilot, SK + other)
 
     _edit(ctx, do)

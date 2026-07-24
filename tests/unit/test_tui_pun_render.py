@@ -371,3 +371,59 @@ def test_tagged_individuals_cluster_under_the_concept_and_drop_on_untag(tmp_path
             assert E + "rex" not in {c.data for c in app._uri_nodes[E + "Mammal"].children}
 
     _run(scenario)
+
+
+# ── pun detail view (merged concept + class facets) ───────────────────────────
+
+_PUN_TTL = """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://ex.org/> .
+ex:s a skos:ConceptScheme ; skos:hasTopConcept ex:Animal .
+ex:Animal a skos:Concept, owl:Class ;
+    skos:prefLabel "Animal"@en ; rdfs:label "Animal class"@en ;
+    skos:definition "A living organism."@en ; rdfs:comment "The OWL class."@en ;
+    skos:narrower ex:Mammal ; skos:topConceptOf ex:s ; skos:inScheme ex:s ; skos:exactMatch ex:Beast .
+ex:Mammal a skos:Concept ; skos:broader ex:Animal ; skos:inScheme ex:s ; skos:prefLabel "Mammal"@en .
+"""
+
+
+def test_pun_detail_badges_and_merges_both_facets(tmp_path) -> None:
+    """A pun's detail leads with a 'pun (owl:Class + skos:Concept)' type badge and folds the
+    SKOS facet into the class sections: rdfs:label + prefLabel, comment + definition, the SKOS
+    hierarchy, and Mappings."""
+    from ster.tui.detail import _fields_for
+
+    src = tmp_path / "o.ttl"
+    src.write_text(_PUN_TTL, encoding="utf-8")
+    fields = _fields_for(store.load(src), E + "Animal", "en")
+    sections = [f.display for f in fields if f.meta.get("type", "").startswith("separator")]
+    values = " | ".join(f"{f.display}={f.value}" for f in fields)
+
+    # the type row carries the pun badge; there is no longer a separate "kind" row
+    assert any(f.key == "node_type" and "pun" in f.value for f in fields)
+    assert not any(f.display == "kind" for f in fields)
+    assert {"Labels", "Notes", "Hierarchy", "Mappings"} <= set(sections)
+    assert "Animal class" in values and "Animal" in values  # rdfs:label + prefLabel
+    assert "The OWL class" in values and "A living organism" in values  # comment + definition
+    assert "Mammal" in values and "Beast" in values  # SKOS hierarchy + mapping
+
+
+def test_append_to_section_edge_branches() -> None:
+    """`_append_to_section` returns base unchanged for empty extra, and appends a fresh
+    section when the target title is absent."""
+    from ster.nav.logic import DetailField, _sep
+    from ster.tui.presenters.pun import _append_to_section
+
+    base = [
+        _sep("Labels"),
+        DetailField("l", "label", "x", editable=True, meta={"type": "rdf_label"}),
+    ]
+    assert _append_to_section(base, "Labels", []) is base  # empty extra → unchanged
+    extra = [DetailField("m", "mapping", "y", editable=False, meta={"type": "stat"})]
+    out = _append_to_section(base, "Mappings", extra)  # absent title → appended as a new section
+    assert [f.display for f in out if f.meta.get("type", "").startswith("separator")] == [
+        "Labels",
+        "Mappings",
+    ]

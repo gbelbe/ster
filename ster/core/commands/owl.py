@@ -21,6 +21,7 @@ from ...operations import (
     delete_owl_class,
     delete_owl_individual,
     delete_owl_property,
+    remove_entity_annotation,
     remove_individual_literal,
     remove_individual_property_value,
     remove_individual_type,
@@ -29,6 +30,7 @@ from ...operations import (
     remove_property_class,
     remove_subclass_of,
     rename_entity_uri,
+    set_entity_annotation,
     set_individual_literal,
     set_individual_property_value,
     set_owl_comment,
@@ -394,6 +396,48 @@ class OwlSetIndividualLiteral:
             self.lang_or_dt,
         )
         return (self.ind_uri,)
+
+
+@dataclass(frozen=True)
+class EntitySetAnnotation:
+    """Add (or replace) one configured annotation on an OWL class / property / individual.
+
+    *is_iri* picks IRI vs literal storage; *old_value* names the entry to replace when the
+    predicate already carries a value (empty appends a new one)."""
+
+    target_path: Path
+    entity_uri: str
+    predicate: str
+    value: str
+    is_iri: bool = False
+    lang: str = ""
+    old_value: str = ""
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        set_entity_annotation(
+            taxonomy,
+            self.entity_uri,
+            self.predicate,
+            self.value,
+            is_iri=self.is_iri,
+            lang=self.lang,
+            old_value=self.old_value,
+        )
+        return (self.entity_uri,)
+
+
+@dataclass(frozen=True)
+class EntityRemoveAnnotation:
+    """Remove one (predicate, value) annotation from an OWL class / property / individual."""
+
+    target_path: Path
+    entity_uri: str
+    predicate: str
+    value: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        remove_entity_annotation(taxonomy, self.entity_uri, self.predicate, self.value)
+        return (self.entity_uri,)
 
 
 @dataclass(frozen=True)

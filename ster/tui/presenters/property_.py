@@ -35,5 +35,11 @@ class PropertyPresenter(EntityPresenter):
         )
 
     def render(self) -> list[DetailField]:
-        base = build_property_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
+        base = build_property_detail(
+            self.tax,
+            self.uri,
+            self.lang,
+            self.ctx.configured_langs,
+            self.ctx.entity_metadata_props,
+        )
         return insert_after_identity(base, self.health()) if base else base

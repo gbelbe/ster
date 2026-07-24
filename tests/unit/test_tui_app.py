@@ -158,11 +158,13 @@ def test_editing_a_class_label_commits_and_saves(tmp_path) -> None:
 
 
 def test_arrow_keys_navigate_panes_and_rows() -> None:
-    """Right enters the detail pane, up/down move between rows, left returns to the tree."""
+    """From a tree's content, Right (like Tab) crosses to the detail pane; up/down move
+    between rows; Escape returns to selecting the left panel it was reached from."""
 
     async def scenario() -> None:
         from textual.widgets import Tree
 
+        from ster.tui import detail
         from ster.tui.detail_view import DetailRow
 
         app = _app()
@@ -172,9 +174,10 @@ def test_arrow_keys_navigate_panes_and_rows() -> None:
             await pilot.pause()
             tree = app.query_one("#ont-tree", Tree)  # Person lives in the ontology pane
             tree.focus()
+            tree.move_cursor(app._uri_nodes[ZOO + "Person"])  # into the content
             await pilot.pause()
 
-            await pilot.press("right")  # tree → first detail row
+            await pilot.press("right")  # content → first detail row (Right mirrors Tab)
             await pilot.pause()
             assert isinstance(app.focused, DetailRow)
             first = app.focused
@@ -187,9 +190,55 @@ def test_arrow_keys_navigate_panes_and_rows() -> None:
             await pilot.pause()
             assert app.focused is first
 
-            await pilot.press("left")  # detail → tree
+            await pilot.press("escape")  # detail → back to selecting the ontology panel
             await pilot.pause()
             assert app.focused is tree
+            assert tree.cursor_node.data == detail.OVERVIEW_URI  # cursor on the pane header
+
+    _run(scenario)
+
+
+def test_space_folds_and_unfolds_a_detail_group() -> None:
+    """In the detail pane, Space folds/unfolds the collapsible group the cursor is in (a
+    subclass's 'N inherited properties' disclosure) — Enter stays reserved for edit menus."""
+
+    async def scenario() -> None:
+        from textual.widgets import Collapsible
+        from textual.widgets._collapsible import CollapsibleTitle
+
+        from ster.tui.app import OntologyApp
+
+        TTL = (
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            "@prefix ex: <https://ex.org/> .\n"
+            'ex:Animal a owl:Class ; rdfs:label "Animal"@en .\n'
+            'ex:Dog a owl:Class ; rdfs:subClassOf ex:Animal ; rdfs:label "Dog"@en .\n'
+            "ex:speaks a owl:ObjectProperty ; rdfs:domain ex:Animal ; rdfs:range ex:Animal .\n"
+        )
+        import tempfile
+        from pathlib import Path
+
+        from ster import store
+
+        d = Path(tempfile.mkdtemp())
+        src = d / "o.ttl"
+        src.write_text(TTL, encoding="utf-8")
+        app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app._show("https://ex.org/Dog")  # subclass → inherited-properties disclosure
+            await pilot.pause()
+            group = app.query_one(Collapsible)
+            assert group.collapsed  # collapsed by default
+            app.query_one(CollapsibleTitle).focus()
+            await pilot.pause()
+            await pilot.press("space")  # fold key → unfolds the group
+            await pilot.pause()
+            assert not group.collapsed
+            await pilot.press("space")  # and folds it again
+            await pilot.pause()
+            assert group.collapsed
 
     _run(scenario)
 
@@ -248,8 +297,9 @@ def test_arrows_skip_information_only_rows_on_overview() -> None:
     _run(scenario)
 
 
-def test_tree_cursor_wraps_around() -> None:
-    """Up at the top of the tree jumps to the last node; down there wraps to the top."""
+def test_item_layer_arrows_navigate_between_tree_items() -> None:
+    """Once inside a pane (item layer), ↑/↓ move between the tree's items; ↑ from the first
+    item lands back on the header (the panel layer)."""
 
     async def scenario() -> None:
         from textual.widgets import Tree
@@ -257,16 +307,18 @@ def test_tree_cursor_wraps_around() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            tree = app.query_one("#tree", Tree)
-            tree.focus()
-            tree.cursor_line = 0
+            tree = app.query_one("#ont-tree", Tree)  # holds the OWL class hierarchy
+            app._select_panel("ont-tree")
+            await pilot.press("enter")  # open the pane → first item (item layer)
             await pilot.pause()
-            await pilot.press("up")  # wrap to the last visible line
+            first = tree.cursor_line
+            assert not tree.has_class("panel-layer")
+            await pilot.press("down")  # → next item
             await pilot.pause()
-            assert tree.cursor_line == len(tree._tree_lines) - 1 > 0
-            await pilot.press("down")  # wrap back to the top
+            assert tree.cursor_line == first + 1
+            await pilot.press("up")  # → back to the first item
             await pilot.pause()
-            assert tree.cursor_line == 0
+            assert tree.cursor_line == first
 
     _run(scenario)
 
@@ -385,7 +437,13 @@ def test_childless_nodes_drop_the_expand_arrow() -> None:
             assert app._uri_nodes[ZOO + "Rex"].allow_expand is False
             props = app.query_one("#prop-tree", Tree)
             assert app._uri_nodes[ZOO + "hasOwner"].allow_expand is False
-            assert props.root.children[0].allow_expand is True  # the Properties section
+            # The "Properties" header is the pane's main entity — clicking it drives the
+            # accordion, not a tree fold — so it carries no arrow either (see
+            # test_pane_header_shows_no_expand_arrow_but_keeps_its_children). A kind group
+            # under it that has children still keeps its arrow.
+            assert props.root.children[0].allow_expand is False  # the Properties header
+            groups_with_children = [g for g in props.root.children[0].children if g.children]
+            assert groups_with_children and all(g.allow_expand for g in groups_with_children)
 
     _run(scenario)
 
@@ -1921,13 +1979,13 @@ def test_cancel_edit_keeps_focus_in_detail_pane(tmp_path) -> None:
 
 def test_arrow_keys_drive_the_detail_panel() -> None:
     async def scenario() -> None:
-        from textual.widgets import Tree
 
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            app.query_one("#ont-tree", Tree).focus()  # the ontology pane holds the classes
-            # Down from the Ontology section header lands on the first (root) class.
+            app._select_panel("ont-tree")  # the ontology pane holds the classes
+            # Enter opens the pane on its head (overview); Down steps to the first root class.
+            await pilot.press("enter")
             await pilot.press("down")
             await pilot.pause()
             # Detail panel must be showing some OWL class.

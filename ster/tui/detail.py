@@ -111,7 +111,18 @@ def _taxonomy_render(ctx: PresenterContext, _uri: str) -> list[DetailField]:
 
 def _entity_render(ctx: PresenterContext, uri: str) -> list[DetailField]:
     builder = _BUILDERS.get(data.kind_of(ctx.tax, uri))
-    return builder(ctx.tax, uri, ctx.lang, configured_langs=ctx.configured_langs) if builder else []
+    if builder is None:
+        return []
+    # Only the OWL-entity builders accept the entity-metadata catalog; the others ignore it.
+    if builder in (build_rdf_class_detail, build_individual_detail, build_property_detail):
+        return builder(
+            ctx.tax,
+            uri,
+            ctx.lang,
+            configured_langs=ctx.configured_langs,
+            entity_metadata_props=ctx.entity_metadata_props,
+        )
+    return builder(ctx.tax, uri, ctx.lang, configured_langs=ctx.configured_langs)
 
 
 def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
@@ -123,6 +134,10 @@ def _presenter_for(ctx: PresenterContext, uri: str) -> EntityPresenter:
         return PropertiesOverviewPresenter(ctx, uri)
     if uri == TAXONOMY_URI:
         return LegacyPresenter(ctx, uri, _taxonomy_render)
+    if ctx.tax.node_type(uri) == "promoted":  # a pun → the merged concept+class view
+        from .presenters.pun import PunPresenter
+
+        return PunPresenter(ctx, uri)
     presenter_cls = PRESENTERS.get(data.kind_of(ctx.tax, uri))
     if presenter_cls is not None:
         return presenter_cls(ctx, uri)
@@ -138,6 +153,7 @@ def _fields_for(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
     quality_block: bool = True,
+    entity_metadata_props: list | None = None,
 ) -> list[DetailField]:
     """The flat DetailField list for *uri*, via its presenter."""
     ctx = PresenterContext(
@@ -148,6 +164,7 @@ def _fields_for(
         lint=lint,
         metadata=metadata,
         quality_block=quality_block,
+        entity_metadata_props=entity_metadata_props,
     )
     return _presenter_for(ctx, uri).render()
 
@@ -177,13 +194,24 @@ def build_sections(
     configured_langs: list[str] | None = None,
     metadata: dict | None = None,
     quality_block: bool = True,
+    entity_metadata_props: list | None = None,
 ) -> list[DetailSection]:
     """Return the grouped detail sections for *uri*, dispatched by entity kind.
 
     Within each section the constructive ＋ Add… action is hoisted to the top
     (see ``_creates_first``). Returns ``[]`` for a uri with no detail builder.
     """
-    fields = _fields_for(tax, uri, lang, activity, lint, configured_langs, metadata, quality_block)
+    fields = _fields_for(
+        tax,
+        uri,
+        lang,
+        activity,
+        lint,
+        configured_langs,
+        metadata,
+        quality_block,
+        entity_metadata_props,
+    )
     # The "Hierarchy" section is dropped from OWL class details only (concepts keep
     # their narrower/broader/related hierarchy).
     extra: frozenset[str] = (
@@ -235,7 +263,11 @@ def _render_row(f: DetailField) -> str:
 
 
 def render_detail(
-    tax: Taxonomy, uri: str, lang: str = "en", configured_langs: list[str] | None = None
+    tax: Taxonomy,
+    uri: str,
+    lang: str = "en",
+    configured_langs: list[str] | None = None,
+    entity_metadata_props: list | None = None,
 ) -> str:
     """Rich-markup detail for *uri*, grouped into titled sections (read-only).
 
@@ -244,7 +276,13 @@ def render_detail(
     labels / hierarchy / properties / actions as the curses panel.
     """
     lines: list[str] = []
-    for sec in build_sections(tax, uri, lang, configured_langs=configured_langs):
+    for sec in build_sections(
+        tax,
+        uri,
+        lang,
+        configured_langs=configured_langs,
+        entity_metadata_props=entity_metadata_props,
+    ):
         pad = "  " if sec.sub else ""  # sub-sections nest one level under their section
         if sec.sub:
             lines.append("")  # a blank line sets each subtitle apart from the group above

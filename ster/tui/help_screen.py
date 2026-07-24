@@ -15,15 +15,29 @@ from .hint_bar import Hint
 from .modal import ModalBase
 
 _HELP = """\
-[bold]Navigation[/bold]
-  ↑ / ↓        move between items (wraps around the ends)
-  → / ←        enter the detail pane / back to the tree
-  tab          cycle the panes
-  /            fuzzy search — jump to any entity
-  e / c        expand / collapse the class tree
+[bold]Navigation — two layers[/bold]
+  The left column has three panes (Mixed SKOS/OWL · Ontology · Properties). You are
+  either [i]selecting a pane[/i] (its header, no item highlighted) or [i]inside its tree[/i].
 
-[bold]Editing[/bold]  (a file must be open)
+  [bold]Panel layer[/bold]  (cursor on a pane header)
+  ↑ / ↓        move between panes
+  tab / ← →    move between panes
+  enter        open the pane — folds the others, selects its head
+  space        fold / unfold the pane
+
+  [bold]Item layer[/bold]  (an item is selected — the head counts too)
+  ↑ / ↓        move between items in the tree
+  → / tab      cross to the detail pane (the head opens its overview)
+  esc          back up to the panel layer (select the pane)
+  space        fold / unfold the item
+  /            fuzzy search — jump to any entity
+
+[bold]Detail pane[/bold]  (a file must be open)
+  ↑ / ↓        move between rows and foldable groups
   enter        edit the focused value, or run the focused action row
+  space        fold / unfold the group
+  tab          toggle back to the tree item it came from
+  esc          back up to the panel layer
   action rows  ✎ edit · + add · ↓ subclass · ↑ link · ⊘ delete · ⇢ convert
   in a modal   enter confirm / select · esc cancel
 
@@ -33,6 +47,7 @@ _HELP = """\
   Details      facts + actions for the selected entity
 
 [bold]App[/bold]
+  e / c        expand / collapse the whole tree
   d            cycle theme  (/ → "Change theme" previews them all)
   ?            this help
   q            quit

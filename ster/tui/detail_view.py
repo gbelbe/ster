@@ -19,6 +19,7 @@ from rich.text import Text
 from textual import events
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.dom import DOMNode
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
@@ -190,24 +191,11 @@ class DetailRow(Static):
     """
 
     can_focus = True
-    BINDINGS = [
-        Binding("enter", "activate", "Edit / run"),
-        Binding("down", "focus_row(1)", "Next", show=False),
-        Binding("up", "focus_row(-1)", "Prev", show=False),
-        Binding("left", "focus_tree", "Tree", show=False),
-    ]
-
-    def action_focus_row(self, delta: int) -> None:
-        """Move focus to the previous/next *actionable* sibling row, wrapping.
-
-        Information-only rows are non-focusable, so they're skipped here too."""
-        rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
-        if rows and self in rows:  # wrap: up from the first → last, down from the last → first
-            rows[(rows.index(self) + delta) % len(rows)].focus()
-
-    def action_focus_tree(self) -> None:
-        """Jump focus back to the main pane the user was last in (the left pane)."""
-        self.app._focus_main_tree()  # type: ignore[attr-defined]
+    # Only Enter is per-row (open the edit menu / run the action). Up/Down navigation,
+    # Space (fold a group) and Escape (back to panel selection) are handled centrally by
+    # the DetailView container so every clickable element — rows *and* foldable group
+    # headers — participates in one consistent model.
+    BINDINGS = [Binding("enter", "activate", "Edit / run")]
 
     class EditRequested(Message):
         """Posted when the user activates an edit-only value row (Enter)."""
@@ -395,12 +383,62 @@ def _graph_action_row(tax: Taxonomy, uri: str) -> DetailRow | None:
 
 
 class DetailView(VerticalScroll):
-    """Compose an entity's detail into section headers + focusable field rows."""
+    """Compose an entity's detail into section headers + focusable field rows.
+
+    Owns the detail pane's keyboard model so navigation is consistent everywhere:
+    Up/Down step through every clickable element (editable rows *and* foldable group
+    headers), Space folds/unfolds the group the cursor is in, Enter opens the row's edit
+    menu (bound per-row), and Escape returns to selecting the left panel. These override
+    the ``VerticalScroll`` scroll bindings for the same keys."""
 
     can_focus = True  # so clicking the (empty) pane can still select it
+    BINDINGS = [
+        Binding("down", "nav(1)", "Next", show=False),
+        Binding("up", "nav(-1)", "Prev", show=False),
+        Binding("space", "toggle_group", "Fold group", show=False),
+        Binding("escape", "back_to_panel", "Panels", show=False),
+        # Tab (and the ←/→ arrows) leave the detail pane for the left panel it was reached
+        # from — cycling then continues across the panels from there. Only ↑/↓ move between
+        # rows, so Tab must override Textual's default focus-next within the pane.
+        Binding("tab", "leave_to_panel", "Panels", show=False),
+        Binding("shift+tab", "leave_to_panel", "Panels", show=False),
+        Binding("left", "leave_to_panel", "Panels", show=False),
+        Binding("right", "leave_to_panel", "Panels", show=False),
+    ]
 
     def compose(self):  # type: ignore[no-untyped-def]
         yield Static(PLACEHOLDER)
+
+    def _navigables(self) -> list[Widget]:
+        """Every clickable element in the pane, in visual order: actionable rows plus
+        foldable group headers (Collapsible titles)."""
+        return [w for w in self.query("DetailRow, CollapsibleTitle") if w.can_focus]
+
+    def action_nav(self, delta: int) -> None:
+        """Move focus to the previous / next clickable element, wrapping."""
+        nav = self._navigables()
+        if not nav:
+            return
+        cur = self.app.focused
+        idx = nav.index(cur) if cur in nav else (-1 if delta > 0 else 0)
+        nav[(idx + delta) % len(nav)].focus()
+
+    def action_toggle_group(self) -> None:
+        """Fold / unfold the Collapsible group the focused element belongs to."""
+        node: DOMNode | None = self.app.focused
+        while node is not None and not isinstance(node, Collapsible):
+            node = node.parent
+        if isinstance(node, Collapsible):
+            node.collapsed = not node.collapsed
+
+    def action_back_to_panel(self) -> None:
+        """Escape: leave the detail pane and re-select the left panel it was reached from."""
+        self.app._back_to_panel_selection()  # type: ignore[attr-defined]
+
+    def action_leave_to_panel(self) -> None:
+        """Tab / Shift-Tab (and ←/→): toggle back to the exact tree item this pane was reached
+        from. Rows are moved between with the arrows only; Escape pops up to the panel layer."""
+        self.app._return_to_source_item()  # type: ignore[attr-defined]
 
     def on_click(self) -> None:
         """Click blank pane space to select this window: focus a row, else the pane."""
@@ -421,6 +459,7 @@ class DetailView(VerticalScroll):
         metadata: dict | None = None,
         issue_fields: list | None = None,
         quality_block: bool = True,
+        entity_metadata_props: list | None = None,
     ) -> None:
         """Rebuild the pane to show *uri* (or a placeholder when None). *issue_fields*
         (the semanticlint plugin's per-entity 'Quality issues' rows) are inserted right
@@ -430,7 +469,15 @@ class DetailView(VerticalScroll):
             self.mount(Static(PLACEHOLDER))
             return
         sections = build_sections(
-            tax, uri, lang, activity, lint, configured_langs, metadata, quality_block
+            tax,
+            uri,
+            lang,
+            activity,
+            lint,
+            configured_langs,
+            metadata,
+            quality_block,
+            entity_metadata_props,
         )
         sections = _insert_issue_sections(sections, issue_fields)
         widgets = _grouped_widgets(sections)

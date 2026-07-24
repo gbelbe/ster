@@ -28,7 +28,13 @@ class ClassPresenter(EntityPresenter):
     Property Fill are individual-driven, so with no instances the box is empty noise."""
 
     def render(self) -> list[DetailField]:
-        base = build_rdf_class_detail(self.tax, self.uri, self.lang, self.ctx.configured_langs)
+        base = build_rdf_class_detail(
+            self.tax,
+            self.uri,
+            self.lang,
+            self.ctx.configured_langs,
+            self.ctx.entity_metadata_props,
+        )
         if self.uri not in self.tax.owl_classes:
             return base
         # The legacy quality sections move into our box.

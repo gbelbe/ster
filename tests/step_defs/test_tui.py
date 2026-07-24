@@ -88,7 +88,8 @@ def when_cursor_down_to(ctx, name):
 
     async def act(app, pilot):
         tree = app.query_one("#ont-tree")  # classes live in the ontology pane
-        tree.focus()
+        app._select_panel("ont-tree")
+        await pilot.press("enter")  # open the pane → item layer, then walk the items
         await pilot.pause()
         for _ in range(20):
             node = tree.cursor_node
@@ -137,7 +138,7 @@ def when_expand_all(ctx):
     _session(ctx, act)
 
 
-@when("I step right into the detail panel, down a row, then left back to the tree")
+@when("I step right into the detail panel, down a row, then Escape back to the tree")
 def when_arrow_navigate(ctx):
     from textual.widgets import Tree
 
@@ -153,7 +154,7 @@ def when_arrow_navigate(ctx):
         await pilot.press("down")  # next row
         await pilot.pause()
         ctx["row_focused"] = isinstance(app.focused, DetailRow)
-        await pilot.press("left")  # detail → tree
+        await pilot.press("escape")  # detail → back to selecting the panel (its header)
         await pilot.pause()
         ctx["tree_focused"] = app.focused is app.query_one("#ont-tree", Tree)
 
@@ -261,28 +262,6 @@ def then_property_in_pane(ctx, label):  # noqa: ARG001
 def then_class_in_main_only(ctx, name):
     assert ZOO + name in ctx["main_uris"]
     assert ZOO + name not in ctx["prop_uris"]
-
-
-@when("I press up from the top of the tree")
-def when_wrap_up(ctx):
-    from textual.widgets import Tree
-
-    async def act(app, pilot):
-        tree = app.query_one("#tree", Tree)
-        tree.focus()
-        tree.cursor_line = 0
-        await pilot.pause()
-        await pilot.press("up")  # at the top → wraps to the last node
-        await pilot.pause()
-        ctx["wrapped_line"] = tree.cursor_line
-        ctx["last_line"] = len(tree._tree_lines) - 1
-
-    _session(ctx, act)
-
-
-@then("the tree cursor lands on the last node")
-def then_cursor_on_last(ctx):
-    assert ctx["wrapped_line"] == ctx["last_line"] > 0
 
 
 @then("a detail row was focused along the way")

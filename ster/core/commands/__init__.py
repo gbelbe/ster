@@ -35,6 +35,8 @@ from .onto import (
     OntoSetPrefix,
 )
 from .owl import (
+    EntityRemoveAnnotation,
+    EntitySetAnnotation,
     OwlAddExternalSuperclass,
     OwlAddIndividualType,
     OwlAddProperty,
@@ -85,6 +87,8 @@ from .skos import (
 
 __all__ = [
     "AddSchemaMedia",
+    "EntityRemoveAnnotation",
+    "EntitySetAnnotation",
     "DemotePunToConcept",
     "LinkConceptToClass",
     "PromoteConceptToClass",

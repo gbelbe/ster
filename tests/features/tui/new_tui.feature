@@ -31,14 +31,10 @@ Feature: New-TUI — the Textual ontology browser
     When I select the class "Dog"
     Then the detail panel shows the comment "Loyal domestic companion."
 
-  Scenario: Arrow keys move between the tree and the detail rows (no Tab needed)
-    When I step right into the detail panel, down a row, then left back to the tree
+  Scenario: Arrow keys move into the detail rows, Escape returns to the panel
+    When I step right into the detail panel, down a row, then Escape back to the tree
     Then a detail row was focused along the way
     And the tree is focused at the end
-
-  Scenario: Arrow keys wrap around the tree (reach the last node from the top)
-    When I press up from the top of the tree
-    Then the tree cursor lands on the last node
 
   Scenario: Expanding the whole tree reveals deep nodes
     When I expand the whole tree

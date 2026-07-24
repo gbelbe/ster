@@ -273,18 +273,24 @@ def test_build_detail_fields_hierarchy_broader(simple_taxonomy):
     assert BASE + "Top" in broader_fields[0].key
 
 
-def test_build_detail_fields_actions_present(simple_taxonomy):
+def test_concept_body_omits_structural_and_delete_actions(simple_taxonomy):
+    """Structural edits (add narrower/related, move) and Delete moved to the context
+    menu; the concept detail body no longer carries them. Instead each section shows the
+    inline '+ Add …' affordance for the SKOS descriptors it is missing."""
     fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en")
-    action_fields = [f for f in fields if f.meta.get("type") == "action"]
-    action_names = [f.meta.get("action") for f in action_fields]
-    assert "add_narrower" in action_names
-    assert "delete" in action_names
+    action_names = [f.meta.get("action") for f in fields if f.meta.get("action")]
+    assert "add_narrower" not in action_names
+    assert "delete" not in action_names
+    assert "add_scope_note" in action_names  # Top has no scope note in en → nudge to add
+    assert "add_alt_label" in action_names  # altLabel add offered per configured language
 
 
-def test_build_detail_fields_show_mappings(simple_taxonomy):
+def test_concept_body_has_no_cross_scheme_mapping_actions(simple_taxonomy):
+    """The concept body no longer emits cross-scheme mapping actions (the legacy
+    show_mappings dump was dropped)."""
     fields = build_detail_fields(simple_taxonomy, BASE + "Top", "en", show_mappings=True)
     map_actions = [f for f in fields if f.meta.get("action", "").startswith("map:")]
-    assert len(map_actions) >= 1
+    assert map_actions == []
 
 
 def test_build_detail_fields_no_mappings_by_default(simple_taxonomy):

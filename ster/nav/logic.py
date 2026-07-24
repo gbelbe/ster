@@ -11,6 +11,7 @@ from pathlib import Path
 from ..analysis_base import pct as _pct
 from ..analysis_base import pct_bar as _pct_bar
 from ..metadata_coverage import MetaProp
+from ..metadata_coverage import entity_predicates as _entity_predicates
 from ..metadata_coverage import is_labelled as _is_labelled
 from ..model import LabelType, OntologyAnnotation, OWLProperty, Taxonomy
 from ..owl_analysis import (
@@ -628,6 +629,125 @@ def _lang_add_actions(
     ]
 
 
+# ── shared "missing element" affordances (common to every entity builder) ─────
+# One place decides what a detail page nudges you to add: the entity's essential
+# label (per configured language it lacks) and each configured annotation
+# predicate it does not carry. The four builders call these instead of each
+# re-deriving the rows, so the affordance is identical everywhere.
+
+
+@dataclass(frozen=True)
+class _EssentialLabel:
+    """The primary human label an entity of a given kind should carry."""
+
+    label_tmpl: str  # e.g. "+ Add rdfs:label [{lang}]"
+    action: str  # the add-action name its handler dispatches on
+    key_prefix: str  # DetailField key prefix
+
+
+_ESSENTIAL_LABEL: dict[str, _EssentialLabel] = {
+    "class": _EssentialLabel("+ Add rdfs:label [{lang}]", "add_rdf_label", "action:add_rdf_label"),
+    "individual": _EssentialLabel(
+        "+ Add rdfs:label [{lang}]", "add_ind_label", "action:add_ind_label"
+    ),
+    "property": _EssentialLabel(
+        "+ Add rdfs:label [{lang}]", "add_prop_label", "action:add_prop_label"
+    ),
+    "concept": _EssentialLabel(
+        "+ Add skos:prefLabel [{lang}]", "add_pref_label", "action:add_pref"
+    ),
+}
+
+
+def essential_label_affordances(
+    kind: str, present_langs: set[str], configured_langs: list[str] | None
+) -> list[DetailField]:
+    """A '+ Add <primary label> [lang]' affordance for each configured language the
+    entity of this *kind* is missing. Empty for kinds without an essential label."""
+    spec = _ESSENTIAL_LABEL.get(kind)
+    if spec is None:
+        return []
+    return _lang_add_actions(
+        configured_langs or [],
+        spec.key_prefix,
+        spec.label_tmpl,
+        spec.action,
+        present=present_langs,
+    )
+
+
+def configured_annotation_affordances(
+    entity: object, catalog: list[MetaProp] | None
+) -> list[DetailField]:
+    """A '+ Add <prefix:local>' affordance for each configured annotation predicate the
+    *entity* does not yet carry. Empty when no catalog is configured."""
+    if not catalog:
+        return []
+    present = _entity_predicates(entity)
+    rows: list[DetailField] = []
+    for mp in catalog:
+        if mp.predicate in present:
+            continue
+        label = mp.label or _annotation_display(mp.predicate)
+        rows.append(
+            _add_action_field(
+                f"action:add_entity_meta:{mp.predicate}",
+                f"+ Add {label}",
+                "add_entity_annotation",
+                predicate=mp.predicate,
+                is_iri="IRI" in mp.label,  # catalog labels flag IRI-valued predicates
+            )
+        )
+    return rows
+
+
+def _entity_annotation_rows(annotation: OntologyAnnotation) -> list[DetailField]:
+    """One editable value row + its paired remove row for a single entity annotation."""
+    display = _annotation_display(annotation.predicate)
+    value_row = DetailField(
+        f"eann:{annotation.predicate}:{annotation.value}",
+        display,
+        annotation.value,
+        editable=True,
+        meta={
+            "type": "entity_annotation",
+            "predicate": annotation.predicate,
+            "old_value": annotation.value,
+            "is_iri": annotation.is_iri,
+            "lang": annotation.lang,
+        },
+    )
+    remove_row = DetailField(
+        f"eann:remove:{annotation.predicate}:{annotation.value}",
+        f"  ✕ remove {display}",
+        "",
+        editable=False,
+        meta={
+            "type": "action_del",
+            "action": "remove_entity_annotation",
+            "predicate": annotation.predicate,
+            "value": annotation.value,
+        },
+    )
+    return [value_row, remove_row]
+
+
+def entity_metadata_section(entity: object, catalog: list[MetaProp] | None) -> list[DetailField]:
+    """The 'Metadata' section for an OWL entity: existing catalogued annotations (editable +
+    remove) followed by a '+ Add …' affordance for each configured predicate it lacks. Empty
+    when nothing configured is present or addable. Individuals keep their annotation values
+    under Property Values, so only their missing-predicate affordances surface here."""
+    if not catalog:
+        return []
+    catalog_preds = {mp.predicate for mp in catalog}
+    rows: list[DetailField] = []
+    for a in getattr(entity, "annotations", []):
+        if a.predicate in catalog_preds:
+            rows += _entity_annotation_rows(a)
+    rows += configured_annotation_affordances(entity, catalog)
+    return [_sep("Metadata"), *rows] if rows else []
+
+
 def _sep_danger(label: str) -> DetailField:
     """Create a non-selectable danger-zone section-separator row (red bold)."""
     return DetailField(
@@ -922,8 +1042,11 @@ def _section_text_list(
 
 
 def _concept_identity_fields(taxonomy: Taxonomy, uri: str, concept, lang: str) -> list[DetailField]:
-    """URI + topConceptOf/inScheme (topConceptOf is navigable → scheme detail)."""
-    fields = [DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"})]
+    """URI + type + topConceptOf/inScheme (topConceptOf is navigable → scheme detail)."""
+    fields = [
+        DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}),
+        _type_field(taxonomy, uri),
+    ]
     if concept.top_concept_of:
         scheme = taxonomy.schemes.get(concept.top_concept_of)
         scheme_label = scheme.title(lang) if scheme else concept.top_concept_of
@@ -1346,6 +1469,48 @@ def _scheme_action_fields() -> list[DetailField]:
 # ──────────────────────────── new public builders ─────────────────────────────
 
 
+def _concept_labels_section(concept, clangs: list[str]) -> list[DetailField]:
+    """prefLabel (essential) + altLabel rows, each with its inline '+ Add …' affordance."""
+    fields = _section_labels_grouped(concept.labels, "pref", "alt", "prefLabel", "pref", "alt")
+    pref_langs = {lbl.lang for lbl in concept.labels if lbl.type == LabelType.PREF}
+    fields += essential_label_affordances("concept", pref_langs, clangs)
+    fields += _lang_add_actions(
+        clangs, "action:add_alt", "+ Add altLabel [{lang}]", "add_alt_label"
+    )
+    return fields
+
+
+def _concept_notes_section(concept, clangs: list[str]) -> list[DetailField]:
+    """definition + scopeNote rows, each with its inline per-language add affordance."""
+    fields = _section_text_list(concept.definitions, "def", "definition", "def")
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_def",
+        "+ Add definition [{lang}]",
+        "add_def",
+        present={d.lang for d in concept.definitions},
+    )
+    fields += _section_text_list(concept.scope_notes, "scope", "scopeNote", "scope_note")
+    fields += _lang_add_actions(
+        clangs,
+        "action:add_scope",
+        "+ Add scopeNote [{lang}]",
+        "add_scope_note",
+        present={d.lang for d in concept.scope_notes},
+    )
+    return fields
+
+
+def _concept_has_mappings(concept) -> bool:
+    return bool(
+        concept.exact_match
+        or concept.close_match
+        or concept.broad_match
+        or concept.narrow_match
+        or concept.related_match
+    )
+
+
 def build_concept_detail(
     taxonomy: Taxonomy,
     uri: str,
@@ -1354,61 +1519,28 @@ def build_concept_detail(
     show_mappings: bool = False,
     configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
-    """Unified concept detail: Identity → Labels → Notes → Hierarchy → Mappings → Statistics → Actions."""
+    """Unified concept detail (mirrors the class page): Identity → Labels → Notes →
+    Hierarchy → Mappings → Overview. Structural edits and Delete live on the context
+    menu; each section carries the inline '+ Add …' affordance for what it's missing."""
     concept = taxonomy.concepts.get(uri)
     if not concept:
         return []
-    fields: list[DetailField] = []
+    clangs = configured_langs or [lang]
 
-    # ── Identity ────────────────────────────────────────────────────────────
-    fields.append(_sep("Identity"))
-    fields.extend(_concept_identity_fields(taxonomy, uri, concept, lang))
+    fields: list[DetailField] = [_sep("Identity")]
+    fields += _concept_identity_fields(taxonomy, uri, concept, lang)
+    fields += [_sep("Labels"), *_concept_labels_section(concept, clangs)]
+    fields += [_sep("Notes"), *_concept_notes_section(concept, clangs)]
 
-    # ── Labels ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Labels"))
-    fields.extend(
-        _section_labels_grouped(concept.labels, "pref", "alt", "prefLabel", "pref", "alt")
-    )
+    if concept.narrower or concept.broader or concept.related:
+        fields += [_sep("Hierarchy"), *_concept_hierarchy_fields(taxonomy, concept, lang)]
+    if _concept_has_mappings(concept):
+        fields += [_sep("Mappings"), *_concept_mappings_fields(taxonomy, concept, lang)]
+    if concept.narrower:  # Overview + per-property completion bars
+        fields += [_sep("Overview"), *_concept_overview_fields(taxonomy, uri, concept)]
+        fields += _concept_completion_fields(taxonomy, uri)  # includes its own _sep rows
 
-    # ── Notes ───────────────────────────────────────────────────────────────
-    has_notes = bool(concept.definitions or concept.scope_notes)
-    if has_notes:
-        fields.append(_sep("Notes"))
-        fields.extend(_section_text_list(concept.definitions, "def", "definition", "def"))
-        fields.extend(_section_text_list(concept.scope_notes, "scope", "scopeNote", "scope_note"))
-
-    # ── Hierarchy ────────────────────────────────────────────────────────────
-    has_hierarchy = bool(concept.narrower or concept.broader or concept.related)
-    if has_hierarchy:
-        fields.append(_sep("Hierarchy"))
-        fields.extend(_concept_hierarchy_fields(taxonomy, concept, lang))
-
-    # ── Mappings ─────────────────────────────────────────────────────────────
-    has_mappings = bool(
-        concept.exact_match
-        or concept.close_match
-        or concept.broad_match
-        or concept.narrow_match
-        or concept.related_match
-    )
-    if has_mappings:
-        fields.append(_sep("Mappings"))
-        fields.extend(_concept_mappings_fields(taxonomy, concept, lang))
-
-    # ── Overview + Completion (only if has narrowers) ───────────────────────
-    if concept.narrower:
-        fields.append(_sep("Overview"))
-        fields.extend(_concept_overview_fields(taxonomy, uri, concept))
-        fields.extend(_concept_completion_fields(taxonomy, uri))  # includes its own _sep rows
-
-    # ── Rich Content (schema.org) ─────────────────────────────────────────────
-    fields.extend(_schema_media_display_fields(concept, "c:"))
-
-    # ── Actions ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
-    fields.extend(_concept_action_fields(lang, concept, show_mappings, configured_langs))
-    fields.extend(_schema_media_action_fields(concept, "c:"))
-
+    fields += _schema_media_display_fields(concept, "c:")
     return fields
 
 
@@ -1896,10 +2028,54 @@ def _flatten_ontology(
 # ──────────────────────────── RDF class detail ───────────────────────────────
 
 _NODE_TYPE_DISPLAY = {
-    "promoted": "skos:Concept + owl:Class",
+    "promoted": "pun (owl:Class + skos:Concept)",
+    "linked": "skos:Concept → owl:Class (foaf:focus)",
     "class": "owl:Class",
     "concept": "skos:Concept",
+    "individual": "owl:NamedIndividual",
+    "property": "owl:Property",
+    "scheme": "skos:ConceptScheme",
 }
+
+# A glyph per node kind for the Identity 'type' row, mirroring the tree glyphs so an
+# entity's kind reads at a glance. (Kept here — the nav layer must not import the tui layer.)
+_TYPE_ICON = {
+    "class": "●",
+    "concept": "○",
+    "promoted": "◉",
+    "linked": "◎",
+    "individual": "◆",
+    "property": "■",
+    "scheme": "⬢",
+}
+
+
+def _type_field(taxonomy: Taxonomy, uri: str, display: str | None = None) -> DetailField:
+    """The Identity 'type' row: a kind glyph + a plain RDF type (e.g. '◉ pun (owl:Class +
+    skos:Concept)'), so every entity clearly states what it is. *display* overrides the type
+    text (used for properties, which name their specific owl:*Property kind)."""
+    nt = taxonomy.node_type(uri)
+    icon = _TYPE_ICON.get(nt, "")
+    text = display or _NODE_TYPE_DISPLAY.get(nt, nt)
+    return DetailField(
+        "node_type", "type", f"{icon} {text}".strip(), editable=False, meta={"type": "stat"}
+    )
+
+
+def _curie(taxonomy: Taxonomy, uri: str) -> str:
+    """A prefixed name for *uri* (e.g. 'dcterms:subject') using the file's namespace
+    bindings — the longest matching prefix wins. Falls back to the local name when no
+    prefix is bound."""
+    best: tuple[str, str] | None = None
+    for prefix, ns in taxonomy.namespace_bindings.items():
+        if uri.startswith(ns) and (best is None or len(ns) > len(best[1])):
+            best = (prefix, ns)
+    if best is not None:
+        prefix, ns = best
+        local = uri[len(ns) :]
+        if local and prefix:
+            return f"{prefix}:{local}"
+    return uri.rstrip("/#").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
 
 
 def _direct_properties(taxonomy: Taxonomy, class_uri: str) -> list:
@@ -2142,6 +2318,7 @@ def build_rdf_class_detail(
     uri: str,
     lang: str,
     configured_langs: list[str] | None = None,
+    entity_metadata_props: list[MetaProp] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:Class / rdfs:Class node."""
     rdf_class = taxonomy.owl_classes.get(uri)
@@ -2149,21 +2326,12 @@ def build_rdf_class_detail(
         return []
 
     clangs = configured_langs or [lang]
-    node_t = taxonomy.node_type(uri)
     fields: list[DetailField] = []
 
     # ── Identity ────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
     fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
-    fields.append(
-        DetailField(
-            "node_type",
-            "type",
-            _NODE_TYPE_DISPLAY.get(node_t, node_t),
-            editable=False,
-            meta={"type": "stat"},
-        )
-    )
+    fields.append(_type_field(taxonomy, uri))
 
     # ── Labels (rdfs:label) — always shown ──────────────────────────────────
     fields.append(_sep("Labels"))
@@ -2178,13 +2346,7 @@ def build_rdf_class_detail(
             )
         )
     fields.extend(
-        _lang_add_actions(
-            clangs,
-            "action:add_rdf_label",
-            "+ Add rdfs:label [{lang}]",
-            "add_rdf_label",
-            present={lbl.lang for lbl in rdf_class.labels},
-        )
+        essential_label_affordances("class", {lbl.lang for lbl in rdf_class.labels}, clangs)
     )
 
     # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
@@ -2288,6 +2450,9 @@ def build_rdf_class_detail(
     # ── Rich Content (schema.org) ─────────────────────────────────────────────
     fields.extend(_schema_media_display_fields(rdf_class, "cls:"))
     fields.extend(_schema_media_action_fields(rdf_class, "cls:"))
+
+    # ── Metadata (configured annotation catalog) ─────────────────────────────
+    fields.extend(entity_metadata_section(rdf_class, entity_metadata_props))
 
     # ── Danger Zone ──────────────────────────────────────────────────────────
     fields.append(_sep_danger("Danger Zone"))
@@ -2478,6 +2643,8 @@ def _value_target_label(taxonomy: Taxonomy, uri: str, lang: str) -> tuple[str, b
 def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -> list[DetailField]:  # type: ignore[no-untyped-def]
     """Asserted object-property values, each editable via ✎ (pick a new target) with a
     folded Delete. Grouped by predicate so multi-valued properties sit together."""
+    from ster.operations import DCT_SUBJECT  # noqa: PLC0415
+
     fields: list[DetailField] = []
     seen: list[str] = []
     for prop_uri, _ in individual.property_values:
@@ -2485,13 +2652,16 @@ def _individual_object_value_fields(taxonomy: Taxonomy, individual, lang: str) -
             seen.append(prop_uri)
     for p_uri in seen:
         prop = taxonomy.owl_properties.get(p_uri)
-        prop_lbl = prop.label(lang) if prop else p_uri.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+        # Show the property's label, else its prefixed name (e.g. dcterms:subject) so the
+        # exact predicate is clear — not just its bare local name.
+        prop_lbl = prop.label(lang) if prop else _curie(taxonomy, p_uri)
+        icon = "🏷" if p_uri == DCT_SUBJECT else "→"  # a dct:subject value is a concept tag
         for val_uri in [vu for pu, vu in individual.property_values if pu == p_uri]:
             val_lbl, navigable = _value_target_label(taxonomy, val_uri, lang)
             fields.append(
                 DetailField(
                     f"ind_propval:{p_uri}::{val_uri}",
-                    f"→ {prop_lbl}",
+                    f"{icon} {prop_lbl}",
                     val_lbl,
                     editable=True,  # ✎ → edit_prop_value picker; paired remove folds into Delete
                     meta={
@@ -2595,6 +2765,7 @@ def build_individual_detail(
     uri: str,
     lang: str,
     configured_langs: list[str] | None = None,
+    entity_metadata_props: list[MetaProp] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:NamedIndividual."""
     individual = taxonomy.owl_individuals.get(uri)
@@ -2607,15 +2778,7 @@ def build_individual_detail(
     # ── Identity ────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
     fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
-    fields.append(
-        DetailField(
-            "node_type",
-            "type",
-            "owl:NamedIndividual",
-            editable=False,
-            meta={"type": "stat"},
-        )
-    )
+    fields.append(_type_field(taxonomy, uri))
 
     # ── Labels (rdfs:label) — always shown ──────────────────────────────────
     fields.append(_sep("Labels"))
@@ -2630,13 +2793,7 @@ def build_individual_detail(
             )
         )
     fields.extend(
-        _lang_add_actions(
-            clangs,
-            "action:add_ind_label",
-            "+ Add rdfs:label [{lang}]",
-            "add_ind_label",
-            present={lbl.lang for lbl in individual.labels},
-        )
+        essential_label_affordances("individual", {lbl.lang for lbl in individual.labels}, clangs)
     )
 
     # ── Notes (rdfs:comment) — always shown ─────────────────────────────────
@@ -2676,6 +2833,9 @@ def build_individual_detail(
     # ── Rich Content (schema.org) ─────────────────────────────────────────────
     fields.extend(_schema_media_display_fields(individual, "ind:"))
     fields.extend(_schema_media_action_fields(individual, "ind:"))
+
+    # ── Metadata (configured annotation catalog) ─────────────────────────────
+    fields.extend(entity_metadata_section(individual, entity_metadata_props))
 
     # ── Danger Zone ──────────────────────────────────────────────────────────
     fields.append(_sep_danger("Danger Zone"))
@@ -3411,6 +3571,7 @@ def build_property_detail(
     uri: str,
     lang: str,
     configured_langs: list[str] | None = None,
+    entity_metadata_props: list[MetaProp] | None = None,
 ) -> list[DetailField]:
     """Detail panel for an owl:ObjectProperty / DatatypeProperty / etc."""
     prop = taxonomy.owl_properties.get(uri)
@@ -3423,43 +3584,45 @@ def build_property_detail(
     # ── Identity ─────────────────────────────────────────────────────────────
     fields.append(_sep("Identity"))
     fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
-    fields.append(
-        DetailField(
-            "prop_type",
-            "type",
-            f"owl:{prop.prop_type}",
-            editable=False,
-            meta={"type": "stat"},
+    fields.append(_type_field(taxonomy, uri, display=f"owl:{prop.prop_type}"))
+
+    # ── Labels (rdfs:label) — always shown, with the missing-language affordance ─
+    fields.append(_sep("Labels"))
+    for lbl in sorted(prop.labels, key=lambda l: l.lang):
+        fields.append(
+            DetailField(
+                f"prop_label:{lbl.lang}",
+                f"label [{lbl.lang}]",
+                lbl.value,
+                editable=True,
+                meta={"type": "prop_label", "lang": lbl.lang},
+            )
         )
+    fields.extend(
+        essential_label_affordances("property", {lbl.lang for lbl in prop.labels}, clangs)
     )
 
-    # ── Labels ───────────────────────────────────────────────────────────────
-    if prop.labels:
-        fields.append(_sep("Labels"))
-        for lbl in sorted(prop.labels, key=lambda l: l.lang):
-            fields.append(
-                DetailField(
-                    f"prop_label:{lbl.lang}",
-                    f"label [{lbl.lang}]",
-                    lbl.value,
-                    editable=True,
-                    meta={"type": "prop_label", "lang": lbl.lang},
-                )
+    # ── Notes (rdfs:comment) — always shown ──────────────────────────────────
+    fields.append(_sep("Notes"))
+    for cmt in sorted(prop.comments, key=lambda d: d.lang):
+        fields.append(
+            DetailField(
+                f"prop_comment:{cmt.lang}",
+                f"comment [{cmt.lang}]",
+                cmt.value,
+                editable=True,
+                meta={"type": "prop_comment", "lang": cmt.lang},
             )
-
-    # ── Notes ────────────────────────────────────────────────────────────────
-    if prop.comments:
-        fields.append(_sep("Notes"))
-        for cmt in sorted(prop.comments, key=lambda d: d.lang):
-            fields.append(
-                DetailField(
-                    f"prop_comment:{cmt.lang}",
-                    f"comment [{cmt.lang}]",
-                    cmt.value,
-                    editable=True,
-                    meta={"type": "prop_comment", "lang": cmt.lang},
-                )
-            )
+        )
+    fields.extend(
+        _lang_add_actions(
+            clangs,
+            "action:add_prop_comment",
+            "+ Add rdfs:comment [{lang}]",
+            "add_prop_comment",
+            present={cmt.lang for cmt in prop.comments},
+        )
+    )
 
     # ── Signature (domain / range / subPropertyOf / inverseOf) ───────────────
     has_sig = bool(prop.domains or prop.ranges or prop.sub_property_of or prop.inverse_of)
@@ -3513,28 +3676,11 @@ def build_property_detail(
     # ── Note (ns1:note markdown) ──────────────────────────────────────────────
     fields.extend(_note_display_fields(prop.note, "prop:"))
 
+    # ── Metadata (configured annotation catalog) ─────────────────────────────
+    fields.extend(entity_metadata_section(prop, entity_metadata_props))
+
     # ── Actions ──────────────────────────────────────────────────────────────
     fields.append(_sep("Actions"))
-    fields.extend(
-        _lang_add_actions(
-            clangs,
-            "action:add_prop_label",
-            "+ Add rdfs:label [{lang}]",
-            "add_prop_label",
-            present={lbl.lang for lbl in prop.labels},
-            green=False,
-        )
-    )
-    fields.extend(
-        _lang_add_actions(
-            clangs,
-            "action:add_prop_comment",
-            "+ Add rdfs:comment [{lang}]",
-            "add_prop_comment",
-            present={cmt.lang for cmt in prop.comments},
-            green=False,
-        )
-    )
     fields.append(
         _add_action_field("action:add_prop_domain", "→ Add domain class", "add_prop_domain")
     )

@@ -12,6 +12,7 @@ action; every mutation is validated and written back to the file.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -123,13 +124,24 @@ _CREATABLE_PROP_KINDS = frozenset(_PROP_MENU)
 # create action → prop_type (reverse lookup for the context-menu dispatch).
 _PROP_CREATE_ACTIONS: dict[str, str] = {row[2]: kind for kind, row in _PROP_MENU.items()}
 
+# Contextual keyboard hint shown on the focused pane's bottom border — one line per
+# navigation layer, so the keys always match where the cursor is. Kept short to fit the
+# border; the full cheat-sheet is the ? help screen.
+_NAV_HINTS: dict[str, str] = {
+    "panel": "↑↓ switch · ↵ open · ␣ fold",
+    "item": "↑↓ nav · → detail · ␛ panels",
+    "detail": "↑↓ rows · ↵ edit · ␛ panels",
+}
+
+
+def _nav_hint(context: str | None) -> str:
+    """The border hint for a navigation layer ('panel' / 'item' / 'detail'), or '' for none."""
+    return _NAV_HINTS.get(context or "", "")
+
 
 class OntologyTree(Tree):
-    """The left-pane tree. `right` jumps into the detail pane; up/down wrap around."""
-
-    _LAST_LINE = 2_000_000_000  # any out-of-range line clamps to the last visible one
-
-    BINDINGS = [Binding("right", "focus_detail", "Detail", show=False)]
+    """The left-pane tree. In the panel layer (cursor on the header) Tab and the arrows move
+    between panels; Enter opens a pane and drops into its items, where the arrows navigate."""
 
     # The node whose guide column is currently lit (the cursor's parent).
     _branch_parent: TreeNode | None = None
@@ -137,6 +149,18 @@ class OntologyTree(Tree):
     def watch_cursor_line(self, previous_line: int, line: int) -> None:
         super().watch_cursor_line(previous_line, line)
         self._light_branch_column()
+        # Panel layer = cursor resting on the pane header (its main entity): no *item* is
+        # selected, so the header's cursor is dimmed (only the pane border reads as active).
+        # Deferred: toggling a class mid-cursor-watch invalidates the tree-line cache.
+        self.call_after_refresh(self._sync_panel_layer_class)
+
+    def _sync_panel_layer_class(self) -> None:
+        # Dim the header only in the panel layer — cursor on the head *and* not entered. Once
+        # entered, the head is a selected item and keeps its normal highlight.
+        pid = self.id or "tree"
+        entered = self.app._entered_pid == pid  # type: ignore[attr-defined]
+        self.set_class(self._cursor_on_main(pid) and not entered, "panel-layer")
+        self.app._update_nav_hint()  # type: ignore[attr-defined]  # panel↔item layer changed
 
     def _light_branch_column(self) -> None:
         """Keep the guide column at the cursor's own level lit as it moves.
@@ -177,21 +201,14 @@ class OntologyTree(Tree):
         return label
 
     def action_focus_detail(self) -> None:
+        # Remember the pane *and* the item we crossed from: Tab in the detail toggles back to
+        # this item, Escape pops up to the pane's header (panel layer).
+        self.app._detail_source_pid = self.id or "tree"  # type: ignore[attr-defined]
+        node = self.cursor_node
+        self.app._detail_source_uri = node.data if node is not None else None  # type: ignore[attr-defined]
         rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
         if rows:
             rows[0].focus()  # first actionable row (info-only rows are skipped)
-
-    def action_cursor_down(self) -> None:
-        before = self.cursor_line
-        super().action_cursor_down()
-        if self.cursor_line == before:  # already at the bottom → wrap to the top
-            self.cursor_line = 0
-
-    def action_cursor_up(self) -> None:
-        before = self.cursor_line
-        super().action_cursor_up()
-        if self.cursor_line == before:  # already at the top → wrap to the bottom
-            self.cursor_line = self._LAST_LINE  # clamped to the last visible line
 
     def _cursor_on_main(self, pid: str) -> bool:
         """True when the cursor sits on this pane's main entity (its overview row) — the
@@ -200,33 +217,78 @@ class OntologyTree(Tree):
         cur = self.cursor_node
         return overview is not None and cur is not None and cur.data == overview
 
+    # Pane-navigation keys → handler. Each returns True when it consumed the key (so the
+    # default tree behaviour is suppressed). Behaviour splits by *layer*:
+    #   * panel layer (a pane is selected but not entered — cursor on its dimmed header):
+    #       ↑/↓ and Tab/←/→ move between panels · Enter opens this pane (folding the others)
+    #       and selects its head as the first item · Space folds/unfolds the pane.
+    #   * item layer (the pane is entered — an item, incl. the head, is selected):
+    #       ↑/↓ navigate the tree · Tab/←/→ cross to the detail pane · Escape exits to the
+    #       panel layer. Space/Enter fall through to the tree.
+    _PANE_KEYS: dict[str, Callable[[OntologyTree, str, bool], bool]] = {
+        "tab": lambda self, pid, panel: self._pane_cross(pid, panel, True),
+        "shift+tab": lambda self, pid, panel: self._pane_cross(pid, panel, False),
+        "right": lambda self, pid, panel: self._pane_cross(pid, panel, True),
+        "left": lambda self, pid, panel: self._pane_cross(pid, panel, False),
+        "down": lambda self, pid, panel: self._pane_arrow(pid, panel, True),
+        "up": lambda self, pid, panel: self._pane_arrow(pid, panel, False),
+        "space": lambda self, pid, panel: self._pane_space(pid, panel),
+        "enter": lambda self, pid, panel: self._pane_enter(pid, panel),
+        "escape": lambda self, pid, panel: self._pane_escape(pid, panel),
+    }
+
+    def _in_panel_layer(self, pid: str) -> bool:
+        """True when this pane is *selected but not entered* — the panel layer. Once entered
+        (Enter), even the head reads as a selected item (the item layer)."""
+        entered = self.app._entered_pid == pid  # type: ignore[attr-defined]
+        return (self._cursor_on_main(pid) or self.has_class("folded")) and not entered
+
     def on_key(self, event: events.Key) -> None:
-        """Two-layer pane navigation while this pane is focused:
-
-        * Tab / Shift-Tab — *select* the next / previous pane (cursor → its main entity).
-        * Enter / Space on a *selected* pane (cursor on the main entity, or a folded pane) —
-          toggle its size (full ⇄ 1/3) and enter its content.
-        * Escape from the content — pop back up and select the pane (cursor → main entity).
-
-        On a content node, Enter / Space / Escape keep their normal tree meaning."""
-        app = self.app
         pid = self.id or "tree"
-        if event.key in ("tab", "shift+tab"):
-            app._select_adjacent_panel(pid, 1 if event.key == "tab" else -1)  # type: ignore[attr-defined]
-        elif event.key in ("enter", "space") and (
-            self.has_class("folded") or self._cursor_on_main(pid)
-        ):
-            app._enter_panel(pid)  # type: ignore[attr-defined]
-        elif (
-            event.key == "escape"
-            and app._PANEL_OVERVIEW.get(pid) is not None  # type: ignore[attr-defined]
-            and not self._cursor_on_main(pid)
-        ):
-            app._select_panel(pid)  # type: ignore[attr-defined]
+        panel = self._in_panel_layer(pid)
+        handler = self._PANE_KEYS.get(event.key)
+        if handler is not None and handler(self, pid, panel):
+            event.prevent_default()
+            event.stop()
+
+    def _pane_cross(self, pid: str, panel: bool, forward: bool) -> bool:
+        """Tab / Shift-Tab / ← / →. Panel layer: cycle to the next / previous pane. Item
+        layer: cross to the detail pane (either direction; a toggle with the detail)."""
+        if panel:
+            self.app._select_adjacent_panel(pid, 1 if forward else -1)  # type: ignore[attr-defined]
         else:
-            return  # not a pane command — leave the default tree behaviour
-        event.prevent_default()
-        event.stop()
+            self.action_focus_detail()
+        return True
+
+    def _pane_arrow(self, pid: str, panel: bool, forward: bool) -> bool:
+        """↑/↓. Panel layer: move between panels. Item layer: let the tree navigate its
+        items (return False → the default cursor movement runs)."""
+        if panel:
+            self.app._select_adjacent_panel(pid, 1 if forward else -1)  # type: ignore[attr-defined]
+            return True
+        return False
+
+    def _pane_space(self, pid: str, panel: bool) -> bool:
+        """Panel layer → fold/unfold the pane; item layer → let the tree fold the node."""
+        if panel:
+            self.app._toggle_full(pid)  # type: ignore[attr-defined]
+            return True
+        return False
+
+    def _pane_enter(self, pid: str, panel: bool) -> bool:
+        """Panel layer → open this pane: fold the others, unfold it to full, and select its
+        head as the first item (the item layer). Item layer → fall through to the tree."""
+        if panel:
+            self.app._enter_panel_full(pid)  # type: ignore[attr-defined]
+            return True
+        return False
+
+    def _pane_escape(self, pid: str, panel: bool) -> bool:
+        """Item layer → exit back to the panel layer (deselect the item; dim the header)."""
+        if not panel and self.app._PANEL_OVERVIEW.get(pid) is not None:  # type: ignore[attr-defined]
+            self.app._select_panel(pid)  # type: ignore[attr-defined]
+            return True
+        return False
 
     def _clicked_line(self, event: events.Click) -> int | None:
         """The tree line a click landed on (from the event style meta, else the hover line)."""
@@ -359,6 +421,12 @@ class OntologyApp(App):
         background: $surface;
         color: $foreground;
     }
+    /* The contextual keyboard hint rides the bottom border of the focused pane only
+       (set in code); keep it dim + left-aligned so it reads as a hint, not a second title. */
+    .main-tree, #prop-tree, #detail {
+        border-subtitle-color: $foreground 55%;
+        border-subtitle-align: left;
+    }
     /* Accordion: the three left panes (Mixed SKOS/OWL, Ontology, Properties) share the
        column — 1/3 each by default. Clicking a pane expands it and folds the other two to
        their titled border bar; double-clicking a folded pane restores the 1/3 layout. A
@@ -425,6 +493,10 @@ class OntologyApp(App):
        resolve to white on a light accent). Focused = full-strength accent. */
     Tree > .tree--cursor { text-style: bold; background: $secondary 40%; color: $foreground; }
     Tree:focus > .tree--cursor { background: $secondary; color: auto; }
+    /* Panel layer: the cursor rests on the pane header and *no item is selected*, so the
+       row highlight is removed entirely — only the pane border reads as active. */
+    OntologyTree.panel-layer > .tree--cursor { background: transparent; text-style: none; color: $foreground; }
+    OntologyTree.panel-layer:focus > .tree--cursor { background: transparent; color: $foreground; }
 
     /* Give the footer a neutral surface background (not the theme's $primary,
        which is blue on solarized-light → invisible key hints) with readable text. */
@@ -521,6 +593,13 @@ class OntologyApp(App):
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
         self._active_main_tree_id = "tree"  # last-focused main pane: "tree" (unified) or "ont-tree"
+        self._detail_source_pid = (
+            "tree"  # the pane Tab/→ crossed from; Escape in detail returns here
+        )
+        self._detail_source_uri: str | None = None  # the tree item Tab in the detail toggles to
+        self._entered_pid: str | None = (
+            None  # the pane currently entered (item layer); None = panel layer
+        )
         self._folded_panels: set[str] = set()  # left panes folded to their title bar
         self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
         self._activity_computed = False
@@ -538,6 +617,7 @@ class OntologyApp(App):
         # The value row whose Edit/Delete submenu is open (set while it is shown).
         self._row_menu_field: DetailField | None = None
         self._row_menu_delete: DetailField | None = None
+        self._row_menu_goto: str | None = None  # nav target for the row menu's "Go to" item
         self._row_menu_origin: Widget | None = None  # row to refocus after the submenu
         # Persist off the UI thread (the slow part of an edit); the lock serialises writes
         # and each save writes the latest authority, so the disk converges to it.
@@ -835,7 +915,9 @@ class OntologyApp(App):
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
 
     def on_mount(self) -> None:
-        self.title = f"ster ontology browser - {self.source}"
+        from ster._version import __version__ as _version  # noqa: PLC0415
+
+        self.title = f"STER version {_version} - {self.source}"
         self.sub_title = ""
         for tree in self.query(Tree):
             tree.show_root = False
@@ -973,13 +1055,17 @@ class OntologyApp(App):
         self._index(uri, node)
         return node
 
-    def _add_class(self, parent: TreeNode, uri: str) -> None:
+    def _add_class(self, parent: TreeNode, uri: str, *, skip_puns: bool = True) -> None:
+        """Render an OWL class node with its subclasses + individuals. In the Ontology pane
+        (``skip_puns=False``) the full OWL hierarchy shows — a pun's class facet is a real
+        owl:Class, so it belongs here too. In the Mixed pane's bridge (``skip_puns=True``) a
+        pun subclass is left out, since it renders on the SKOS spine instead."""
         label = data.label_of(self.tax, uri, self.lang)
         node = parent.add(f"{self._node_icon(uri, 'class')} {label}", data=uri)
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
-            if self.tax.node_type(sub) != "promoted":  # a pun subclass lives in the taxonomy spine
-                self._add_class(node, sub)
+            if not skip_puns or self.tax.node_type(sub) != "promoted":
+                self._add_class(node, sub, skip_puns=skip_puns)
         for ind in data.individuals_of(self.tax, uri, self.lang):
             self._leaf(node, ind, "individual")
 
@@ -1038,6 +1124,7 @@ class OntologyApp(App):
             self._cta(tax_sec, "＋ Add concept scheme", "add_scheme")
         tax_sec.expand()
         self._strip_childless_arrows(root)
+        tax_sec.allow_expand = False  # header drives the accordion, not a tree fold → no arrow
 
     def _build_ontology_tree(self, tree: Tree) -> None:
         """Second pane: the full OWL class hierarchy (including puns — a promoted concept
@@ -1047,7 +1134,7 @@ class OntologyApp(App):
         ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
         self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
         for uri in data.class_roots(tax, self.lang):
-            self._add_class(ont_sec, uri)
+            self._add_class(ont_sec, uri, skip_puns=False)  # full OWL view: puns are classes too
 
         loose = data.untyped_individuals(tax, self.lang)
         if loose:
@@ -1058,6 +1145,7 @@ class OntologyApp(App):
             self._cta(ont_sec, "＋ Add class", "create_owl_class")
         ont_sec.expand()
         self._strip_childless_arrows(root)
+        ont_sec.allow_expand = False  # header drives the accordion, not a tree fold → no arrow
 
     _PANEL_IDS = ("tree", "ont-tree", "prop-tree")
     # The main-entity overview each pane shows when it becomes the active one.
@@ -1096,9 +1184,15 @@ class OntologyApp(App):
         self._folded_panels = set() if self._folded_panels == others else others
         self._apply_layout()
 
+    def _refresh_pane_layer(self, pid: str) -> None:
+        """Re-sync a pane's header dimming + border hint after an entered-state change that
+        may not have moved the cursor (Enter / Escape both rest on the head)."""
+        self.query_one(f"#{pid}", OntologyTree)._sync_panel_layer_class()
+
     def _select_panel(self, pid: str) -> None:
-        """Select a pane: focus it, land the cursor on its main entity, and print that pane's
-        overview in the detail view. The layout is unchanged."""
+        """Select a pane (the panel layer): focus it, rest the cursor on its dimmed header, and
+        print that pane's overview. No item is entered."""
+        self._entered_pid = None
         tree = self.query_one(f"#{pid}", Tree)
         tree.focus()
         node = self._panel_main_node(pid)
@@ -1107,22 +1201,70 @@ class OntologyApp(App):
         overview = self._PANEL_OVERVIEW.get(pid)
         if overview is not None:  # show it even when the cursor was already on the main entity
             self._show(overview)
+        self._refresh_pane_layer(pid)
 
     def _select_adjacent_panel(self, pid: str, step: int) -> None:
         """Select the next (step=1) / previous (step=-1) pane — Tab / Shift-Tab."""
         nxt = self._PANEL_IDS[(self._PANEL_IDS.index(pid) + step) % len(self._PANEL_IDS)]
         self._select_panel(nxt)
 
-    def _enter_panel(self, pid: str) -> None:
-        """Enter/Space on a selected pane: toggle its size (full ⇄ 1/3) and dive into its
-        content. Full = this pane is the only one open (the others folded); 1/3 = all open."""
-        self._toggle_full(pid)
+    def _back_to_panel_selection(self) -> None:
+        """Escape from the detail pane: re-select the left panel it was reached from (cursor
+        on its header — the panel layer), so Tab cycles panels again."""
+        pid = self._detail_source_pid if self._detail_source_pid in self._PANEL_IDS else "tree"
+        self._select_panel(pid)
+
+    def _hint_target_and_context(self):  # type: ignore[no-untyped-def]
+        """The pane widget the border hint belongs on, and its navigation layer — from the
+        focused widget: a tree (panel / item by its cursor), or the detail pane."""
+        focused = self.focused
+        if isinstance(focused, OntologyTree):
+            return focused, ("panel" if focused.has_class("panel-layer") else "item")
+        if isinstance(focused, DetailRow):
+            return self.query_one("#detail", DetailView), "detail"
+        if isinstance(focused, DetailView):
+            return focused, "detail"
+        return None, None
+
+    def _update_nav_hint(self) -> None:
+        """Show the contextual key hint on the focused pane's bottom border; clear the rest,
+        so exactly one hint shows and it always matches the current layer."""
+        target, context = self._hint_target_and_context()
+        hint = _nav_hint(context)
+        for pane in (*self.query(OntologyTree), self.query_one("#detail", DetailView)):
+            pane.border_subtitle = hint if pane is target else ""
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """Refresh the contextual key hint whenever focus crosses panes or reaches the detail."""
+        self._update_nav_hint()
+
+    def _return_to_source_item(self) -> None:
+        """Tab from the detail pane: toggle back to the exact tree item it was reached from
+        (the item layer). Falls back to the pane header if that item is gone."""
+        pid = self._detail_source_pid if self._detail_source_pid in self._PANEL_IDS else "tree"
+        node = self._uri_nodes.get(self._detail_source_uri) if self._detail_source_uri else None
+        if node is None:
+            self._select_panel(pid)
+            return
+        self._entered_pid = pid  # back in the item layer
         tree = self.query_one(f"#{pid}", Tree)
-        header = self._panel_main_node(pid)
-        if header is not None and header.children:
-            tree.move_cursor(header.children[0])
-        else:
-            tree.focus()
+        tree.focus()
+        tree.move_cursor(node)
+        self._refresh_pane_layer(pid)
+
+    def _enter_panel_full(self, pid: str) -> None:
+        """Enter a pane from the panel layer (Enter): fold the other panes so this one opens to
+        full height, and select its head as the first item (the item layer). The head has its
+        own overview detail, so it navigates to the detail pane like any other item."""
+        self._entered_pid = pid
+        self._folded_panels = set(self._PANEL_IDS) - {pid}
+        self._apply_layout()
+        tree = self.query_one(f"#{pid}", Tree)
+        tree.focus()
+        node = self._panel_main_node(pid)
+        if node is not None:
+            tree.move_cursor(node)  # the head becomes the selected item
+        self._refresh_pane_layer(pid)
 
     def _cta(self, parent: TreeNode, label: str, action: str) -> None:
         """Add a dim call-to-action leaf under an *empty* section — activating it (Enter /
@@ -1160,6 +1302,7 @@ class OntologyApp(App):
             sec.expand()
         prop_sec.expand()
         self._strip_childless_arrows(tree.root)
+        prop_sec.allow_expand = False  # header drives the accordion, not a tree fold → no arrow
 
     @staticmethod
     def _prop_header_data(kind: str | None) -> str | None:
@@ -1191,7 +1334,9 @@ class OntologyApp(App):
         self._detail_uri = uri
         clangs = self.configured_langs or [self.lang]
         self._detail_text = (
-            detail.render_detail(self.tax, uri, self.lang, clangs) if uri else PLACEHOLDER
+            detail.render_detail(self.tax, uri, self.lang, clangs, self.entity_metadata_props)
+            if uri
+            else PLACEHOLDER
         )
         is_overview = uri == detail.OVERVIEW_URI
         activity = self._ontology_activity() if is_overview else None
@@ -1208,6 +1353,7 @@ class OntologyApp(App):
             metadata,
             issue_fields=self._entity_detail_fields(uri),
             quality_block=self._overview_quality_on,
+            entity_metadata_props=self.entity_metadata_props,
         )
         view.border_title = self._detail_title(uri)
 
@@ -1333,8 +1479,9 @@ class OntologyApp(App):
             return "Properties overview"
         label = data.label_of(self.tax, uri, self.lang) or "Details"
         kind = data.kind_of(self.tax, uri)
-        type_label = _KIND_TITLE.get(kind)
-        if type_label:
+        if self.tax.node_type(uri) == "promoted":  # a pun is both facets — spell it out
+            label += " : pun (OWL Class + SKOS Concept)"
+        elif type_label := _KIND_TITLE.get(kind):
             label += f" ({type_label})"  # note the resource's type, e.g. 'Person (Class)'
         if edits.context_actions(kind):
             label += "  ⋯"  # a context menu is available
@@ -1619,12 +1766,19 @@ class OntologyApp(App):
             )
 
     def on_detail_row_menu_requested(self, message: DetailRow.MenuRequested) -> None:
-        """A value row with both edit and delete was activated → Edit/Delete submenu."""
+        """A value row with both edit and delete was activated → Edit / Delete submenu, plus a
+        generic "Go to «target»" when the value points at a navigable entity (e.g. an object
+        property's target, or a dct:subject tag's concept)."""
         self._row_menu_field = message.field
         self._row_menu_delete = message.delete_field
         self._row_menu_origin = self.focused  # the row, before the menu grabs focus
         self._pending_focus_key = message.field.key  # refocus this row after edit/delete
         items = [("✎ Edit", "row_edit"), ("⊘ Delete", "row_delete")]
+        meta = message.field.meta
+        target = meta.get("val_uri") or meta.get("uri")
+        self._row_menu_goto = target if meta.get("nav") and target else None
+        if self._row_menu_goto is not None:
+            items.append((f"→ Go to «{message.field.value}»", "row_goto"))
         self.query_one("#ctx-menu", ContextMenu).show(message.field.display, items, message.anchor)
 
     def _apply_row_delete(self, delete_field: DetailField, *, label: str | None = None) -> None:
@@ -1843,25 +1997,37 @@ class OntologyApp(App):
             return items
         return [(lbl, act) for lbl, act in items if act != "link_superclass"]
 
-    def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
-        """A context-menu action was picked → run it against the selected entity."""
-        # Detail-row Edit/Delete submenu (takes priority over the tree-node menu).
-        if message.action == "row_edit" and self._row_menu_field is not None:
+    def _handle_row_menu_action(self, action: str) -> bool:
+        """The detail-row submenu — Edit / Delete / Go-to. Returns True when it handled *action*.
+
+        Value rows carry an edit *action* (a picker for object values / class membership, a
+        text modal for literals) — dispatch it; plain editable rows (labels, comments, URI)
+        open the generic edit modal."""
+        if action == "row_edit" and self._row_menu_field is not None:
             field, self._row_menu_field = self._row_menu_field, None
             self._row_menu_delete = None
-            # Value rows carry an edit *action* (a picker for object values / class
-            # membership, a text modal for literals) — dispatch it; plain editable rows
-            # (labels, comments, URI) open the generic edit modal.
             if field.meta.get("action"):
                 self._run_field_action(field)
             else:
                 self._open_edit_modal(field, origin=self._row_menu_origin)
-            return
-        if message.action == "row_delete" and self._row_menu_delete is not None:
+            return True
+        if action == "row_delete" and self._row_menu_delete is not None:
             delete_field, self._row_menu_delete = self._row_menu_delete, None
             menu_field, self._row_menu_field = self._row_menu_field, None
             label = menu_field.display if menu_field is not None else delete_field.display
             self._apply_row_delete(delete_field, label=label)
+            return True
+        if action == "row_goto" and self._row_menu_goto is not None:
+            target, self._row_menu_goto = self._row_menu_goto, None
+            self._row_menu_field = self._row_menu_delete = None
+            self.jump_to(target)  # navigate to the value's target entity
+            return True
+        return False
+
+    def on_context_menu_chosen(self, message: ContextMenu.Chosen) -> None:
+        """A context-menu action was picked → run it against the selected entity."""
+        # Detail-row Edit / Delete / Go-to submenu (takes priority over the tree-node menu).
+        if self._handle_row_menu_action(message.action):
             return
 
         prop_type = _PROP_CREATE_ACTIONS.get(message.action)
@@ -1911,6 +2077,7 @@ class OntologyApp(App):
             (edits.SCHEME_ACTIONS, self._create_scheme),
             (edits.ONTOLOGY_RENAME_ACTIONS, self._edit_ontology_identity),
             (edits.ANNOTATION_ADD_ACTIONS, self._add_ont_annotation),
+            (edits.ENTITY_ANNOTATION_ADD_ACTIONS, self._add_entity_annotation),
             (edits.META_INPUT_ACTIONS, self._open_meta_input),
             (edits.INPUT_ACTIONS, self._open_input),
         )
@@ -2573,6 +2740,22 @@ class OntologyApp(App):
         self.push_screen(
             PickerModal("Add metadata — pick a predicate", picker_options), _on_predicate
         )
+
+    def _add_entity_annotation(self, field: DetailField, uri: str, path: Path) -> None:
+        """Add a configured annotation to the shown entity — the predicate is known from the
+        affordance's meta, so a single value-input modal completes it."""
+        from ster.core.commands import EntitySetAnnotation
+        from ster.nav.logic import _annotation_display
+
+        predicate = field.meta.get("predicate", "")
+        is_iri = bool(field.meta.get("is_iri"))
+        short = _annotation_display(predicate)
+
+        def _on_value(value: str | None) -> None:
+            if value:
+                self._apply_command(EntitySetAnnotation(path, uri, predicate, value, is_iri=is_iri))
+
+        self.push_screen(EditModal(f"Value for {short}", ""), _on_value)
 
     def _create_scheme(self, field: DetailField, uri: str, path: Path) -> None:
         """Two-step: collect the scheme title, then its URI, and create it."""

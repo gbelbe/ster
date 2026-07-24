@@ -23,6 +23,8 @@ from pathlib import Path
 
 from ster.core.commands import (
     AddSchemaMedia,
+    EntityRemoveAnnotation,
+    EntitySetAnnotation,
     OntoRemoveAnnotation,
     OntoRenameUri,
     OntoSetAnnotation,
@@ -112,6 +114,16 @@ def _build_edit_registry() -> dict[str, _EditFactory]:
     # Generic annotation row (New-TUI overview): replace old_value with new value.
     reg["ont_annotation"] = lambda f, u, p, v, lang: OntoSetAnnotation(
         p, f.meta["predicate"], f.meta.get("old_value", ""), v
+    )
+    # Generic entity annotation row (class / property / individual): replace in place.
+    reg["entity_annotation"] = lambda f, u, p, v, lang: EntitySetAnnotation(
+        p,
+        u,
+        f.meta["predicate"],
+        v,
+        is_iri=f.meta.get("is_iri", False),
+        lang=f.meta.get("lang", ""),
+        old_value=f.meta.get("old_value", ""),
     )
     return reg
 
@@ -343,6 +355,10 @@ _DIRECT_REGISTRY: dict[str, _DirectFactory] = {
     "remove_ont_annotation": lambda f, u, p: OntoRemoveAnnotation(
         p, f.meta["predicate"], f.meta["value"]
     ),
+    # Generic entity annotation removal (class / property / individual).
+    "remove_entity_annotation": lambda f, u, p: EntityRemoveAnnotation(
+        p, u, f.meta["predicate"], f.meta["value"]
+    ),
 }
 
 
@@ -509,6 +525,10 @@ ONTOLOGY_RENAME_ACTIONS = frozenset({"edit_ontology_uri", "edit_ontology_domain"
 # "Add metadata" action on the ontology overview: opens the catalog picker then
 # a text-input modal for the value. The app handles the two-step flow.
 ANNOTATION_ADD_ACTIONS = frozenset({"add_ont_annotation"})
+
+# "+ Add <predicate>" affordance on an entity page: the predicate is already known
+# (from the row meta), so a single value-input modal completes the add.
+ENTITY_ANNOTATION_ADD_ACTIONS = frozenset({"add_entity_annotation"})
 
 
 def ontology_rename_command(path: Path, base_with_sep: str) -> object:

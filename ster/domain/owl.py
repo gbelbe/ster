@@ -12,6 +12,7 @@ from ..exceptions import CircularHierarchyError, ClassNotFoundError, URIAlreadyE
 from ..model import (
     Definition,
     Label,
+    OntologyAnnotation,
     OWLIndividual,
     OWLProperty,
     RDFClass,
@@ -667,6 +668,66 @@ def set_individual_literal(
         individual.literal_values[individual.literal_values.index(triple_old)] = triple_new
     elif triple_new not in individual.literal_values:
         individual.literal_values.append(triple_new)
+
+
+def _upsert_entity_annotation(
+    annotations: list[OntologyAnnotation],
+    predicate: str,
+    value: str,
+    is_iri: bool,
+    lang: str,
+    old_value: str,
+) -> None:
+    """Replace the (predicate, old_value) entry in place, else append (skipping a dup)."""
+    if old_value:
+        for i, a in enumerate(annotations):
+            if a.predicate == predicate and a.value == old_value:
+                annotations[i] = OntologyAnnotation(
+                    predicate=predicate, value=value, is_iri=is_iri, lang=lang
+                )
+                return
+    if not any(a.predicate == predicate and a.value == value for a in annotations):
+        annotations.append(
+            OntologyAnnotation(predicate=predicate, value=value, is_iri=is_iri, lang=lang)
+        )
+
+
+def set_entity_annotation(
+    taxonomy: Taxonomy,
+    uri: str,
+    predicate: str,
+    value: str,
+    *,
+    is_iri: bool = False,
+    lang: str = "",
+    old_value: str = "",
+) -> None:
+    """Add (or replace) one configured annotation on an OWL entity.
+
+    Classes and properties keep annotations in their generic ``.annotations`` bucket;
+    an individual keeps them as an object (IRI) or literal property assertion — matching
+    how the store round-trips each kind. No-op for an unknown *uri*."""
+    entity = taxonomy.owl_classes.get(uri) or taxonomy.owl_properties.get(uri)
+    if entity is not None:
+        _upsert_entity_annotation(entity.annotations, predicate, value, is_iri, lang, old_value)
+    elif uri in taxonomy.owl_individuals:
+        if is_iri:
+            set_individual_property_value(taxonomy, uri, predicate, value, old_value)
+        else:
+            lang_or_dt = f"@{lang}" if lang else ""
+            set_individual_literal(taxonomy, uri, predicate, old_value, value, lang_or_dt)
+
+
+def remove_entity_annotation(taxonomy: Taxonomy, uri: str, predicate: str, value: str) -> None:
+    """Remove the first (predicate, value) annotation from an OWL entity. No-op if absent."""
+    entity = taxonomy.owl_classes.get(uri) or taxonomy.owl_properties.get(uri)
+    if entity is not None:
+        for i, a in enumerate(entity.annotations):
+            if a.predicate == predicate and a.value == value:
+                del entity.annotations[i]
+                return
+    elif uri in taxonomy.owl_individuals:
+        remove_individual_property_value(taxonomy, uri, predicate, value)
 
 
 def _count_owl_incoming_refs(taxonomy: Taxonomy, uri: str) -> int:
