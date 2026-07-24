@@ -68,25 +68,31 @@ Use a short, descriptive prefix:
 bash scripts/ci.sh
 ```
 
-This mirrors the GitHub Actions pipeline exactly:
+The static checks are driven by **prek** (`.pre-commit-config.yaml`) — the *same
+hooks* the git pre-commit hook and the GitHub `checks` job run, so local and CI
+can't drift:
 
-| Step | What it runs |
-|------|-------------|
-| Lint | `ruff check .` |
-| Format | `ruff format --check .` |
-| Types | `mypy ster/` |
-| Security SAST | `bandit -r ster/ -c pyproject.toml` |
+| Step | Driven by |
+|------|-----------|
+| Lint · format · types · SAST · imports · complexity ratchet · hygiene | `prek run --all-files` — ruff (incl. its `S`/flake8-bandit SAST rules, which replaced standalone bandit) · ruff-format · mypy · import-linter · `scripts/check_complexity_ratchet.py` |
+| JS lint + syntax | `eslint .` + `node --check` |
 | CVE scan | `pip-audit --skip-editable` |
-| Tests | `pytest` on Python 3.11, 3.12, and 3.13 |
+| Tests + coverage | `pytest --cov=ster` — **current Python only, locally** (fast feedback) |
+| Patch coverage (≥ 90%) | `diff-cover` vs `origin/main` |
 
-On success it writes a `.ci-passed` sentinel file. The pre-push hook reads
-this file and blocks `git push` if CI has not passed in the last 60 minutes.
+Tests run on your current interpreter locally; **GitHub Actions runs the full
+3.11 / 3.12 / 3.13 matrix on every PR** — so support for all three is enforced on
+the PR, not locally. After pushing, check `gh pr checks` to confirm every version
+is green.
+
+On success `scripts/ci.sh` writes a `.ci-passed` sentinel. The pre-push hook reads
+it and blocks `git push` if the gate has not passed in the last 60 minutes.
 
 ### Faster iteration during development
 
 ```bash
-bash scripts/ci.sh --fast   # current Python only, skips multi-version matrix
-bash scripts/ci.sh --fix    # auto-fix ruff lint/format, then run the full gate
+bash scripts/ci.sh --fast   # current Python, skips the patch-coverage gate
+bash scripts/ci.sh --fix    # let prek auto-fix ruff lint/format, then re-run the gate
 ```
 
 ### Run a specific test file
