@@ -14,6 +14,7 @@ from ..exceptions import (
     HasChildrenError,
     RelatedHierarchyConflictError,
     SchemeNotFoundError,
+    URIAlreadyExistsError,
 )
 from ..handles import assign_handles, handle_for_uri
 from ..model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
@@ -30,6 +31,8 @@ def add_concept(
     """Add a new concept. parent_handle may be a concept or scheme handle/URI."""
     if uri in taxonomy.concepts:
         raise ConceptAlreadyExistsError(uri)
+    if taxonomy.uri_taken(uri):  # taken by a scheme / class / individual / property
+        raise URIAlreadyExistsError(uri)
 
     labels = [Label(lang=lang, value=val) for lang, val in pref_labels.items()]
     defns = [Definition(lang=lang, value=val) for lang, val in (definitions or {}).items()]
@@ -377,6 +380,8 @@ def create_scheme(
     languages: list[str] | None = None,
     base_uri: str = "",
 ) -> ConceptScheme:
+    if taxonomy.uri_taken(uri):  # taken by a concept / class / individual / property
+        raise URIAlreadyExistsError(uri)
     scheme = ConceptScheme(
         uri=uri,
         labels=[Label(lang=lang, value=val) for lang, val in labels.items()],

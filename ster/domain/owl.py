@@ -47,6 +47,8 @@ def add_owl_property(
     """
     if uri in taxonomy.owl_properties:
         raise ValueError(f"Property already exists: {uri}")
+    if taxonomy.uri_taken(uri):  # taken by a concept / scheme / class / individual
+        raise URIAlreadyExistsError(uri)
     labels = [Label(lang=lang, value=label)] if label else []
     domains = [domain_uri] if domain_uri else []
     ranges = [range_uri] if range_uri else []
@@ -234,6 +236,8 @@ def add_owl_individual(taxonomy: Taxonomy, uri: str, class_uri: str | None = Non
     existing = taxonomy.owl_individuals.get(uri)
     if existing is not None:
         return existing
+    if taxonomy.uri_taken(uri):  # taken by a concept / scheme / class / property
+        raise URIAlreadyExistsError(uri)
     individual = OWLIndividual(uri=uri, types=[class_uri] if class_uri else [])
     taxonomy.owl_individuals[uri] = individual
     return individual

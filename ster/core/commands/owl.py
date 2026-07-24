@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...exceptions import CircularHierarchyError, ClassNotFoundError
+from ...exceptions import CircularHierarchyError, ClassNotFoundError, URIAlreadyExistsError
 from ...handles import assign_handles
 from ...model import RDFClass, Taxonomy
 from ...operations import (
@@ -104,6 +104,8 @@ class OwlCreateSubclass:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         if self.class_uri not in taxonomy.owl_classes:
+            if taxonomy.uri_taken(self.class_uri):  # a concept/individual/property owns it
+                raise URIAlreadyExistsError(self.class_uri)
             taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
         if self.parent_uri:
             try:
@@ -127,6 +129,8 @@ class OwlCreateClass:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         if self.class_uri not in taxonomy.owl_classes:
+            if taxonomy.uri_taken(self.class_uri):  # a concept/individual/property owns it
+                raise URIAlreadyExistsError(self.class_uri)
             taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
         if self.parent_uri:
             try:

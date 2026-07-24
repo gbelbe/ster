@@ -358,6 +358,19 @@ class Taxonomy:
             return "property"
         return "unknown"
 
+    def uri_taken(self, uri: str) -> bool:
+        """True when *uri* already identifies an entity in any layer — a concept, scheme,
+        OWL class, individual, or property. New entities must not reuse a URI; the one
+        deliberate shared URI (a pun's concept + class) is minted only via
+        ``promote_concept_to_class``, which does not go through the create ops."""
+        return (
+            uri in self.concepts
+            or uri in self.schemes
+            or uri in self.owl_classes
+            or uri in self.owl_individuals
+            or uri in self.owl_properties
+        )
+
     def resolve(self, handle_or_uri: str) -> str | None:
         """Return URI for a handle, local name, or full URI. Returns None if not found."""
         # 1. Full URI — pass through if known
