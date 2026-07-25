@@ -39,6 +39,7 @@ DEFAULT_FEATURES: dict = {
     "icons": True,
     "detail": True,
     "quality_block": True,
+    "check_on_open": True,
     "enforce": False,
 }
 

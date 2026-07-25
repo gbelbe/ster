@@ -48,6 +48,7 @@ def test_load_config_fills_defaults() -> None:
         "icons": True,
         "detail": True,
         "quality_block": True,
+        "check_on_open": True,  # scan the file for errors on open
         "enforce": False,  # write-side authoring, opt-in
     }
 

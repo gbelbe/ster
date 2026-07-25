@@ -557,6 +557,7 @@ class OntologyApp(App):
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
+        Binding("exclamation_mark", "problems", "Problems", show=False),
         # Ctrl+C / Cmd+C copy the selection or the focused value (quit stays on q / Ctrl+Q).
         Binding("ctrl+c,super+c", "copy", "Copy", show=False),
         Binding("q", "quit", "Quit"),
@@ -632,6 +633,8 @@ class OntologyApp(App):
         # The detail row (by field key) that was being edited, so focus lands back on it
         # after a mutation rebuilds the pane — not on the first row / tree.
         self._pending_focus_key: str | None = None
+        # A scan-on-open fix ran under the Problems modal; rebuild the panes on close.
+        self._dirty_after_fix = False
 
     def _load_metadata_props(self) -> list[MetaProp]:
         """The configured ontology-metadata predicate catalog (built-in defaults
@@ -959,6 +962,7 @@ class OntologyApp(App):
         self._show(detail.OVERVIEW_URI)
         if self._lint_icons_on:
             self._rebuild_tree()
+        self.call_after_refresh(self._maybe_scan_on_open)
 
     def action_open_query(self) -> None:
         """Open the SPARQL query workspace over the live taxonomy. On close, make sure the
@@ -1671,6 +1675,83 @@ class OntologyApp(App):
         self._lint_computed = False
         self._lint_index = {}
         self._lint_issues = {}
+
+    # ── scan on open: the Problems fix-it worklist ──────────────────────────────
+
+    def _blocking_errors(self) -> list[dict]:
+        """The current ERROR-severity semanticlint issues (empty when the plugin is off
+        or the file is clean)."""
+        from ster.plugins.semanticlint import fixes
+
+        result = self._ontology_lint()
+        return fixes.blocking_errors(result[1]) if result else []
+
+    def _maybe_scan_on_open(self) -> None:
+        """First-paint hook: surface blocking errors in the Problems modal, but only when
+        the plugin's 'check on open' feature is on. Silent when the file is clean."""
+        from ster.plugins.semanticlint import config
+
+        if config.feature_enabled("check_on_open"):
+            errors = self._blocking_errors()
+            if errors:
+                self._open_problems(errors)
+
+    def action_problems(self) -> None:
+        """Reopen the Problems worklist, re-scanning first so resolved errors drop off;
+        notify when there is nothing left to fix."""
+        self._invalidate_lint()
+        errors = self._blocking_errors()
+        if errors:
+            self._open_problems(errors)
+        else:
+            self.notify("No blocking errors.", severity="information")
+
+    def _open_problems(self, errors: list[dict]) -> None:
+        from ster.plugins.semanticlint import fixes
+        from ster.tui.plugins.semanticlint_ui.problems_modal import ProblemsModal
+
+        problems = [(issue, fixes.fix_for(issue, self.tax)) for issue in errors]
+        self.push_screen(ProblemsModal(problems, self._apply_fix), self._after_problems)
+
+    def _apply_fix(self, issue: dict, choice: str) -> bool:
+        """Apply an inline fix from the Problems modal: build its command(s) and run them
+        through the service. True on success (the modal then drops the row)."""
+        from ster.plugins.semanticlint import fixes
+
+        if self._path is None:
+            return False
+        commands = fixes.commands_for(issue, self.tax, self._path, choice)
+        if not commands:
+            self.notify("Nothing to apply for this fix.", severity="warning")
+            return False
+        return self._apply_fix_commands(commands)
+
+    def _apply_fix_commands(self, commands: list) -> bool:
+        """Execute fix *commands* via the service — no UI rebuild (the modal is on top;
+        the panes refresh when it closes). False on the first failure."""
+        if self._service is None or self._path is None:
+            self.notify("Read-only session (no file loaded).", severity="warning")
+            return False
+        for command in commands:
+            result = self._service.execute(command, persist=False)  # type: ignore[arg-type]
+            if not result.ok:
+                self.notify(result.error or "Fix failed.", severity="error")
+                return False
+        self.tax = self._workspace.taxonomies[self._path]
+        self.search_rows = data.search_rows(self.tax, self.lang)
+        self._invalidate_lint()
+        self._dirty_after_fix = True
+        self._schedule_save()
+        return True
+
+    def _after_problems(self, _result: object) -> None:
+        """The Problems modal closed — if a fix ran, rebuild the panes so the tree/detail
+        reflect the edits (deferred while the modal was on top)."""
+        if self._dirty_after_fix:
+            self._dirty_after_fix = False
+            self._rebuild_tree()
+            self._show(self._detail_uri)
+            self._schedule_lint()
 
     def _restore_focus(self) -> None:
         """Land focus back on the row that was being edited after a mutation rebuilt the

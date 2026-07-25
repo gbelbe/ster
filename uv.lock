@@ -2184,7 +2184,7 @@ wheels = [
 
 [[package]]
 name = "semanticlint"
-version = "0.5.0"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyshacl" },
@@ -2193,9 +2193,9 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/87/86/1384e64bcbcc1d485e13cf67f64b5ae6469d7e1bc128079caabd8cf8d91a/semanticlint-0.5.0.tar.gz", hash = "sha256:3c31902526ee921bd1c4d88ad55f75830a43fb86b4f990856be7405cd9ebabbd", size = 95723, upload-time = "2026-07-05T13:49:01.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/cb/704a8edd9348fda72e046a6aafd2c487567684205c7447fc21fe71d59659/semanticlint-0.6.0.tar.gz", hash = "sha256:9b466687f7772d1175458c643bdc17342f4611df57c1595261748752019adc6d", size = 99434, upload-time = "2026-07-24T18:28:29.561Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/c4/a478387ced436ca9ca7d1cef24586b523e00425d3f0e14f7cf60744291ab/semanticlint-0.5.0-py3-none-any.whl", hash = "sha256:88afd5bacb64b8a1c35d8a1c9a225744bebcf9a0c598514ddca9421331894125", size = 29838, upload-time = "2026-07-05T13:49:00.168Z" },
+    { url = "https://files.pythonhosted.org/packages/14/64/25fb72bb7142e4134b493925778136a4b69f72abdd5198a612bc65d2bc99/semanticlint-0.6.0-py3-none-any.whl", hash = "sha256:594ea7a445223953f7b57db6809475119d32e06fc14d33796eb68fc1ed606822", size = 31735, upload-time = "2026-07-24T18:28:28.326Z" },
 ]
 
 [[package]]
@@ -2426,8 +2426,8 @@ requires-dist = [
     { name = "rdflib", specifier = ">=7.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "semanticlint", marker = "extra == 'dev'", specifier = ">=0.5.0" },
-    { name = "semanticlint", marker = "extra == 'semanticlint'", specifier = ">=0.5.0" },
+    { name = "semanticlint", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+    { name = "semanticlint", marker = "extra == 'semanticlint'", specifier = ">=0.6.0" },
     { name = "starlette", specifier = ">=1.3.1" },
     { name = "ster", extras = ["dev"], marker = "extra == 'all'" },
     { name = "ster", extras = ["semanticlint"], marker = "extra == 'all'" },

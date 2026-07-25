@@ -724,6 +724,7 @@ class ConfigModal(ModalBase[None]):
         ("icons", "Colour entity icons by issue severity"),
         ("detail", "Annotate issues in the detail panel"),
         ("quality_block", "Show the Quality & Coverage block"),
+        ("check_on_open", "Check the file for errors when it opens"),
         ("enforce", "Enforce properties with SHACL rules (author shapes.ttl)"),
     )
     #: numeric coverage thresholds (0.0–1.0) offered in the Semantic Lint tab.

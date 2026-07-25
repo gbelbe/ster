@@ -67,6 +67,9 @@ def semanticlint_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "_prefs_path", lambda: tmp_path / "prefs.json")
     monkeypatch.setattr(config, "_config_path", lambda: tmp_path / "quality.json")
     plugins.set_enabled("semanticlint", True)
+    # These tests predate scan-on-open; keep the Problems modal from popping over them
+    # (its own behaviour is covered by tests/unit/test_scan_on_open.py).
+    config.set_feature("check_on_open", False)
 
 
 def _app() -> OntologyApp:
