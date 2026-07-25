@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, BNode, Dataset, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 
 VOID = Namespace("http://rdfs.org/ns/void#")
@@ -85,9 +85,15 @@ _FORMAT_MAP = {
     ".n3": "n3",
     ".jsonld": "json-ld",
     ".json": "json-ld",
+    ".trig": "trig",
 }
 
 _RDFXML_EXTENSIONS = {".rdf", ".xml", ".owl"}
+
+# Dataset (named-graph / quad) serialisations. ster models a single flat graph, so on load
+# every named graph and the default graph are merged into one — the entities are viewed
+# together, without their graph partition (which ster does not represent).
+_DATASET_FORMATS = {"trig"}
 
 
 def _detect_format(path: Path) -> str:
@@ -181,19 +187,30 @@ def format_parse_error(exc: Exception, path: Path) -> str:
     return "\n".join(parts)
 
 
+def _parse_into(fmt: str, path: Path) -> Graph:
+    """Parse *path* as *fmt* into a single Graph. Dataset formats (TriG) are read into a
+    Dataset and every graph — named + default — merged, since ster models one flat graph."""
+    if fmt in _DATASET_FORMATS:
+        ds = Dataset()
+        ds.parse(str(path), format=fmt)
+        g = Graph()
+        for s, p, o, _ctx in ds.quads((None, None, None, None)):
+            g.add((s, p, o))
+        return g
+    g = Graph()
+    g.parse(str(path), format=fmt)
+    return g
+
+
 def _parse_graph(path: Path) -> Graph:
     """Parse *path* into a Graph, falling back to sniffed format if extension-based parse fails."""
     fmt = _detect_format(path)
-    g = Graph()
     try:
-        g.parse(str(path), format=fmt)
-        return g
+        return _parse_into(fmt, path)
     except Exception as exc:
         sniffed = _sniff_format(path)
         if sniffed and sniffed != fmt:
-            g = Graph()
-            g.parse(str(path), format=sniffed)
-            return g
+            return _parse_into(sniffed, path)
         raise exc
 
 

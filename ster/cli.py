@@ -203,8 +203,8 @@ _SUBCOMMANDS = frozenset(
     }
 )
 
-_TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3"}
-_TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3")
+_TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3", ".trig"}
+_TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3", "*.trig")
 
 # Sentinels returned by _pick_file_interactive for special menu entries
 _HTML_SENTINEL: Path = Path(".__ster_html__")
@@ -1089,7 +1089,7 @@ def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
 @app.command("show")
 def cmd_show(
     file: Path | None = typer.Argument(
-        None, help="Taxonomy file (.ttl / .rdf / .jsonld). Auto-detected if omitted."
+        None, help="Taxonomy file (.ttl / .rdf / .jsonld / .trig). Auto-detected if omitted."
     ),
     concept: str | None = typer.Option(
         None,
