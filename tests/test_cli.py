@@ -378,6 +378,72 @@ def test_home_action_menu_flushes_stdin_before_reading(tmp_path, monkeypatch):
     assert termios.TCIFLUSH in flush_calls
 
 
+# ── home flow: a freshly picked file opens straight in the viewer ──────────────
+
+
+def test_fresh_file_selection_opens_viewer_directly(tmp_path, monkeypatch):
+    """Selecting a file returns the 'open' action ([file]) — the action menu is
+    skipped, so `ster` drops straight into the TUI."""
+    from ster import cli
+
+    f = tmp_path / "a.ttl"
+    f.touch()
+    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(cli, "_select_home_file", lambda found: f)
+    menu_calls: list = []
+    monkeypatch.setattr(cli, "_home_action_menu", lambda sel: menu_calls.append(sel) or "MENU")
+
+    selected, action = cli._home_obtain_action(None, None, [f])
+
+    assert selected == f
+    assert action == [f]  # the open-in-viewer action
+    assert menu_calls == []  # the action menu was not shown
+
+
+def test_action_menu_shown_once_a_file_is_selected(tmp_path, monkeypatch):
+    """After the viewer closes, the same (already-selected) file gets its action menu
+    on the next loop turn — that's where publish / import / change-file live."""
+    from ster import cli
+
+    f = tmp_path / "a.ttl"
+    f.touch()
+    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(
+        cli, "_select_home_file", lambda found: pytest.fail("must not reselect a known file")
+    )
+    monkeypatch.setattr(cli, "_home_action_menu", lambda sel: "MENU")
+
+    selected, action = cli._home_obtain_action(None, f, [f])  # f already selected & present
+
+    assert selected == f
+    assert action == "MENU"
+
+
+def test_pending_file_argument_opens_viewer_without_menu(tmp_path, monkeypatch):
+    """`ster file.ttl` (pending_open) still opens straight in the viewer, no menu."""
+    from ster import cli
+
+    f = tmp_path / "a.ttl"
+    f.touch()
+    monkeypatch.setattr(
+        cli, "_home_action_menu", lambda sel: pytest.fail("no menu for a pending open")
+    )
+
+    assert cli._home_obtain_action(f, None, []) == (f, [f])
+
+
+def test_quit_at_file_selection_returns_quit_sentinel(tmp_path, monkeypatch):
+    from ster import cli
+
+    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(cli, "_select_home_file", lambda found: None)  # user quit / cancelled
+
+    selected, action = cli._home_obtain_action(None, None, [])
+
+    assert selected is None
+    assert action is cli._QUIT_SENTINEL
+
+
 # ── _collect_reachable ────────────────────────────────────────────────────────
 
 

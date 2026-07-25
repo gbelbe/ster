@@ -2280,9 +2280,12 @@ def _open_selected_in_viewer(
 def _home_obtain_action(
     pending_open: Path | None, selected_file: Path | None, found: list[Path]
 ) -> tuple[Path | None, list[Path] | Path | None]:
-    """One home-loop turn's ``(file, action)``: open a pending file directly, else run
-    step 1 (pick the file, remembered until "Change file") + step 2 (its action menu).
-    Returns ``action = _QUIT_SENTINEL`` when the user quits at file selection."""
+    """One home-loop turn's ``(file, action)``.
+
+    A pending file (``ster file.ttl``) or a freshly picked file opens straight in the
+    viewer — no action menu in between. Once a file is selected and the viewer has
+    closed, the next turn shows its action menu (SPARQL / publish / graph / import /
+    change file). Returns ``action = _QUIT_SENTINEL`` when the user quits at selection."""
     if pending_open is not None:  # ster PATH/file.ttl → open that file directly
         return pending_open, [pending_open]
     _print_home_intro()
@@ -2293,7 +2296,10 @@ def _home_obtain_action(
         if choice == _DEMO_SENTINEL:  # a fresh demo, opened directly
             demo = _load_demo_into_cwd()
             return demo, [demo]
-        selected_file = choice
+        # A freshly picked file opens straight in the viewer — no action menu in
+        # between. The menu (SPARQL / publish / graph / import / change file) is shown
+        # only after the viewer closes, on the next loop turn for the same file.
+        return choice, [choice]
     return selected_file, _home_action_menu(selected_file)
 
 
@@ -2319,9 +2325,9 @@ def _home_perform(
 def _home_screen(initial_file: Path | None = None) -> None:
     """Interactive home-screen loop (bare ``ster``).
 
-    Two steps: pick a single taxonomy file, then choose an action for it — every action
-    (open / graph / query / …) operates on that file, with a "Change file" entry to switch.
-    ``ster PATH/file.ttl`` opens that file directly first; on exit the menu takes over.
+    Pick a single taxonomy file and it opens straight in the Textual viewer. When the
+    viewer closes, its action menu appears — graph / query / publish / import, plus a
+    "Change file" entry to switch. ``ster PATH/file.ttl`` opens that file directly first.
     """
     pending_open = initial_file
     selected_file: Path | None = None

@@ -295,8 +295,8 @@ def test_home_screen_opens_selected_file_in_the_new_tui(tmp_path, monkeypatch):
 
 
 def test_home_screen_actions_use_the_chosen_file_not_the_first(tmp_path, monkeypatch):
-    """The user picks the 2nd file, then a menu action (Query) → it dispatches with THAT file,
-    not found[0] — the whole point of selecting the file first."""
+    """The user picks the 2nd file → it opens straight in the viewer; then a menu action
+    (Query) dispatches with THAT file, not found[0] — the point of selecting it first."""
     from ster.cli import _QUERY_SENTINEL, _QUIT_SENTINEL, _home_screen
 
     a = tmp_path / "a.ttl"
@@ -306,19 +306,25 @@ def test_home_screen_actions_use_the_chosen_file_not_the_first(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
 
     dispatched: list[list] = []
+    opened: list[list] = []
 
     def _fake_dispatch(action, found):
+        if isinstance(action, list):  # the open-in-viewer action is not a menu action
+            return False
         dispatched.append([action, list(found)])
-        return True  # handled → loop continues
+        return True  # a menu sentinel → handled, loop continues
 
-    # first the action menu returns Query, then Quit to end the loop
+    # Turn 1: picking b opens the viewer directly. Turns 2-3: the action menu returns
+    # Query, then Quit to end the loop.
     with (
         patch("ster.cli._select_home_file", return_value=b),  # user chose the 2nd file
         patch("ster.cli._home_action_menu", side_effect=[_QUERY_SENTINEL, _QUIT_SENTINEL]),
         patch("ster.cli._dispatch_menu_action", side_effect=_fake_dispatch),
+        patch("ster.cli._open_selected_in_viewer", side_effect=lambda sel, *a: opened.append(sel)),
         patch("ster.cli._print_welcome"),
     ):
         _home_screen()
+    assert opened == [[b]]  # the freshly picked file opened straight in the viewer
     assert dispatched == [[_QUERY_SENTINEL, [b]]]  # Query dispatched with the chosen file b
 
 
@@ -469,12 +475,13 @@ def test_home_screen_runs_the_intro_and_ci_check_once(tmp_path, monkeypatch):
     with (
         patch("ster.cli._select_home_file", return_value=src),
         patch("ster.cli._home_action_menu", return_value=_QUIT_SENTINEL),
+        patch("ster.cli._open_selected_in_viewer"),  # turn 1 opens the viewer directly
         patch("ster.cli._print_welcome") as welcome,
         patch("ster.init_ci.prompt_if_missing", return_value=False),
     ):
         _home_screen()
-    welcome.assert_called_once()
-    assert cli_module._ci_check_done is True  # the one-time CI check ran
+    welcome.assert_called()  # the banner prints each home turn
+    assert cli_module._ci_check_done is True  # the one-time CI check ran (guarded once)
 
 
 def test_home_screen_quits_when_no_file_selected(tmp_path, monkeypatch):
