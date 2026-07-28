@@ -29,4 +29,8 @@ snapshot_report.html
 
 # ster runtime/session artifacts (never commit)
 .ster/
-/mixed-gear-demo.ttl
+*.ttl
+!ster/taxonomy.ttl
+!ster/tui/demo.ttl
+!ster/tui/mixed-gear-demo.ttl
+!ster/wind-bigood.ttl
