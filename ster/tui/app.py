@@ -19,10 +19,11 @@ from pathlib import Path
 from rich.style import Style
 from rich.text import Text
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
@@ -1223,21 +1224,27 @@ class OntologyApp(App):
     def _hint_target_and_context(self):  # type: ignore[no-untyped-def]
         """The pane widget the border hint belongs on, and its navigation layer — from the
         focused widget: a tree (panel / item by its cursor), or the detail pane."""
-        focused = self.focused
-        if isinstance(focused, OntologyTree):
-            return focused, ("panel" if focused.has_class("panel-layer") else "item")
-        if isinstance(focused, DetailRow):
-            return self.query_one("#detail", DetailView), "detail"
-        if isinstance(focused, DetailView):
-            return focused, "detail"
-        return None, None
+        try:
+            focused = self.focused
+            if isinstance(focused, OntologyTree):
+                return focused, ("panel" if focused.has_class("panel-layer") else "item")
+            if isinstance(focused, DetailRow):
+                return self.query("#detail").first(), "detail"
+            if isinstance(focused, DetailView):
+                return focused, "detail"
+            return None, None
+        except (ScreenStackError, NoMatches):  # pragma: no cover
+            # Handle cases where the app is starting up/shutting down (no screen stack)
+            # or widgets are missing during a transition.
+            return None, None
 
     def _update_nav_hint(self) -> None:
         """Show the contextual key hint on the focused pane's bottom border; clear the rest,
         so exactly one hint shows and it always matches the current layer."""
         target, context = self._hint_target_and_context()
         hint = _nav_hint(context)
-        for pane in (*self.query(OntologyTree), self.query_one("#detail", DetailView)):
+        # Use query instead of query_one for #detail to avoid NoMatches during transitions/modals
+        for pane in (*self.query(OntologyTree), *self.query("#detail")):
             pane.border_subtitle = hint if pane is target else ""
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:

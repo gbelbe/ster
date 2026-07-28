@@ -840,7 +840,7 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -958,13 +958,13 @@ name = "kurra"
 version = "2.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "httpx", marker = "python_full_version >= '3.12'" },
-    { name = "pyshacl", marker = "python_full_version >= '3.12'" },
-    { name = "rdflib", marker = "python_full_version >= '3.12'" },
-    { name = "rich", marker = "python_full_version >= '3.12'" },
-    { name = "shacl-rules", marker = "python_full_version >= '3.12'" },
-    { name = "sparqlkit", marker = "python_full_version >= '3.12'" },
-    { name = "typer", marker = "python_full_version >= '3.12'" },
+    { name = "httpx" },
+    { name = "pyshacl" },
+    { name = "rdflib" },
+    { name = "rich" },
+    { name = "shacl-rules" },
+    { name = "sparqlkit" },
+    { name = "typer" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/37/a6/b96ce205c4ee7eca220a9c6043bdc6825b85d8499968eb5cae9c79d5aa52/kurra-2.3.2.tar.gz", hash = "sha256:1854024ceb0d799f0ea4a46e05a062d60349b6dc5f5b3f7b055e718f2a2a9849", size = 105911, upload-time = "2026-03-18T01:33:12.518Z" }
 wheels = [
@@ -1723,12 +1723,12 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "dominate", marker = "python_full_version < '3.12'" },
-    { name = "html5lib", marker = "python_full_version < '3.12'" },
-    { name = "httpx", marker = "python_full_version < '3.12'" },
-    { name = "markdown", marker = "python_full_version < '3.12'" },
-    { name = "rdflib", marker = "python_full_version < '3.12'" },
-    { name = "tqdm", marker = "python_full_version < '3.12'" },
+    { name = "dominate" },
+    { name = "html5lib" },
+    { name = "httpx" },
+    { name = "markdown" },
+    { name = "rdflib" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c9/ec/eb56353ec6bfd7020397d2a8ebbbe9d6220f33bb44af856a671522296d4a/pylode-3.4.1.tar.gz", hash = "sha256:382fe47a5b5e4c624bdd98d6bec726ed58a455d5bf9bd9b250adbc8cf516c4bc", size = 203996, upload-time = "2026-02-28T09:38:34.749Z" }
 wheels = [
@@ -1745,13 +1745,13 @@ resolution-markers = [
     "python_full_version == '3.12.*'",
 ]
 dependencies = [
-    { name = "dominate", marker = "python_full_version >= '3.12'" },
-    { name = "html5lib", marker = "python_full_version >= '3.12'" },
-    { name = "httpx", marker = "python_full_version >= '3.12'" },
-    { name = "kurra", marker = "python_full_version >= '3.12'" },
-    { name = "markdown", marker = "python_full_version >= '3.12'" },
-    { name = "rdflib", marker = "python_full_version >= '3.12'" },
-    { name = "tqdm", marker = "python_full_version >= '3.12'" },
+    { name = "dominate" },
+    { name = "html5lib" },
+    { name = "httpx" },
+    { name = "kurra" },
+    { name = "markdown" },
+    { name = "rdflib" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/42/47eb26133b543466ebcd848959213e619f20917305d50afe7bede3e425f4/pylode-3.4.2.tar.gz", hash = "sha256:65e2c23b85837c68fcb1eafe9bb5fa4230a6a57abc425facd860d3f2a6b86ebd", size = 204926, upload-time = "2026-03-27T23:01:22.825Z" }
 wheels = [
@@ -2039,9 +2039,9 @@ name = "rich-click"
 version = "1.9.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "python_full_version >= '3.12'" },
-    { name = "colorama", marker = "python_full_version >= '3.12' and sys_platform == 'win32'" },
-    { name = "rich", marker = "python_full_version >= '3.12'" },
+    { name = "click" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "rich" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/04/27/091e140ea834272188e63f8dd6faac1f5c687582b687197b3e0ec3c78ebf/rich_click-1.9.7.tar.gz", hash = "sha256:022997c1e30731995bdbc8ec2f82819340d42543237f033a003c7b1f843fc5dc", size = 74838, upload-time = "2026-01-31T04:29:27.707Z" }
 wheels = [
@@ -2225,11 +2225,11 @@ name = "shacl-rules"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "python_full_version >= '3.12'" },
-    { name = "lark", marker = "python_full_version >= '3.12'" },
-    { name = "rdflib", marker = "python_full_version >= '3.12'" },
-    { name = "rich", marker = "python_full_version >= '3.12'" },
-    { name = "rich-click", marker = "python_full_version >= '3.12'" },
+    { name = "click" },
+    { name = "lark" },
+    { name = "rdflib" },
+    { name = "rich" },
+    { name = "rich-click" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0c/4d/d76166ef339253c9903aeb113b268387c5ea61d9ba0bf0b81c9058f0872f/shacl_rules-0.1.4.tar.gz", hash = "sha256:a7eed0e0d2586ea9dd6ca036abf6f9d6c5c2567bd0947af6c7da2dbe945dd151", size = 104914, upload-time = "2026-01-28T09:04:09.892Z" }
 wheels = [
@@ -2277,7 +2277,7 @@ name = "sparqlkit"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "lark", marker = "python_full_version >= '3.12'" },
+    { name = "lark" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/8f/48475950a74a6188affc3449d7b3d3a554a53838280f702349cd4e803618/sparqlkit-0.4.1.tar.gz", hash = "sha256:0018e4c200348c6a4f28a60ad8bb6fdc18db985b7f762cf4280904c18ba210be", size = 142853, upload-time = "2026-01-26T14:11:56.195Z" }
 wheels = [
@@ -2342,13 +2342,16 @@ version = "0.9.7"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
     { name = "idna" },
     { name = "llm" },
     { name = "msgpack" },
+    { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pylode", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "pylode", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "rdflib" },
     { name = "rich" },
     { name = "starlette" },
@@ -2361,7 +2364,6 @@ dependencies = [
 all = [
     { name = "coverage", extra = ["toml"] },
     { name = "diff-cover" },
-    { name = "httpx" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -2371,7 +2373,6 @@ all = [
     { name = "pytest-cov" },
     { name = "pytest-textual-snapshot" },
     { name = "pytest-xdist" },
-    { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
     { name = "semanticlint" },
@@ -2380,7 +2381,6 @@ all = [
 dev = [
     { name = "coverage", extra = ["toml"] },
     { name = "diff-cover" },
-    { name = "httpx" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -2390,7 +2390,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-textual-snapshot" },
     { name = "pytest-xdist" },
-    { name = "pyyaml" },
     { name = "radon" },
     { name = "ruff" },
     { name = "semanticlint" },
@@ -2405,13 +2404,14 @@ requires-dist = [
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "diff-cover", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.110" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "idna", specifier = ">=3.15" },
     { name = "import-linter", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "llm", specifier = ">=0.19" },
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pylode", specifier = ">=3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
@@ -2421,7 +2421,7 @@ requires-dist = [
     { name = "pytest-textual-snapshot", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5" },
     { name = "python-multipart", specifier = ">=0.0.31" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "rdflib", specifier = ">=7.0" },
     { name = "rich", specifier = ">=13.0" },
