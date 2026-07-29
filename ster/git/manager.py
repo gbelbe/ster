@@ -27,6 +27,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from rich.console import Console
 
@@ -879,10 +880,11 @@ class GitManager:
             console.print(f"[bold green]✓ Pull Request:[/bold green] {pr_url}")
         else:
             remote = self._cfg.get("remote_url", "")
-            if "github.com" in remote:
-                clean = remote.rstrip("/").removesuffix(".git")
+            if match := self._parse_github_owner_repo(remote):
+                owner, repo_name = match
                 console.print(
-                    f"\n[yellow]Create a PR at:[/yellow]\n  {clean}/compare/{main}...{fb}"
+                    f"\n[yellow]Create a PR at:[/yellow]\n"
+                    f"  https://github.com/{owner}/{repo_name}/compare/{main}...{fb}"
                 )
 
     def _create_pr(self, repo: Path, head: str, base: str, title: str, body: str) -> str | None:
@@ -985,8 +987,36 @@ class GitManager:
 
     @staticmethod
     def _parse_github_owner_repo(url: str) -> tuple[str, str] | None:
-        m = re.search(r"github\.com[:/]([^/]+)/([^/\\.]+)", url)
-        return (m.group(1), m.group(2)) if m else None
+        if not url:
+            return None
+
+        # 1. Try URL parsing for schemes like https:// or ssh://
+        # This handles explicit ports correctly: ssh://git@github.com:443/owner/repo
+        if "://" in url:
+            try:
+                parsed = urlparse(url)
+                if parsed.hostname == "github.com":
+                    # Path is usually /owner/repo or /owner/repo.git
+                    path_parts = parsed.path.strip("/").split("/")
+                    if len(path_parts) >= 2:
+                        owner, repo = path_parts[0], path_parts[1]
+                        if repo.endswith(".git"):
+                            repo = repo[:-4]
+                        return owner, repo
+            except Exception:
+                pass
+
+        # 2. Try scp-style parsing (git@github.com:owner/repo.git)
+        # We only match if it looks like a github.com host followed by a colon
+        scp_pattern = r"^(?:git@)?github\.com:([^/ \?#]+)/([^/ \?#]+)"
+        match = re.search(scp_pattern, url)
+        if match:
+            owner, repo = match.groups()
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            return owner, repo
+
+        return None
 
     # ── private: git utility ──────────────────────────────────────────────────
 

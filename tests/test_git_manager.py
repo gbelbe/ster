@@ -359,6 +359,24 @@ def test_parse_empty_returns_none():
     assert result is None
 
 
+def test_parse_malicious_github_domain():
+    # Ensure we don't pick up github.com in query parameters or different hosts
+    result = GitManager._parse_github_owner_repo("https://attacker.com/?q=github.com/bad/bad")
+    assert result is None
+
+
+def test_parse_github_ssh_with_port():
+    # URL form with specific port
+    result = GitManager._parse_github_owner_repo("ssh://git@github.com:443/alice/myrepo")
+    assert result == ("alice", "myrepo")
+
+
+def test_parse_github_ssh_url_form():
+    # URL form without port
+    result = GitManager._parse_github_owner_repo("ssh://git@github.com/alice/myrepo.git")
+    assert result == ("alice", "myrepo")
+
+
 # ── _get_remote_url ───────────────────────────────────────────────────────────
 
 
@@ -1381,3 +1399,66 @@ def test_commit_new_taxonomy_pushes_with_remote(tmp_path, monkeypatch):
     monkeypatch.setattr(gm, "_git", git_side)
     mgr.commit_new_taxonomy("chore: add taxonomy")
     assert push_called, "push should have been called when remote_url is set"
+
+
+# ── _push_pr and PR link generation ──────────────────────────────────────────
+
+
+def test_push_pr_fallback_link_generation_github_ssh(tmp_path, monkeypatch, capsys):
+    """Test that _push_pr generates a correct GitHub compare link for SSH remotes."""
+    from rich.console import Console
+
+    mgr = _make_manager(
+        tmp_path,
+        {
+            "remote_url": "git@github.com:owner/repo.git",
+            "repo_path": str(tmp_path),
+            "main_branch": "main",
+        },
+    )
+
+    my_console = Console(force_terminal=False, width=100, no_color=True)
+    monkeypatch.setattr(gm, "console", my_console)
+
+    with (
+        patch("ster.git.manager._git") as mock_git,
+        patch.object(GitManager, "_create_pr", return_value=None),
+        patch("rich.prompt.Prompt.ask") as mock_ask,
+    ):
+        mock_git.return_value = MagicMock(returncode=0)
+        mock_ask.side_effect = ["feat/x", "Title", "Body"]
+
+        mgr._push_pr(tmp_path, "main", "msg")
+
+    captured = capsys.readouterr().out
+    assert "https://github.com/owner/repo/compare/main...feat/x" in captured
+
+
+def test_push_pr_fallback_link_generation_github_https(tmp_path, monkeypatch, capsys):
+    """Test that _push_pr generates a correct GitHub compare link for HTTPS remotes."""
+    from rich.console import Console
+
+    mgr = _make_manager(
+        tmp_path,
+        {
+            "remote_url": "https://github.com/owner/repo.git",
+            "repo_path": str(tmp_path),
+            "main_branch": "main",
+        },
+    )
+
+    my_console = Console(force_terminal=False, width=100, no_color=True)
+    monkeypatch.setattr(gm, "console", my_console)
+
+    with (
+        patch("ster.git.manager._git") as mock_git,
+        patch.object(GitManager, "_create_pr", return_value=None),
+        patch("rich.prompt.Prompt.ask") as mock_ask,
+    ):
+        mock_git.return_value = MagicMock(returncode=0)
+        mock_ask.side_effect = ["feat/y", "Title", "Body"]
+
+        mgr._push_pr(tmp_path, "main", "msg")
+
+    captured = capsys.readouterr().out
+    assert "https://github.com/owner/repo/compare/main...feat/y" in captured

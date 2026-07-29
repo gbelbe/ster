@@ -974,7 +974,7 @@ def test_clicking_a_link_warns_when_no_browser_is_available(monkeypatch) -> None
             row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
             assert len(notes) == 1
             msg, severity = notes[0]
-            assert "https://example.org" in msg and severity == "warning"  # URL surfaced
+            assert msg == "https://example.org" and severity == "warning"  # URL surfaced
 
     _run(scenario)
 
@@ -1008,7 +1008,9 @@ def test_clicking_a_link_surfaces_a_toast_even_when_the_browser_raises(monkeypat
             row.on_click(types.SimpleNamespace(style=Style(link="https://example.org")))
             assert len(notes) == 1
             msg, severity = notes[0]
-            assert "https://example.org" in msg and severity == "error"  # URL + error surfaced
+            assert (
+                msg == "https://example.org\nno browser" and severity == "error"
+            )  # URL + error surfaced
 
     _run(scenario)
 
