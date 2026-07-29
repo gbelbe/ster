@@ -8,6 +8,9 @@ venv/
 .ci-passed
 .pytest_cache/
 .coverage
+*.pickle
+*.cache
+*.nt
 coverage.xml
 htmlcov/
 snapshot_report.html

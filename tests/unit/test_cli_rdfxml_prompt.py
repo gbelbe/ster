@@ -48,7 +48,7 @@ def test_cmd_convert_explicit_output(tmp_path):
     src = tmp_path / "onto.rdf"
     src.write_text(_RDF_XML)
     dst = tmp_path / "result.ttl"
-    result = runner.invoke(app, ["convert", str(src), "--output", str(dst)])
+    result = runner.invoke(app, ["convert", str(src), str(dst)])
     assert result.exit_code == 0
     assert dst.exists()
 

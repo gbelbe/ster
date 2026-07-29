@@ -135,7 +135,7 @@ def when_run_ster_convert(ctx, name):
 def when_run_ster_convert_output(ctx, name, out):
     src = ctx["tmp_path"] / name
     dst = ctx["tmp_path"] / out
-    ctx["result"] = runner.invoke(app, ["convert", str(src), "--output", str(dst)])
+    ctx["result"] = runner.invoke(app, ["convert", str(src), str(dst)])
     ctx["explicit_output"] = dst
 
 

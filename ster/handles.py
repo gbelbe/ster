@@ -28,16 +28,21 @@ def derive_candidate(local_name: str) -> str:
     return clean[:3].upper() if clean else "X"
 
 
-def handle_for_uri(uri: str, used: set[str]) -> str:
+def handle_for_uri(uri: str, used: set[str], counters: dict[str, int]) -> str:
     """Assign a unique handle for a URI, avoiding collisions with `used`."""
     local = extract_local_name(uri)
     base = derive_candidate(local)
-    candidate = base
-    suffix = 2
-    while candidate in used:
+
+    if base not in used:
+        return base
+
+    suffix = counters.get(base, 2)
+    while True:
         candidate = f"{base}{suffix}"
+        if candidate not in used:
+            counters[base] = suffix + 1
+            return candidate
         suffix += 1
-    return candidate
 
 
 def assign_handles(taxonomy: Taxonomy) -> None:
@@ -47,30 +52,31 @@ def assign_handles(taxonomy: Taxonomy) -> None:
     sorted by URI to ensure stable results across reloads.
     """
     used: set[str] = set()
+    counters: dict[str, int] = {}
     taxonomy.handle_index.clear()
 
     for uri in sorted(taxonomy.schemes):
-        h = handle_for_uri(uri, used)
+        h = handle_for_uri(uri, used, counters)
         used.add(h)
         taxonomy.handle_index[h] = uri
 
     for uri in sorted(taxonomy.concepts):
-        h = handle_for_uri(uri, used)
+        h = handle_for_uri(uri, used, counters)
         used.add(h)
         taxonomy.handle_index[h] = uri
 
     for uri in sorted(taxonomy.owl_classes):
         if uri not in taxonomy.concepts:  # promoted nodes already indexed above
-            h = handle_for_uri(uri, used)
+            h = handle_for_uri(uri, used, counters)
             used.add(h)
             taxonomy.handle_index[h] = uri
 
     for uri in sorted(taxonomy.owl_individuals):
-        h = handle_for_uri(uri, used)
+        h = handle_for_uri(uri, used, counters)
         used.add(h)
         taxonomy.handle_index[h] = uri
 
     for uri in sorted(taxonomy.owl_properties):
-        h = handle_for_uri(uri, used)
+        h = handle_for_uri(uri, used, counters)
         used.add(h)
         taxonomy.handle_index[h] = uri

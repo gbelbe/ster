@@ -14,16 +14,38 @@ BASE = "https://example.org/test/"
 
 @pytest.fixture(autouse=True)
 def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
-    """Redirect the on-disk analysis cache to a per-test tmp dir.
+    """Redirect the on-disk analysis cache to a per-test tmp dir and disable binary cache.
 
     Without this, tests read/write the developer's real
     ~/.cache/ster/analysis_cache.json: every viewer-save test re-serialised the
-    whole accumulated blob (~900ms once it grew to thousands of dead pytest
-    tmp-path entries) and polluted it further. Isolating it keeps the suite fast
-    and side-effect-free. See tests/unit/test_analysis_cache_isolation.py.
+    real home cache, causing both disk I/O noise and potential cross-pollination.
+    Isolating it keeps the suite fast and side-effect-free.
+    See tests/unit/test_analysis_cache_isolation.py.
     """
+    monkeypatch.setenv("STER_NO_CACHE", "1")
     cache = tmp_path_factory.mktemp("ster-analysis-cache") / "analysis_cache.json"
     monkeypatch.setattr("ster.analysis_cache._cache_path", lambda: cache)
+    # Also isolate the binary cache directory
+    bin_cache_dir = tmp_path_factory.mktemp("ster-bin-cache")
+    monkeypatch.setattr("ster.store._bin_cache_dir", lambda: bin_cache_dir)
+
+
+@pytest.fixture(autouse=True)
+def _disable_version_check(request, monkeypatch):
+    """Prevent tests from spawning background threads to check PyPI.
+
+    This avoids non-deterministic cache updates and network noise.
+    We skip this for the tests that specifically test the version check logic.
+    """
+    if request.module.__name__ in ("tests.test_cli", "tests.test_version"):
+        return
+
+    from ster import _version as version_module
+    from ster import cli
+
+    # Mock the high-level functions that trigger the check
+    monkeypatch.setattr(cli, "_check_new_version", lambda: None)
+    monkeypatch.setattr(version_module, "check_update", lambda: None)
 
 
 @pytest.fixture(autouse=True)

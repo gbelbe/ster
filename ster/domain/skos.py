@@ -43,7 +43,7 @@ def add_concept(
 
     # Assign a handle for the new concept
     used = set(taxonomy.handle_index.keys())
-    h = handle_for_uri(uri, used)
+    h = handle_for_uri(uri, used, {})
     taxonomy.handle_index[h] = uri
 
     return concept

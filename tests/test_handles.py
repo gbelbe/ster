@@ -56,19 +56,19 @@ def test_derive_candidate_all_caps():
 
 def test_handle_for_uri_unique():
     used: set[str] = set()
-    h = handle_for_uri(BASE + "BoatCharacteristic", used)
+    h = handle_for_uri(BASE + "BoatCharacteristic", used, {})
     assert h == "BC"
 
 
 def test_handle_for_uri_collision():
     used = {"BC"}
-    h = handle_for_uri(BASE + "BoatCharacteristic", used)
+    h = handle_for_uri(BASE + "BoatCharacteristic", used, {})
     assert h == "BC2"
 
 
 def test_handle_for_uri_multiple_collisions():
     used = {"BC", "BC2", "BC3"}
-    h = handle_for_uri(BASE + "BoatCharacteristic", used)
+    h = handle_for_uri(BASE + "BoatCharacteristic", used, {})
     assert h == "BC4"
 
 

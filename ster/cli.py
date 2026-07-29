@@ -203,8 +203,8 @@ _SUBCOMMANDS = frozenset(
     }
 )
 
-_TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3", ".trig"}
-_TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3", "*.trig")
+_TAXONOMY_SUFFIXES = {".ttl", ".rdf", ".jsonld", ".owl", ".n3", ".trig", ".nt"}
+_TAXONOMY_GLOBS = ("*.ttl", "*.rdf", "*.jsonld", "*.owl", "*.n3", "*.trig", "*.nt")
 
 # Sentinels returned by _pick_file_interactive for special menu entries
 _HTML_SENTINEL: Path = Path(".__ster_html__")
@@ -1440,22 +1440,21 @@ def cmd_validate(
 @app.command("convert")
 def cmd_convert(
     input_file: Path = typer.Argument(..., help="Input RDF file (any supported format)."),
-    output: Path | None = typer.Option(
+    output: Path | None = typer.Argument(
         None,
-        "--output",
-        "-o",
         help="Output file path. Format detected from extension. Defaults to input stem + .ttl.",
     ),
 ) -> None:
     """Convert an RDF file to a different serialisation format.
 
-    Input format is inferred from the file extension (.rdf, .owl, .xml, .ttl, .jsonld, .n3).
-    Output defaults to Turtle (.ttl). Pass --output to specify a different path or format.
+    Input format is inferred from the file extension (.rdf, .owl, .xml, .ttl, .jsonld, .n3, .nt).
+    Output defaults to Turtle (.ttl).
 
     Examples:\n
-      ster convert onto.rdf              # → onto.ttl\n
-      ster convert onto.owl              # → onto.ttl\n
-      ster convert onto.ttl -o onto.rdf  # → RDF/XML\n
+      ster convert onto.rdf                # → onto.ttl\n
+      ster convert onto.owl                # → onto.ttl\n
+      ster convert onto.ttl onto.nt        # → onto.nt (N-Triples)\n
+      ster convert onto.ttl onto.rdf       # → onto.rdf (RDF/XML)\n
     """
     try:
         if output is not None:

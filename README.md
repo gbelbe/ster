@@ -131,9 +131,16 @@ the full keymap — the essentials are `+` add, `d` delete, `e` edit,
 | Extension | Format |
 |---|---|
 | `.ttl` | Turtle (recommended) |
+| `.nt` | N-Triples (fastest for large files) |
 | `.rdf` / `.xml` | RDF/XML |
 | `.jsonld` / `.json` | JSON-LD |
 | `.owl` | OWL/XML |
+
+### Large Files & Performance
+For large ontologies or taxonomies (over 100k triples), `ster` provides several performance boosts out of the box:
+- **Fast Rust Parsing**: `ster` uses the high-performance Oxigraph engine automatically for near-instant RDF parsing.
+- **N-Triples Acceleration**: Reading `.nt` files is significantly faster than Turtle for massive datasets. Use `ster convert large.ttl large.nt` to switch.
+- **Binary Caching**: After the first successful parse, a secure binary cache is created. Subsequent loads are near-instant (typically under 2s for 150MB+ files).
 
 ## Key dependencies
 
