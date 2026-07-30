@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import click.exceptions
 import pytest
+import typer
 from typer.testing import CliRunner
 
 import ster.cli as cli_module
@@ -122,9 +122,7 @@ def test_resolve_file_no_files_exits(tmp_path, monkeypatch):
     monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
     monkeypatch.chdir(tmp_path)
 
-    import click
-
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _resolve_file(None)
 
 
@@ -694,7 +692,7 @@ def test_check_new_version_stale_cache(tmp_path, monkeypatch):
 def test_load_bad_file_exits(tmp_path):
     bad = tmp_path / "bad.ttl"
     bad.write_text("NOT TURTLE @@@@")
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         cli_module._load(bad)
 
 
@@ -704,19 +702,19 @@ def test_save_unwritable_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(_store, "save", lambda t, p: (_ for _ in ()).throw(OSError("disk full")))
     from ster.model import Taxonomy
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         cli_module._save(Taxonomy(), tmp_path / "out.ttl")
 
 
 def test_resolve_missing_handle_exits(simple_taxonomy):
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         cli_module._resolve(simple_taxonomy, "NONEXISTENT")
 
 
 def test_run_converts_skostax_error_to_exit(simple_taxonomy):
     from ster.exceptions import ConceptNotFoundError
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         cli_module._run(lambda: (_ for _ in ()).throw(ConceptNotFoundError("https://x.org/Ghost")))
 
 

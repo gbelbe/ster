@@ -68,6 +68,7 @@ dev = [
     "mypy>=1.10",
     # Security — CVE scanning
     "pip-audit>=2.7",
+    "requests>=2.32.2",       # pin away from GHSA-9wv6-86v2-5v37 (used by pip-audit)
     # Complexity ratchet (scripts/check_complexity_ratchet.py)
     "radon>=6.0",
     # Patch-coverage gate (CI + scripts/ci.sh)
