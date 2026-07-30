@@ -112,7 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0   # diff-cover compares changed lines against the base branch
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
@@ -134,7 +134,16 @@ jobs:
         # backend; 3.11 has no sysmon, so it uses the C tracer.
         env:
           COVERAGE_CORE: ${{ matrix.python-version == '3.11' && 'ctrace' || 'sysmon' }}
-        run: uv run pytest --tb=short -q -n auto --cov=ster --cov-report=xml --cov-report=term-missing
+        run: uv run pytest --tb=short -q -n auto --cov=ster --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+
+      - name: 📤 Archive coverage reports
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            pytest-report.xml
 
       - name: Patch coverage — changed lines must be ≥ 90% covered
         # Diff-aware: only on PRs, once (latest Python).
@@ -156,6 +165,32 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false   # don't break CI if Codecov is unreachable
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ── 4b. SonarQube Scan ───────────────────────────────────────────────────────
+  # Runs after tests are complete to collect coverage reports.
+  sonar:
+    name: "📡 Code Quality: Sonar push"
+    needs: [test]
+    runs-on: [self-hosted, Linux, standard]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: ⚙️ Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: 🛠️ Install project
+        run: uv sync --extra dev
+
+      - name: 📥 Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-reports
+          path: .
+
+      - name: "📡 Code Quality: Sonar push"
+        uses: adeo/sonarqube--scan-action@84f845bcd23f3fff451d91b91a910af2c941d60c # v2.5.0
 
   # ── 5. Publish to PyPI ───────────────────────────────────────────────────────
   # Runs only on pushes to master (not PRs) after all checks pass.
