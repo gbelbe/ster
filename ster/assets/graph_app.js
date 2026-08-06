@@ -83,7 +83,7 @@ function runLayout(){
 (function(){
   try{
     const s=JSON.parse(localStorage.getItem(_stateKey)||'null');
-    if(s&&s.pos&&s.pos.length&&s.sig===_graphSig()){
+    if(s?.pos?.length&&s.sig===_graphSig()){
       const posMap={};
       s.pos.forEach(p=>{posMap[p.id]={x:p.x,y:p.y};});
       cy.nodes().forEach(n=>{if(posMap[n.id()])n.position(posMap[n.id()]);});
@@ -135,8 +135,19 @@ cy.on('mouseout','node',()=>{tipEl.style.display='none';});
 
 // ── Individuals toggle ────────────────────────────────────────────────────────
 const classIndMap={};
-cy.edges('[type="instanceOf"]').forEach(e=>{const c=e.data('target');(classIndMap[c]=classIndMap[c]||[]).push(e.data('source'));});
 const hiddenIndivClasses=new Set();
+function initIndividualFilters(){
+  for(const e of cy.edges('[type="instanceOf"]').toArray()){
+    const c=e.data('target');
+    classIndMap[c]=classIndMap[c]||[];
+    classIndMap[c].push(e.data('source'));
+  }
+  if(!Object.keys(classIndMap).length){
+    const b=document.getElementById('ft-individuals');
+    if(b)b.style.display='none';
+  }
+}
+initIndividualFilters();
 function applyIndivVis(){
   cy.nodes('[type="individual"]').forEach(n=>{
     const e=cy.edges('[source="'+n.id()+'"][type="instanceOf"]').first();
@@ -156,15 +167,23 @@ function toggleAllIndividuals(){
   const btn=document.getElementById('btn-toggle-indivs');
   if(btn)btn.textContent=nowHid?'Show all individuals':'Hide all individuals';
 }
-// Hide the individuals button when no individuals exist
-if(!Object.keys(classIndMap).length){const b=document.getElementById('ft-individuals');if(b)b.style.display='none';}
-
 // ── Class-order toggles ───────────────────────────────────────────────────────
 const firstOrderIds=new Set(cy.nodes('[type="class"][rootClass=1]').map(n=>n.id()));
 const secondOrderIds=new Set();
-cy.edges('[type="subClassOf"]').forEach(e=>{
-  if(firstOrderIds.has(e.data('target')))secondOrderIds.add(e.data('source'));
-});
+function initClassOrderFilters(){
+  cy.edges('[type="subClassOf"]').forEach(e=>{
+    if(firstOrderIds.has(e.data('target')))secondOrderIds.add(e.data('source'));
+  });
+  if(!firstOrderIds.size){
+    const b=document.getElementById('ft-first-order');
+    if(b)b.style.display='none';
+  }
+  if(!secondOrderIds.size){
+    const b=document.getElementById('ft-second-order');
+    if(b)b.style.display='none';
+  }
+}
+initClassOrderFilters();
 
 let firstOrderHidden=false;
 let secondOrderHidden=false;
@@ -199,15 +218,12 @@ function toggleSecondOrderClasses(){
   const btn=document.getElementById('ft-second-order');
   if(btn){if(secondOrderHidden)btn.classList.remove('active');else btn.classList.add('active');}
 }
-if(!firstOrderIds.size){const b=document.getElementById('ft-first-order');if(b)b.style.display='none';}
-if(!secondOrderIds.size){const b=document.getElementById('ft-second-order');if(b)b.style.display='none';}
-
 // ── Edge type toggle ──────────────────────────────────────────────────────────
 const hiddenEdgeTypes=new Set();
 function toggleEdgeType(t){
   const btn=document.getElementById('ft-'+t);
-  if(hiddenEdgeTypes.has(t)){hiddenEdgeTypes.delete(t);btn&&btn.classList.add('active');}
-  else{hiddenEdgeTypes.add(t);btn&&btn.classList.remove('active');}
+  if(hiddenEdgeTypes.has(t)){hiddenEdgeTypes.delete(t);btn?.classList.add('active');}
+  else{hiddenEdgeTypes.add(t);btn?.classList.remove('active');}
   cy.edges('[type="'+t+'"]').forEach(e=>{if(hiddenEdgeTypes.has(t))e.addClass('hidden');else e.removeClass('hidden');});
 }
 
@@ -344,7 +360,7 @@ function exploreNode(uri){
   fetch(endpoint+'?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
     .then(r=>r.ok?r.json():null)
     .then(d=>{
-      if(!d||!d.nodes||!d.nodes.length)return;
+      if(!d?.nodes?.length)return;
       if(!_savedGraph){_savedGraph={els:cy.elements().jsons(),zoom:cy.zoom(),pan:cy.pan()};}
       cy.elements().remove();
       cy.add(buildElements(d));
@@ -405,6 +421,19 @@ function _seedAndSpread(addedNodes,fp){
 
 // ── Extend: merge a node's neighbourhood onto the current subgraph ─────────────
 let _mergeCtr=0;
+const sigOf=(s,t,ty,l)=>s+'\u0001'+t+'\u0001'+ty+'\u0001'+(l||'');
+function _addMergedEdges(edges,onlyVisible,haveEdges){
+  const fresh=[];
+  for(const e of edges){
+    const sig=sigOf(e.source,e.target,e.type,e.label);
+    if(haveEdges.has(sig))continue;
+    if(onlyVisible&&(cy.getElementById(e.source).empty()||cy.getElementById(e.target).empty()))continue;
+    haveEdges.add(sig);
+    fresh.push({...e,id:'x'+(_mergeCtr++)});
+  }
+  if(fresh.length)cy.add(buildElements({nodes:[],edges:fresh}));
+}
+
 function extendNode(uri){
   if(!API_TOKEN)return;
   const node=cy.$('#'+CSS.escape(uri));
@@ -415,21 +444,9 @@ function extendNode(uri){
   // them de-duplicated by (source,target,type,label) and re-id'd. onlyVisible
   // keeps only edges whose endpoints are already drawn -- used to bring in the
   // newcomers' own property relations without dragging in further nodes.
-  const sigOf=(s,t,ty,l)=>s+'\u0001'+t+'\u0001'+ty+'\u0001'+(l||'');
   const haveEdges=new Set(cy.edges().map(e=>sigOf(e.data('source'),e.data('target'),e.data('type'),e.data('label'))));
-  function addEdges(edges,onlyVisible){
-    const fresh=[];
-    edges.forEach(e=>{
-      const sig=sigOf(e.source,e.target,e.type,e.label);
-      if(haveEdges.has(sig))return;
-      if(onlyVisible&&(cy.getElementById(e.source).empty()||cy.getElementById(e.target).empty()))return;
-      haveEdges.add(sig);
-      fresh.push({...e,id:'x'+(_mergeCtr++)});
-    });
-    if(fresh.length)cy.add(buildElements({nodes:[],edges:fresh}));
-  }
   _fetchRel(node.data('type'),uri).then(d=>{
-    if(!d||!d.nodes||!d.nodes.length)return;
+    if(!d?.nodes?.length)return;
     // Nodes are keyed by URI id -- add only those not already present.
     const existingIds=new Set(cy.nodes().map(n=>n.id()));
     const newNodes=d.nodes.filter(n=>!existingIds.has(n.id));
@@ -437,12 +454,12 @@ function extendNode(uri){
     const fp=focus.length?focus.position():{x:0,y:0};
     const added=cy.add(buildElements({nodes:newNodes,edges:[]}));
     const addedNodes=added.nodes();
-    addEdges(d.edges,false);
+    _addMergedEdges(d.edges,false,haveEdges);
     // Bring in each newcomer's own property edges that link nodes already on
     // screen, so adding a node also adds its relations (no extra nodes pulled in).
     const explorable=addedNodes.filter(nn=>_EXPLORE_ENDPOINT[nn.data('type')]);
     Promise.all(explorable.map(nn=>_fetchRel(nn.data('type'),nn.id()))).then(rs=>{
-      rs.forEach(rd=>{if(rd&&rd.edges)addEdges(rd.edges,true);});
+      for(const rd of rs){if(rd?.edges)_addMergedEdges(rd.edges,true,haveEdges);}
       _seedAndSpread(addedNodes,fp);
       applyIndivVis();
       hiddenEdgeTypes.forEach(t=>cy.edges('[type="'+t+'"]').addClass('hidden'));
@@ -570,7 +587,7 @@ function toggleSuperclasses(){
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){if(!panelVisible){togglePanel(true);return;}const sb=document.getElementById('search-box');if(sb&&sb.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
+  if(e.key==='Escape'){if(!panelVisible){togglePanel(true);return;}const sb=document.getElementById('search-box');if(sb?.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
   if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(_){}runLayout();}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(0.77);}
@@ -617,7 +634,11 @@ function showDefault(){
     indToggle='<button id="btn-toggle-indivs" class="dp-indiv-btn" onclick="window._sterToggleIndiv()">'+(allHid?'Show all individuals':'Hide all individuals')+'</button><div class="dp-hint">Click a class to view details and highlight connections.</div>';
   }
   let leg='<hr class="dp-hr"><div class="dp-sub">Legend</div>';
-  [['class-root','Root Class',hasRoot],['class-sub','Class',hasSub],['individual','Individual',ntypes.has('individual')],['topconcept','Top Concept',ntypes.has('topconcept')],['concept','Concept',ntypes.has('concept')],['scheme','Scheme',ntypes.has('scheme')]].forEach(([t,lbl,show])=>{if(!show)return;leg+='<div class="lr">'+nodeSvg(t)+lbl+'</div>';if(t==='individual')leg+=indToggle;});
+  for(const [t,lbl,show] of [['class-root','Root Class',hasRoot],['class-sub','Class',hasSub],['individual','Individual',ntypes.has('individual')],['topconcept','Top Concept',ntypes.has('topconcept')],['concept','Concept',ntypes.has('concept')],['scheme','Scheme',ntypes.has('scheme')]]){
+    if(!show)continue;
+    leg+='<div class="lr">'+nodeSvg(t)+lbl+'</div>';
+    if(t==='individual')leg+=indToggle;
+  }
   leg+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';
   [['subClassOf','subClassOf'],['objectProperty','objectProperty'],['datatypeProperty','datatypeProperty'],['instanceOf','rdf:type'],['broader','broader'],['inScheme','inScheme']].filter(([t])=>etypes.has(t)).forEach(([t,lbl])=>{leg+='<div class="lr">'+edgeLine(t)+lbl+'</div>';});
   panelEl.innerHTML='<div class="dp"><div class="dp-h2">'+esc(taxoMeta.title)+'</div>'+(taxoMeta.ontology_uri?'<div class="dp-uri">'+esc(taxoMeta.ontology_uri)+'</div>':'')+'<div class="dp-sub" style="margin-top:6px">Overview</div><div class="dp-section">'+rows+'</div>'+leg+'</div>';
@@ -642,18 +663,18 @@ function navigateTo(uri){
 }
 
 // ── Live refresh ──────────────────────────────────────────────────────────────
-if(API_TOKEN){
-  // SSE mode (ster[api] installed)
-  const src=new EventSource('/api/events?token='+encodeURIComponent(API_TOKEN));
-  src.onmessage=async function(){
-    try{
-      const resp=await fetch('/api/graph',{headers:{'Authorization':'Bearer '+API_TOKEN}});
-      const data=await resp.json();
-      applyGraphUpdate(data);
-    }catch(err){console.error('Graph refresh failed:',err);}
-  };
-}else{
-  // Static-file mode: poll companion _data.json every 2.5 s
+function initLiveRefresh(){
+  if(API_TOKEN){
+    const src=new EventSource('/api/events?token='+encodeURIComponent(API_TOKEN));
+    src.onmessage=async function(){
+      try{
+        const resp=await fetch('/api/graph',{headers:{'Authorization':'Bearer '+API_TOKEN}});
+        const data=await resp.json();
+        applyGraphUpdate(data);
+      }catch(err){console.error('Graph refresh failed:',err);}
+    };
+    return;
+  }
   const dataUrl=window.location.origin+window.location.pathname.replace(/_vowl\.html$/,'_data.json');
   let _ver='';
   setInterval(async()=>{
@@ -666,9 +687,10 @@ if(API_TOKEN){
       if(v===_ver)return;
       _ver=v;
       applyGraphUpdate(d);
-    }catch(_){}
+    }catch(_){ }
   },2500);
 }
+initLiveRefresh();
 }catch(err){
   const el=document.createElement('div');
   el.style.cssText='position:fixed;inset:0;background:rgba(220,38,38,.95);color:white;padding:24px;font-family:monospace;font-size:13px;z-index:200;white-space:pre-wrap;overflow:auto';

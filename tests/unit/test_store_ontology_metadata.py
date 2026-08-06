@@ -13,7 +13,14 @@ from rdflib import Graph, URIRef
 from rdflib.namespace import DCTERMS, OWL, XSD
 
 from ster import store
-from ster.model import ConceptScheme, Label, OntologyAnnotation, Taxonomy
+from ster.model import (
+    ConceptScheme,
+    Definition,
+    Label,
+    OntologyAnnotation,
+    OWLIndividual,
+    Taxonomy,
+)
 
 SKOS_SCOPE_NOTE = "http://www.w3.org/2004/02/skos/core#scopeNote"
 
@@ -43,6 +50,47 @@ def _saved_graph(tax: Taxonomy, tmp_path: Path) -> Graph:
 
 def _values(tax: Taxonomy, predicate: str) -> list[str]:
     return [a.value for a in tax.ontology_annotations if a.predicate == predicate]
+
+
+def test_taxonomy_to_graph_serializes_optional_scheme_and_individual_fields(tmp_path):
+    scheme_uri = "https://example.org/scheme"
+    individual_uri = "https://example.org/individual"
+    tax = Taxonomy(
+        schemes={
+            scheme_uri: ConceptScheme(
+                uri=scheme_uri,
+                labels=[Label("en", "Scheme")],
+                descriptions=[Definition("en", "Description")],
+                creator="Creator",
+                created="2026-01-02",
+                languages=["en"],
+                base_uri="https://example.org/",
+            )
+        },
+        owl_individuals={
+            individual_uri: OWLIndividual(
+                uri=individual_uri,
+                labels=[Label("en", "Individual")],
+                comments=[Definition("en", "Comment")],
+                types=["https://example.org/Type"],
+                property_values=[("https://example.org/related", "https://example.org/target")],
+                literal_values=[("https://example.org/name", "Alice", "@en")],
+                note="A note",
+            )
+        },
+    )
+
+    graph = store.taxonomy_to_graph(tax)
+
+    assert (URIRef(scheme_uri), DCTERMS.description, None) in graph
+    assert (URIRef(scheme_uri), DCTERMS.creator, None) in graph
+    assert (URIRef(scheme_uri), DCTERMS.created, None) in graph
+    assert (URIRef(individual_uri), URIRef("https://example.org/name"), None) in graph
+    assert (
+        URIRef(individual_uri),
+        URIRef("http://purl.org/dc/terms/description"),
+        None,
+    ) not in graph
 
 
 # ── generic capture ─────────────────────────────────────────────────────────────

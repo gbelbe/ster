@@ -150,7 +150,7 @@ def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
     }
 
 
-def _detail_scheme(scheme: ConceptScheme, taxonomy: Taxonomy) -> dict:  # noqa: ARG001
+def _detail_scheme(scheme: ConceptScheme, _taxonomy: Taxonomy) -> dict:
     labels = [
         {
             "lang": lbl.lang,

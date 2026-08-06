@@ -125,7 +125,7 @@ def serve(
     # Also store broadcaster in shared state so the watcher can reach it
     app.state._ster["broadcaster"] = broadcaster  # type: ignore[attr-defined]
 
-    async def _on_startup() -> None:
+    def _on_startup() -> None:
         _start_file_watcher(file_path, app, asyncio.get_running_loop())
 
     app.router.on_startup.append(_on_startup)  # type: ignore[attr-defined]

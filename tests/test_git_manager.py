@@ -758,6 +758,101 @@ def test_setup_auto_links_existing_repo(tmp_path, monkeypatch):
     assert result is True
 
 
+def test_clone_repo_attempt_rejects_unreachable_remote(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    result = MagicMock(returncode=128, stderr="connection refused")
+    with patch("ster.git.manager._git", return_value=result):
+        assert mgr._clone_repo_attempt(tmp_path, "https://github.com/u/r") is False
+
+
+def test_clone_repo_attempt_clones_empty_directory(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    def git_side(*args, **kwargs):
+        if args[0] == "ls-remote":
+            return MagicMock(returncode=0, stderr="")
+        if args[0] == "clone":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "remote":
+            return MagicMock(returncode=0, stdout="https://github.com/u/r\n")
+        return MagicMock(returncode=1, stdout="")
+
+    with (
+        patch("ster.git.manager._git", side_effect=git_side),
+        patch.object(mgr, "_link_existing_repo"),
+        patch.object(mgr, "_persist"),
+    ):
+        assert mgr._clone_repo_attempt(repo_dir, "https://github.com/u/r") is True
+    assert mgr._cfg["remote_url"] == "https://github.com/u/r"
+
+
+def test_clone_repo_attempt_reports_clone_failure(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    def git_side(*args, **kwargs):
+        if args[0] == "ls-remote":
+            return MagicMock(returncode=0, stderr="")
+        if args[0] == "clone":
+            return MagicMock(returncode=1, stderr="clone failed")
+        return MagicMock(returncode=1, stdout="")
+
+    with patch("ster.git.manager._git", side_effect=git_side):
+        assert mgr._clone_repo_attempt(repo_dir, "https://github.com/u/r") is False
+
+
+def test_clone_repo_attempt_rejects_failed_remote_verification(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    def git_side(*args, **kwargs):
+        if args[0] == "ls-remote":
+            return MagicMock(returncode=0, stderr="")
+        if args[0] == "clone":
+            return MagicMock(returncode=0, stdout="")
+        if args[0] == "remote":
+            return MagicMock(returncode=1, stdout="")
+        return MagicMock(returncode=1, stdout="")
+
+    with (
+        patch("ster.git.manager._git", side_effect=git_side),
+        patch.object(mgr, "_link_existing_repo") as link_repo,
+        patch.object(mgr, "_persist") as persist,
+    ):
+        assert mgr._clone_repo_attempt(repo_dir, "https://github.com/u/r") is False
+    link_repo.assert_not_called()
+    persist.assert_not_called()
+    assert "remote_url" not in mgr._cfg
+
+
+def test_clone_repo_attempt_rejects_in_place_initialisation_failure(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "ontology.ttl").write_text("data")
+
+    with (
+        patch("ster.git.manager._git", return_value=MagicMock(returncode=0, stderr="")),
+        patch.object(mgr, "_init_inplace_with_remote", return_value=False),
+    ):
+        assert mgr._clone_repo_attempt(repo_dir, "https://github.com/u/r") is False
+
+
+def test_clone_repo_rejects_retry_after_failed_attempt(tmp_path):
+    mgr = _make_manager(tmp_path, {})
+    with (
+        patch("rich.prompt.Prompt.ask", return_value="https://github.com/u/r"),
+        patch("rich.prompt.Confirm.ask", return_value=False),
+        patch.object(mgr, "_clone_repo_attempt", return_value=False) as attempt,
+    ):
+        assert mgr._clone_repo() is False
+    attempt.assert_called_once()
+
+
 def test_setup_auto_links_asks_strategy_if_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gm, "CONFIG_FILE", tmp_path / "cfg.json")
     monkeypatch.setattr(gm, "CONFIG_DIR", tmp_path)

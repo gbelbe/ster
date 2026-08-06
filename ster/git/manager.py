@@ -422,7 +422,7 @@ class GitManager:
         main = self._cfg.get("main_branch", "main")
         self._push_direct(repo, main)
 
-    def _run_commit_lint(self, repo: Path) -> _LintState | None:
+    def _run_commit_lint(self) -> _LintState | None:
         """Run semanticlint over the file when the plugin is active, returning
         ``(violations, fail_on)``. Uses the plugin's global ``quality.json`` — the same
         config the TUI live view uses — so the commit gate matches what you saw editing.
@@ -480,7 +480,7 @@ class GitManager:
 
         # Semanticlint quality gate (only when the plugin is active). ``lint`` is None
         # when disabled, so every use below is skipped and ster behaves as standard.
-        lint = self._run_commit_lint(repo)
+        lint = self._run_commit_lint()
         if self._lint_blocks_commit(lint):
             return
 
@@ -605,68 +605,54 @@ class GitManager:
         repo_dir = self.taxonomy_path.parent
 
         while True:
-            # ── ask for URL ───────────────────────────────────────────────
             url = Prompt.ask("Repository URL (GitHub https or SSH)")
             if not url:
                 return False
 
-            # ── test connectivity ─────────────────────────────────────────
-            console.print(f"[dim]Connecting to {url}…[/dim]")
-            ls_r = _git("ls-remote", "--exit-code", "--heads", url, cwd=repo_dir)
-            remote_empty = ls_r.returncode == 2  # connected, but no refs
-            connected = ls_r.returncode in (0, 2)
-
-            if not connected:
-                err.print(
-                    f"[red]Cannot reach {url}[/red]\n"
-                    f"[dim]{ls_r.stderr.strip()}[/dim]\n"
-                    "[dim]Check the URL, your network, and credentials "
-                    "(SSH key authorised? HTTPS token valid?)[/dim]"
-                )
-                if not Confirm.ask("Try a different URL?", default=True):
-                    return False
-                continue
-
-            console.print("[green]✓ Remote reachable.[/green]")
-
-            # ── is the directory empty enough to do a true clone? ─────────
-            existing = [f for f in repo_dir.iterdir() if not f.name.startswith(".")]
-            already_git = _git("rev-parse", "--git-dir", cwd=repo_dir).returncode == 0
-
-            if not existing and not already_git:
-                # Empty directory — plain git clone
-                r = _git("clone", url, ".", cwd=repo_dir)
-                if r.returncode != 0:
-                    err.print(f"[red]Clone failed:[/red] {r.stderr.strip()}")
-                    if not Confirm.ask("Try again?", default=True):
-                        return False
-                    continue
-                console.print(f"[green]✓ Cloned to {repo_dir}[/green]")
-            else:
-                # Non-empty (or already a git dir) — init-in-place
-                ok = self._init_inplace_with_remote(repo_dir, url, remote_empty)
-                if not ok:
-                    if not Confirm.ask("Try again with a different URL?", default=True):
-                        return False
-                    continue
-
-            # ── final verification ────────────────────────────────────────
-            self._link_existing_repo(repo_dir)
-            self._cfg["remote_url"] = url
-            self._persist()
-
-            verify = _git("remote", "get-url", "origin", cwd=repo_dir)
-            if verify.returncode == 0:
-                console.print(
-                    f"[bold green]✓ Git configured.[/bold green]  Remote: {verify.stdout.strip()}"
-                )
+            if self._clone_repo_attempt(repo_dir, url):
                 return True
 
-            err.print("[red]Verification failed — remote not set correctly.[/red]")
             if not Confirm.ask("Retry?", default=True):
                 return False
 
-    def _init_inplace_with_remote(self, repo_dir: Path, url: str, remote_empty: bool) -> bool:
+    def _clone_repo_attempt(self, repo_dir: Path, url: str) -> bool:
+        """Perform one connection, clone/init, and verification attempt."""
+        console.print(f"[dim]Connecting to {url}…[/dim]")
+        ls_result = _git("ls-remote", "--exit-code", "--heads", url, cwd=repo_dir)
+        if ls_result.returncode not in (0, 2):
+            err.print(
+                f"[red]Cannot reach {url}[/red]\n"
+                f"[dim]{ls_result.stderr.strip()}[/dim]\n"
+                "[dim]Check the URL, your network, and credentials "
+                "(SSH key authorised? HTTPS token valid?)[/dim]"
+            )
+            return False
+
+        console.print("[green]✓ Remote reachable.[/green]")
+        existing = [file for file in repo_dir.iterdir() if not file.name.startswith(".")]
+        already_git = _git("rev-parse", "--git-dir", cwd=repo_dir).returncode == 0
+        if not existing and not already_git:
+            result = _git("clone", url, ".", cwd=repo_dir)
+            if result.returncode != 0:
+                err.print(f"[red]Clone failed:[/red] {result.stderr.strip()}")
+                return False
+            console.print(f"[green]✓ Cloned to {repo_dir}[/green]")
+        elif not self._init_inplace_with_remote(repo_dir, url):
+            return False
+
+        verify = _git("remote", "get-url", "origin", cwd=repo_dir)
+        if verify.returncode != 0:
+            err.print("[red]Verification failed — remote not set correctly.[/red]")
+            return False
+        self._link_existing_repo(repo_dir)
+        self._cfg["remote_url"] = url
+        self._persist()
+        console.print(
+            f"[bold green]✓ Git configured.[/bold green]  Remote: {verify.stdout.strip()}"
+        )
+        return True
+
+    def _init_inplace_with_remote(self, repo_dir: Path, url: str) -> bool:
         """Set up git in a non-empty directory and link it to *url*."""
         from rich.prompt import Prompt
 
@@ -995,14 +981,11 @@ class GitManager:
         if "://" in url:
             try:
                 parsed = urlparse(url)
-                if parsed.hostname == "github.com":
-                    # Path is usually /owner/repo or /owner/repo.git
-                    path_parts = parsed.path.strip("/").split("/")
-                    if len(path_parts) >= 2:
-                        owner, repo = path_parts[0], path_parts[1]
-                        if repo.endswith(".git"):
-                            repo = repo[:-4]
-                        return owner, repo
+                # Path is usually /owner/repo or /owner/repo.git.
+                path_parts = parsed.path.strip("/").split("/")
+                if parsed.hostname == "github.com" and len(path_parts) >= 2:
+                    owner, repo = path_parts[0], path_parts[1]
+                    return owner, repo.removesuffix(".git")
             except Exception:
                 pass
 
@@ -1012,9 +995,7 @@ class GitManager:
         match = re.search(scp_pattern, url)
         if match:
             owner, repo = match.groups()
-            if repo.endswith(".git"):
-                repo = repo[:-4]
-            return owner, repo
+            return owner, repo.removesuffix(".git")
 
         return None
 

@@ -287,7 +287,12 @@ def render_detail(
         if sec.sub:
             lines.append("")  # a blank line sets each subtitle apart from the group above
         if sec.title:
-            style = "bold red" if sec.danger else "bold underline" if sec.group else "bold"
+            if sec.danger:
+                style = "bold red"
+            elif sec.group:
+                style = "bold underline"
+            else:
+                style = "bold"
             lines.append(f"{pad}[{style}]{_esc(sec.title)}[/]")
         lines.extend(f"{pad}{_render_row(f)}" for f in sec.fields)
     return "\n".join(lines)

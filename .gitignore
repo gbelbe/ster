@@ -30,8 +30,9 @@ node_modules/
 .claude/settings.local.json
 snapshot_report.html
 
-# ster runtime/session artifacts (never commit)
-.ster/
+# ster runtime/session artifacts; project.json is shared project configuration
+.ster/*
+!.ster/project.json
 *.ttl
 !ster/taxonomy.ttl
 !ster/tui/demo.ttl

@@ -243,6 +243,53 @@ def test_load_safe_returns_none_on_missing_file(tmp_path):
     assert result is None
 
 
+def test_graph_viz_file_prompt_can_be_cancelled(tmp_path):
+    from ster.cli import _run_graph_viz_interactive
+
+    files = [tmp_path / "one.ttl", tmp_path / "two.ttl"]
+    with patch("ster.cli.Prompt.ask", side_effect=EOFError):
+        _run_graph_viz_interactive(files)
+
+
+def test_html_export_profile_prompt_can_be_cancelled(tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    source = tmp_path / "onto.ttl"
+    source.write_text(_TTL)
+    with (
+        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="both"),
+        patch("ster.cli.Prompt.ask", side_effect=EOFError),
+    ):
+        _run_html_export_interactive([source])
+
+
+def test_html_export_language_prompt_can_be_cancelled(tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    source = tmp_path / "onto.ttl"
+    source.write_text(_TTL)
+    with (
+        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="vocpub"),
+        patch("ster.cli.Prompt.ask", side_effect=EOFError),
+    ):
+        _run_html_export_interactive([source])
+
+
+def test_html_export_output_prompt_can_be_cancelled(tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    source = tmp_path / "onto.ttl"
+    source.write_text(_TTL)
+    with (
+        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="ontpub"),
+        patch("ster.cli.Prompt.ask", side_effect=EOFError),
+    ):
+        _run_html_export_interactive([source])
+
+
 def test_load_warns_on_format_mismatch(tmp_path, monkeypatch):
     """_load prints a warning when file content format differs from its extension."""
     from ster.cli import _load

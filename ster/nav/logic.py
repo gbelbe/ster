@@ -645,14 +645,14 @@ class _EssentialLabel:
     key_prefix: str  # DetailField key prefix
 
 
+_ADD_RDFS_LABEL = "+ Add rdfs:label [{lang}]"
+_ADD_RDFS_COMMENT = "+ Add rdfs:comment [{lang}]"
+
+
 _ESSENTIAL_LABEL: dict[str, _EssentialLabel] = {
-    "class": _EssentialLabel("+ Add rdfs:label [{lang}]", "add_rdf_label", "action:add_rdf_label"),
-    "individual": _EssentialLabel(
-        "+ Add rdfs:label [{lang}]", "add_ind_label", "action:add_ind_label"
-    ),
-    "property": _EssentialLabel(
-        "+ Add rdfs:label [{lang}]", "add_prop_label", "action:add_prop_label"
-    ),
+    "class": _EssentialLabel(_ADD_RDFS_LABEL, "add_rdf_label", "action:add_rdf_label"),
+    "individual": _EssentialLabel(_ADD_RDFS_LABEL, "add_ind_label", "action:add_ind_label"),
+    "property": _EssentialLabel(_ADD_RDFS_LABEL, "add_prop_label", "action:add_prop_label"),
     "concept": _EssentialLabel(
         "+ Add skos:prefLabel [{lang}]", "add_pref_label", "action:add_pref"
     ),
@@ -2365,7 +2365,7 @@ def build_rdf_class_detail(
         _lang_add_actions(
             clangs,
             "action:add_rdf_comment",
-            "+ Add rdfs:comment [{lang}]",
+            _ADD_RDFS_COMMENT,
             "add_rdf_comment",
             present={cmt.lang for cmt in rdf_class.comments},
         )
@@ -2812,7 +2812,7 @@ def build_individual_detail(
         _lang_add_actions(
             clangs,
             "action:add_ind_comment",
-            "+ Add rdfs:comment [{lang}]",
+            _ADD_RDFS_COMMENT,
             "add_ind_comment",
             present={cmt.lang for cmt in individual.comments},
         )
@@ -3618,7 +3618,7 @@ def build_property_detail(
         _lang_add_actions(
             clangs,
             "action:add_prop_comment",
-            "+ Add rdfs:comment [{lang}]",
+            _ADD_RDFS_COMMENT,
             "add_prop_comment",
             present={cmt.lang for cmt in prop.comments},
         )

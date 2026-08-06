@@ -104,10 +104,10 @@ class _Fixer:
 
     guidance = "Review and correct this issue manually."
 
-    def describe(self, issue: dict, tax: Taxonomy) -> Fix:
+    def describe(self, issue: dict, _tax: Taxonomy) -> Fix:
         return Fix("suggest", self.guidance, subject=issue.get("subject", ""))
 
-    def commands(self, issue: dict, tax: Taxonomy, path: Path, choice: str) -> list:
+    def commands(self, _issue: dict, _tax: Taxonomy, _path: Path, _choice: str) -> list:
         return []
 
 

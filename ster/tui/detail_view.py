@@ -420,7 +420,10 @@ class DetailView(VerticalScroll):
         if not nav:
             return
         cur = self.app.focused
-        idx = nav.index(cur) if cur in nav else (-1 if delta > 0 else 0)
+        if cur in nav:
+            idx = nav.index(cur)
+        else:
+            idx = -1 if delta > 0 else 0
         nav[(idx + delta) % len(nav)].focus()
 
     def action_toggle_group(self) -> None:

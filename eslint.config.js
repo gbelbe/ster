@@ -13,7 +13,13 @@ import globals from "globals";
 export default [
   {
     // This config file is an ES module and is not part of the browser assets.
-    ignores: ["node_modules/**", ".venv*/**", "dist/**", "eslint.config.js"],
+    ignores: [
+      "node_modules/**",
+      ".venv*/**",
+      ".uv_cache/**",
+      "dist/**",
+      "eslint.config.js",
+    ],
   },
   js.configs.recommended,
   {

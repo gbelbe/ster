@@ -46,6 +46,12 @@ from .uri_modal import UriModal
 
 # Shared suffix for the tree's sentinel node data (property-header "add" sentinels).
 _ACTION_SUFFIX = "__"
+_DETAIL_SELECTOR = "#detail"
+_READ_ONLY_MESSAGE = "Read-only session (no file loaded)."
+_TREE_SELECTOR = "#tree"
+_ONTOLOGY_TREE_SELECTOR = "#ont-tree"
+_PROPERTY_TREE_SELECTOR = "#prop-tree"
+_CONTEXT_MENU_SELECTOR = "#ctx-menu"
 
 # Human-readable resource type shown in the detail-pane title (e.g. "Person (Class)").
 _KIND_TITLE = {
@@ -207,7 +213,7 @@ class OntologyTree(Tree):
         self.app._detail_source_pid = self.id or "tree"  # type: ignore[attr-defined]
         node = self.cursor_node
         self.app._detail_source_uri = node.data if node is not None else None  # type: ignore[attr-defined]
-        rows = [r for r in self.app.query("#detail DetailRow") if r.can_focus]
+        rows = [r for r in self.app.query(f"{_DETAIL_SELECTOR} DetailRow") if r.can_focus]
         if rows:
             rows[0].focus()  # first actionable row (info-only rows are skipped)
 
@@ -929,14 +935,16 @@ class OntologyApp(App):
             tree.show_root = False
             tree.guide_depth = 3
         self._sync_lint_features()  # cache icon-colour on/off before the first build
-        self._build_prop_tree(self.query_one("#prop-tree", Tree))  # built early so it can fold
+        self._build_prop_tree(
+            self.query_one(_PROPERTY_TREE_SELECTOR, Tree)
+        )  # built early so it can fold
         self._folded_panels = self._default_folded()  # pure SKOS / OWL opens the relevant panes
         self._build_main_trees()
-        self.query_one("#tree", Tree).border_title = "Mixed SKOS/OWL"
-        self.query_one("#ont-tree", Tree).border_title = "Ontology"
-        self.query_one("#prop-tree", Tree).border_title = "Properties"
-        self.query_one("#detail", DetailView).border_title = "Details"
-        self.query_one("#tree", Tree).focus()
+        self.query_one(_TREE_SELECTOR, Tree).border_title = "Mixed SKOS/OWL"
+        self.query_one(_ONTOLOGY_TREE_SELECTOR, Tree).border_title = "Ontology"
+        self.query_one(_PROPERTY_TREE_SELECTOR, Tree).border_title = "Properties"
+        self.query_one(_DETAIL_SELECTOR, DetailView).border_title = "Details"
+        self.query_one(_TREE_SELECTOR, Tree).focus()
         # Both trees emit a spurious initial NodeHighlighted on mount (the
         # prop-tree's lands on its data-less header → _show(None)), which would
         # clobber the detail pane. Show the overview after the refresh settles so
@@ -1108,8 +1116,8 @@ class OntologyApp(App):
         The unified pane is built first so that a pun (which renders in both panes) has its
         ``_uri_nodes`` entry land on its **spine** node — the concept's natural home, where
         selection/navigation should go (``_index`` keeps the first node seen for a URI)."""
-        self._build_unified_tree(self.query_one("#tree", Tree))
-        self._build_ontology_tree(self.query_one("#ont-tree", Tree))
+        self._build_unified_tree(self.query_one(_TREE_SELECTOR, Tree))
+        self._build_ontology_tree(self.query_one(_ONTOLOGY_TREE_SELECTOR, Tree))
         self._apply_layout()
 
     def _build_unified_tree(self, tree: Tree) -> None:
@@ -1229,7 +1237,7 @@ class OntologyApp(App):
             if isinstance(focused, OntologyTree):
                 return focused, ("panel" if focused.has_class("panel-layer") else "item")
             if isinstance(focused, DetailRow):
-                return self.query("#detail").first(), "detail"
+                return self.query(_DETAIL_SELECTOR).first(), "detail"
             if isinstance(focused, DetailView):
                 return focused, "detail"
             return None, None
@@ -1244,7 +1252,7 @@ class OntologyApp(App):
         target, context = self._hint_target_and_context()
         hint = _nav_hint(context)
         # Use query instead of query_one for #detail to avoid NoMatches during transitions/modals
-        for pane in (*self.query(OntologyTree), *self.query("#detail")):
+        for pane in (*self.query(OntologyTree), *self.query(_DETAIL_SELECTOR)):
             pane.border_subtitle = hint if pane is target else ""
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
@@ -1355,13 +1363,16 @@ class OntologyApp(App):
         activity = self._ontology_activity() if is_overview else None
         lint = self._ontology_lint()  # whole-file lint (cached); None when plugin inactive
         metadata = self._metadata_coverage() if is_overview else None
-        view = self.query_one("#detail", DetailView)
+        lint_counts = lint[0] if lint else None
+        if not is_overview:
+            lint_counts = None
+        view = self.query_one(_DETAIL_SELECTOR, DetailView)
         view.update_entity(
             self.tax,
             uri,
             self.lang,
             activity,
-            (lint[0] if lint else None) if is_overview else None,  # counts only on the overview
+            lint_counts,  # counts only on the overview
             clangs,
             metadata,
             issue_fields=self._entity_detail_fields(uri),
@@ -1512,8 +1523,8 @@ class OntologyApp(App):
         """Rebuild both main panes (classes / individuals / schemes / concepts). Their
         ``_uri_nodes`` entries are dropped and re-added; the prop pane is left untouched."""
         self._sync_lint_features()
-        unified = self.query_one("#tree", Tree)
-        ont = self.query_one("#ont-tree", Tree)
+        unified = self.query_one(_TREE_SELECTOR, Tree)
+        ont = self.query_one(_ONTOLOGY_TREE_SELECTOR, Tree)
         mains = {unified, ont}
         self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree not in mains}
         unified.root.remove_children()
@@ -1524,7 +1535,7 @@ class OntologyApp(App):
         """Rebuild only the property pane, leaving the (large) main pane untouched — so a
         property edit doesn't pay to rebuild every class/individual node."""
         self._sync_lint_features()
-        props = self.query_one("#prop-tree", Tree)
+        props = self.query_one(_PROPERTY_TREE_SELECTOR, Tree)
         self._uri_nodes = {u: n for u, n in self._uri_nodes.items() if n.tree is not props}
         props.root.remove_children()
         self._build_prop_tree(props)
@@ -1613,7 +1624,7 @@ class OntologyApp(App):
         rather than stranded on a row that no longer exists.
         """
         if self._service is None or self._path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         result = self._service.execute(command, persist=False)  # type: ignore[arg-type]
         if not result.ok:
@@ -1737,7 +1748,7 @@ class OntologyApp(App):
         """Execute fix *commands* via the service — no UI rebuild (the modal is on top;
         the panes refresh when it closes). False on the first failure."""
         if self._service is None or self._path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return False
         for command in commands:
             result = self._service.execute(command, persist=False)  # type: ignore[arg-type]
@@ -1767,9 +1778,9 @@ class OntologyApp(App):
         A mutation destroys the old row widgets, so we re-find by field key. Value rows
         embed the value in their key (``…::<value>``); when an edit changes the value the
         key changes too, so we also try the stable stem before that separator."""
-        rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
+        rows = [r for r in self.query(f"{_DETAIL_SELECTOR} DetailRow") if r.can_focus]
         if not rows:
-            self.query_one("#tree", Tree).focus()
+            self.query_one(_TREE_SELECTOR, Tree).focus()
             return
         key, self._pending_focus_key = self._pending_focus_key, None
         target = self._row_for_focus_key(rows, key) if key else None
@@ -1787,7 +1798,7 @@ class OntologyApp(App):
     def _refocus_edited_row(self) -> None:
         """Focus back the row that was being edited after a *cancel* — value edits open
         from the row's menu (which held focus), so Textual can't restore the row itself."""
-        rows = [r for r in self.query("#detail DetailRow") if r.can_focus]
+        rows = [r for r in self.query(f"{_DETAIL_SELECTOR} DetailRow") if r.can_focus]
         key, self._pending_focus_key = self._pending_focus_key, None
         target = self._row_for_focus_key(rows, key) if (rows and key) else None
         if target is not None:
@@ -1824,7 +1835,7 @@ class OntologyApp(App):
         # overview edits the primary scheme via meta["target_uri"]).
         uri, path = field.meta.get("target_uri") or self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
 
         def _on_submit(value: str | None) -> None:
@@ -1869,7 +1880,9 @@ class OntologyApp(App):
         self._row_menu_goto = target if meta.get("nav") and target else None
         if self._row_menu_goto is not None:
             items.append((f"→ Go to «{message.field.value}»", "row_goto"))
-        self.query_one("#ctx-menu", ContextMenu).show(message.field.display, items, message.anchor)
+        self.query_one(_CONTEXT_MENU_SELECTOR, ContextMenu).show(
+            message.field.display, items, message.anchor
+        )
 
     def _apply_row_delete(self, delete_field: DetailField, *, label: str | None = None) -> None:
         """Confirm, then run the paired removal command for a row's Delete submenu choice.
@@ -1878,7 +1891,7 @@ class OntologyApp(App):
         — one Tab/arrow back to the detail pane; on cancel it stays on the edited row."""
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         command = edits.direct_command(delete_field, uri, path)
         if command is None:
@@ -1918,7 +1931,7 @@ class OntologyApp(App):
             return
         uri, path = self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         if action == "edit_property":  # the field names the property (not the shown class)
             self._open_property_edit(field.meta.get("uri", ""), path)
@@ -2039,7 +2052,9 @@ class OntologyApp(App):
         prop_type = _parse_add_prop(uri)
         if prop_type is not None:  # a property-tree header → "＋ Add <kind> property"
             title, add_label, action, _modal = _PROP_MENU[prop_type]
-            self.query_one("#ctx-menu", ContextMenu).show(title, [(add_label, action)], anchor)
+            self.query_one(_CONTEXT_MENU_SELECTOR, ContextMenu).show(
+                title, [(add_label, action)], anchor
+            )
             return
         if uri == detail.OVERVIEW_URI:  # the Ontology section → "＋ Add class"
             self._show_section_menu(uri, "Ontology", ("＋ Add class", "create_owl_class"), anchor)
@@ -2055,7 +2070,7 @@ class OntologyApp(App):
             return
         self._show(uri)  # select it, so the actions target this entity
         label = data.label_of(self.tax, uri, self.lang)
-        self.query_one("#ctx-menu", ContextMenu).show(label, items, anchor)
+        self.query_one(_CONTEXT_MENU_SELECTOR, ContextMenu).show(label, items, anchor)
 
     def _show_section_menu(
         self, uri: str, title: str, item: tuple[str, str], anchor: tuple[int, int] | None
@@ -2063,7 +2078,7 @@ class OntologyApp(App):
         """Select a section node (Ontology / Taxonomy) so its create action has the right
         target, then pop its single-item context menu."""
         self._show(uri)
-        self.query_one("#ctx-menu", ContextMenu).show(title, [item], anchor)
+        self.query_one(_CONTEXT_MENU_SELECTOR, ContextMenu).show(title, [item], anchor)
 
     #: context-menu actions that belong to an opt-in plugin feature (SHACL enforce).
     _ENFORCE_ACTIONS = frozenset({"enforce_shacl", "unenforce_shacl"})
@@ -2140,7 +2155,7 @@ class OntologyApp(App):
     def _rename_entity(self, uri: str) -> None:
         """Open a modal to rename *uri* (cascades across every reference)."""
         if self._service is None or self._path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         path = self._path
         field = DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"})
@@ -2260,7 +2275,7 @@ class OntologyApp(App):
 
         path = self._path
         if self._service is None or path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         base = uri_edit.mint_base(self.tax, "create_owl_property", detail.OVERVIEW_URI)
         modal_title = _PROP_MENU[prop_type][3]
@@ -2292,7 +2307,7 @@ class OntologyApp(App):
 
         path = self._path
         if self._service is None or path is None:
-            self.notify("Read-only session (no file loaded).", severity="warning")
+            self.notify(_READ_ONLY_MESSAGE, severity="warning")
             return
         base = uri_edit.mint_base(self.tax, "create_owl_property", detail.OVERVIEW_URI)
         classes = sorted(
@@ -3136,7 +3151,7 @@ class OntologyApp(App):
         for tree_id in ("#ont-tree", "#prop-tree"):
             if focused is self.query_one(tree_id, Tree):
                 return focused  # type: ignore[return-value]
-        return self.query_one("#tree", Tree)
+        return self.query_one(_TREE_SELECTOR, Tree)
 
     def _focus_main_tree(self) -> None:
         """Return focus to the main pane the user was last in (unified or ontology) —

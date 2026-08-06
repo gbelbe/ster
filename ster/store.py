@@ -546,100 +546,112 @@ def _parse_individual(uri: str, triples: list[tuple[Node, Node]]) -> OWLIndividu
     return ind
 
 
-def graph_to_taxonomy(g: Graph) -> Taxonomy:
-    taxonomy = Taxonomy()
-
-    # ONE pass to index everything by subject AND collect type assignments.
-    # This avoids O(N_entities * N_lookups) store overhead.
+def _graph_index(g: Graph) -> tuple[dict[str, list[tuple[Node, Node]]], dict[str, list[str]]]:
     index: dict[str, list[tuple[Node, Node]]] = {}
     subjects_by_type: dict[str, list[str]] = {}
     for s, p, o in g:
         if isinstance(s, URIRef):
-            s_u = str(s)
-            index.setdefault(s_u, []).append((p, o))
+            subject = str(s)
+            index.setdefault(subject, []).append((p, o))
             if p == RDF.type:
-                subjects_by_type.setdefault(str(o), []).append(s_u)
+                subjects_by_type.setdefault(str(o), []).append(subject)
+    return index, subjects_by_type
 
-    # ── Schemes ──────────────────────────────────────────────────────────────
-    for s_uri in subjects_by_type.get(str(SKOS.ConceptScheme), []):
-        taxonomy.schemes[s_uri] = _parse_scheme(s_uri, index.get(s_uri, []))
 
-    # ── Concepts ─────────────────────────────────────────────────────────────
-    for c_uri in subjects_by_type.get(str(SKOS.Concept), []):
-        taxonomy.concepts[c_uri] = _parse_concept(c_uri, index.get(c_uri, []))
-
-    # ── RDF/OWL Classes ───────────────────────────────────────────────────────
-    all_class_uris: set[str] = set()
-    for t_uri in (str(RDFS.Class), str(OWL.Class)):
-        for c_uri in subjects_by_type.get(t_uri, []):
-            if not is_builtin_uri(c_uri):
-                all_class_uris.add(c_uri)
-
-    # Inference (using the store directly for these broad queries is efficient).
-    def _add_inferred_classes(gen):
-        for ref in gen:
-            if isinstance(ref, URIRef):
-                u = str(ref)
-                if not is_builtin_uri(u):
-                    all_class_uris.add(u)
-
-    _add_inferred_classes(g.subjects(RDFS.subClassOf, None))
-    _add_inferred_classes(g.objects(None, RDFS.subClassOf))
-    _add_inferred_classes(g.objects(None, RDFS.domain))
-    _add_inferred_classes(g.objects(None, RDFS.range))
-
-    for uri in all_class_uris:
+def _load_classes(
+    g: Graph,
+    taxonomy: Taxonomy,
+    index: dict[str, list[tuple[Node, Node]]],
+    subjects_by_type: dict[str, list[str]],
+) -> None:
+    class_uris = {
+        uri
+        for type_uri in (str(RDFS.Class), str(OWL.Class))
+        for uri in subjects_by_type.get(type_uri, [])
+        if not is_builtin_uri(uri)
+    }
+    for refs in (
+        g.subjects(RDFS.subClassOf, None),
+        g.objects(None, RDFS.subClassOf),
+        g.objects(None, RDFS.domain),
+        g.objects(None, RDFS.range),
+    ):
+        class_uris.update(
+            str(ref) for ref in refs if isinstance(ref, URIRef) and not is_builtin_uri(str(ref))
+        )
+    for uri in class_uris:
         taxonomy.owl_classes[uri] = _parse_class(uri, index.get(uri, []))
 
-    # ── owl:Ontology ──────────────────────────────────────────────────────────
-    for ont_uri in subjects_by_type.get(str(OWL.Ontology), []):
-        _load_ontology_node(taxonomy, ont_uri, index.get(ont_uri, []))
-        break
 
-    # ── OWL Properties ────────────────────────────────────────────────────────
-    _PROP_TYPE_MAP = {
+def _load_properties(
+    taxonomy: Taxonomy,
+    index: dict[str, list[tuple[Node, Node]]],
+    subjects_by_type: dict[str, list[str]],
+) -> None:
+    property_types = {
         str(OWL.ObjectProperty): "ObjectProperty",
         str(OWL.DatatypeProperty): "DatatypeProperty",
         str(OWL.AnnotationProperty): "AnnotationProperty",
         str(RDF.Property): "Property",
     }
-    for t_uri, prop_type_name in _PROP_TYPE_MAP.items():
-        for p_uri in subjects_by_type.get(t_uri, []):
-            if not is_builtin_uri(p_uri) and p_uri not in taxonomy.owl_properties:
-                taxonomy.owl_properties[p_uri] = _parse_property(
-                    p_uri, index.get(p_uri, []), prop_type_name
+    for type_uri, property_type in property_types.items():
+        for uri in subjects_by_type.get(type_uri, []):
+            if not is_builtin_uri(uri) and uri not in taxonomy.owl_properties:
+                taxonomy.owl_properties[uri] = _parse_property(
+                    uri, index.get(uri, []), property_type
                 )
 
-    # ── OWL Individuals ───────────────────────────────────────────────────────
-    individual_uris: set[str] = set()
-    for s_uri in subjects_by_type.get(str(OWL.NamedIndividual), []):
-        if not is_builtin_uri(s_uri):
-            individual_uris.add(s_uri)
 
-    known_classes = set(taxonomy.owl_classes.keys())
-    for t_uri, s_uris in subjects_by_type.items():
-        if t_uri in known_classes:
-            for s_uri in s_uris:
-                if (
-                    not is_builtin_uri(s_uri)
-                    and s_uri not in taxonomy.owl_classes
-                    and s_uri not in taxonomy.concepts
-                    and s_uri not in taxonomy.schemes
-                ):
-                    individual_uris.add(s_uri)
-
+def _load_individuals(
+    taxonomy: Taxonomy,
+    index: dict[str, list[tuple[Node, Node]]],
+    subjects_by_type: dict[str, list[str]],
+) -> None:
+    individual_uris = _individual_uris(taxonomy, subjects_by_type)
     for uri in individual_uris:
         taxonomy.owl_individuals[uri] = _parse_individual(uri, index.get(uri, []))
 
-    # ── Normalize hierarchy (handle graphs that only declare one direction) ──
-    _normalize_hierarchy(taxonomy)
 
-    # ── Capture prefix bindings from source file ──────────────────────────────
+def _individual_uris(taxonomy: Taxonomy, subjects_by_type: dict[str, list[str]]) -> set[str]:
+    individual_uris = {
+        uri for uri in subjects_by_type.get(str(OWL.NamedIndividual), []) if not is_builtin_uri(uri)
+    }
+    known_classes = set(taxonomy.owl_classes)
+    for type_uri, uris in subjects_by_type.items():
+        if type_uri not in known_classes:
+            continue
+        individual_uris.update(
+            uri
+            for uri in uris
+            if not is_builtin_uri(uri)
+            and uri not in taxonomy.owl_classes
+            and uri not in taxonomy.concepts
+            and uri not in taxonomy.schemes
+        )
+    return individual_uris
+
+
+def _capture_namespaces(g: Graph, taxonomy: Taxonomy) -> None:
     for raw_prefix, raw_ns in g.namespace_manager.namespaces():
-        p, n = str(raw_prefix), str(raw_ns)  # type: ignore[assignment]
-        if p not in _RDFLIB_DEFAULT_PREFIXES:
-            taxonomy.namespace_bindings[p] = n  # type: ignore[index]
+        prefix, namespace = str(raw_prefix), str(raw_ns)
+        if prefix not in _RDFLIB_DEFAULT_PREFIXES:
+            taxonomy.namespace_bindings[prefix] = namespace
 
+
+def graph_to_taxonomy(g: Graph) -> Taxonomy:
+    taxonomy = Taxonomy()
+    index, subjects_by_type = _graph_index(g)
+    for uri in subjects_by_type.get(str(SKOS.ConceptScheme), []):
+        taxonomy.schemes[uri] = _parse_scheme(uri, index.get(uri, []))
+    for uri in subjects_by_type.get(str(SKOS.Concept), []):
+        taxonomy.concepts[uri] = _parse_concept(uri, index.get(uri, []))
+    _load_classes(g, taxonomy, index, subjects_by_type)
+    if ontology_uris := subjects_by_type.get(str(OWL.Ontology), []):
+        _load_ontology_node(taxonomy, ontology_uris[0], index.get(ontology_uris[0], []))
+    _load_properties(taxonomy, index, subjects_by_type)
+    _load_individuals(taxonomy, index, subjects_by_type)
+    _normalize_hierarchy(taxonomy)
+    _capture_namespaces(g, taxonomy)
     return taxonomy
 
 
@@ -767,6 +779,73 @@ def _serialize_property(g: Graph, uri: str, prop: OWLProperty) -> None:
         g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
+def _serialize_scheme(g: Graph, uri: str, scheme: ConceptScheme) -> None:
+    ref = URIRef(uri)
+    g.add((ref, RDF.type, SKOS.ConceptScheme))
+    _serialize_scheme_literals(g, ref, scheme)
+    _serialize_scheme_relations(g, ref, scheme)
+    _serialize_annotations(g, ref, scheme.annotations)
+
+
+def _serialize_scheme_literals(g: Graph, ref: URIRef, scheme: ConceptScheme) -> None:
+    for lbl in scheme.labels:
+        g.add((ref, DCTERMS.title, Literal(lbl.value, lang=lbl.lang or None)))
+    for desc in scheme.descriptions:
+        g.add((ref, DCTERMS.description, Literal(desc.value, lang=desc.lang or None)))
+    if scheme.creator:
+        g.add((ref, DCTERMS.creator, Literal(scheme.creator)))
+    if scheme.created:
+        g.add((ref, DCTERMS.created, Literal(scheme.created, datatype=XSD.date)))
+    for lang in scheme.languages:
+        g.add((ref, DCTERMS.language, Literal(lang)))
+    if scheme.base_uri:
+        g.add((ref, VOID.uriSpace, Literal(scheme.base_uri)))
+
+
+def _serialize_scheme_relations(g: Graph, ref: URIRef, scheme: ConceptScheme) -> None:
+    for tc_uri in scheme.top_concepts:
+        g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
+
+
+def _serialize_annotations(g: Graph, ref: URIRef, annotations: list[OntologyAnnotation]) -> None:
+    for annotation in annotations:
+        g.add((ref, URIRef(annotation.predicate), _annotation_object(annotation)))
+
+
+def _serialize_individual(g: Graph, uri: str, individual: OWLIndividual) -> None:
+    ref = URIRef(uri)
+    g.add((ref, RDF.type, OWL.NamedIndividual))
+    for type_uri in individual.types:
+        g.add((ref, RDF.type, URIRef(type_uri)))
+    _serialize_labels_comments(g, ref, individual.labels, individual.comments)
+    _serialize_individual_values(g, ref, individual)
+    _serialize_schema_media(g, ref, individual)
+    if individual.note:
+        g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(individual.note)))
+
+
+def _serialize_individual_values(g: Graph, ref: URIRef, individual: OWLIndividual) -> None:
+    for prop_uri, value_uri in individual.property_values:
+        g.add((ref, URIRef(prop_uri), URIRef(value_uri)))
+    for prop_uri, value, lang_or_datatype in individual.literal_values:
+        if lang_or_datatype.startswith("@"):
+            literal = Literal(value, lang=lang_or_datatype[1:] or None)
+        elif lang_or_datatype:
+            literal = Literal(value, datatype=URIRef(lang_or_datatype))
+        else:
+            literal = Literal(value)
+        g.add((ref, URIRef(prop_uri), literal))
+
+
+def _serialize_ontology(g: Graph, taxonomy: Taxonomy) -> None:
+    if not taxonomy.ontology_uri:
+        return
+    ref = URIRef(taxonomy.ontology_uri)
+    g.add((ref, RDF.type, OWL.Ontology))
+    for annotation in taxonomy.ontology_annotations:
+        g.add((ref, URIRef(annotation.predicate), _annotation_object(annotation)))
+
+
 def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     g = Graph()
     g.bind("skos", SKOS)
@@ -786,26 +865,8 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     # Try to bind a short prefix for the primary namespace
     _bind_namespace(g, taxonomy)
 
-    # ── Schemes ──────────────────────────────────────────────────────────────
     for uri, scheme in taxonomy.schemes.items():
-        ref = URIRef(uri)
-        g.add((ref, RDF.type, SKOS.ConceptScheme))
-        for lbl in scheme.labels:
-            g.add((ref, DCTERMS.title, Literal(lbl.value, lang=lbl.lang or None)))
-        for desc in scheme.descriptions:
-            g.add((ref, DCTERMS.description, Literal(desc.value, lang=desc.lang or None)))
-        if scheme.creator:
-            g.add((ref, DCTERMS.creator, Literal(scheme.creator)))
-        if scheme.created:
-            g.add((ref, DCTERMS.created, Literal(scheme.created, datatype=XSD.date)))
-        for lang in scheme.languages:
-            g.add((ref, DCTERMS.language, Literal(lang)))
-        if scheme.base_uri:
-            g.add((ref, VOID.uriSpace, Literal(scheme.base_uri)))
-        for tc_uri in scheme.top_concepts:
-            g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
-        for a in scheme.annotations:
-            g.add((ref, URIRef(a.predicate), _annotation_object(a)))
+        _serialize_scheme(g, uri, scheme)
 
     # ── Concepts ─────────────────────────────────────────────────────────────
     for uri, concept in taxonomy.concepts.items():
@@ -815,47 +876,14 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     for uri, rdf_class in taxonomy.owl_classes.items():
         _serialize_class(g, uri, rdf_class)
 
-    # ── OWL Individuals ───────────────────────────────────────────────────────
     for uri, individual in taxonomy.owl_individuals.items():
-        ref = URIRef(uri)
-        g.add((ref, RDF.type, OWL.NamedIndividual))
-        for type_uri in individual.types:
-            g.add((ref, RDF.type, URIRef(type_uri)))
-        for lbl in individual.labels:
-            g.add((ref, RDFS.label, Literal(lbl.value, lang=lbl.lang or None)))
-        for comment in individual.comments:
-            g.add((ref, RDFS.comment, Literal(comment.value, lang=comment.lang or None)))
-        for prop_uri, val_uri in individual.property_values:
-            g.add((ref, URIRef(prop_uri), URIRef(val_uri)))
-        for prop_uri, val_str, lang_or_dt in individual.literal_values:
-            if lang_or_dt.startswith("@"):
-                lit = Literal(val_str, lang=lang_or_dt[1:] or None)
-            elif lang_or_dt:
-                lit = Literal(val_str, datatype=URIRef(lang_or_dt))
-            else:
-                lit = Literal(val_str)
-            g.add((ref, URIRef(prop_uri), lit))
-        for u in individual.schema_images:
-            g.add((ref, SCHEMA.image, URIRef(u)))
-        for u in individual.schema_videos:
-            g.add((ref, SCHEMA.video, URIRef(u)))
-        for u in individual.schema_urls:
-            g.add((ref, SCHEMA.url, URIRef(u)))
-        if individual.note:
-            g.add((ref, URIRef(NOTE_PROPERTY_URI), Literal(individual.note)))
+        _serialize_individual(g, uri, individual)
 
     # ── OWL Properties ────────────────────────────────────────────────────────
     for uri, prop in taxonomy.owl_properties.items():
         _serialize_property(g, uri, prop)
 
-    # ── owl:Ontology ──────────────────────────────────────────────────────────
-    if taxonomy.ontology_uri:
-        ont_ref = URIRef(taxonomy.ontology_uri)
-        g.add((ont_ref, RDF.type, OWL.Ontology))
-        # Serialise every descriptive annotation generically (the typed accessors
-        # write into this same store, so title/description/version come for free).
-        for a in taxonomy.ontology_annotations:
-            g.add((ont_ref, URIRef(a.predicate), _annotation_object(a)))
+    _serialize_ontology(g, taxonomy)
 
     return g
 
@@ -865,7 +893,12 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 
 def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
     """Ensure skos:broader/narrower and skos:topConceptOf/hasTopConcept are symmetric."""
-    # 1. Bidirectional broader ↔ narrower
+    _normalize_concept_links(taxonomy)
+    _normalize_scheme_links(taxonomy)
+    _assign_orphan_top_concepts(taxonomy)
+
+
+def _normalize_concept_links(taxonomy: Taxonomy) -> None:
     for uri, concept in taxonomy.concepts.items():
         for child_uri in concept.narrower:
             child = taxonomy.concepts.get(child_uri)
@@ -876,28 +909,26 @@ def _normalize_hierarchy(taxonomy: Taxonomy) -> None:
             if parent and uri not in parent.narrower:
                 parent.narrower.append(uri)
 
-    # 2. hasTopConcept → topConceptOf
+
+def _normalize_scheme_links(taxonomy: Taxonomy) -> None:
     for scheme_uri, scheme in taxonomy.schemes.items():
         for tc_uri in scheme.top_concepts:
             tc_concept = taxonomy.concepts.get(tc_uri)
             if tc_concept and tc_concept.top_concept_of is None:
                 tc_concept.top_concept_of = scheme_uri
 
-    # 3. topConceptOf → hasTopConcept
     for concept_uri, concept in taxonomy.concepts.items():
         if concept.top_concept_of:
             tc_scheme = taxonomy.schemes.get(concept.top_concept_of)
             if tc_scheme and concept_uri not in tc_scheme.top_concepts:
                 tc_scheme.top_concepts.append(concept_uri)
 
-    # 4. Auto-detect: concepts with no broader that aren't yet a top concept
-    #    are top concepts of whatever scheme lists them in its hierarchy.
+
+def _assign_orphan_top_concepts(taxonomy: Taxonomy) -> None:
     primary = taxonomy.primary_scheme()
     for concept_uri, concept in taxonomy.concepts.items():
         if concept.broader or concept.top_concept_of:
             continue
-        # Check if any scheme lists this concept in its top_concepts (already handled
-        # above). If not, assign to the primary scheme as a top concept.
         in_any_scheme = any(concept_uri in s.top_concepts for s in taxonomy.schemes.values())
         if not in_any_scheme and primary:
             primary.top_concepts.append(concept_uri)

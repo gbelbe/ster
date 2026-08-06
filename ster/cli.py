@@ -56,6 +56,20 @@ def _app_callback(
 
 
 _AUTHOR = "ster contributors"
+_TAXONOMY_FILE_HELP = "Taxonomy file."
+_ANSI_RESET = "\033[0m"
+_ANSI_BOLD = "\033[1m"
+_ANSI_DIM = "\033[2m"
+_ANSI_INVERSE = "\033[7m"
+_ANSI_RED = "\033[31m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_BLUE = "\033[34m"
+_ANSI_CYAN = "\033[36m"
+_ANSI_MAGENTA = "\033[35m"
+_ANSI_BRIGHT_CYAN = "\033[1;36m"
+_CLEAR_LINE = "\r\033[2K"
+_CANCELLED_MESSAGE = "\n[dim]Cancelled.[/dim]"
 
 _PYPI_URL = "https://pypi.org/pypi/ster/json"
 _VERSION_CACHE = Path(tempfile.gettempdir()) / "ster_version_check.json"
@@ -221,15 +235,15 @@ _DEMO_FILE: Path = Path(__file__).parent / "tui" / "mixed-gear-demo.ttl"
 
 # Home action-menu row colours (ANSI), keyed by sentinel; ``True`` = the "open" action.
 _MENU_COLOURS: dict[object, str] = {
-    True: "\033[1;36m",  # bright cyan — TTL Viewer-Editor (the primary action)
-    _GRAPH_SENTINEL: "\033[33m",  # yellow
-    _QUERY_SENTINEL: "\033[32m",  # green
-    _EXT_ONT_SENTINEL: "\033[35m",  # magenta
-    _HTML_SENTINEL: "\033[34m",  # blue
-    _PUBLISH_SENTINEL: "\033[32m",  # green
-    _DEMO_SENTINEL: "\033[32m",  # green
-    _CHANGE_FILE_SENTINEL: "\033[36m",  # cyan
-    _QUIT_SENTINEL: "\033[31m",  # red
+    True: _ANSI_BRIGHT_CYAN,  # bright cyan — TTL Viewer-Editor (the primary action)
+    _GRAPH_SENTINEL: _ANSI_YELLOW,
+    _QUERY_SENTINEL: _ANSI_GREEN,
+    _EXT_ONT_SENTINEL: _ANSI_MAGENTA,
+    _HTML_SENTINEL: _ANSI_BLUE,
+    _PUBLISH_SENTINEL: _ANSI_GREEN,
+    _DEMO_SENTINEL: _ANSI_GREEN,
+    _CHANGE_FILE_SENTINEL: _ANSI_CYAN,
+    _QUIT_SENTINEL: _ANSI_RED,
 }
 
 _session_file: Path | None = None  # in-process cache
@@ -483,7 +497,7 @@ def _pick_file_interactive(
 
 
 def _arrow_file_picker(
-    files: list[Path],
+    _files: list[Path],
     item_values: list[Path | None],
     initial_sel: int,
     preselect: Path | None,
@@ -497,17 +511,17 @@ def _arrow_file_picker(
     import termios
     import tty
 
-    R = "\033[0m"  # reset all
-    B = "\033[1m"  # bold
-    D = "\033[2m"  # dim
-    CY = "\033[36m"  # cyan
-    BCY = "\033[1;36m"  # bold cyan
-    GR = "\033[32m"  # green
-    INV = "\033[7m"  # reverse video (readable on any background)
+    R = _ANSI_RESET
+    B = _ANSI_BOLD
+    D = _ANSI_DIM
+    CY = _ANSI_CYAN
+    BCY = _ANSI_BRIGHT_CYAN
+    GR = _ANSI_GREEN
+    INV = _ANSI_INVERSE
 
     # \r\033[2K: go to column 0 then erase entire line — works in both cooked
     # and raw terminal modes (raw mode does NOT auto-add CR before LF).
-    CLEAR = "\r\033[2K"
+    CLEAR = _CLEAR_LINE
     NL = "\r\n"  # explicit CR+LF so raw mode doesn't drift columns
 
     n = len(item_values)
@@ -520,7 +534,7 @@ def _arrow_file_picker(
 
         if val == _QUIT_SENTINEL:
             plain = "✕  Quit"
-            coloured = f"\033[31m{plain}{R}"  # red
+            coloured = f"{_ANSI_RED}{plain}{R}"
         elif val == _DEMO_SENTINEL:
             plain = "🎒 Load demo ontology / taxonomy"
             coloured = f"{GR}{plain}{R}"
@@ -624,7 +638,7 @@ def _load_safe(path: Path) -> Taxonomy | None:
     """Load *path*, printing errors and returning None on failure (never raises)."""
     mismatch = store.detect_format_mismatch(path)
     if mismatch:
-        declared, actual = mismatch
+        _, actual = mismatch
         console.print(
             f"[yellow]⚠[/yellow]  [bold]{path.name}[/bold] has a "
             f"[bold].{path.suffix.lstrip('.')}[/bold] extension but content looks like "
@@ -755,42 +769,52 @@ def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> ob
     return actions[idx][0]
 
 
+def _render_arrow_menu(
+    selected: Path,
+    actions: list[tuple[object, str]],
+    cursor: int,
+    first: bool,
+    colors: tuple[str, str, str, str, str, str, str],
+) -> None:
+    import sys
+
+    reset, bold, dim, cyan, green, inverse, bright_cyan = colors
+    if not first:
+        sys.stdout.write(f"\033[{len(actions) + 3}A")
+    sys.stdout.write(
+        f"{_CLEAR_LINE}  {green}✓{reset}  {bold}{selected.name}{reset}\r\n{_CLEAR_LINE}\r\n"
+    )
+    for index, (sentinel, label) in enumerate(actions):
+        color = _MENU_COLOURS.get(sentinel, cyan)
+        number = f"{index + 1:>2}"
+        row = (
+            f"  {bright_cyan}{inverse} {number} {reset}  {color}{bold}{label}{reset}"
+            if index == cursor
+            else f"    {cyan}{number}{reset}  {color}{label}{reset}"
+        )
+        sys.stdout.write(f"{_CLEAR_LINE}{row}\r\n")
+    sys.stdout.write(f"{_CLEAR_LINE}  {dim}↑↓ navigate  Enter: select{reset}\r\n")
+    sys.stdout.flush()
+
+
 def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | None:
     """Arrow-key action menu for *selected*. Returns the chosen index, or None on Quit/Esc."""
     import sys
     import termios
     import tty
 
-    R, B, D, CY, GR, INV, BCY = (
-        "\033[0m",
-        "\033[1m",
-        "\033[2m",
-        "\033[36m",
-        "\033[32m",
-        "\033[7m",
-        "\033[1;36m",
+    colors = (
+        _ANSI_RESET,
+        _ANSI_BOLD,
+        _ANSI_DIM,
+        _ANSI_CYAN,
+        _ANSI_GREEN,
+        _ANSI_INVERSE,
+        _ANSI_BRIGHT_CYAN,
     )
-    CLEAR, NL = "\r\033[2K", "\r\n"
     n = len(actions)
     cursor = next((i for i, (s, _) in enumerate(actions) if s is True), 0)  # start on "open"
-
-    def render(first: bool = False) -> None:
-        if not first:
-            sys.stdout.write(f"\033[{n + 3}A")  # file row + blank + n actions + hint
-        sys.stdout.write(f"{CLEAR}  {GR}✓{R}  {B}{selected.name}{R}{NL}{CLEAR}{NL}")
-        for j, (sentinel, label) in enumerate(actions):
-            col = _MENU_COLOURS.get(sentinel, CY)
-            num = f"{j + 1:>2}"
-            row = (
-                f"  {BCY}{INV} {num} {R}  {col}{B}{label}{R}"
-                if j == cursor
-                else f"    {CY}{num}{R}  {col}{label}{R}"
-            )
-            sys.stdout.write(f"{CLEAR}{row}{NL}")
-        sys.stdout.write(f"{CLEAR}  {D}↑↓ navigate  Enter: select{R}{NL}")
-        sys.stdout.flush()
-
-    render(first=True)
+    _render_arrow_menu(selected, actions, cursor, first=True, colors=colors)
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     result: int | None = None
@@ -811,11 +835,15 @@ def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | 
                 if nxt != b"[":
                     break  # bare Esc → quit
                 code = sys.stdin.buffer.read(1)
-                cursor = (cursor + (1 if code == b"B" else -1 if code == b"A" else 0)) % n
-            render()
+                if code == b"B":
+                    cursor += 1
+                elif code == b"A":
+                    cursor -= 1
+                cursor %= n
+            _render_arrow_menu(selected, actions, cursor, first=False, colors=colors)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        sys.stdout.write(NL)
+        sys.stdout.write("\r\n")
         sys.stdout.flush()
     return result
 
@@ -1160,7 +1188,7 @@ def cmd_add(
     def_en: str | None = typer.Option(None, "--def-en", help="English definition."),
     def_fr: str | None = typer.Option(None, "--def-fr", help="French definition."),
     lang: str = typer.Option("en", "--lang", "-l", help="Display language for confirmation."),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Add a new concept to the taxonomy.
 
@@ -1201,7 +1229,7 @@ def cmd_remove(
     cascade: bool = typer.Option(False, "--cascade", help="Also remove all descendants."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Remove a concept from the taxonomy."""
     taxonomy_file = _resolve_file(file)
@@ -1236,7 +1264,7 @@ def cmd_move(
         help="New parent handle (omit to promote to top level).",
     ),
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Move a concept to a new parent."""
     taxonomy_file = _resolve_file(file)
@@ -1292,7 +1320,7 @@ def cmd_label(
     lang: str = typer.Argument(..., help="Language code (en, fr, …)"),
     text: str = typer.Argument(..., help="Label text"),
     alt: bool = typer.Option(False, "--alt", help="Add as alt label (default: pref label)."),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Set a preferred or alternative label on a concept."""
     taxonomy_file = _resolve_file(file)
@@ -1313,7 +1341,7 @@ def cmd_define(
     concept: str = typer.Argument(..., metavar="HANDLE"),
     lang: str = typer.Argument(..., help="Language code"),
     text: str = typer.Argument(..., help="Definition text"),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Set a definition on a concept."""
     taxonomy_file = _resolve_file(file)
@@ -1332,7 +1360,7 @@ def cmd_relate(
     concept_a: str = typer.Argument(..., metavar="HANDLE_A"),
     concept_b: str = typer.Argument(..., metavar="HANDLE_B"),
     remove: bool = typer.Option(False, "--remove", help="Remove instead of adding."),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Add or remove a skos:related link between two concepts."""
     taxonomy_file = _resolve_file(file)
@@ -1358,7 +1386,7 @@ def cmd_rename(
         ..., metavar="HANDLE|NAME", help="Handle or name of concept to rename."
     ),
     new_name: str = typer.Argument(..., help="New local name or full URI."),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Change the URI of a concept (updates all cross-references).
 
@@ -1380,7 +1408,7 @@ def cmd_rename(
 @app.command("handles")
 def cmd_handles(
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Print the full handle → label → URI index."""
     taxonomy_file = _resolve_file(file)
@@ -1394,7 +1422,7 @@ def cmd_handles(
 @app.command("validate")
 def cmd_validate(
     lang: str = typer.Option("en", "--lang", "-l"),
-    file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file."),
+    file: Path | None = typer.Option(None, "--file", "-f", help=_TAXONOMY_FILE_HELP),
 ) -> None:
     """Check SKOS integrity: missing labels, orphans, duplicate prefLabels."""
     taxonomy_file = _resolve_file(file)
@@ -1613,7 +1641,7 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
                 default="1",
             )
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Cancelled.[/dim]")
+            console.print(_CANCELLED_MESSAGE)
             return
         try:
             idx = int(choice.strip()) - 1
@@ -1722,7 +1750,7 @@ def _ensure_ontology_uri(taxonomy_file: Path) -> bool:
         name = Prompt.ask("Ontology name", default=default_name)
         uri = Prompt.ask("Ontology URI", default=default_uri)
     except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled.[/dim]")
+        console.print(_CANCELLED_MESSAGE)
         return False
 
     if not uri or " " in uri.strip():
@@ -1736,25 +1764,19 @@ def _ensure_ontology_uri(taxonomy_file: Path) -> bool:
     return True
 
 
-def _run_html_export_interactive(files: list[Path]) -> None:
-    """Interactive HTML export from the home-screen menu."""
-    if not _ensure_pylode():
-        return
+def _show_html_export_preview(files: list[Path]) -> None:
+    from .html_export import _available_languages, detect_profile
 
-    from .html_export import _available_languages, detect_profile, generate_html
-
-    if not files:
-        err.print("[red]No taxonomy files selected.[/red]")
-        return
-
-    console.print()
     for taxonomy_file in files:
         detected = detect_profile(taxonomy_file)
         taxonomy = _load_safe(taxonomy_file)
         if taxonomy is None:
             continue
-        langs = _available_languages(taxonomy) if detected != "ontpub" else []
-        lang_str = (", ".join(langs) if langs else "en") if detected != "ontpub" else "n/a (OWL)"
+        if detected == "ontpub":
+            lang_str = "n/a (OWL)"
+        else:
+            langs = _available_languages(taxonomy)
+            lang_str = ", ".join(langs) if langs else "en"
         profile_str = {"vocpub": "SKOS/VocPub", "ontpub": "OWL/OntPub", "both": "SKOS+OWL"}.get(
             detected, detected
         )
@@ -1765,53 +1787,87 @@ def _run_html_export_interactive(files: list[Path]) -> None:
 
     console.print()
 
-    # Per-file profile selection (needed when a file contains both SKOS and OWL)
+
+def _choose_html_profiles(files: list[Path]) -> dict[Path, str] | None:
+    from .html_export import detect_profile
+
     file_profiles: dict[Path, str] = {}
     for taxonomy_file in files:
         detected = detect_profile(taxonomy_file)
-        if detected == "both":
-            console.print(
-                f"[yellow]{taxonomy_file.name}[/yellow] contains both "
-                "skos:ConceptScheme and owl:Ontology declarations."
-            )
-            try:
-                choice = Prompt.ask(
-                    "  Which profile?",
-                    choices=["vocpub", "ontpub"],
-                    default="ontpub",
-                )
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]Cancelled.[/dim]")
-                return
-            file_profiles[taxonomy_file] = choice
-        else:
+        if detected != "both":
             file_profiles[taxonomy_file] = detected
-
-    # Language prompt — only relevant for VocPub files
-    has_vocpub = any(p == "vocpub" for p in file_profiles.values())
-    languages: list[str] | None = None
-    if has_vocpub:
+            continue
+        console.print(
+            f"[yellow]{taxonomy_file.name}[/yellow] contains both "
+            "skos:ConceptScheme and owl:Ontology declarations."
+        )
         try:
-            lang_input = Prompt.ask(
-                "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
-                default="",
+            file_profiles[taxonomy_file] = Prompt.ask(
+                "  Which profile?", choices=["vocpub", "ontpub"], default="ontpub"
             )
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Cancelled.[/dim]")
-            return
-        languages = [lg.strip() for lg in lang_input.split(",") if lg.strip()] or None
+            console.print(_CANCELLED_MESSAGE)
+            return None
+    return file_profiles
 
+
+def _choose_html_languages(
+    file_profiles: dict[Path, str],
+) -> tuple[bool, list[str] | None]:
+    if not any(profile == "vocpub" for profile in file_profiles.values()):
+        return True, None
+    try:
+        lang_input = Prompt.ask(
+            "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print(_CANCELLED_MESSAGE)
+        return False, None
+    return True, [lg.strip() for lg in lang_input.split(",") if lg.strip()] or None
+
+
+def _choose_html_output(files: list[Path]) -> Path | None:
     output_dir = files[0].parent / "html"
     console.print()
     try:
-        out_input = Prompt.ask(
-            "Output directory",
-            default=str(output_dir),
-        )
-        output_dir = Path(out_input.strip())
+        return Path(Prompt.ask("Output directory", default=str(output_dir)).strip())
     except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled.[/dim]")
+        console.print(_CANCELLED_MESSAGE)
+        return None
+
+
+def _html_export_options(
+    files: list[Path],
+) -> tuple[dict[Path, str], list[str] | None, Path] | None:
+    _show_html_export_preview(files)
+    file_profiles = _choose_html_profiles(files)
+    if file_profiles is None:
+        return None
+    accepted, languages = _choose_html_languages(file_profiles)
+    if not accepted:
+        return None
+    output_dir = _choose_html_output(files)
+    if output_dir is None:
+        return None
+    return file_profiles, languages, output_dir
+
+
+def _run_html_export_interactive(files: list[Path]) -> None:
+    """Interactive HTML export from the home-screen menu."""
+    if not _ensure_pylode():
         return
+
+    from .html_export import generate_html
+
+    if not files:
+        err.print("[red]No taxonomy files selected.[/red]")
+        return
+
+    options = _html_export_options(files)
+    if options is None:
+        return
+    file_profiles, languages, output_dir = options
 
     console.print()
     all_created: list[Path] = []
@@ -1942,8 +1998,8 @@ def _render_publish_menu(labels: list[str], sel: int, first: bool) -> None:  # p
     """Redraw the publish menu in place (raw-terminal ANSI)."""
     import sys
 
-    inv, r, b, d = "\033[7m", "\033[0m", "\033[1m", "\033[2m"
-    clear, nl = "\r\033[2K", "\r\n"
+    inv, r, b, d = _ANSI_INVERSE, _ANSI_RESET, _ANSI_BOLD, _ANSI_DIM
+    clear, nl = _CLEAR_LINE, "\r\n"
     if not first:
         sys.stdout.write(f"\033[{len(labels) + 1}A")
     for i, lab in enumerate(labels):
