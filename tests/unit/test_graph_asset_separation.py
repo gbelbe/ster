@@ -111,7 +111,7 @@ def test_taxonomy_data_injected_not_baked_into_app_asset(stub_lib):
 
 def test_app_asset_reads_data_from_injected_global():
     js = _app_js()
-    assert "window.__STER_GRAPH__" in js
+    assert "globalThis.__STER_GRAPH__" in js
     # The old inline placeholder tokens must be gone from the app layer.
     assert "__GRAPH_DATA__" not in js
     assert "__API_TOKEN__" not in js

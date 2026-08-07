@@ -81,8 +81,8 @@ def test_app_js_defines_superclasses_toggle():
 
 def test_nav_link_onclick_uses_single_quoted_attribute():
     js = _app_js()
-    assert "onclick='window._sterNav(" in js
-    assert 'onclick="window._sterNav(' not in js
+    assert "onclick='globalThis._sterNav(" in js
+    assert 'onclick="globalThis._sterNav(' not in js
 
 
 def test_nav_link_markup_survives_html_parsing():
@@ -100,10 +100,10 @@ def test_nav_link_markup_survives_html_parsing():
                 if k == "onclick":
                     self.onclick = v
 
-    markup = f"<button onclick='window._sterNav(\"{uri}\")'>x</button>"
+    markup = f"<button onclick='globalThis._sterNav(\"{uri}\")'>x</button>"
     p = _P()
     p.feed(markup)
-    assert p.onclick == f'window._sterNav("{uri}")'
+    assert p.onclick == f'globalThis._sterNav("{uri}")'
 
 
 # ── rendered-page wiring ────────────────────────────────────────────────────────
