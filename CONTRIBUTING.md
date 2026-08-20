@@ -9,15 +9,15 @@ process from first clone to merged pull request.
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Python | 3.11 – 3.13 | [python.org](https://www.python.org/downloads/) |
+| Python | 3.12 – 3.13 | [python.org](https://www.python.org/downloads/) |
 | uv | latest | `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | git | 2.x+ | system package manager |
 
-To run all three Python versions in the test matrix you need all three
-interpreters installed. `uv` can manage them for you:
+To run both Python versions in the test matrix you need both interpreters
+installed. `uv` can manage them for you:
 
 ```bash
-uv python install 3.11 3.12 3.13
+uv python install 3.12 3.13
 ```
 
 ---
@@ -80,10 +80,10 @@ can't drift:
 | Tests + coverage | `pytest --cov=ster` — **current Python only, locally** (fast feedback) |
 | Patch coverage (≥ 90%) | `diff-cover` vs `origin/main` |
 
-Tests run on your current interpreter locally; **GitHub Actions runs the full
-3.11 / 3.12 / 3.13 matrix on every PR** — so support for all three is enforced on
-the PR, not locally. After pushing, check `gh pr checks` to confirm every version
-is green.
+Tests run on your current interpreter locally; **GitHub Actions runs the
+3.12 / 3.13 matrix on every PR** — so support for both is enforced on the PR,
+not locally. After pushing, check `gh pr checks` to confirm every version is
+green.
 
 On success `scripts/ci.sh` writes a `.ci-passed` sentinel. The pre-push hook reads
 it and blocks `git push` if the gate has not passed in the last 60 minutes.
@@ -221,7 +221,7 @@ Run `bash scripts/install-hooks.sh` once after cloning.
 **A Python version is missing from the test matrix**
 
 ```bash
-uv python install 3.11   # or 3.12 / 3.13
+uv python install 3.12   # or 3.13
 bash scripts/ci.sh
 ```
 

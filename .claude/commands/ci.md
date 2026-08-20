@@ -3,9 +3,9 @@
 Runs `scripts/ci.sh`. The static checks are driven by **prek**
 (`.pre-commit-config.yaml`) — the same hooks the git pre-commit hook and the
 GitHub `checks` job run, so local and CI can never drift. Tests run on the
-**current Python only locally** (fast feedback); GitHub Actions still runs the
-**full 3.11 / 3.12 / 3.13 matrix** on every PR, so support for all three is
-enforced before merge.
+**current Python only locally** (fast feedback); GitHub Actions runs the
+**3.12 / 3.13 matrix** on every PR, so support for both is enforced before
+merge.
 
 **This MUST be run and pass before every `git push`.** The git pre-push hook
 (installed via prek) runs `scripts/pre-push.sh`, which blocks any push unless
@@ -45,7 +45,7 @@ would bypass the gate — this works for all developers, not just Claude.
 - If a new CVE appears in `pip-audit`, upgrade the package first. Only add
   `--ignore-vuln` for CVEs that affect pip itself, not ster's dependencies.
 - After fixing, re-run `/ci` in full (not `--fast`) before pushing. Local runs
-  the current Python only — the full 3.11 / 3.12 / 3.13 matrix runs on the PR,
-  so check `gh pr checks` after pushing to confirm every version is green.
+  the current Python only — the 3.12 / 3.13 matrix runs on the PR, so check
+  `gh pr checks` after pushing to confirm every version is green.
 
 $ARGUMENTS

@@ -10,7 +10,7 @@ version = "0.10.0"
 description = "Terminal tool for building and exploring SKOS taxonomies and OWL ontologies"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 # ── Core runtime dependencies ─────────────────────────────────────────────────
 #
@@ -133,7 +133,7 @@ exclude_lines = [
 # Docs: https://docs.astral.sh/ruff/
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length    = 100
 
 [tool.ruff.lint]
@@ -186,7 +186,7 @@ max-complexity = 200
 # Docs: https://mypy.readthedocs.io/
 
 [tool.mypy]
-python_version        = "3.11"
+python_version        = "3.12"
 ignore_missing_imports = true   # external libs without stubs (rdflib, pylode…)
 warn_return_any       = false   # too noisy for progressive adoption
 warn_unused_ignores   = false   # some ignores are version-dependent

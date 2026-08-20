@@ -4,7 +4,7 @@
 #
 # Static checks run via prek (.pre-commit-config.yaml) — the exact hooks the
 # GitHub 'checks' job runs. Tests run on the current Python only (fast); GitHub
-# Actions runs the full 3.11 / 3.12 / 3.13 matrix on every PR.
+# Actions runs the 3.12 / 3.13 matrix on every PR.
 #
 # Usage:
 #   scripts/ci.sh            # full gate: prek + eslint + pip-audit + tests + diff-cover
@@ -88,8 +88,8 @@ ok "pip-audit"
 
 # ── 4. Tests (single Python version locally) ─────────────────────────────────
 # Local CI runs the current interpreter only — fast feedback. GitHub Actions
-# runs the *full* 3.11 / 3.12 / 3.13 matrix on every PR, so support for all
-# three versions is still enforced there before merge.
+# runs the 3.12 / 3.13 matrix on every PR, so support for both versions is
+# still enforced there before merge.
 #   -n auto → one worker per CPU core. Safe now that SPARQL parsing is
 #             serialised (sparql_query._SPARQL_LOCK) — the rdflib parser
 #             thread-safety flake that previously blocked xdist is fixed.

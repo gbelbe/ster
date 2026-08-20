@@ -2461,8 +2461,11 @@ def test_dunder_main_launches(monkeypatch) -> None:
     os.environ.get("CI") == "true",
     reason="visual snapshot is renderer-sensitive; run locally with --snapshot-update",
 )
-def test_browser_snapshot(snap_compare) -> None:
+def test_browser_snapshot(snap_compare, monkeypatch) -> None:
     """Render the app (after jumping to Rex) and diff against the committed SVG."""
+    # The header renders "STER version <v>", so the live package version would be
+    # baked into the snapshot and every release bump would break this test. Pin it.
+    monkeypatch.setattr("ster._version.__version__", "0.0.0-test")
 
     async def jump(pilot) -> None:
         await pilot.pause()

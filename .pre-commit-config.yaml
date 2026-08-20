@@ -20,6 +20,12 @@
 
 default_install_hook_types: [pre-commit, pre-push]
 
+# Hooks that parse our source with Python's own `ast` (debug-statements) must
+# run on an interpreter at least as new as the syntax we use. ster targets
+# 3.12+, so PEP 695 generics (`def f[T](...)`) are a parse error on 3.11.
+default_language_version:
+  python: python3.12
+
 repos:
   # ── generic file hygiene (skips RDF/data + generated artefacts) ──────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks

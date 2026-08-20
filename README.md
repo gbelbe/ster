@@ -166,7 +166,7 @@ bash scripts/ci.sh              # full local gate: lint · types · security · 
 ```
 
 The local gate mirrors GitHub Actions (ruff · mypy · bandit + pip-audit ·
-pytest on Python 3.11 / 3.12 / 3.13), and a pre-push hook blocks any push
+pytest on Python 3.12 / 3.13), and a pre-push hook blocks any push
 without a passing run in the last 60 minutes. Coverage is reported to
 [Codecov](https://codecov.io/gh/gbelbe/ster).
 

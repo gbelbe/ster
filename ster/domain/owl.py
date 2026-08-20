@@ -6,7 +6,7 @@ Part of the domain layer (docs/architecture/module-layout.md): reached through
 
 from __future__ import annotations
 
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from ..exceptions import CircularHierarchyError, ClassNotFoundError, URIAlreadyExistsError
 from ..model import (
@@ -27,9 +27,6 @@ class _Localized(Protocol):
 
     lang: str
     value: str
-
-
-_LocalizedT = TypeVar("_LocalizedT", bound=_Localized)
 
 
 def add_owl_property(
@@ -580,7 +577,7 @@ def _owl_entity(taxonomy: Taxonomy, uri: str) -> RDFClass | OWLIndividual | OWLP
     )
 
 
-def _upsert_localized(items: list[_LocalizedT], lang: str, value: str, item: _LocalizedT) -> None:
+def _upsert_localized[T: _Localized](items: list[T], lang: str, value: str, item: T) -> None:
     """Replace the entry for *lang* in place, or append *item* if none matches."""
     for existing in items:
         if existing.lang == lang:

@@ -15,9 +15,9 @@ so local and CI can't drift.
 Or invoke the script directly: `bash scripts/ci.sh`
 
 **Tests run on the current Python only locally** (fast feedback). GitHub Actions
-still runs the **full 3.11 / 3.12 / 3.13 matrix** on every PR — three-version
-support is not dropped, just enforced on the PR rather than locally. After
-pushing, check `gh pr checks` to confirm every version is green.
+runs the **3.12 / 3.13 matrix** on every PR — multi-version support is enforced
+on the PR rather than locally. After pushing, check `gh pr checks` to confirm
+every version is green.
 
 The git pre-push hook (prek runs `scripts/pre-push.sh`, installed via
 `bash scripts/install-hooks.sh`) blocks any `git push` that does not have a

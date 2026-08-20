@@ -49,7 +49,7 @@ def _disable_version_check(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_prefs(tmp_path_factory, monkeypatch):
+def _isolate_prefs_globally(tmp_path_factory, monkeypatch):
     """Redirect every on-disk preference file to a per-test tmp dir.
 
     Without this, tests read (and *write*) the developer's real
@@ -58,6 +58,11 @@ def _isolate_prefs(tmp_path_factory, monkeypatch):
     order-dependent: e.g. the annotation picker's options come from
     ``load_metadata_props()``, so a leaked catalog changes what predicates are
     offered. Isolating the prefs makes every test see the clean defaults.
+
+    The name is deliberately *not* ``_isolate_prefs``: several modules define a
+    local autouse fixture by that name, which would shadow this one and silently
+    re-expose whatever paths the local version forgets to patch. Keeping the
+    names distinct makes both run, so the full set is always covered.
     """
     from ster.nav import prefs
     from ster.plugins.semanticlint import config as sl_config
