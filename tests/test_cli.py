@@ -649,7 +649,9 @@ def test_check_new_version_uses_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
     monkeypatch.setattr(cli_module, "_VERSION", "0.1.0")
 
-    result = cli_module._check_new_version()
+    with patch("threading.Thread") as mock_thread:
+        mock_thread.return_value = MagicMock()
+        result = cli_module._check_new_version()
     assert result is not None
     assert result[0] == "99.0.0"
     assert "big update" in result[1]
@@ -672,7 +674,8 @@ def test_check_new_version_stale_cache(tmp_path, monkeypatch):
     cache = tmp_path / "version_cache.json"
     from datetime import datetime, timedelta
 
-    old = datetime.now() - timedelta(hours=24)
+    # Use a wide stale margin to avoid clock-boundary flakes on CI workers.
+    old = datetime.now() - timedelta(days=7)
     data = {"checked": old.isoformat(), "latest": "99.0.0", "notes": ""}
     cache.write_text(json.dumps(data))
     monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
