@@ -35,6 +35,9 @@ _OWL_ONTOLOGY_PREFIX = "__ster:owl_ontology::"  # prefix for per-file ontology r
 _UNATTACHED_INDS_URI = "__ster:unattached_inds__"  # group node for typeless individuals
 SECTION_PROPERTIES = "__ster:section:properties__"  # collapsible Properties section header
 _ACTION_ADD_PROPERTY = "__ster:add_property__"  # sentinel URI for "Add property" action row
+_MARKDOWN_EMPHASIS_RE = r"\*{1,2}([^*]+)\*{1,2}"
+_RDFS_LABEL = "rdfs:label"
+_MAX_DEPTH = "max depth"
 
 
 def _ontology_sentinel(file_path: Path | None) -> str:
@@ -771,15 +774,15 @@ def render_note_markdown(text: str) -> list[tuple[str, bool]]:
     for line in text.split("\n"):
         m = _re.match(r"^#{1,6}\s+(.*)", line)
         if m:
-            content = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", m.group(1))
+            content = _re.sub(_MARKDOWN_EMPHASIS_RE, r"\1", m.group(1))
             result.append((content, True))
             continue
         m = _re.match(r"^[-*+]\s+(.*)", line)
         if m:
-            content = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", m.group(1))
+            content = _re.sub(_MARKDOWN_EMPHASIS_RE, r"\1", m.group(1))
             result.append(("• " + content, False))
             continue
-        stripped = _re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", line)
+        stripped = _re.sub(_MARKDOWN_EMPHASIS_RE, r"\1", line)
         result.append((stripped, False))
     return result
 
@@ -1187,7 +1190,7 @@ def _class_quality_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[Detai
     fields: list[DetailField] = [_sep("Subtree Quality")]
     if n_classes > 1:
         fields.append(_stat("cls:q:n_classes", "classes in subtree", str(n_classes)))
-    fields.append(_pct_stat("cls:q:lbl", "rdfs:label", label_p))
+    fields.append(_pct_stat("cls:q:lbl", _RDFS_LABEL, label_p))
     fields.append(_pct_stat("cls:q:cmt", "rdfs:comment", comment_p))
     fields.append(_stat("cls:q:inst:subtree", "instances (subtree)", str(n_subtree_inds)))
 
@@ -1376,7 +1379,9 @@ def _concept_action_fields(
 # ──────────────────────────── scheme-specific section helpers ─────────────────
 
 
-def _scheme_settings_fields(scheme, lang: str) -> list[DetailField]:
+def _scheme_settings_fields(
+    scheme, lang: str, _configured_langs: list[str] | None = None
+) -> list[DetailField]:
     """URI and base URI for a scheme."""
     return [
         DetailField("scheme_uri", "URI", scheme.uri, editable=False, meta={"type": "scheme_uri"}),
@@ -1438,7 +1443,7 @@ def _scheme_stats_fields(scheme_analysis) -> list[DetailField]:
     return [
         _stat("stat:total", "total concepts", str(st.total_concepts)),
         _stat("stat:top", "top-level", str(st.top_level_concepts)),
-        _stat("stat:depth_max", "max depth", str(st.max_depth)),
+        _stat("stat:depth_max", _MAX_DEPTH, str(st.max_depth)),
         _stat("stat:depth_avg", "avg depth", f"{st.avg_depth:.1f}"),
         _stat("stat:langs", "languages", ", ".join(st.languages) if st.languages else "—"),
     ]
@@ -1515,8 +1520,6 @@ def build_concept_detail(
     taxonomy: Taxonomy,
     uri: str,
     lang: str,
-    analysis: dict | None = None,
-    show_mappings: bool = False,
     configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Unified concept detail (mirrors the class page): Identity → Labels → Notes →
@@ -1549,7 +1552,7 @@ def build_scheme_detail(
     scheme_uri: str,
     lang: str,
     analysis: dict | None = None,
-    configured_langs: list[str] | None = None,  # accepted for builder-dispatch uniformity
+    configured_langs: list[str] | None = None,
 ) -> list[DetailField]:
     """Unified scheme detail: Settings → Labels → Notes → Metadata → Top Concepts → Statistics → Completion → Issues → Actions."""
     scheme = taxonomy.schemes.get(scheme_uri)
@@ -1563,7 +1566,7 @@ def build_scheme_detail(
 
     # ── Settings ─────────────────────────────────────────────────────────────
     fields.append(_sep("Settings"))
-    fields.extend(_scheme_settings_fields(scheme, lang))
+    fields.extend(_scheme_settings_fields(scheme, lang, configured_langs))
 
     # ── Labels ───────────────────────────────────────────────────────────────
     fields.append(_sep("Labels"))
@@ -1636,6 +1639,147 @@ def _ontology_display_name(taxonomy: Taxonomy, file_path: Path | None) -> str:
     return "OWL Ontology"
 
 
+def _class_hierarchy(
+    taxonomy: Taxonomy, allowed: set[str] | None = None
+) -> tuple[dict[str, list[str]], list[str]]:
+    class_uris = allowed if allowed is not None else set(taxonomy.owl_classes)
+    children_of: dict[str, list[str]] = {uri: [] for uri in class_uris}
+    roots: list[str] = []
+    for uri in class_uris:
+        parents = [
+            parent for parent in taxonomy.owl_classes[uri].sub_class_of if parent in class_uris
+        ]
+        if parents:
+            for parent in parents:
+                children_of[parent].append(uri)
+        else:
+            roots.append(uri)
+    roots.sort()
+    return children_of, roots
+
+
+def _class_tree_children(
+    taxonomy: Taxonomy,
+    children_of: dict[str, list[str]],
+    folded: set[str],
+    file_path: Path | None,
+    individuals_of: dict[str, list[str]],
+    visited: set[str],
+    depth: int,
+    prefix: str,
+    children: list[str],
+    individuals: list[str],
+) -> list[TreeLine]:
+    rows: list[TreeLine] = []
+    extension = prefix
+    for index, child in enumerate(children):
+        child_is_last = index == len(children) - 1 and not individuals
+        rows.extend(
+            _class_tree_branch(
+                taxonomy,
+                children_of,
+                folded,
+                file_path,
+                individuals_of,
+                visited,
+                child,
+                depth + 1,
+                extension,
+                child_is_last,
+            )
+        )
+    for index, individual_uri in enumerate(individuals):
+        individual_connector = "└── " if index == len(individuals) - 1 else "├── "
+        rows.append(
+            TreeLine(
+                uri=individual_uri,
+                depth=depth + 1,
+                prefix=prefix + extension + individual_connector,
+                file_path=file_path,
+                node_type="individual",
+            )
+        )
+    return rows
+
+
+def _class_tree_branch(
+    taxonomy: Taxonomy,
+    children_of: dict[str, list[str]],
+    folded: set[str],
+    file_path: Path | None,
+    individuals_of: dict[str, list[str]],
+    visited: set[str],
+    uri: str,
+    depth: int,
+    prefix: str,
+    is_last: bool,
+) -> list[TreeLine]:
+    if uri in visited:
+        return []
+    visited.add(uri)
+    children = children_of.get(uri, [])
+    individuals = individuals_of.get(uri, [])
+    is_folded = uri in folded and bool(children or individuals)
+    connector = "└── " if is_last else "├── "
+    row = TreeLine(
+        uri=uri,
+        depth=depth,
+        prefix=prefix + connector,
+        is_folded=is_folded,
+        hidden_count=_count_class_descendants(children_of, uri, individuals_of) if is_folded else 0,
+        file_path=file_path,
+        node_type=taxonomy.node_type(uri),
+    )
+    if is_folded:
+        return [row]
+    extension = prefix + ("    " if is_last else "│   ")
+    return [
+        row,
+        *_class_tree_children(
+            taxonomy,
+            children_of,
+            folded,
+            file_path,
+            individuals_of,
+            visited,
+            depth,
+            extension,
+            children,
+            individuals,
+        ),
+    ]
+
+
+def _class_tree_rows(
+    taxonomy: Taxonomy,
+    children_of: dict[str, list[str]],
+    roots: list[str],
+    folded: set[str],
+    file_path: Path | None,
+    depth: int,
+    prefix: str,
+    individuals_of: dict[str, list[str]],
+) -> list[TreeLine]:
+    rows: list[TreeLine] = []
+    visited: set[str] = set()
+    for index, root_uri in enumerate(roots):
+        rows.extend(
+            _class_tree_branch(
+                taxonomy,
+                children_of,
+                folded,
+                file_path,
+                individuals_of,
+                visited,
+                root_uri,
+                depth,
+                prefix,
+                index == len(roots) - 1,
+            )
+        )
+    return rows
+
+
 def flatten_mixed_tree(
     taxonomy_or_workspace: Taxonomy | TaxonomyWorkspace,
     folded: set[str] | None = None,
@@ -1695,64 +1839,18 @@ def _flatten_mixed(
     if not pure_class_uris:
         return skos_rows
 
-    # Build children index within pure classes only
-    children_of: dict[str, list[str]] = {uri: [] for uri in pure_class_uris}
-    roots: list[str] = []
-    for uri in pure_class_uris:
-        cls = taxonomy.owl_classes[uri]
-        parents_in_pure = [p for p in cls.sub_class_of if p in pure_class_uris]
-        if parents_in_pure:
-            for p in parents_in_pure:
-                children_of[p].append(uri)
-        else:
-            roots.append(uri)
-    roots.sort()
-
+    children_of, roots = _class_hierarchy(taxonomy, pure_class_uris)
     individuals_of = _build_individuals_of(taxonomy)
-    owl_rows: list[TreeLine] = []
-    _visited_mixed: set[str] = set()
-
-    def visit_class(uri: str, depth: int, prefix: str, is_last: bool) -> None:
-        if uri in _visited_mixed:
-            return
-        _visited_mixed.add(uri)
-        connector = "└── " if is_last else "├── "
-        children = children_of.get(uri, [])
-        inds = individuals_of.get(uri, [])
-        has_content = bool(children) or bool(inds)
-        is_fold = uri in folded and has_content
-        hidden = _count_class_descendants(children_of, uri, individuals_of) if is_fold else 0
-        owl_rows.append(
-            TreeLine(
-                uri=uri,
-                depth=depth,
-                prefix=prefix + connector,
-                is_folded=is_fold,
-                hidden_count=hidden,
-                file_path=file_path,
-                node_type=taxonomy.node_type(uri),
-            )
-        )
-        if not is_fold:
-            ext = "    " if is_last else "│   "
-            all_children = list(children)
-            for i, child in enumerate(all_children):
-                is_last_child = i == len(all_children) - 1 and not inds
-                visit_class(child, depth + 1, prefix + ext, is_last_child)
-            for j, ind_uri in enumerate(inds):
-                ind_connector = "└── " if j == len(inds) - 1 else "├── "
-                owl_rows.append(
-                    TreeLine(
-                        uri=ind_uri,
-                        depth=depth + 1,
-                        prefix=prefix + ext + ind_connector,
-                        file_path=file_path,
-                        node_type="individual",
-                    )
-                )
-
-    for i, root_uri in enumerate(roots):
-        visit_class(root_uri, concept_base_depth, scheme_prefix, i == len(roots) - 1)
+    owl_rows = _class_tree_rows(
+        taxonomy,
+        children_of,
+        roots,
+        folded,
+        file_path,
+        concept_base_depth,
+        scheme_prefix,
+        individuals_of,
+    )
 
     ontology_name = _ontology_display_name(taxonomy, file_path)
     ont_root = TreeLine(
@@ -1919,60 +2017,12 @@ def _flatten_ontology(
     if not taxonomy.owl_classes and not unattached:
         return []
 
-    # Build parent→children index within the known owl_classes
-    children_of: dict[str, list[str]] = {uri: [] for uri in taxonomy.owl_classes}
-    roots: list[str] = []
-    for uri, cls in taxonomy.owl_classes.items():
-        parents_in_graph = [p for p in cls.sub_class_of if p in taxonomy.owl_classes]
-        if parents_in_graph:
-            for parent in parents_in_graph:
-                children_of[parent].append(uri)
-        else:
-            roots.append(uri)
-    roots.sort()
-
+    children_of, roots = _class_hierarchy(taxonomy)
     individuals_of = _build_individuals_of(taxonomy)
+    class_rows = _class_tree_rows(
+        taxonomy, children_of, roots, folded, file_path, 1, "    ", individuals_of
+    )
     result: list[TreeLine] = []
-    _visited: set[str] = set()
-
-    def visit(uri: str, depth: int, prefix: str, is_last: bool) -> None:
-        if uri in _visited:
-            return
-        _visited.add(uri)
-        connector = "└── " if is_last else "├── "
-        children = children_of.get(uri, [])
-        inds = individuals_of.get(uri, [])
-        has_content = bool(children) or bool(inds)
-        is_fold = uri in folded and has_content
-        hidden = _count_class_descendants(children_of, uri, individuals_of) if is_fold else 0
-        result.append(
-            TreeLine(
-                uri=uri,
-                depth=depth,
-                prefix=prefix + connector,
-                is_folded=is_fold,
-                hidden_count=hidden,
-                file_path=file_path,
-                node_type=taxonomy.node_type(uri),
-            )
-        )
-        if not is_fold:
-            ext = "    " if is_last else "│   "
-            all_children = list(children)
-            for i, child in enumerate(all_children):
-                is_last_child = i == len(all_children) - 1 and not inds
-                visit(child, depth + 1, prefix + ext, is_last_child)
-            for j, ind_uri in enumerate(inds):
-                ind_connector = "└── " if j == len(inds) - 1 else "├── "
-                result.append(
-                    TreeLine(
-                        uri=ind_uri,
-                        depth=depth + 1,
-                        prefix=prefix + ext + ind_connector,
-                        file_path=file_path,
-                        node_type="individual",
-                    )
-                )
 
     ontology_name = _ontology_display_name(taxonomy, file_path)
     ont_root = TreeLine(
@@ -2017,10 +2067,7 @@ def _flatten_ontology(
                         node_type="individual",
                     )
                 )
-
-    # ── Root OWL classes ──────────────────────────────────────────────────────
-    for i, root_uri in enumerate(roots):
-        visit(root_uri, 1, "    ", i == len(roots) - 1)
+    result.extend(class_rows)
 
     return [ont_root] + result
 
@@ -2484,9 +2531,9 @@ def build_promoted_detail(
     concept = taxonomy.concepts.get(uri)
     rdf_class = taxonomy.owl_classes.get(uri)
     if not concept:
-        return build_rdf_class_detail(taxonomy, uri, lang)
+        return build_rdf_class_detail(taxonomy, uri, lang, configured_langs)
     if not rdf_class:
-        return build_concept_detail(taxonomy, uri, lang, show_mappings=show_mappings)
+        return build_concept_detail(taxonomy, uri, lang, configured_langs)
 
     fields: list[DetailField] = []
 
@@ -2875,9 +2922,9 @@ def _ontology_quality_fields(
     fields.append(_sep("Class Quality"))
     fields.append(_stat("ont:q:classes", "total classes", str(st.total_classes)))
     fields.append(_stat("ont:q:roots", "root classes", str(st.root_classes)))
-    fields.append(_stat("ont:q:depth", "max depth", str(st.max_depth)))
+    fields.append(_stat("ont:q:depth", _MAX_DEPTH, str(st.max_depth)))
     if st.total_classes:
-        fields.append(_pct_stat("ont:q:lbl", "rdfs:label", st.label_pct))
+        fields.append(_pct_stat("ont:q:lbl", _RDFS_LABEL, st.label_pct))
         fields.append(_pct_stat("ont:q:cmt", "rdfs:comment", st.comment_pct))
 
     # ── By level ──────────────────────────────────────────────────────────────
@@ -3368,7 +3415,7 @@ def _stats_classes(taxonomy: Taxonomy) -> list[DetailField]:
     if depths:
         avg = sum(depths.values()) / len(depths)
         fields.append(_stat("st:avg_depth", "avg depth", f"{avg:.1f}"))
-        fields.append(_stat("st:max_depth", "max depth", str(max(depths.values()))))
+        fields.append(_stat("st:max_depth", _MAX_DEPTH, str(max(depths.values()))))
     return fields
 
 
@@ -3746,7 +3793,7 @@ def build_properties_section_fields(taxonomy: Taxonomy, lang: str) -> list[Detai
         lbl_pct = _pct(sum(1 for p in props if p.labels), n)
         dom_pct = _pct(sum(1 for p in props if p.domains), n)
         rng_pct = _pct(sum(1 for p in props if p.ranges), n)
-        fields.append(_pct_stat("props:cov:label", "rdfs:label", lbl_pct))
+        fields.append(_pct_stat("props:cov:label", _RDFS_LABEL, lbl_pct))
         fields.append(_pct_stat("props:cov:domain", "rdfs:domain", dom_pct))
         fields.append(_pct_stat("props:cov:range", "rdfs:range", rng_pct))
 
@@ -3784,10 +3831,10 @@ def build_detail_fields(
     taxonomy: Taxonomy,
     uri: str,
     lang: str,
-    show_mappings: bool = False,
+    show_mappings: bool = False,  # noqa: ARG001 - retained for backward compatibility
 ) -> list[DetailField]:
     """Backward-compat alias for build_concept_detail."""
-    return build_concept_detail(taxonomy, uri, lang, show_mappings=show_mappings)
+    return build_concept_detail(taxonomy, uri, lang)
 
 
 def _display_lang_field(lang: str) -> DetailField:
@@ -3842,7 +3889,7 @@ def build_scheme_fields(
         if not scheme:
             return []
         scheme_uri = scheme.uri
-    return build_scheme_detail(taxonomy, scheme_uri, lang, analysis=None)
+    return build_scheme_detail(taxonomy, scheme_uri, lang)
 
 
 # ──────────────────────────── global overview ────────────────────────────────
@@ -3934,6 +3981,231 @@ def build_individual_candidates_grouped(
     return candidates
 
 
+def _global_server_fields(
+    lang: str,
+    server_url: str,
+    server_port: int,
+    show_token: bool,
+    pending_restart: bool,
+    ontology_slug: str | None,
+) -> list[DetailField]:
+    fields = [_sep("Local Server Configuration")]
+    if pending_restart:
+        fields.append(
+            DetailField(
+                "server:restart_warning",
+                "⚠ restart required",
+                "close browser tabs then relaunch ster",
+                editable=False,
+                meta={"type": "warning"},
+            )
+        )
+    fields.extend(
+        [
+            DetailField(
+                "server:url",
+                "server URL",
+                server_url,
+                editable=False,
+                meta={"type": "action", "action": "edit_server_url"},
+            ),
+            DetailField(
+                "server:port",
+                "port",
+                str(server_port),
+                editable=False,
+                meta={"type": "action", "action": "edit_server_port"},
+            ),
+            DetailField(
+                "server:token",
+                "bearer token",
+                _load_bearer_token() if show_token else "***",
+                editable=False,
+                meta={"type": "action", "action": "show_bearer_token"},
+            ),
+        ]
+    )
+    if ontology_slug is not None:
+        host = server_url.rstrip("/")
+        fields.extend(
+            [
+                _stat(
+                    "ontology:serving_url",
+                    "ontology serving URL",
+                    f"{host}:{server_port}/{ontology_slug}",
+                ),
+                _stat("ontology:viz_url", "VoWL graph URL", f"{host}:{server_port}/viz"),
+            ]
+        )
+    fields.extend(
+        [
+            _sep("LLM Setup"),
+            _display_lang_field(lang),
+            _add_action_field("llm:ai_config", "configure AI model", "open_ai_config"),
+        ]
+    )
+    return fields
+
+
+def _global_taxonomy_counts(all_taxes: list[Taxonomy]) -> tuple[int, int, int]:
+    return (
+        sum(len(t.schemes) for t in all_taxes),
+        sum(len(t.concepts) for t in all_taxes),
+        sum(len(t.owl_classes) for t in all_taxes),
+    )
+
+
+def _global_languages(all_taxes: list[Taxonomy]) -> str:
+    languages = {
+        label.lang
+        for taxonomy in all_taxes
+        for concept in taxonomy.concepts.values()
+        for label in concept.labels
+        if label.value
+    }
+    return ", ".join(sorted(languages)) if languages else "—"
+
+
+def _global_overview_fields(
+    workspace: TaxonomyWorkspace,
+) -> tuple[list[DetailField], list[Taxonomy], int, int]:
+    all_taxes = list(workspace.taxonomies.values())
+    n_schemes, n_concepts, n_owl = _global_taxonomy_counts(all_taxes)
+    fields = [
+        _sep("Overview"),
+        _stat("g:files", "taxonomy files", str(len(workspace.taxonomies))),
+    ]
+    optional_stats = (
+        (n_schemes, "g:schemes", "concept schemes"),
+        (n_concepts, "g:concepts", "total concepts"),
+        (n_owl, "g:owl", "OWL classes"),
+    )
+    fields.extend(_stat(key, label, str(count)) for count, key, label in optional_stats if count)
+    fields.append(_stat("g:langs", "languages", _global_languages(all_taxes)))
+    return fields, all_taxes, n_schemes, n_owl
+
+
+def _global_owl_missing_counts(all_taxes: list[Taxonomy]) -> tuple[int, int]:
+    missing_lbl = sum(sum(1 for cls in t.owl_classes.values() if not cls.labels) for t in all_taxes)
+    missing_cmt = sum(
+        sum(1 for cls in t.owl_classes.values() if not cls.comments) for t in all_taxes
+    )
+    return missing_lbl, missing_cmt
+
+
+def _global_owl_counts(all_taxes: list[Taxonomy]) -> tuple[int, int, int, int, int]:
+    n_owl = sum(len(t.owl_classes) for t in all_taxes)
+    n_promoted = sum(sum(uri in t.concepts for uri in t.owl_classes) for t in all_taxes)
+    max_depth = max(
+        (compute_owl_analysis(t).max_depth for t in all_taxes if t.owl_classes),
+        default=0,
+    )
+    missing_lbl, missing_cmt = _global_owl_missing_counts(all_taxes)
+    return n_owl, n_promoted, max_depth, missing_lbl, missing_cmt
+
+
+def _global_owl_missing_fields(missing_lbl: int, missing_cmt: int) -> list[DetailField]:
+    fields: list[DetailField] = []
+    if missing_lbl:
+        fields.append(_stat("owl:miss_lbl", "missing rdfs:label", str(missing_lbl)))
+    if missing_cmt:
+        fields.append(_stat("owl:miss_cmt", "missing rdfs:comment", str(missing_cmt)))
+    return fields
+
+
+def _global_owl_fields(all_taxes: list[Taxonomy], n_owl: int) -> list[DetailField]:
+    if not n_owl:
+        return []
+    _, n_promoted, max_depth, missing_lbl, missing_cmt = _global_owl_counts(all_taxes)
+    n_pure = n_owl - n_promoted
+    fields = [_sep("OWL Classes")]
+    if n_promoted:
+        fields.append(_stat("owl:promoted", "promoted (concept+class)", str(n_promoted)))
+    if n_pure:
+        fields.append(_stat("owl:pure", "pure classes", str(n_pure)))
+    fields.append(_stat("owl:depth", _MAX_DEPTH, str(max_depth)))
+    fields.extend(_global_owl_missing_fields(missing_lbl, missing_cmt))
+    return fields
+
+
+def _aggregate_completions(
+    analysis: dict[str, SchemeAnalysis],
+) -> dict[str, tuple[str, int, dict[str, int]]]:
+    aggregate: dict[str, tuple[str, int, dict[str, int]]] = {}
+    for scheme_analysis in analysis.values():
+        for completion in scheme_analysis.completions:
+            display, total, by_language = aggregate.get(
+                completion.property_key, (completion.display_name, 0, {})
+            )
+            by_language = {**by_language}
+            total += completion.total
+            for language, count in completion.by_language.items():
+                by_language[language] = by_language.get(language, 0) + count
+            aggregate[completion.property_key] = (display, total, by_language)
+    return aggregate
+
+
+def _completion_field(
+    prop_key: str, display: str, total: int, by_language: dict[str, int]
+) -> DetailField | None:
+    if not total:
+        return None
+    best_count = max(by_language.values(), default=0)
+    best_pct = int(best_count * 100 / total)
+    language_parts = [
+        f"[{language}] {int(count * 100 / total)}%"
+        for language, count in sorted(by_language.items())
+    ]
+    value = (
+        f"{_pct_bar(best_pct)}  " + "  ".join(language_parts)
+        if language_parts
+        else _pct_bar(best_pct)
+    )
+    return _stat(f"g:comp:{prop_key}", display, value)
+
+
+def _global_completion_fields(
+    analysis: dict[str, SchemeAnalysis],
+) -> list[DetailField]:
+    aggregate = _aggregate_completions(analysis)
+    fields = [
+        field
+        for key, (display, total, by_language) in aggregate.items()
+        if (field := _completion_field(key, display, total, by_language)) is not None
+    ]
+    return [_sep("Completeness"), *fields] if fields else []
+
+
+def _global_issue_fields(analysis: dict[str, SchemeAnalysis]) -> list[DetailField]:
+    total_errors = sum(
+        sum(issue.severity == "error" for issue in scheme_analysis.issues)
+        for scheme_analysis in analysis.values()
+    )
+    total_warnings = sum(
+        sum(issue.severity == "warning" for issue in scheme_analysis.issues)
+        for scheme_analysis in analysis.values()
+    )
+    fields = [_sep("Quality")]
+    if not total_errors and not total_warnings:
+        return [*fields, _stat("g:issues:ok", "✓ no issues", "")]
+    if total_errors:
+        fields.append(_stat("g:errors", "⊘ errors", str(total_errors)))
+    if total_warnings:
+        fields.append(_stat("g:warnings", "⚠ warnings", str(total_warnings)))
+    return fields
+
+
+def _global_analysis_fields(
+    n_schemes: int,
+    analysis: dict[str, SchemeAnalysis] | None,
+) -> list[DetailField]:
+    if not n_schemes:
+        return []
+    if not analysis:
+        return [_sep("Completeness & Quality"), _stat("g:pending", "analysis", "loading…")]
+    return [*_global_completion_fields(analysis), *_global_issue_fields(analysis)]
+
+
 def build_global_fields(
     workspace: TaxonomyWorkspace | None,
     analysis: dict[str, SchemeAnalysis] | None,
@@ -3950,253 +4222,23 @@ def build_global_fields(
     sections are included (used by the standalone config screen).
     """
 
-    fields: list[DetailField] = []
-
-    # ── 1. Local Server Configuration ─────────────────────────────────────────
-    fields.append(_sep("Local Server Configuration"))
-    if pending_restart:
-        fields.append(
-            DetailField(
-                "server:restart_warning",
-                "⚠ restart required",
-                "close browser tabs then relaunch ster",
-                editable=False,
-                meta={"type": "warning"},
-            )
-        )
-    fields.append(
-        DetailField(
-            "server:url",
-            "server URL",
-            server_url,
-            editable=False,
-            meta={"type": "action", "action": "edit_server_url"},
-        )
+    fields = _global_server_fields(
+        lang, server_url, server_port, show_token, pending_restart, ontology_slug
     )
-    fields.append(
-        DetailField(
-            "server:port",
-            "port",
-            str(server_port),
-            editable=False,
-            meta={"type": "action", "action": "edit_server_port"},
-        )
-    )
-    _token_value = _load_bearer_token() if show_token else "***"
-    fields.append(
-        DetailField(
-            "server:token",
-            "bearer token",
-            _token_value,
-            editable=False,
-            meta={"type": "action", "action": "show_bearer_token"},
-        )
-    )
-    if ontology_slug is not None:
-        _host = server_url.rstrip("/")
-        fields.append(
-            DetailField(
-                "ontology:serving_url",
-                "ontology serving URL",
-                f"{_host}:{server_port}/{ontology_slug}",
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-        fields.append(
-            DetailField(
-                "ontology:viz_url",
-                "VoWL graph URL",
-                f"{_host}:{server_port}/viz",
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-
-    # ── 2. LLM Setup ──────────────────────────────────────────────────────────
-    fields.append(_sep("LLM Setup"))
-    fields.append(_display_lang_field(lang))
-    fields.append(_add_action_field("llm:ai_config", "configure AI model", "open_ai_config"))
-
     if workspace is None:
         return fields
-
-    # ── 3. Keyboard shortcuts ─────────────────────────────────────────────────
     fields.append(_sep("Keyboard Shortcuts"))
-    for keys, desc in _HELP_HINTS:
-        fields.append(
-            DetailField(
-                f"help:{keys}",
-                keys,
-                desc,
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-
-    # ── 3. Overview stats ─────────────────────────────────────────────────────
-    n_files = len(workspace.taxonomies)
-    all_taxes = list(workspace.taxonomies.values())
-    n_schemes = sum(len(t.schemes) for t in all_taxes)
-    n_concepts = sum(len(t.concepts) for t in all_taxes)
-    n_owl = sum(len(t.owl_classes) for t in all_taxes)
-    n_promoted = sum(sum(1 for uri in t.owl_classes if uri in t.concepts) for t in all_taxes)
-    n_pure = n_owl - n_promoted
-    all_langs: set[str] = set()
-    for t in all_taxes:
-        for c in t.concepts.values():
-            for lbl in c.labels:
-                if lbl.value:
-                    all_langs.add(lbl.lang)
-
-    fields.append(_sep("Overview"))
-    fields.append(
-        DetailField(
-            "g:files", "taxonomy files", str(n_files), editable=False, meta={"type": "stat"}
-        )
-    )
-    if n_schemes:
-        fields.append(
-            DetailField(
-                "g:schemes",
-                "concept schemes",
-                str(n_schemes),
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-    if n_concepts:
-        fields.append(
-            DetailField(
-                "g:concepts",
-                "total concepts",
-                str(n_concepts),
-                editable=False,
-                meta={"type": "stat"},
-            )
-        )
-    if n_owl:
-        fields.append(
-            DetailField("g:owl", "OWL classes", str(n_owl), editable=False, meta={"type": "stat"})
-        )
-    fields.append(
-        DetailField(
-            "g:langs",
-            "languages",
-            ", ".join(sorted(all_langs)) if all_langs else "—",
-            editable=False,
-            meta={"type": "stat"},
-        )
-    )
-
-    # ── 4. OWL classes quality (always shown when classes present) ────────────
-    if n_owl:
-        max_depth = max(
-            (compute_owl_analysis(t).max_depth for t in all_taxes if t.owl_classes),
-            default=0,
-        )
-        missing_lbl = sum(
-            sum(1 for cls in t.owl_classes.values() if not cls.labels) for t in all_taxes
-        )
-        missing_cmt = sum(
-            sum(1 for cls in t.owl_classes.values() if not cls.comments) for t in all_taxes
-        )
-        fields.append(_sep("OWL Classes"))
-        if n_promoted:
-            fields.append(_stat("owl:promoted", "promoted (concept+class)", str(n_promoted)))
-        if n_pure:
-            fields.append(_stat("owl:pure", "pure classes", str(n_pure)))
-        fields.append(_stat("owl:depth", "max depth", str(max_depth)))
-        if missing_lbl:
-            fields.append(_stat("owl:miss_lbl", "missing rdfs:label", str(missing_lbl)))
-        if missing_cmt:
-            fields.append(_stat("owl:miss_cmt", "missing rdfs:comment", str(missing_cmt)))
-
-    # ── 5. Completeness / Quality (SKOS only — skip when no schemes) ──────────
-    if n_schemes:
-        if analysis:
-            agg: dict[str, tuple[str, int, dict[str, int]]] = {}
-            for sa in analysis.values():
-                for comp in sa.completions:
-                    if comp.property_key not in agg:
-                        agg[comp.property_key] = (comp.display_name, 0, {})
-                    disp, tot, by_lang = agg[comp.property_key]
-                    tot += comp.total
-                    for lg, cnt in comp.by_language.items():
-                        by_lang[lg] = by_lang.get(lg, 0) + cnt
-                    agg[comp.property_key] = (disp, tot, by_lang)
-
-            if agg:
-                fields.append(_sep("Completeness"))
-                for prop_key, (disp, total, by_lang) in agg.items():
-                    if total == 0:
-                        continue
-                    best_lang, best_cnt = (
-                        max(by_lang.items(), key=lambda kv: kv[1]) if by_lang else ("—", 0)
-                    )
-                    best_pct = int(best_cnt * 100 / total) if total else 0
-                    bar = _pct_bar(best_pct)
-                    lang_parts = []
-                    for lg, cnt in sorted(by_lang.items()):
-                        pct = int(cnt * 100 / total) if total else 0
-                        lang_parts.append(f"[{lg}] {pct}%")
-                    value = f"{bar}  " + "  ".join(lang_parts) if lang_parts else f"{bar}"
-                    fields.append(
-                        DetailField(
-                            f"g:comp:{prop_key}",
-                            disp,
-                            value,
-                            editable=False,
-                            meta={"type": "stat"},
-                        )
-                    )
-
-            total_errors = sum(
-                sum(1 for i in sa.issues if i.severity == "error") for sa in analysis.values()
-            )
-            total_warnings = sum(
-                sum(1 for i in sa.issues if i.severity == "warning") for sa in analysis.values()
-            )
-            fields.append(_sep("Quality"))
-            if total_errors == 0 and total_warnings == 0:
-                fields.append(
-                    DetailField(
-                        "g:issues:ok", "✓ no issues", "", editable=False, meta={"type": "stat"}
-                    )
-                )
-            else:
-                if total_errors:
-                    fields.append(
-                        DetailField(
-                            "g:errors",
-                            "⊘ errors",
-                            str(total_errors),
-                            editable=False,
-                            meta={"type": "stat"},
-                        )
-                    )
-                if total_warnings:
-                    fields.append(
-                        DetailField(
-                            "g:warnings",
-                            "⚠ warnings",
-                            str(total_warnings),
-                            editable=False,
-                            meta={"type": "stat"},
-                        )
-                    )
-        else:
-            fields.append(_sep("Completeness & Quality"))
-            fields.append(
-                DetailField(
-                    "g:pending", "analysis", "loading…", editable=False, meta={"type": "stat"}
-                )
-            )
-
-    fields.append(_sep("Graph"))
-    fields.append(
-        _add_action_field(
-            "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
-        )
+    fields.extend(_stat(f"help:{keys}", keys, desc) for keys, desc in _HELP_HINTS)
+    overview, all_taxes, n_schemes, n_owl = _global_overview_fields(workspace)
+    fields.extend(overview)
+    fields.extend(_global_owl_fields(all_taxes, n_owl))
+    fields.extend(_global_analysis_fields(n_schemes, analysis))
+    fields.extend(
+        [
+            _sep("Graph"),
+            _add_action_field(
+                "action:view_ontology_graph", "⊙ View graph in browser", "view_ontology_graph"
+            ),
+        ]
     )
     return fields
