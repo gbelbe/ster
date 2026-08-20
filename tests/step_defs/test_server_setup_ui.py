@@ -84,10 +84,16 @@ def then_server_setup_section(ctx):
     assert "Local Server Configuration" in labels
 
 
-@then('a section labelled "LLM Setup" is present')
-def then_llm_setup_section(ctx):
+@then('a section labelled "Display" is present')
+def then_display_section(ctx):
     labels = [f.display for f in ctx["fields"] if f.meta.get("type") == "separator"]
-    assert "LLM Setup" in labels
+    assert "Display" in labels
+
+
+@then('no section is labelled "LLM Setup"')
+def then_no_llm_setup_section(ctx):
+    labels = [f.display for f in ctx["fields"] if f.meta.get("type") == "separator"]
+    assert "LLM Setup" not in labels
 
 
 @then('no section is labelled exactly "Setup"')
@@ -114,16 +120,15 @@ def then_bearer_token_field(ctx):
     assert any(f.display == "bearer token" for f in section)
 
 
-@then('the LLM Setup section contains a field with action "pick_lang"')
-def then_pick_lang_in_llm(ctx):
-    section = _fields_in_section(ctx["fields"], "LLM Setup")
+@then('the Display section contains a field with action "pick_lang"')
+def then_pick_lang_in_display(ctx):
+    section = _fields_in_section(ctx["fields"], "Display")
     assert any(f.meta.get("action") == "pick_lang" for f in section)
 
 
-@then('the LLM Setup section contains a field with action "open_ai_config"')
-def then_ai_config_in_llm(ctx):
-    section = _fields_in_section(ctx["fields"], "LLM Setup")
-    assert any(f.meta.get("action") == "open_ai_config" for f in section)
+@then('no field carries the action "open_ai_config"')
+def then_no_ai_config_action(ctx):
+    assert all(f.meta.get("action") != "open_ai_config" for f in ctx["fields"])
 
 
 @then("the Local Server Configuration section contains a restart warning field")

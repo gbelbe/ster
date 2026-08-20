@@ -19,7 +19,6 @@ requires-python = ">=3.12"
 #   rich     — terminal rendering: colours, tables, prompts
 #   fastapi  — graph/publish server (Version & Publish LD opens live web pages)
 #   pylode   — HTML documentation export (VocPub / OntPub profiles)
-#   llm      — LLM-powered concept suggestions (online & offline models)
 #
 dependencies = [
     "rdflib>=7.0",
@@ -30,8 +29,7 @@ dependencies = [
     "fastapi[standard]>=0.110",   # includes uvicorn[standard]
     "watchfiles>=0.21",           # file-change watcher for live push
     "pylode>=3.0",                # HTML export
-    "llm>=0.19",                  # AI assist
-    "httpx>=0.27",                # AI model detection & API calls
+    "httpx>=0.27",                # HTTP client (FastAPI TestClient / server calls)
     "pydantic>=2.0",              # API models
     "pyyaml>=6.0",                # Config loading (semanticlint)
     "msgpack>=1.2.1",             # pin away from GHSA-6v7p-g79w-8964
@@ -43,9 +41,9 @@ dependencies = [
 
 # ── Optional dependency groups ────────────────────────────────────────────────
 #
-#   The former html / ai / api extras are now part of the core dependencies
+#   The former html / api extras are now part of the core dependencies
 #   above, so a plain `pip install ster` (or `uv tool install ster`) ships the
-#   HTML export, AI assist, and graph/publish server out of the box.
+#   HTML export and the graph/publish server out of the box.
 #
 #   dev   — test suite + all linting / security tools (mirrors CI)
 #             install:  pip install "ster[dev]"
@@ -207,13 +205,6 @@ type = "forbidden"
 source_modules = ["ster"]
 forbidden_modules = ["pylode"]
 ignore_imports = ["ster.html_export -> pylode"]
-
-[[tool.importlinter.contracts]]
-name = "llm only via ster.ai"
-type = "forbidden"
-source_modules = ["ster"]
-forbidden_modules = ["llm"]
-ignore_imports = ["ster.ai -> llm"]
 
 [[tool.importlinter.contracts]]
 name = "semanticlint only via the semanticlint plugin"

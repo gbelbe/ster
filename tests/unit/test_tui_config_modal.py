@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App
-from textual.widgets import Button, Checkbox, Input, Select
+from textual.widgets import Button, Checkbox, Input, Select, Tabs
 
 from ster import store
 from ster.metadata_coverage import MetaProp
@@ -579,7 +579,7 @@ def test_display_language_change_autosaves(tmp_path) -> None:
 # ── single-Tab-stop language group ──────────────────────────────────────────────
 
 
-def test_block_is_one_focus_stop_with_arrow_toggle_and_tab_exits_to_llm() -> None:
+def test_block_is_one_focus_stop_with_arrow_toggle_and_tab_exits_to_tabs() -> None:
     async def scenario() -> None:
         app = _Host()
         async with app.run_test() as pilot:
@@ -600,10 +600,10 @@ def test_block_is_one_focus_stop_with_arrow_toggle_and_tab_exits_to_llm() -> Non
             # The field and + button are inside the block (reached with arrows).
             assert modal.query_one("#cfg-extra", Input) in group._items()
             assert modal.query_one("#cfg-add") in group._items()
-            # Tab leaves the block straight to the LLM mode Select.
+            # Last group in the tab: Tab leaves the block back to the tab bar.
             group.action_exit_next()
             await pilot.pause()
-            assert modal.query_one("#llm-mode-select").has_focus
+            assert modal.query_one(Tabs).has_focus
 
     _run(scenario)
 

@@ -4,9 +4,9 @@ Opened with a shortcut. Everything auto-saves — there is no Save button; each
 change (display language, theme, a toggled/added language) posts a
 :class:`ConfigModal.Changed` message that the app applies and persists. Esc closes.
 
-The configured-languages block is a single Tab stop: Tab from it jumps to
-"Configure LLM"; inside, the arrow keys move between the checkboxes, the narrow
-"add" field and its button. The theme dropdown applies live.
+The configured-languages block is a single Tab stop: Tab from it returns to the
+tab bar; inside, the arrow keys move between the checkboxes, the narrow "add"
+field and its button. The theme dropdown applies live.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from ster.tui.check import Check
 from .choice_modal import ChoiceModal
 from .focus_group import FocusGroup, FormGroup
 from .hint_bar import Hint
-from .llm_group import LlmSetup
 from .local_property_modal import LocalPropertyModal
 from .modal import ModalBase
 
@@ -197,7 +196,7 @@ class _LangGroup(FocusGroup):
     """The configured-languages block: the checkboxes *and* the add field/+ button as
     one Tab stop. Space/enter toggles the current checkbox (the rest is inherited)."""
 
-    exit_next = "#llm-mode-select"
+    exit_next = "Tabs"  # last group in the tab → Tab returns to the tab bar
     exit_prev = "#cfg-server"
 
     def _items(self) -> list:  # type: ignore[type-arg]
@@ -518,7 +517,7 @@ class _MetaCatalog(FocusGroup):
 
 
 class ConfigModal(ModalBase[None]):
-    """Display language + theme + configured languages + an LLM entry (auto-saving)."""
+    """Display language + theme + configured languages (auto-saving)."""
 
     DEFAULT_CSS = """
     /* A fixed modal size so it doesn't resize when switching tabs. The tabs fill
@@ -629,14 +628,6 @@ class ConfigModal(ModalBase[None]):
     #cfg-server-url { width: 3fr; }      /* URL takes the lion's share */
     #cfg-server-port { width: 1fr; margin-left: 1; }
     #cfg-server-token { width: 1fr; }
-    /* Inline LLM setup block (its own FocusGroup). */
-    #cfg-llm {
-        border: round $foreground 40%;
-        border-title-color: $foreground 70%;
-        padding: 0 1;
-        margin-bottom: 1;
-    }
-    #cfg-llm:focus-within { border: round $primary; border-title-color: $primary; }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Close")]
@@ -896,8 +887,6 @@ class ConfigModal(ModalBase[None]):
                     id="cfg-extra",
                 )
                 yield Button("+", id="cfg-add")
-        yield Static("Configure LLM", classes="cfg-label")
-        yield LlmSetup(id="cfg-llm")
 
     def _props_tab(self) -> ComposeResult:
         yield Static(
@@ -943,7 +932,6 @@ class ConfigModal(ModalBase[None]):
         self.query_one("#cfg-box").border_title = "Configuration"
         self.query_one("#cfg-server").border_title = "Local server (ster serve)"
         self.query_one("#cfg-langs").border_title = "Configured languages"
-        self.query_one("#cfg-llm").border_title = "LLM"
         # Land on the tab bar: space switches tabs, then Tab/arrows enter the items.
         self.query_one(Tabs).focus()
         self._ready = True

@@ -117,9 +117,6 @@ Only after the user approves the simplified scope and test plan should you proce
 ## Project conventions
 
 - State machine pattern: one dataclass per viewer mode in `nav_state.py`, pure `_draw_*` / `_on_*` methods in `nav.py`
-- All AI prompts live in `prompts.py` as `string.Template` objects — no prompt strings in logic files
-- Use `${var}` syntax in templates when the variable name is immediately followed by a non-separator character
-- AI functions in `ai.py` must go through `_call()` for copypaste/LLM dispatch
 - Curses must be suspended (`curses.endwin()`) before any non-curses terminal I/O (Rich, input()), then resumed (`stdscr.refresh()`)
 - All new features need tests; run the full suite before committing
 
@@ -127,7 +124,7 @@ Only after the user approves the simplified scope and test plan should you proce
 
 Third-party libraries must stay easy to upgrade without breaking changes:
 
-- **Isolate every external library behind a thin internal adapter** — the rest of the code imports our module, never the library directly. Follow the existing pattern: `llm` is reached only through `ai.py::_call()`, pyLODE only through `html_export.py`. A library swap or major upgrade should touch one file, not the whole tree.
+- **Isolate every external library behind a thin internal adapter** — the rest of the code imports our module, never the library directly. Follow the existing pattern: pyLODE is reached only through `html_export.py`, FastAPI only through `api.py`. A library swap or major upgrade should touch one file, not the whole tree.
 - **Keep the dependency list minimal** — apply YAGNI to dependencies too. Don't add a library for what the stdlib or an existing dependency already does; justify each new dependency in the PR.
 - **Constrain versions deliberately** in `pyproject.toml` (a lower bound on the features you actually use) and commit the resolved `uv.lock` so installs are reproducible.
 - **On every upgrade**: read the library's changelog for breaking changes, bump `uv.lock`, then run the full gate (`/ci`) plus `pip-audit` before committing. Pin away from a release only with a comment explaining why.

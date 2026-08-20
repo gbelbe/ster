@@ -17,7 +17,6 @@ core_deps = {
     "fastapi",
     "watchfiles",
     "pylode",
-    "llm",
     "httpx",
     "yaml",  # pyyaml
     "msgpack",

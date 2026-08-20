@@ -47,6 +47,22 @@ if [[ -n "$DELETED_UNSTAGED" ]]; then
 fi
 ok "no ghost deletions"
 
+# ── 0b. Pre-flight: untracked Python files ───────────────────────────────────
+# prek's --all-files means "all files git knows about" — an untracked .py file
+# is invisible to it. Write a new module or test, run the gate, and every static
+# check silently skips it; the moment it is committed, GitHub lints it for the
+# first time and fails. Intent-to-add (git add -N) is enough to make prek see a
+# file while leaving its contents unstaged.
+step "Pre-flight: untracked Python files"
+UNTRACKED_PY=$(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null || true)
+if [[ -n "$UNTRACKED_PY" ]]; then
+  echo -e "${FAIL} Untracked .py files — prek cannot see them, so GitHub lints them first:"
+  while IFS= read -r f; do echo "  ? $f"; done <<< "$UNTRACKED_PY"
+  echo -e "  Fix: git add -N \$file   (intent-to-add; contents stay unstaged)"
+  exit 1
+fi
+ok "no untracked Python files"
+
 # ── 1. Ensure main dev deps are installed ─────────────────────────────────────
 step "Install deps (main env)"
 uv sync --extra dev --quiet

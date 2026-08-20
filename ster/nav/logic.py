@@ -4037,13 +4037,9 @@ def _global_server_fields(
                 _stat("ontology:viz_url", "VoWL graph URL", f"{host}:{server_port}/viz"),
             ]
         )
-    fields.extend(
-        [
-            _sep("LLM Setup"),
-            _display_lang_field(lang),
-            _add_action_field("llm:ai_config", "configure AI model", "open_ai_config"),
-        ]
-    )
+    # The display-language picker is not an LLM concern; it outlived the
+    # "LLM Setup" section that used to house it.
+    fields.extend([_sep("Display"), _display_lang_field(lang)])
     return fields
 
 
@@ -4218,7 +4214,7 @@ def build_global_fields(
 ) -> list[DetailField]:
     """Build DetailField list for the global overview panel.
 
-    When *workspace* is None only Local Server Configuration and LLM Setup
+    When *workspace* is None only the Local Server Configuration and Display
     sections are included (used by the standalone config screen).
     """
 

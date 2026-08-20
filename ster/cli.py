@@ -931,9 +931,6 @@ def _load_workspace(
     return workspace
 
 
-# ──────────────────────────── AI config launcher ─────────────────────────────
-
-
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
 

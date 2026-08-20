@@ -1,6 +1,6 @@
 Feature: Server setup UI in the global overview panel
   As a ster user
-  I want to configure the server and LLM from the global overview panel
+  I want to configure the server and the display language from the global overview panel
   So that everything is discoverable in one place
 
   Background:
@@ -22,17 +22,21 @@ Feature: Server setup UI in the global overview panel
     When I build the global overview fields
     Then the Local Server Configuration section contains a field labelled "bearer token"
 
-  Scenario: LLM Setup section is present
+  Scenario: Display section is present
     When I build the global overview fields
-    Then a section labelled "LLM Setup" is present
+    Then a section labelled "Display" is present
 
-  Scenario: Language picker is in LLM Setup section
+  Scenario: Language picker is in Display section
     When I build the global overview fields
-    Then the LLM Setup section contains a field with action "pick_lang"
+    Then the Display section contains a field with action "pick_lang"
 
-  Scenario: AI config action is in LLM Setup section
+  Scenario: No LLM section remains
     When I build the global overview fields
-    Then the LLM Setup section contains a field with action "open_ai_config"
+    Then no section is labelled "LLM Setup"
+
+  Scenario: No AI config action remains
+    When I build the global overview fields
+    Then no field carries the action "open_ai_config"
 
   Scenario: No bare "Setup" section remains
     When I build the global overview fields

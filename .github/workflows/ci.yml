@@ -147,15 +147,13 @@ jobs:
 
       - name: Patch coverage — changed lines must be ≥ 90% covered
         # Diff-aware: only on PRs, once (latest Python).
-        # The interactive curses layer (viewer.py / ai_model_picker.py) is driven by
-        # terminal I/O that unit tests can't exercise, so it is excluded from the
-        # patch-coverage gate — the 90% floor still applies to every other module.
+        # The 90% floor applies to every module — the curses-era exclusions
+        # (viewer.py / ai_model_picker.py) went away with those files.
         if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
         run: >
           uv run diff-cover coverage.xml
           --compare-branch "origin/${{ github.base_ref }}"
           --fail-under 90
-          --exclude '*/nav/viewer.py' '*/nav/ai_model_picker.py'
 
       - name: Upload coverage to Codecov
         # Upload only once (latest Python) to avoid duplicate reports

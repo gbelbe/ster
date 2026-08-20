@@ -93,9 +93,7 @@ pip install ster            # install / upgrade with: pip install -U ster
 ```
 
 That's everything — TUI editing, graph viewer, SPARQL, HTML export, and the
-publish server, no extras required. AI-assisted concept suggestions are
-available via the [`llm`](https://llm.datasette.io/) library (online models,
-local [Ollama](https://ollama.com/) models, or a no-model copy-paste mode).
+publish server, no extras required.
 
 ## Quick start
 

@@ -58,6 +58,48 @@ git rm path/to/file
 
 ---
 
+### 3. Untracked files are invisible to prek
+
+**Symptom**: GitHub's `Static checks (prek)` job fails on a lint/format/type
+error in a file you just added — often `I001` (unsorted imports) in a brand-new
+module or test — while the identical local `prek run --all-files` passed.
+
+**Why**: `--all-files` means *all files git knows about*, not all files on disk.
+A new `.py` file that has never been `git add`ed is skipped by every hook. You
+run the gate, it passes, you commit the file — and GitHub lints it for the very
+first time, on the PR.
+
+This is the mirror image of a ghost deletion: there, git sees a file local runs
+don't; here, local runs skip a file git is about to see.
+
+**Detect**:
+```bash
+git ls-files --others --exclude-standard -- '*.py'
+```
+Any output is invisible to the gate. `scripts/ci.sh` now fails pre-flight on this.
+
+**Fix**:
+```bash
+git add -N path/to/new_file.py   # intent-to-add: prek sees it, contents stay unstaged
+```
+
+---
+
+### 4. Tests-only local runs while a static check is red
+
+**Symptom**: the three `Test (Python 3.x)` jobs pass on GitHub but the PR is
+still red.
+
+**Why**: `scripts/ci.sh` aborts at the first failing stage, so a static-check
+failure means the test stage never ran locally — it is easy to read "the tests
+passed" from a *partial* local run and assume the gate is green.
+
+**Fix**: read the gate's final line. It prints
+`All checks passed — ready to push  ✓` only when every stage ran and passed;
+anything else means the run stopped early, whatever the last output said.
+
+---
+
 ## Runbook
 
 1. **Clear mypy cache and re-run types**

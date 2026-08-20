@@ -32,9 +32,9 @@ def test_config_fields_has_server_setup_section():
     assert "Local Server Configuration" in _section_labels(fields)
 
 
-def test_config_fields_has_llm_setup_section():
+def test_config_fields_has_display_section():
     fields = build_global_fields(None, None, "en", server_url="http://127.0.0.1", server_port=8765)
-    assert "LLM Setup" in _section_labels(fields)
+    assert "Display" in _section_labels(fields)
 
 
 # ── Server URL and port display ───────────────────────────────────────────────

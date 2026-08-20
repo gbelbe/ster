@@ -59,8 +59,13 @@ def test_server_setup_section_present():
     assert "Local Server Configuration" in _section_labels(_fields())
 
 
-def test_llm_setup_section_present():
-    assert "LLM Setup" in _section_labels(_fields())
+def test_display_section_present():
+    assert "Display" in _section_labels(_fields())
+
+
+def test_no_llm_setup_section():
+    # Regression: the LLM feature was removed — no section may advertise it.
+    assert "LLM Setup" not in _section_labels(_fields())
 
 
 def test_no_bare_setup_section():
@@ -85,16 +90,16 @@ def test_bearer_token_field_present():
     assert "bearer token" in labels
 
 
-def test_language_field_in_llm_setup():
-    section = _fields_in_section(_fields(), "LLM Setup")
+def test_language_field_in_display_section():
+    section = _fields_in_section(_fields(), "Display")
     actions = [f.meta.get("action") for f in section]
     assert "pick_lang" in actions
 
 
-def test_ai_config_field_in_llm_setup():
-    section = _fields_in_section(_fields(), "LLM Setup")
-    actions = [f.meta.get("action") for f in section]
-    assert "open_ai_config" in actions
+def test_no_ai_config_action_anywhere():
+    # Regression: the "configure AI model" row went away with the LLM feature.
+    actions = [f.meta.get("action") for f in _fields()]
+    assert "open_ai_config" not in actions
 
 
 def test_restart_warning_when_pending():

@@ -2,8 +2,7 @@
 
 The old full-screen curses viewer and REPL shell were removed once the Textual
 New-TUI (:mod:`ster.tui`) reached parity; what remains here is reused by the
-New-TUI (:mod:`~ster.nav.logic` detail builders, :mod:`~ster.nav.prefs`,
-:mod:`~ster.nav.ai_model_picker`).
+New-TUI (:mod:`~ster.nav.logic` detail builders and :mod:`~ster.nav.prefs`).
 """
 
 from __future__ import annotations
