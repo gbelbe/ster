@@ -5,7 +5,7 @@ Covers scope A of the "graph opens an older/static version" bug:
   * a token-less (static) page must carry an in-page "live server not running"
     banner so the degraded experience is never silent;
   * ``is_live_server`` reflects whether the live API backs the page;
-  * ``_await_uvicorn_started`` only reports success once *our* uvicorn bound,
+  * ``api_server._await_uvicorn_started`` only reports success once *our* uvicorn bound,
     so a stale server squatting the port can't be mistaken for ours.
 """
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import ster.api_server as srv
 import ster.viz_vowl as vv
 from ster.model import RDFClass, Taxonomy
 
@@ -114,12 +115,17 @@ def test_quiet_handler_sets_no_cache_headers(monkeypatch) -> None:
 
 
 def test_is_live_server_true_when_api_app_set(monkeypatch) -> None:
-    monkeypatch.setattr(vv, "_api_app", object())
+    # is_live_server now delegates to api_server, which owns the server state.
+    import ster.api_server as srv
+
+    monkeypatch.setattr(srv, "_bg", srv._Background(app=object()))
     assert vv.is_live_server() is True
 
 
 def test_is_live_server_false_when_no_api_app(monkeypatch) -> None:
-    monkeypatch.setattr(vv, "_api_app", None)
+    import ster.api_server as srv
+
+    monkeypatch.setattr(srv, "_bg", srv._Background())
     assert vv.is_live_server() is False
 
 
@@ -133,17 +139,17 @@ class _FakeServer:
 
 def test_await_uvicorn_started_true_when_started() -> None:
     holder = {"server": _FakeServer(started=True)}
-    assert vv._await_uvicorn_started(holder, sleep=lambda *_: None) is True
+    assert srv._await_uvicorn_started(holder, sleep=lambda *_: None) is True
 
 
 def test_await_uvicorn_started_false_on_startup_error() -> None:
     holder = {"server": _FakeServer(started=False), "error": RuntimeError("address in use")}
-    assert vv._await_uvicorn_started(holder, sleep=lambda *_: None) is False
+    assert srv._await_uvicorn_started(holder, sleep=lambda *_: None) is False
 
 
 def test_await_uvicorn_started_false_when_serve_finished_unstarted() -> None:
     holder = {"server": _FakeServer(started=False), "done": True}
-    assert vv._await_uvicorn_started(holder, sleep=lambda *_: None) is False
+    assert srv._await_uvicorn_started(holder, sleep=lambda *_: None) is False
 
 
 def test_await_uvicorn_started_false_on_timeout() -> None:
@@ -154,7 +160,7 @@ def test_await_uvicorn_started_false_on_timeout() -> None:
         return 0.0 if clock["n"] == 1 else 99.0
 
     holder: dict = {}
-    result = vv._await_uvicorn_started(
+    result = srv._await_uvicorn_started(
         holder, timeout=1.0, sleep=lambda *_: None, monotonic=fake_monotonic
     )
     assert result is False

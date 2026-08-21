@@ -72,6 +72,38 @@ Every capability below is reachable from the home menu, acting on the file you s
 | **Import External Ontology** | Fetch and cache external vocabularies, binding their namespaces for reuse |
 | **Linked Data Publish & Version** | Semver-tagged releases served over a local Linked-Data server |
 
+## Ask your AI agent about your ontology
+
+ster exposes a **read-only [MCP](https://modelcontextprotocol.io) endpoint**, so
+whichever AI agent you already use can answer questions about the ontology you
+are editing — including *what you are looking at right now*. ster provides the
+context; you bring your own agent, your own model and your own keys. No AI
+provider is bundled, and nothing is sent anywhere by ster itself.
+
+The endpoint comes up on its own when you open a file in the TUI (or run
+`ster serve`). Point an agent at it once:
+
+```bash
+claude mcp add --transport http ster http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $(cat ~/.config/ster/api_token)"
+```
+
+Any MCP-capable client works the same way — the endpoint is plain JSON-RPC over
+HTTP, guarded by the same bearer token as the rest of the API.
+
+| Tool | Answers |
+|---|---|
+| `get_current_context` | "What am I looking at?" — the focused entity, its ancestors and siblings |
+| `get_overview` | "What is in this file?" — counts, schemes, languages |
+| `get_entity` | Full detail for one URI (SKOS concepts *and* OWL classes) |
+| `search_entities` | Resolve a name you mention into a URI |
+| `run_sparql` | Anything else — `SELECT` / `ASK` only |
+
+**Read-only by design.** There are no write tools, SPARQL update forms are
+refused, and the endpoint rejects browser requests from foreign origins (the
+DNS-rebinding defence the MCP spec requires). An agent can read your ontology
+and answer questions about it; it cannot change it.
+
 ---
 
 ## Installation

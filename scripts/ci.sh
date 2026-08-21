@@ -53,10 +53,14 @@ ok "no ghost deletions"
 # check silently skips it; the moment it is committed, GitHub lints it for the
 # first time and fails. Intent-to-add (git add -N) is enough to make prek see a
 # file while leaving its contents unstaged.
+#
+# Scoped to the source trees on purpose: a developer's scratch script at the
+# repo root is their own business and must not block the gate. Only files that
+# would ship are checked.
 step "Pre-flight: untracked Python files"
-UNTRACKED_PY=$(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null || true)
+UNTRACKED_PY=$(git ls-files --others --exclude-standard -- 'ster/*.py' 'tests/*.py' 'scripts/*.py' 2>/dev/null || true)
 if [[ -n "$UNTRACKED_PY" ]]; then
-  echo -e "${FAIL} Untracked .py files — prek cannot see them, so GitHub lints them first:"
+  echo -e "${FAIL} Untracked .py files in the source tree — prek cannot see them, so GitHub lints them first:"
   while IFS= read -r f; do echo "  ? $f"; done <<< "$UNTRACKED_PY"
   echo -e "  Fix: git add -N \$file   (intent-to-add; contents stay unstaged)"
   exit 1

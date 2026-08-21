@@ -44,14 +44,11 @@ def _free_port() -> int:
 
 
 def _setup_globals(monkeypatch, tmp_path, url: str, port: int):
-    """Reset viz_vowl globals and wire config/token to tmp files."""
+    """Reset the background-server state and wire config/token to tmp files."""
     import ster.api_server as srv
-    import ster.viz_vowl as vv
 
-    monkeypatch.setattr(vv, "_api_app", None)
-    monkeypatch.setattr(vv, "_api_broadcaster", None)
-    monkeypatch.setattr(vv, "_api_loop", None)
-    monkeypatch.setattr(vv, "_api_running", False)
+    # Server lifecycle lives in api_server; viz_vowl only injects the HTML renderer.
+    monkeypatch.setattr(srv, "_bg", srv._Background())
 
     cfg_file = tmp_path / "server_config.json"
     monkeypatch.setattr(srv, "_SERVER_CONFIG_FILE", cfg_file)
@@ -195,6 +192,7 @@ def test_start_api_server_reports_failure_when_uvicorn_cannot_bind(monkeypatch, 
     failure and resets the globals, so callers fall back to a real static graph
     file instead.
     """
+    import ster.api_server as srv
     import ster.viz_vowl as vv
 
     _setup_globals(monkeypatch, tmp_path, "http://127.0.0.1", 9555)
@@ -217,4 +215,4 @@ def test_start_api_server_reports_failure_when_uvicorn_cannot_bind(monkeypatch, 
         result = vv._start_api_server(_make_taxonomy(), None)
 
     assert result is False, "must not claim success when uvicorn fails to bind"
-    assert vv._api_app is None
+    assert srv.current_app() is None

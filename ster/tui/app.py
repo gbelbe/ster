@@ -68,6 +68,40 @@ _KIND_TITLE = {
 _ADD_PROP_PREFIX = "__addprop:"
 
 
+def _start_context_server(taxonomy: Taxonomy, path: Path | None) -> bool:
+    """Bring up the API server so agents can reach the MCP endpoint.
+
+    Runs on a daemon thread beside the TUI. Best-effort: a taken port (a second
+    ster instance, say) just means no MCP this session — it must never stop the
+    editor from opening. No HTML renderer is supplied; opening the graph viewer
+    later attaches the VOWL one to this same server.
+    """
+    try:
+        from ..api_server import start_background  # noqa: PLC0415
+
+        return start_background(taxonomy, path)
+    except Exception:  # noqa: BLE001 — the editor must open regardless
+        return False
+
+
+def _publish_selection(uri: str | None) -> None:
+    """Tell the running API server which entity is on screen, for MCP's
+    ``get_current_context``.
+
+    A no-op when no server is running (the common case — the server only starts
+    once a file is opened), and never allowed to disturb navigation: publishing
+    context is strictly best-effort.
+    """
+    try:
+        from ..api_server import current_app  # noqa: PLC0415
+
+        app = current_app()
+        if app is not None:
+            app.state._ster["selection"] = uri
+    except Exception:  # noqa: BLE001 — context publishing must never break the UI
+        pass
+
+
 def _add_prop_uri(prop_type: str) -> str:
     return f"{_ADD_PROP_PREFIX}{prop_type}{_ACTION_SUFFIX}"
 
@@ -931,6 +965,7 @@ class OntologyApp(App):
 
         self.title = f"STER version {_version} - {self.source}"
         self.sub_title = ""
+        _start_context_server(self.tax, self._path)
         for tree in self.query(Tree):
             tree.show_root = False
             tree.guide_depth = 3
@@ -1353,6 +1388,7 @@ class OntologyApp(App):
         # _detail_text mirrors the rendered markup (used by tests + as a quick
         # text view); the DetailView builds the composed, focusable widgets.
         self._detail_uri = uri
+        _publish_selection(uri)  # so the MCP server knows what the user is looking at
         clangs = self.configured_langs or [self.lang]
         self._detail_text = (
             detail.render_detail(self.tax, uri, self.lang, clangs, self.entity_metadata_props)

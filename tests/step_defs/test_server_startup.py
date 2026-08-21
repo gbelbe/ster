@@ -65,15 +65,12 @@ def given_config_free_port(ctx):
 
 def _write_config(ctx, url: str, port: int) -> None:
     import ster.api_server as srv
-    import ster.viz_vowl as vv
 
     mp = ctx["monkeypatch"]
     tmp = ctx["tmp_path"]
 
-    mp.setattr(vv, "_api_app", None)
-    mp.setattr(vv, "_api_broadcaster", None)
-    mp.setattr(vv, "_api_loop", None)
-    mp.setattr(vv, "_api_running", False)
+    # Server lifecycle lives in api_server; viz_vowl only injects the HTML renderer.
+    mp.setattr(srv, "_bg", srv._Background())
 
     cfg_file = tmp / "server_config.json"
     mp.setattr(srv, "_SERVER_CONFIG_FILE", cfg_file)

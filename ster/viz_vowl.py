@@ -24,7 +24,6 @@ render_vowl_html()      Return the rendered HTML string (used by the FastAPI ser
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import html as _html
 import http.server
@@ -879,7 +878,9 @@ def _offline_banner(api_token: str) -> str:
 
 def is_live_server() -> bool:
     """True when the live FastAPI server backs the graph (vs a static snapshot)."""
-    return _api_app is not None
+    from .api_server import is_running  # noqa: PLC0415
+
+    return is_running()
 
 
 def _server_host_port(host: str | None, port: int | None) -> tuple[str, int]:
@@ -988,42 +989,13 @@ _file_path: Path | None = None
 _http_server: http.server.HTTPServer | None = None
 _http_port: int | None = None
 
-# FastAPI/SSE-based server — set when ster[api] is available.
-_api_app: Any = None
-_api_broadcaster: Any = None
-_api_loop: Any = None
-_api_running: bool = False
+
+def _vowl_html(taxonomy: Taxonomy, root_uri: str | None, token: str) -> str:
+    """Render the VOWL landing page for the background server."""
+    return render_vowl_html(taxonomy, _api_file_path, api_token=token, root_uri=root_uri)
 
 
-def _await_uvicorn_started(
-    holder: dict[str, Any],
-    *,
-    timeout: float = 10.0,
-    poll: float = 0.05,
-    sleep: Any = None,
-    monotonic: Any = None,
-) -> bool:
-    """Block until *our* uvicorn server reports it has bound and is serving.
-
-    *holder* is the dict the server thread fills in: ``server`` (the
-    ``uvicorn.Server`` once constructed), ``error`` (a startup exception, e.g. a
-    bind failure), and ``done`` (set once ``serve()`` returns). Returns True only
-    when ``server.started`` flips True — so a stale server squatting the
-    configured port can never be mistaken for ours. Returns False on a startup
-    error, when ``serve()`` finished without starting, or on timeout.
-    """
-    sleep = sleep or time.sleep
-    monotonic = monotonic or time.monotonic
-    deadline = monotonic() + timeout
-    while True:
-        server = holder.get("server")
-        if server is not None and getattr(server, "started", False):
-            return True
-        if holder.get("error") is not None or holder.get("done"):
-            return False
-        if monotonic() >= deadline:
-            return False
-        sleep(poll)
+_api_file_path: Path | None = None
 
 
 def _start_api_server(
@@ -1031,93 +1003,17 @@ def _start_api_server(
     file_path: Path | None,
     on_change_fn: Any = None,
 ) -> bool:
-    """Start the FastAPI server in a daemon thread; return True on success."""
-    global _api_app, _api_broadcaster, _api_loop, _api_running
-    if _api_app is not None:
-        _api_app.state._ster["taxonomy"] = taxonomy
-        return True
-    try:
-        import uvicorn  # noqa: PLC0415
-    except ImportError:
-        return False
-    try:
-        from .api import SSEBroadcaster, create_app  # noqa: PLC0415
-    except ImportError:
-        return False
-    try:
-        from .api_server import _load_or_create_token  # noqa: PLC0415
-    except ImportError:
-        return False
+    """Start the shared API server with the VOWL graph as its landing page.
 
-    from .api_server import load_server_config  # noqa: PLC0415
+    Server lifecycle itself lives in :mod:`ster.api_server` — this only supplies
+    the graph-viewer HTML, so other features (the MCP context server) can start
+    the same server without pulling in the visualisation stack.
+    """
+    global _api_file_path
+    from .api_server import start_background  # noqa: PLC0415
 
-    _server_url, _server_port = load_server_config()
-    _server_host = _server_url.split("://", 1)[-1]  # strip scheme for bind address
-
-    token = _load_or_create_token()
-    broadcaster = SSEBroadcaster()
-
-    def html_fn(root_uri: str | None = None) -> str:
-        tax = app.state._ster["taxonomy"]
-        return render_vowl_html(tax, file_path, api_token=token, root_uri=root_uri)
-
-    def save_fn(tax: Taxonomy) -> None:
-        if file_path is not None:
-            from .store import save  # noqa: PLC0415
-
-            save(tax, file_path)
-        if on_change_fn is not None:
-            on_change_fn()
-
-    # Mount the project's publish tree (ontology/) so published stable/dev
-    # artifacts are served at /ontology/... — created up-front so the mount
-    # exists even before the first publish (StaticFiles serves live from disk).
-    publish_dir = file_path.parent / "ontology" if file_path is not None else None
-    if publish_dir is not None:
-        publish_dir.mkdir(parents=True, exist_ok=True)
-
-    app = create_app(
-        taxonomy, token, broadcaster, save_fn, html_fn=html_fn, publish_dir=publish_dir
-    )
-    app.state._ster["broadcaster"] = broadcaster
-
-    _api_app = app
-    _api_broadcaster = broadcaster
-
-    loop_captured: threading.Event = threading.Event()
-    holder: dict[str, Any] = {}
-
-    def _run() -> None:
-        global _api_loop
-
-        async def _serve() -> None:
-            global _api_loop
-            _api_loop = asyncio.get_running_loop()
-            server = uvicorn.Server(
-                uvicorn.Config(app, host=_server_host, port=_server_port, log_level="warning")
-            )
-            holder["server"] = server
-            loop_captured.set()
-            try:
-                await server.serve()
-            except BaseException as exc:  # noqa: BLE001  (bind failure must not crash the thread)
-                holder["error"] = exc
-
-        asyncio.run(_serve())
-        holder["done"] = True
-
-    threading.Thread(target=_run, daemon=True, name="ster-api-server").start()
-    loop_captured.wait(timeout=10)
-    # Report success only once *our* uvicorn has actually bound the socket. A
-    # bare "is the port open?" probe accepts a stale static server squatting the
-    # configured port — callers then open `/` against it and get a cache
-    # directory listing instead of the graph.
-    if _api_loop is None or not _await_uvicorn_started(holder):
-        _api_app = _api_broadcaster = None
-        _api_running = False
-        return False
-    _api_running = True
-    return True
+    _api_file_path = file_path
+    return start_background(taxonomy, file_path, html_renderer=_vowl_html, on_change=on_change_fn)
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -1280,9 +1176,10 @@ def open_in_browser(
 
 def push_update(taxonomy: Taxonomy) -> None:
     """Push an updated taxonomy to all connected viewers."""
-    if _api_app is not None:
-        _api_app.state._ster["taxonomy"] = taxonomy
-        _api_broadcaster.notify(_api_loop)
+    from .api_server import is_running, push_taxonomy  # noqa: PLC0415
+
+    if is_running():
+        push_taxonomy(taxonomy)
         return
     if _out_path is not None:
         _write_html(taxonomy, _file_path, _out_path)
@@ -1293,7 +1190,9 @@ def open_focused_in_browser(
     taxonomy: Taxonomy, root_uri: str, file_path: Path | None = None
 ) -> str:
     """Open a focused VOWL graph centred on *root_uri* in the browser."""
-    if _api_app is not None:
+    from .api_server import is_running  # noqa: PLC0415
+
+    if is_running():
         from .api_server import load_server_config  # noqa: PLC0415
 
         _url, _port = load_server_config()

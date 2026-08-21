@@ -12,8 +12,16 @@ import asyncio
 import json
 import secrets
 import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# A renderer for the server's HTML landing pages: (taxonomy, root_uri, token) -> html.
+# Injected by the caller so this module stays free of any front-end feature
+# (the VOWL graph passes ``render_vowl_html``; the MCP server passes nothing).
+HtmlRenderer = Callable[[Any, str | None, str], str]
 
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
@@ -87,6 +95,205 @@ def _start_file_watcher(
     thread.start()
 
 
+# ── Background (non-blocking) server ──────────────────────────────────────────
+#
+# ``serve()`` below blocks, which suits ``ster serve``. Long-running front-ends
+# (the TUI) instead need the server running *alongside* them, so they can keep
+# rendering while the API answers requests. Everything here is feature-agnostic:
+# the VOWL graph viewer and the MCP context server both start the same server
+# and differ only in the HTML renderer they inject.
+
+
+@dataclass
+class _Background:
+    """The one running background server, if any."""
+
+    app: Any = None
+    broadcaster: Any = None
+    loop: Any = None
+    running: bool = False
+
+    def reset(self) -> None:
+        self.app = self.broadcaster = self.loop = None
+        self.running = False
+
+
+_bg = _Background()
+
+
+def is_running() -> bool:
+    """True when a background API server is up (vs. no server / a static fallback)."""
+    return _bg.app is not None
+
+
+def current_app() -> Any | None:
+    """The running background FastAPI app, or None."""
+    return _bg.app
+
+
+def push_taxonomy(taxonomy: Any) -> None:
+    """Publish an updated *taxonomy* to the running server and wake SSE subscribers."""
+    if _bg.app is None:
+        return
+    _bg.app.state._ster["taxonomy"] = taxonomy
+    _bg.broadcaster.notify(_bg.loop)
+
+
+def _await_uvicorn_started(
+    holder: dict[str, Any],
+    *,
+    timeout: float = 10.0,
+    poll: float = 0.05,
+    sleep: Any = None,
+    monotonic: Any = None,
+) -> bool:
+    """Block until *our* uvicorn server reports it has bound and is serving.
+
+    *holder* is the dict the server thread fills in: ``server`` (the
+    ``uvicorn.Server`` once constructed), ``error`` (a startup exception, e.g. a
+    bind failure), and ``done`` (set once ``serve()`` returns). Returns True only
+    when ``server.started`` flips True — so a stale server squatting the
+    configured port can never be mistaken for ours. Returns False on a startup
+    error, when ``serve()`` finished without starting, or on timeout.
+    """
+    sleep = sleep or time.sleep
+    monotonic = monotonic or time.monotonic
+    deadline = monotonic() + timeout
+    while True:
+        server = holder.get("server")
+        if server is not None and getattr(server, "started", False):
+            return True
+        if holder.get("error") is not None or holder.get("done"):
+            return False
+        if monotonic() >= deadline:
+            return False
+        sleep(poll)
+
+
+def _server_deps() -> tuple[Any, Any, Any] | None:
+    """Return ``(uvicorn, SSEBroadcaster, create_app)``, or None when unavailable."""
+    try:
+        import uvicorn  # noqa: PLC0415
+
+        from .api import SSEBroadcaster, create_app  # noqa: PLC0415
+    except ImportError:
+        return None
+    return uvicorn, SSEBroadcaster, create_app
+
+
+def _make_html_fn(app: Any, renderer: HtmlRenderer, token: str) -> Callable[..., str]:
+    """Bind *renderer* to *app*'s live taxonomy, as the landing-page callable.
+
+    Reads the taxonomy from app state on every call, so the page tracks later
+    ``push_taxonomy`` updates rather than freezing the one it started with.
+    """
+
+    def html_fn(root_uri: str | None = None) -> str:
+        return renderer(app.state._ster["taxonomy"], root_uri, token)
+
+    return html_fn
+
+
+def _publish_dir_for(file_path: Path | None) -> Path | None:
+    """The project's publish tree (``ontology/``), created up-front.
+
+    Made eagerly so the StaticFiles mount exists even before the first publish.
+    """
+    if file_path is None:
+        return None
+    publish_dir = file_path.parent / "ontology"
+    publish_dir.mkdir(parents=True, exist_ok=True)
+    return publish_dir
+
+
+def _spawn_uvicorn(app: Any, host: str, port: int, uvicorn: Any) -> dict[str, Any]:
+    """Run *app* under uvicorn on a daemon thread; return the thread's status holder."""
+    holder: dict[str, Any] = {}
+    ready = threading.Event()
+
+    def _run() -> None:
+        async def _serve_async() -> None:
+            holder["loop"] = asyncio.get_running_loop()
+            server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+            holder["server"] = server
+            ready.set()
+            try:
+                await server.serve()
+            except BaseException as exc:  # noqa: BLE001  (bind failure must not kill the thread)
+                holder["error"] = exc
+
+        asyncio.run(_serve_async())
+        holder["done"] = True
+
+    threading.Thread(target=_run, daemon=True, name="ster-api-server").start()
+    ready.wait(timeout=10)
+    return holder
+
+
+def start_background(
+    taxonomy: Any,
+    file_path: Path | None = None,
+    *,
+    html_renderer: HtmlRenderer | None = None,
+    on_change: Callable[[], None] | None = None,
+) -> bool:
+    """Start the API server on a daemon thread. True once it is actually serving.
+
+    Idempotent: a second call re-publishes *taxonomy* onto the already-running
+    server instead of starting a second one. If that call supplies an
+    *html_renderer* and the running server has none, the renderer is attached —
+    the TUI starts this server for MCP with no landing page, and opening the
+    graph viewer afterwards must still get its page rather than a 501.
+    """
+    if _bg.app is not None:
+        state = _bg.app.state._ster
+        state["taxonomy"] = taxonomy
+        if html_renderer is not None and state.get("html_fn") is None:
+            state["html_fn"] = _make_html_fn(_bg.app, html_renderer, state["token"])
+        return True
+
+    deps = _server_deps()
+    if deps is None:
+        return False
+    uvicorn, sse_broadcaster, create_app = deps
+
+    url, port = load_server_config()
+    host = url.split("://", 1)[-1]  # strip scheme for the bind address
+    token = _load_or_create_token()
+    broadcaster = sse_broadcaster()
+
+    def save_fn(tax: Any) -> None:
+        if file_path is not None:
+            from .store import save  # noqa: PLC0415
+
+            save(tax, file_path)
+        if on_change is not None:
+            on_change()
+
+    app = create_app(
+        taxonomy,
+        token,
+        broadcaster,
+        save_fn,
+        publish_dir=_publish_dir_for(file_path),
+    )
+    app.state._ster["broadcaster"] = broadcaster
+    app.state._ster["token"] = token
+    if html_renderer is not None:
+        app.state._ster["html_fn"] = _make_html_fn(app, html_renderer, token)
+    _bg.app, _bg.broadcaster = app, broadcaster
+
+    holder = _spawn_uvicorn(app, host, port, uvicorn)
+    _bg.loop = holder.get("loop")
+    # Success only once *our* uvicorn reports started — a bare "is the port open?"
+    # probe would accept a stale server squatting the configured port.
+    if _bg.loop is None or not _await_uvicorn_started(holder):
+        _bg.reset()
+        return False
+    _bg.running = True
+    return True
+
+
 def serve(
     file_path: Path,
     host: str | None = None,
@@ -133,6 +340,7 @@ def serve(
     print("\n  ster API server")
     print(f"  URL  : http://{_host}:{_port}/")
     print(f"  Docs : http://{_host}:{_port}/docs")
+    print(f"  MCP  : http://{_host}:{_port}/mcp   (read-only ontology context)")
     print(f"  Token: {token}")
     print(f"  (token persisted at {_TOKEN_FILE})\n")
 

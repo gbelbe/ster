@@ -96,14 +96,26 @@ class SSEBroadcaster:
         self._queues: list[asyncio.Queue[str]] = []
 
     def notify(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        """Schedule an 'updated' event to all connected listeners."""
+        """Schedule an 'updated' event to all connected listeners.
+
+        A no-op when there is no loop to schedule on — including a *closed* one.
+        The server runs on a daemon thread, so once it stops (shutdown, a bind
+        failure, a crash) the cached loop is closed while callers still hold a
+        reference; without this guard the next save would raise
+        ``RuntimeError: Event loop is closed`` up through the TUI's save path.
+        """
         target = loop
         if target is None:
             try:
                 target = asyncio.get_running_loop()
             except RuntimeError:
                 return
-        asyncio.run_coroutine_threadsafe(self._broadcast(), target)
+        if target.is_closed():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._broadcast(), target)
+        except RuntimeError:
+            return  # loop closed between the check and the call
 
     async def _broadcast(self) -> None:
         for q in list(self._queues):
@@ -150,7 +162,11 @@ def create_app(
     when the source file changes; the broadcasted SSE event triggers a reload
     in every connected graph client.
     """
-    _st: dict[str, Any] = {"taxonomy": taxonomy, "file_path": file_path}
+    # html_fn lives in the mutable state rather than the closure so it can be
+    # attached to an already-running server: the TUI starts the server for MCP
+    # (no landing page), and opening the graph viewer later supplies the VOWL
+    # renderer to that same server.
+    _st: dict[str, Any] = {"taxonomy": taxonomy, "file_path": file_path, "html_fn": html_fn}
     _bearer = HTTPBearer(auto_error=False)
 
     def _tax() -> Taxonomy:
@@ -196,10 +212,11 @@ def create_app(
     def _graph_html_response(root_uri: str | None) -> HTMLResponse:
         # no-store: the page inlines its JS, so caching it served stale builds
         # until a manual hard-reload.
-        if html_fn is None:
+        render = _st.get("html_fn")
+        if render is None:
             raise HTTPException(status_code=501, detail="No HTML renderer configured")
         return HTMLResponse(
-            html_fn(root_uri),
+            render(root_uri),
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
@@ -356,7 +373,47 @@ def create_app(
             raise HTTPException(status_code=401, detail="Unauthorized")
         return StreamingResponse(broadcaster.subscribe(), media_type="text/event-stream")
 
+    @app.post(
+        "/mcp",
+        summary="MCP (Model Context Protocol) endpoint — read-only ontology context",
+        tags=["MCP"],
+    )
+    async def mcp_endpoint(request: Request, _: None = Depends(_check_auth)) -> Response:
+        """JSON-RPC 2.0 over HTTP, so any MCP-capable agent CLI can query the graph.
+
+        The protocol logic lives in :mod:`ster.mcp_server`; this route only does
+        auth, JSON decoding and the notification/response distinction.
+        """
+        from .mcp_server import PARSE_ERROR, handle_message, origin_allowed  # noqa: PLC0415
+
+        # MCP spec: servers MUST validate Origin, or a page the user visits could
+        # script requests against their local ster server (DNS rebinding).
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(status_code=403, detail="Origin not allowed")
+
+        try:
+            message = await request.json()
+        except Exception:  # noqa: BLE001 — malformed body is a protocol error, not a 500
+            return _json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": PARSE_ERROR, "message": "Parse error."},
+                }
+            )
+        reply = handle_message(message, _tax(), _st.get("selection"))
+        if reply is None:  # a notification takes no response body
+            return Response(status_code=202)
+        return _json_response(reply)
+
     return app
+
+
+def _json_response(payload: dict) -> Response:
+    """A JSON body without FastAPI's response-model machinery (payloads are dynamic)."""
+    import json as _json
+
+    return Response(content=_json.dumps(payload), media_type="application/json")
 
 
 # ── Domain helpers ────────────────────────────────────────────────────────────
