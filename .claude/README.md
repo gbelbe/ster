@@ -64,7 +64,7 @@ and interprets any failures for you.
 **Never push while the gate is red.** The pre-push hook blocks any `git push`
 without a fresh pass in the last 60 minutes. Static checks are driven by **prek**
 (`.pre-commit-config.yaml`), so local and CI can't drift; tests run on your
-current Python locally, while GitHub runs the full 3.11/3.12/3.13 matrix on the
+current Python locally, while GitHub runs the full 3.12/3.13 matrix on the
 PR — so check `gh pr checks` after pushing.
 
 ### `/fix-ci-gap` — local passed, GitHub failed

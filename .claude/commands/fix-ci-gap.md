@@ -132,7 +132,7 @@ anything else means the run stopped early, whatever the last output said.
 
 5. **If still diverging**: read the full GitHub Actions log — look for the
    exact error line and the Python version. Sometimes it's a version-specific
-   issue (3.11 vs 3.13) that only shows up in the matrix run.
+   issue (3.12 vs 3.13) that only shows up in the matrix run.
 
 ## Hardening rule
 

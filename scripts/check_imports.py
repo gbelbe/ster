@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-# stdlib_module_names is available in Python 3.10+; project requires 3.11+
+# stdlib_module_names is available in Python 3.10+; project requires 3.12+
 stdlib = set(sys.stdlib_module_names)
 
 # Add some common ones that might be missed or are built-into the interpreter
