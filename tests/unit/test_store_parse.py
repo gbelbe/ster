@@ -63,17 +63,22 @@ def test_parse_into_uses_the_default_store(tmp_path: Path):
     assert type(graph.store).__name__ == "Memory"
 
 
-def test_pyoxigraph_is_not_a_core_dependency():
-    """Guards the removal: it shipped a binary wheel for a branch that never ran.
+def test_oxigraph_is_not_wired_in_as_an_rdflib_store():
+    """pyoxigraph earns its place as a parser, never as an rdflib store backend.
 
-    The ``Graph(store="Oxigraph")`` plugin is registered by ``oxrdflib``, not by
-    ``pyoxigraph``, so declaring pyoxigraph alone could never enable it — every
-    parse raised PluginException and fell back. Re-adding it needs a benchmark
-    that beats the numbers in ``test_parse_into_uses_the_default_store``.
+    Both integrations exist and only one is worth having:
+
+    * ``Graph(store="Oxigraph")`` needs ``oxrdflib`` and marshals every triple
+      across the FFI boundary, which made ster's load *slower* (9.6s -> 11.2s).
+    * ``pyoxigraph.parse()`` keeps parsing inside Rust and streams quads once,
+      which made it faster (10.4s -> 2.8s) — see :mod:`ster.store._native_index`.
+
+    So the dependency is expected, and the store plugin is expected to be absent.
     """
     pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
 
     deps = " ".join(data["project"]["dependencies"])
 
-    assert "pyoxigraph" not in deps
+    assert "pyoxigraph" in deps
+    assert "oxrdflib" not in deps

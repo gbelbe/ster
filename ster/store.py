@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from rdflib import RDF, Dataset, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, BNode, Dataset, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 from rdflib.term import Node
 
@@ -94,6 +94,9 @@ _FORMAT_MAP = {
 }
 
 _RDFXML_EXTENSIONS = {".rdf", ".xml", ".owl"}
+
+# (subject -> [(predicate, object)], rdf:type -> [subjects], URIs implied to be classes)
+_Index = tuple[dict[str, list[tuple[Node, Node]]], dict[str, list[str]], set[str]]
 
 # Dataset (named-graph / quad) serialisations. ster models a single flat graph, so on load
 # every named graph and the default graph are merged into one — the entities are viewed
@@ -208,6 +211,136 @@ def _parse_into(fmt: str, path: Path) -> Graph:
     return g
 
 
+# ── Native (Rust) parsing ────────────────────────────────────────────────────
+#
+# rdflib's parser is pure Python and dominates the cost of opening a large file.
+# pyoxigraph parses the same bytes in Rust: measured 7.4x faster on N-Triples and
+# 15.9x on RDF/XML, which took ster's end-to-end load of a 324k-triple file from
+# 10.4s to 2.8s.
+#
+# The win only holds when the triples stream straight into the index. Going
+# through rdflib's Graph API instead (store="Oxigraph") is slower than plain
+# rdflib, because every triple is then marshalled across the FFI boundary twice.
+
+_OX_FORMATS = {"turtle": "TURTLE", "nt": "N_TRIPLES", "xml": "RDF_XML"}
+
+
+def _ox_term(term: object) -> Node:
+    """Convert one pyoxigraph term to its rdflib equivalent."""
+    kind = type(term).__name__
+    value = term.value  # type: ignore[attr-defined]
+    if kind == "NamedNode":
+        return URIRef(value)
+    if kind == "BlankNode":
+        return BNode(value)
+    # A language-tagged literal also reports rdf:langString as its datatype;
+    # rdflib refuses both at once, so the language tag wins.
+    if lang := getattr(term, "language", None):
+        return Literal(value, lang=lang)
+    datatype = getattr(term, "datatype", None)
+    return Literal(value, datatype=URIRef(datatype.value) if datatype else None)
+
+
+def _xmlns_prefixes(path: Path) -> dict[str, str] | None:
+    """Prefix bindings declared in an RDF/XML document, or None if unsafe to read.
+
+    pyoxigraph's RDF/XML parser does not report xmlns declarations, so they are
+    read with expat, which streams the document without building a tree — on a
+    32MB file that costs 0.9s against 8.1s for a full rdflib parse.
+
+    Entity-expansion attacks ("billion laughs") need a DTD to declare the
+    entities, so a document carrying one is refused outright and the caller falls
+    back to rdflib rather than this reader seeing it. A DOCTYPE is only legal
+    before the root element, so the head of the file is the whole search space.
+    """
+    import xml.etree.ElementTree as ET  # noqa: PLC0415
+
+    try:
+        if b"<!DOCTYPE" in path.read_bytes()[:_SNIFF_BYTES]:
+            return None
+    except OSError:
+        return None
+
+    found: dict[str, str] = {}
+    try:
+        # No DTD, so entity expansion cannot be triggered; external entities are
+        # not resolved by ElementTree in any case.
+        for _event, (prefix, uri) in ET.iterparse(str(path), events=("start-ns",)):  # noqa: S314
+            found.setdefault(prefix, uri)
+    except ET.ParseError:
+        return None
+    return found
+
+
+def _bindings_graph(prefixes: dict[str, str]) -> Graph:
+    """An empty Graph carrying *prefixes*, for :func:`_capture_namespaces`.
+
+    Replaying them through rdflib's namespace manager keeps its disambiguation —
+    a file binding ``geo:`` to wgs84 becomes ``geo1`` because rdflib reserves
+    ``geo`` for GeoSPARQL — so the native path reports exactly what rdflib would.
+    """
+    g = Graph()
+    for prefix, uri in prefixes.items():
+        g.namespace_manager.bind(prefix, Namespace(uri), replace=False)
+    return g
+
+
+def _native_index(fmt: str, path: Path) -> tuple[_Index, Graph] | None:
+    """Parse *path* in Rust into ster's index, or None to use the rdflib path.
+
+    None means "this parser cannot do it" — an unmapped format, a missing
+    pyoxigraph, or bytes it rejects — never a hard failure, so a file that only
+    rdflib's more lenient reader accepts still opens.
+    """
+    ox_format = _OX_FORMATS.get(fmt)
+    if ox_format is None:
+        return None
+    try:
+        import pyoxigraph  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    index: dict[str, list[tuple[Node, Node]]] = {}
+    subjects_by_type: dict[str, list[str]] = {}
+    class_refs: set[str] = set()
+    try:
+        with path.open("rb") as handle:
+            parser = pyoxigraph.parse(handle, format=getattr(pyoxigraph.RdfFormat, ox_format))
+            for quad in parser:
+                _index_quad(quad, index, subjects_by_type, class_refs)
+            prefixes = dict(parser.prefixes)
+    except Exception:  # noqa: BLE001 — any parse failure falls back to rdflib
+        return None
+
+    if fmt == "xml":
+        # Losing the bindings would silently change what ster round-trips, so an
+        # unreadable header sends the whole load back to rdflib.
+        if (xml_prefixes := _xmlns_prefixes(path)) is None:
+            return None
+        prefixes = xml_prefixes
+    return (index, subjects_by_type, class_refs), _bindings_graph(prefixes)
+
+
+def _index_quad(
+    quad: object,
+    index: dict[str, list[tuple[Node, Node]]],
+    subjects_by_type: dict[str, list[str]],
+    class_refs: set[str],
+) -> None:
+    """Fold one pyoxigraph quad into the index, mirroring :func:`_graph_index`."""
+    subject, predicate, obj = quad.subject, quad.predicate, quad.object  # type: ignore[attr-defined]
+    p = _ox_term(predicate)
+    o = _ox_term(obj)
+    s = _ox_term(subject)
+    _note_class_ref(class_refs, p, s, o)
+    if type(subject).__name__ != "NamedNode":
+        return
+    uri = subject.value  # type: ignore[attr-defined]
+    index.setdefault(uri, []).append((p, o))
+    if p == RDF.type:
+        subjects_by_type.setdefault(str(o), []).append(uri)
+
+
 def _parse_graph(path: Path) -> Graph:
     """Parse *path* into a Graph, falling back to sniffed format if extension-based parse fails."""
     fmt = _detect_format(path)
@@ -300,6 +433,18 @@ def _try_save_cache(cache_path: Path, taxonomy: Taxonomy) -> None:
 # ──────────────────────────── public API ─────────────────────────────────────
 
 
+def _parse_to_taxonomy(path: Path) -> Taxonomy:
+    """Build the taxonomy for *path*, in Rust when possible and rdflib otherwise."""
+    try:
+        fmt = _detect_format(path)
+    except ValueError:
+        fmt = ""
+    if fmt and fmt not in _DATASET_FORMATS and (native := _native_index(fmt, path)) is not None:
+        parsed, ns_graph = native
+        return _taxonomy_from_index(parsed, ns_graph)
+    return graph_to_taxonomy(_parse_graph(path))
+
+
 def load(path: str | Path) -> Taxonomy:
     """Parse an RDF file and return a fully handle-annotated Taxonomy.
 
@@ -316,8 +461,7 @@ def load(path: str | Path) -> Taxonomy:
         if taxonomy:
             return taxonomy
 
-    g = _parse_graph(path)
-    taxonomy = graph_to_taxonomy(g)
+    taxonomy = _parse_to_taxonomy(path)
     taxonomy.file_path = path
     assign_handles(taxonomy)
 
@@ -539,23 +683,40 @@ def _parse_individual(uri: str, triples: list[tuple[Node, Node]]) -> OWLIndividu
     return ind
 
 
-def _graph_index(g: Graph) -> tuple[dict[str, list[tuple[Node, Node]]], dict[str, list[str]]]:
+def _note_class_ref(refs: set[str], p: Node, s: Node, o: Node) -> None:
+    """Record URIs that a schema predicate implies are classes.
+
+    Collected while indexing so the caller never needs to re-scan the graph, and
+    so blank-node subjects (which the index skips) still contribute their objects.
+    """
+    if p == RDFS.subClassOf:
+        if isinstance(s, URIRef):
+            refs.add(str(s))
+        if isinstance(o, URIRef):
+            refs.add(str(o))
+    elif p in (RDFS.domain, RDFS.range) and isinstance(o, URIRef):
+        refs.add(str(o))
+
+
+def _graph_index(g: Graph) -> _Index:
     index: dict[str, list[tuple[Node, Node]]] = {}
     subjects_by_type: dict[str, list[str]] = {}
+    class_refs: set[str] = set()
     for s, p, o in g:
+        _note_class_ref(class_refs, p, s, o)
         if isinstance(s, URIRef):
             subject = str(s)
             index.setdefault(subject, []).append((p, o))
             if p == RDF.type:
                 subjects_by_type.setdefault(str(o), []).append(subject)
-    return index, subjects_by_type
+    return index, subjects_by_type, class_refs
 
 
 def _load_classes(
-    g: Graph,
     taxonomy: Taxonomy,
     index: dict[str, list[tuple[Node, Node]]],
     subjects_by_type: dict[str, list[str]],
+    class_refs: set[str],
 ) -> None:
     class_uris = {
         uri
@@ -563,15 +724,7 @@ def _load_classes(
         for uri in subjects_by_type.get(type_uri, [])
         if not is_builtin_uri(uri)
     }
-    for refs in (
-        g.subjects(RDFS.subClassOf, None),
-        g.objects(None, RDFS.subClassOf),
-        g.objects(None, RDFS.domain),
-        g.objects(None, RDFS.range),
-    ):
-        class_uris.update(
-            str(ref) for ref in refs if isinstance(ref, URIRef) and not is_builtin_uri(str(ref))
-        )
+    class_uris.update(uri for uri in class_refs if not is_builtin_uri(uri))
     for uri in class_uris:
         taxonomy.owl_classes[uri] = _parse_class(uri, index.get(uri, []))
 
@@ -631,21 +784,32 @@ def _capture_namespaces(g: Graph, taxonomy: Taxonomy) -> None:
             taxonomy.namespace_bindings[prefix] = namespace
 
 
-def graph_to_taxonomy(g: Graph) -> Taxonomy:
+def _taxonomy_from_index(parsed: _Index, ns_graph: Graph) -> Taxonomy:
+    """Build the taxonomy from an index, whichever parser produced it.
+
+    Split out of :func:`graph_to_taxonomy` so the native parser can feed the same
+    logic without materialising an rdflib Graph — building one would reintroduce
+    exactly the per-triple cost the native path exists to avoid. *ns_graph* only
+    has to carry namespace bindings, never triples.
+    """
+    index, subjects_by_type, class_refs = parsed
     taxonomy = Taxonomy()
-    index, subjects_by_type = _graph_index(g)
     for uri in subjects_by_type.get(str(SKOS.ConceptScheme), []):
         taxonomy.schemes[uri] = _parse_scheme(uri, index.get(uri, []))
     for uri in subjects_by_type.get(str(SKOS.Concept), []):
         taxonomy.concepts[uri] = _parse_concept(uri, index.get(uri, []))
-    _load_classes(g, taxonomy, index, subjects_by_type)
+    _load_classes(taxonomy, index, subjects_by_type, class_refs)
     if ontology_uris := subjects_by_type.get(str(OWL.Ontology), []):
         _load_ontology_node(taxonomy, ontology_uris[0], index.get(ontology_uris[0], []))
     _load_properties(taxonomy, index, subjects_by_type)
     _load_individuals(taxonomy, index, subjects_by_type)
     _normalize_hierarchy(taxonomy)
-    _capture_namespaces(g, taxonomy)
+    _capture_namespaces(ns_graph, taxonomy)
     return taxonomy
+
+
+def graph_to_taxonomy(g: Graph) -> Taxonomy:
+    return _taxonomy_from_index(_graph_index(g), g)
 
 
 # ── per-entity serialization (kept small so taxonomy_to_graph stays under the ratchet) ──
