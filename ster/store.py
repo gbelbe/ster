@@ -203,14 +203,7 @@ def _parse_into(fmt: str, path: Path) -> Graph:
             g.add((s, p, o))
         return g
 
-    # Speed up parsing of large files if pyoxigraph is installed.
-    # rdflib 7.0+ supports store="Oxigraph" which uses a fast Rust-based parser.
-    try:
-        g = Graph(store="Oxigraph")
-    except Exception:  # noqa: BLE001
-        # Fall back to default rdflib store (e.g. PluginException, ImportError, ValueError)
-        g = Graph()
-
+    g = Graph()
     g.parse(str(path), format=fmt)
     return g
 
