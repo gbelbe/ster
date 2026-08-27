@@ -13,9 +13,11 @@ from typer.testing import CliRunner
 from ster.cli import (
     _CHANGE_FILE_SENTINEL,
     _EXT_ONT_SENTINEL,
+    _MCP_SENTINEL,
     _QUIT_SENTINEL,
     _dispatch_menu_action,
     _home_action_menu,
+    _home_actions,
     _launch_query,
     _select_home_file,
     app,
@@ -231,15 +233,31 @@ def test_action_menu_open_returns_the_selected_file(tmp_path, monkeypatch):
 def test_action_menu_selects_import_external(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="7"):  # 7 = Import External Ontology
+    with patch("ster.cli.Prompt.ask", return_value=_row_number(_EXT_ONT_SENTINEL)):
         assert _home_action_menu(f) == _EXT_ONT_SENTINEL
+
+
+def _row_number(sentinel: object) -> str:
+    """The 1-based menu number for *sentinel*.
+
+    Derived rather than hardcoded: these tests used fixed numbers, so inserting
+    a row silently retargeted them at their neighbour.
+    """
+    return str([s for s, _label in _home_actions()].index(sentinel) + 1)
 
 
 def test_action_menu_selects_quit(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value="8"):  # 8 = Quit (last)
+    with patch("ster.cli.Prompt.ask", return_value=_row_number(_QUIT_SENTINEL)):
         assert _home_action_menu(f) == _QUIT_SENTINEL
+
+
+def test_action_menu_selects_connect_mcp(tmp_path, monkeypatch):
+    _no_tty(monkeypatch)
+    f = tmp_path / "a.ttl"
+    with patch("ster.cli.Prompt.ask", return_value=_row_number(_MCP_SENTINEL)):
+        assert _home_action_menu(f) == _MCP_SENTINEL
 
 
 def test_select_home_file_single_file_still_shows_the_picker(tmp_path, monkeypatch):

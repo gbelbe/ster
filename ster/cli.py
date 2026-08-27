@@ -228,6 +228,7 @@ _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
 _DEMO_SENTINEL: Path = Path(".__ster_demo__")  # home menu → load the bundled sample
+_MCP_SENTINEL: Path = Path(".__ster_mcp__")  # home menu → start MCP + copy endpoint
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 # The bundled mixed SKOS+OWL sample, shipped inside the package (ster/tui/).
@@ -242,6 +243,7 @@ _MENU_COLOURS: dict[object, str] = {
     _HTML_SENTINEL: _ANSI_BLUE,
     _PUBLISH_SENTINEL: _ANSI_GREEN,
     _DEMO_SENTINEL: _ANSI_GREEN,
+    _MCP_SENTINEL: _ANSI_MAGENTA,
     _CHANGE_FILE_SENTINEL: _ANSI_CYAN,
     _QUIT_SENTINEL: _ANSI_RED,
 }
@@ -748,6 +750,7 @@ def _home_actions() -> list[tuple[object, str]]:
         (_HTML_SENTINEL, "🌐 HTML Data Catalog"),
         (_GRAPH_SENTINEL, "◈  Load Graph Viewer"),
         (_EXT_ONT_SENTINEL, "📥 Import External Ontology"),
+        (_MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_QUIT_SENTINEL, "✕  Quit"),
     ]
 
@@ -953,6 +956,7 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _QUERY_SENTINEL: _launch_query,
         _EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _PUBLISH_SENTINEL: _run_publish_interactive,
+        _MCP_SENTINEL: _run_mcp_connect_interactive,
     }
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:
@@ -2098,6 +2102,83 @@ def _publish_stable_flow(taxonomy_file: Path, publish_dir: Path) -> None:  # pra
             f"[dim]No remote configured — push manually: "
             f"git push && git push origin {result.tag}[/dim]"
         )
+
+
+def mcp_connection_info(base_url: str, token: str) -> tuple[str, str]:
+    """Return (endpoint, config_snippet) for an MCP client.
+
+    The snippet is the ``mcpServers`` object every MCP-capable client reads —
+    the endpoint is plain JSON-RPC over HTTP with a bearer token, so nothing
+    here is specific to one vendor's CLI.
+    """
+    endpoint = f"{base_url.rstrip('/')}/mcp"
+    snippet = json.dumps(
+        {
+            "mcpServers": {
+                "ster": {
+                    "type": "http",
+                    "url": endpoint,
+                    "headers": {"Authorization": f"Bearer {token}"},
+                }
+            }
+        },
+        indent=2,
+    )
+    return endpoint, snippet
+
+
+def _print_mcp_connection(endpoint: str, token: str, snippet: str, copied: bool) -> None:
+    """Show the endpoint, how to connect, and whether the copy landed."""
+    console.print()
+    console.print(f"  [bold]MCP endpoint[/bold]   [cyan]{endpoint}[/cyan]")
+    console.print("  [bold]Transport[/bold]      HTTP (JSON-RPC 2.0)")
+    console.print(f"  [bold]Auth header[/bold]    Authorization: Bearer {token}")
+    console.print()
+    console.print("  Point any MCP-capable agent at it — add this to its config:")
+    console.print()
+    for line in snippet.splitlines():
+        console.print(f"    [dim]{line}[/dim]")
+    console.print()
+    console.print("  Claude Code, for example:")
+    console.print(
+        f"    [dim]claude mcp add --transport http ster {endpoint} \\[/dim]\n"
+        f'      [dim]--header "Authorization: Bearer $(cat ~/.config/ster/api_token)"[/dim]'
+    )
+    console.print()
+    if copied:
+        console.print("  [green]✓[/green] endpoint copied to clipboard")
+    else:
+        console.print("  [yellow]![/yellow] could not reach the clipboard — copy the URL above")
+    console.print()
+
+
+def _run_mcp_connect_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
+    """Start the live server if needed, then show and copy the MCP endpoint.
+
+    The endpoint only exists while the server runs, so this starts it rather
+    than reporting that it is down.
+    """
+    from .api_server import load_token
+    from .tui.clipboard import copy_to_system_clipboard
+    from .viz_vowl import ensure_published_server
+
+    if not files:
+        err.print("[red]No taxonomy files found.[/red]")
+        return
+    taxonomy_file = _pick_file(files)
+
+    from . import store
+
+    console.print(f"\n  Starting the ster server for [bold]{taxonomy_file.name}[/bold]…")
+    base_url = ensure_published_server(store.load(taxonomy_file), taxonomy_file)
+    if not base_url:
+        err.print(
+            "[red]The server could not start — reinstall ster so fastapi/uvicorn are present.[/red]"
+        )
+        return
+
+    endpoint, snippet = mcp_connection_info(base_url, load_token())
+    _print_mcp_connection(endpoint, load_token(), snippet, copy_to_system_clipboard(endpoint))
 
 
 def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
