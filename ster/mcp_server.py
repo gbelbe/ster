@@ -134,12 +134,29 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_vocabulary",
+        "description": (
+            "The predicates, types, prefixes and language tags this file actually uses. "
+            "Call this before writing any SPARQL: it tells you whether labels are on "
+            "skos:prefLabel or rdfs:label, whether the hierarchy is skos:broader or "
+            "rdfs:subClassOf, and which language tags exist — the three things that "
+            "otherwise get guessed wrong and return zero rows."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "run_sparql",
         "description": (
             "Run a read-only SPARQL query (SELECT or ASK) against the open file and get "
             "columns plus rows. Update forms (INSERT/DELETE/DROP/CLEAR/LOAD) are refused. "
             "Use this for questions the other tools cannot answer directly, such as counting "
-            "or filtering by an arbitrary predicate."
+            "or filtering by an arbitrary predicate.\n"
+            "Call get_vocabulary first and build the query from the predicates it reports — "
+            "do not assume a vocabulary. Always include a LIMIT: results are not capped and "
+            "there is no timeout. If a query returns zero rows, re-check the vocabulary "
+            "rather than guessing again; drop one triple pattern at a time to find the "
+            "empty one. Avoid naming a variable after a write keyword (?add, ?copy, ?create, "
+            "?move): the read-only guard matches those words and will refuse the query."
         ),
         "inputSchema": {
             "type": "object",
@@ -167,6 +184,10 @@ def _tool_search_entities(tax: Taxonomy, _selection: str | None, args: dict) -> 
     return ctx.search(tax, args["query"], int(args.get("limit", 20)), args.get("lang", "en"))
 
 
+def _tool_get_vocabulary(tax: Taxonomy, _selection: str | None, _args: dict) -> Any:
+    return ctx.vocabulary(tax)
+
+
 def _tool_run_sparql(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
     return ctx.run_sparql(tax, args["query"])
 
@@ -178,6 +199,7 @@ _IMPLS: dict[str, Callable[[Taxonomy, str | None, dict], Any]] = {
     "get_overview": _tool_get_overview,
     "get_entity": _tool_get_entity,
     "search_entities": _tool_search_entities,
+    "get_vocabulary": _tool_get_vocabulary,
     "run_sparql": _tool_run_sparql,
 }
 
@@ -201,6 +223,32 @@ def _text_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
     }
 
 
+# Sent to every client at session start. The MCP spec treats this as a hint for
+# the model, which makes it the one place a querying discipline reaches *any*
+# agent — not just the ones that support a vendor-specific prompt or skill file.
+INSTRUCTIONS = """\
+ster serves one RDF file: a SKOS taxonomy, an OWL ontology, or both.
+
+Before writing SPARQL, call get_vocabulary. It reports the predicates, types,
+prefixes and language tags this file actually uses. Ontologies differ in
+vocabulary, so a query built on assumptions parses cleanly and returns nothing —
+labels may be skos:prefLabel or rdfs:label, the hierarchy skos:broader or
+rdfs:subClassOf, the labels tagged @fr and not @en.
+
+A reliable order:
+  1. get_overview      — how big this file is and what it holds
+  2. get_vocabulary    — the predicates and prefixes to build the query from
+  3. search_entities   — resolve each name to a real URI; never invent one
+  4. run_sparql        — compose using only predicates you have now seen
+
+Zero rows means an assumption was wrong, not that the answer is empty. Re-read
+the vocabulary and drop one triple pattern at a time to find the one that
+matches nothing.
+
+This server is read-only: SELECT and ASK only, and update forms are refused.
+"""
+
+
 def _handle_initialize(params: dict, _tax: Taxonomy, _sel: str | None) -> dict[str, Any]:
     from ._version import __version__
 
@@ -208,6 +256,7 @@ def _handle_initialize(params: dict, _tax: Taxonomy, _sel: str | None) -> dict[s
         "protocolVersion": negotiate_version(params.get("protocolVersion")),
         "capabilities": {"tools": {"listChanged": False}},
         "serverInfo": {"name": SERVER_NAME, "version": __version__},
+        "instructions": INSTRUCTIONS,
     }
 
 

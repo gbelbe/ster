@@ -97,7 +97,16 @@ HTTP, guarded by the same bearer token as the rest of the API.
 | `get_overview` | "What is in this file?" — counts, schemes, languages |
 | `get_entity` | Full detail for one URI (SKOS concepts *and* OWL classes) |
 | `search_entities` | Resolve a name you mention into a URI |
+| `get_vocabulary` | "What predicates does this file actually use?" — prefixes, types and language tags, so a query is built on the real vocabulary instead of a guess |
 | `run_sparql` | Anything else — `SELECT` / `ASK` only |
+
+**Grounded queries, any agent.** Ontologies differ in vocabulary: labels sit on
+`skos:prefLabel` or `rdfs:label`, hierarchy on `skos:broader` or
+`rdfs:subClassOf`, and the labels may be tagged `@fr` rather than `@en`. An agent
+that assumes wrong writes a query that parses cleanly and returns nothing. ster
+answers those questions from the file itself via `get_vocabulary`, and tells
+every client to ask them first through the MCP `instructions` field — so this
+works with any MCP-capable agent, not only the one you happen to use.
 
 **Read-only by design.** There are no write tools, SPARQL update forms are
 refused, and the endpoint rejects browser requests from foreign origins (the

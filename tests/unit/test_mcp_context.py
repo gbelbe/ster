@@ -255,3 +255,97 @@ def test_run_sparql_syntax_error_returns_error_payload(tmp_path):
 
     out = mc.run_sparql(tax, "SELECT ?s WHERE {{{")
     assert out["error"] == "query_error"
+
+
+# ── get_vocabulary ────────────────────────────────────────────────────────────
+#
+# The probe reads the *file*, not the in-memory Taxonomy: an agent composing
+# SPARQL needs the predicates actually asserted on disk, which is what its query
+# will run against.
+
+SKOS_TTL = """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://example.org/zoo#> .
+ex:Animal a skos:Concept ; skos:prefLabel "Animal"@en, "Animal"@fr .
+ex:Mammal a skos:Concept ; skos:prefLabel "Mammal"@en, "Mammifere"@fr ;
+    skos:broader ex:Animal ; skos:notation "M1" .
+ex:Dog a skos:Concept ; skos:prefLabel "Dog"@en ; skos:broader ex:Mammal .
+"""
+
+OWL_TTL = """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/zoo#> .
+ex:Enclosure a owl:Class ; rdfs:label "Enclosure"@en .
+ex:Aviary a owl:Class ; rdfs:label "Aviary"@en ; rdfs:subClassOf ex:Enclosure .
+"""
+
+
+def _tax_from(tmp_path, ttl: str) -> Taxonomy:
+    path = tmp_path / "vocab.ttl"
+    path.write_text(ttl, encoding="utf-8")
+    tax = Taxonomy()
+    tax.file_path = path
+    return tax
+
+
+def test_vocabulary_reports_skos_shape_for_a_concept_scheme(tmp_path):
+    assert mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))["shape"] == "skos"
+
+
+def test_vocabulary_reports_owl_shape_for_a_class_hierarchy(tmp_path):
+    assert mc.vocabulary(_tax_from(tmp_path, OWL_TTL))["shape"] == "owl"
+
+
+def test_vocabulary_reports_mixed_shape(tmp_path):
+    out = mc.vocabulary(_tax_from(tmp_path, SKOS_TTL + OWL_TTL))
+    assert out["shape"] == "mixed"
+
+
+def test_vocabulary_ranks_predicates_by_use(tmp_path):
+    out = mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))
+    counts = [p["count"] for p in out["predicates"]]
+    assert counts == sorted(counts, reverse=True)
+    # skos:prefLabel is asserted 5 times, more than any other predicate here.
+    assert out["predicates"][0]["prefixed"] == "skos:prefLabel"
+
+
+def test_vocabulary_identifies_the_dominant_label_predicate(tmp_path):
+    """A file using rdfs:label must never send the agent to skos:prefLabel."""
+    out = mc.vocabulary(_tax_from(tmp_path, OWL_TTL))
+    assert "rdfs:label" in out["label_predicates"]
+    assert "skos:prefLabel" not in out["label_predicates"]
+
+
+def test_vocabulary_lists_hierarchy_predicates_actually_present(tmp_path):
+    assert mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))["hierarchy_predicates"] == ["skos:broader"]
+    assert mc.vocabulary(_tax_from(tmp_path, OWL_TTL))["hierarchy_predicates"] == [
+        "rdfs:subClassOf"
+    ]
+
+
+def test_vocabulary_reports_namespace_bindings_from_the_file(tmp_path):
+    """Prefix bindings are invisible to SPARQL — only the parsed graph has them."""
+    out = mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))
+    assert out["namespaces"]["ex"] == "https://example.org/zoo#"
+
+
+def test_vocabulary_lists_every_language_tag(tmp_path):
+    assert mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))["languages"] == ["en", "fr"]
+
+
+def test_vocabulary_counts_types(tmp_path):
+    out = mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))
+    concept = next(t for t in out["types"] if t["prefixed"] == "skos:Concept")
+    assert concept["count"] == 3
+
+
+def test_vocabulary_without_source_file_returns_error(zoo):
+    assert mc.vocabulary(zoo)["error"] == "no_source_file"
+
+
+def test_vocabulary_on_empty_graph_returns_empty_inventory(tmp_path):
+    out = mc.vocabulary(_tax_from(tmp_path, "# nothing here\n"))
+    assert out["predicates"] == []
+    assert out["label_predicates"] == []
+    assert out["shape"] == "unknown"

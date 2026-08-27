@@ -12,6 +12,8 @@ without the SDK. Nothing in this module mutates the taxonomy.
 from __future__ import annotations
 
 import re
+from collections import Counter
+from functools import lru_cache
 from typing import Any
 
 from .model import Taxonomy, is_builtin_uri
@@ -221,6 +223,133 @@ def siblings_of(taxonomy: Taxonomy, uri: str) -> list[str]:
     for parent in parents_of(taxonomy, uri, kind):
         out.extend(s for s in children_of(taxonomy, parent, kind) if s != uri and s not in out)
     return out
+
+
+# ── Vocabulary probe ─────────────────────────────────────────────────────────
+#
+# What an agent must know before it can write a query that returns anything:
+# which predicate carries a label here, how the hierarchy is asserted, and which
+# language tags exist. Guessing any of these is the usual cause of an empty
+# result, so ster answers them from the file instead of leaving them to chance.
+
+
+@lru_cache(maxsize=1)
+def _terms() -> dict[str, tuple[str, ...]]:
+    """The W3C term URIs the probe looks for, taken from rdflib.
+
+    Sourced from rdflib rather than spelled out here so there is one definition
+    of each namespace and no chance of a typo in a literal. Lazy for the same
+    reason as run_sparql: importing rdflib is slow and the TUI must not pay for
+    it just to start.
+
+    Label and hierarchy terms are ordered most-specific first; only those the
+    file actually uses are reported.
+    """
+    from rdflib.namespace import DC, DCTERMS, OWL, RDFS, SKOS  # noqa: PLC0415
+
+    return {
+        "label": (
+            str(SKOS.prefLabel),
+            str(RDFS.label),
+            str(DCTERMS.title),
+            str(DC.title),
+            str(SKOS.altLabel),
+        ),
+        "hierarchy": (
+            str(SKOS.broader),
+            str(SKOS.narrower),
+            str(RDFS.subClassOf),
+            str(RDFS.subPropertyOf),
+        ),
+        "concept_types": (str(SKOS.Concept),),
+        "class_types": (str(OWL.Class), str(RDFS.Class)),
+    }
+
+
+def _shape_of(type_uris: set[str]) -> str:
+    """Whether this file is a SKOS taxonomy, an OWL ontology, or both.
+
+    Decides `skos:broader` vs `rdfs:subClassOf` for the agent — the second most
+    common cause of a query that parses fine and returns nothing.
+    """
+    terms = _terms()
+    has_concepts = any(t in type_uris for t in terms["concept_types"])
+    has_classes = any(t in type_uris for t in terms["class_types"])
+    if has_concepts and has_classes:
+        return "mixed"
+    if has_concepts:
+        return "skos"
+    if has_classes:
+        return "owl"
+    return "unknown"
+
+
+def _ranked(counter: Any, normalize: Any) -> list[dict[str, Any]]:
+    """Counter → [{uri, prefixed, count}], most-used first."""
+    return [
+        {"uri": str(uri), "prefixed": normalize(uri), "count": count}
+        for uri, count in counter.most_common()
+    ]
+
+
+def _used_namespaces(graph: Any, used: set[str]) -> dict[str, str]:
+    """Prefix bindings the file actually uses.
+
+    rdflib binds ~30 namespaces into every graph by default; returning them all
+    would bury the handful this ontology is written in. Prefix bindings are also
+    invisible to SPARQL, so this is the only way an agent can learn them.
+    """
+    out: dict[str, str] = {}
+    for prefix, uri in graph.namespaces():
+        text = str(uri)
+        if any(u.startswith(text) for u in used):
+            out[str(prefix)] = text
+    return out
+
+
+def _languages(graph: Any) -> list[str]:
+    """Every language tag on a literal, sorted."""
+    from rdflib.term import Literal  # noqa: PLC0415
+
+    return sorted(
+        {obj.language for obj in graph.objects() if isinstance(obj, Literal) and obj.language}
+    )
+
+
+def vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
+    """The file's real vocabulary — call before composing SPARQL against it.
+
+    Reads the parsed graph rather than the in-memory taxonomy: a query runs
+    against the file, so the predicates on disk are the ones that matter.
+    """
+    if taxonomy.file_path is None:
+        return {"error": "no_source_file", "message": "The taxonomy has no file to query."}
+
+    # Lazy, like run_sparql: rdflib is heavy and the TUI must not pay for it.
+    from rdflib.namespace import RDF  # noqa: PLC0415
+
+    from .sparql_query import load_graph_cached  # noqa: PLC0415
+
+    graph = load_graph_cached([taxonomy.file_path])
+    normalize = graph.namespace_manager.normalizeUri
+
+    predicates = Counter(graph.predicates())
+    types = Counter(graph.objects(None, RDF.type))
+    predicate_uris = {str(p) for p in predicates}
+    type_uris = {str(t) for t in types}
+
+    used = predicate_uris | type_uris | {str(s) for s in graph.subjects()}
+    return {
+        "shape": _shape_of(type_uris),
+        "namespaces": _used_namespaces(graph, used),
+        "predicates": _ranked(predicates, normalize),
+        "label_predicates": [normalize(p) for p in _terms()["label"] if p in predicate_uris],
+        "hierarchy_predicates": [
+            normalize(p) for p in _terms()["hierarchy"] if p in predicate_uris
+        ],
+        "types": _ranked(types, normalize),
+        "languages": _languages(graph),
+    }
 
 
 def is_read_only_sparql(query: str) -> bool:

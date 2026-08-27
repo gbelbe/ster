@@ -141,6 +141,7 @@ def test_tools_are_registered_with_expected_names(zoo):
         "get_overview",
         "get_entity",
         "search_entities",
+        "get_vocabulary",
         "run_sparql",
     }
 
@@ -226,7 +227,7 @@ def _rpc(client, body: dict, token: str = TOKEN):
 def test_mcp_mounted_at_slash_mcp(client):
     resp = _rpc(client, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert resp.status_code == 200
-    assert len(resp.json()["result"]["tools"]) == 5
+    assert len(resp.json()["result"]["tools"]) == len(ms.TOOLS)
 
 
 def test_mcp_requires_bearer_token(client):
@@ -315,3 +316,42 @@ def test_mcp_reads_the_live_selection_from_app_state(client):
     )
     payload = json.loads(resp.json()["result"]["content"][0]["text"])
     assert payload["focused"]["label"] == "Dog"
+
+
+# ── get_vocabulary wiring + the hints that route agents to it ─────────────────
+
+
+def test_tools_list_includes_get_vocabulary(zoo):
+    reply = ms.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, zoo)
+    assert "get_vocabulary" in {t["name"] for t in reply["result"]["tools"]}
+
+
+def test_get_vocabulary_is_callable_via_tools_call(zoo):
+    reply = ms.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "get_vocabulary", "arguments": {}},
+        },
+        zoo,
+    )
+    # The zoo fixture has no source file, so the tool reports that rather than
+    # failing the call — same contract as run_sparql.
+    payload = json.loads(reply["result"]["content"][0]["text"])
+    assert payload["error"] == "no_source_file"
+
+
+def test_initialize_returns_instructions(zoo):
+    """Every MCP client gets the querying discipline at session start."""
+    reply = ms.handle_message(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, zoo
+    )
+    assert "get_vocabulary" in reply["result"]["instructions"]
+
+
+def test_run_sparql_description_points_at_get_vocabulary():
+    """Locks the hint: without it agents guess predicates and get empty results."""
+    desc = next(t for t in ms.TOOLS if t["name"] == "run_sparql")["description"]
+    assert "get_vocabulary" in desc
+    assert "LIMIT" in desc

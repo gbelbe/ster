@@ -54,6 +54,42 @@ def given_zoo(ctx):
     ctx["tax"] = tax
 
 
+SKOS_TTL = f"""\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+<{NS}Animal> a skos:Concept ; skos:prefLabel "Animal"@en, "Animal"@fr .
+<{NS}Mammal> a skos:Concept ; skos:prefLabel "Mammal"@en, "Mammifère"@fr ;
+    skos:broader <{NS}Animal> .
+"""
+
+RDFS_ONLY_TTL = f"""\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<{NS}Enclosure> a owl:Class ; rdfs:label "Enclosure"@en .
+<{NS}Aviary> a owl:Class ; rdfs:label "Aviary"@en ; rdfs:subClassOf <{NS}Enclosure> .
+"""
+
+
+def _retarget(ctx, ttl_text: str) -> None:
+    """Point the open taxonomy at a purpose-built file for the vocabulary probe.
+
+    The shared Background keeps its concepts in memory rather than on disk;
+    get_vocabulary reads the file, so these scenarios need their own source.
+    """
+    path = ctx["tmp_path"] / "vocab.ttl"
+    path.write_text(ttl_text, encoding="utf-8")
+    ctx["tax"].file_path = path
+
+
+@given("a SKOS file whose labels carry English and French")
+def given_skos_file(ctx):
+    _retarget(ctx, SKOS_TTL)
+
+
+@given("an OWL file whose labels use only rdfs:label")
+def given_rdfs_only_file(ctx):
+    _retarget(ctx, RDFS_ONLY_TTL)
+
+
 @given(parsers.parse('the user has focused the concept "{name}"'))
 def given_focused(ctx, name):
     ctx["selection"] = NS + name
@@ -154,3 +190,38 @@ def then_refused(ctx):
 @then(parsers.parse('the tool list includes "{name}"'))
 def then_tool_listed(ctx, name):
     assert name in {t["name"] for t in ctx["reply"]["result"]["tools"]}
+
+
+@when("the agent initializes the session")
+def when_initialize(ctx):
+    _rpc(ctx, "initialize")
+
+
+@then(parsers.parse('the server instructions mention "{needle}"'))
+def then_instructions_mention(ctx, needle):
+    assert needle in ctx["reply"]["result"]["instructions"]
+
+
+@then(parsers.parse('the vocabulary reports the shape "{shape}"'))
+def then_vocab_shape(ctx, shape):
+    assert _payload(ctx)["shape"] == shape
+
+
+@then(parsers.parse('the vocabulary reports "{term}" as a label predicate'))
+def then_vocab_label_predicate(ctx, term):
+    assert term in _payload(ctx)["label_predicates"]
+
+
+@then(parsers.parse('the vocabulary does not report "{term}" as a label predicate'))
+def then_vocab_not_label_predicate(ctx, term):
+    assert term not in _payload(ctx)["label_predicates"]
+
+
+@then(parsers.parse('the vocabulary reports "{term}" as a hierarchy predicate'))
+def then_vocab_hierarchy_predicate(ctx, term):
+    assert term in _payload(ctx)["hierarchy_predicates"]
+
+
+@then(parsers.parse('the vocabulary lists the language "{lang}"'))
+def then_vocab_language(ctx, lang):
+    assert lang in _payload(ctx)["languages"]
