@@ -166,10 +166,17 @@ jobs:
 
   # ── 4b. SonarQube Scan ───────────────────────────────────────────────────────
   # Runs after tests are complete to collect coverage reports.
+  #
+  # The self-hosted runners belong to the internal adeo org. The public mirror
+  # (gbelbe/ster) has none registered, so without the repository guard this job
+  # queues until GitHub kills it at the 24h ceiling and reds the whole run.
   sonar:
     name: "📡 Code Quality: Sonar push"
     needs: [test]
+    if: github.repository == 'adeo/kai-ster'
     runs-on: [self-hosted, Linux, standard]
+    # Fail in minutes, not a day, if no self-hosted runner picks this up.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -240,7 +247,13 @@ jobs:
 
       - name: Publish to PyPI
         if: steps.check.outputs.publish == 'true'
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.12.4
+        # Keep in step with publish.yml: twine before v1.14 rejects the
+        # Metadata-Version 2.5 that the current build backend emits.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          # This job and the tag-triggered publish.yml can race on the same
+          # version; whichever loses should no-op instead of failing the run.
+          skip-existing: true
 
       - name: Create GitHub release
         if: steps.check.outputs.publish == 'true'
