@@ -61,6 +61,30 @@ def test_load_assigns_handles(taxonomy):
         assert taxonomy.uri_to_handle(uri) is not None
 
 
+def test_load_reports_progress_by_phase(tmp_path, monkeypatch):
+    """The optional progress callback reports ordered load phases through 100%."""
+    monkeypatch.setenv("STER_NO_CACHE", "1")
+    path = tmp_path / "progress.ttl"
+    path.write_text(
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+        "@prefix ex: <https://example.org/> .\n"
+        "ex:scheme a skos:ConceptScheme .\n",
+        encoding="utf-8",
+    )
+    events: list[tuple[int, str]] = []
+
+    store.load(path, progress_callback=lambda percent, message: events.append((percent, message)))
+
+    assert events[0] == (0, "Starting")
+    assert events[-1] == (100, "Ready")
+    assert [percent for percent, _ in events] == sorted(percent for percent, _ in events)
+    assert {message for _, message in events} >= {
+        "Parsing RDF",
+        "Building model",
+        "Assigning handles",
+    }
+
+
 def test_base_uri_round_trip(tmp_path):
     """base_uri stored as void:uriSpace survives a save/reload cycle."""
     from ster import operations

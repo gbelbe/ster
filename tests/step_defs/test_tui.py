@@ -168,7 +168,7 @@ def when_run_cli(ctx):
     from ster.cli import app as cli_app
 
     with (
-        patch("ster.tui.launch") as launch,
+        patch("ster.tui.launch_file", return_value=store.load(DEMO)) as launch,
         patch("ster.git.manager.GitManager") as gm,
     ):
         gm.return_value.is_enabled.return_value = False  # skip the git commit/push flow
@@ -340,6 +340,6 @@ def then_url_opened(ctx):
 def then_cli_launched(ctx):
     assert ctx["cli_result"].exit_code == 0, ctx["cli_result"].output
     ctx["launch"].assert_called_once()
-    (taxonomy,), kwargs = ctx["launch"].call_args
+    (path,), kwargs = ctx["launch"].call_args
     assert kwargs.get("source") == "demo.ttl"
-    assert taxonomy.owl_classes
+    assert path == DEMO

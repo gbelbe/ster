@@ -104,12 +104,16 @@ offending entities. Health rows are these nav rows, so drill-in is free.
 ```python
 # ster/tui/presenters/__init__.py
 PRESENTERS: dict[str, type[EntityPresenter]] = {
-    "class": ClassPresenter, "property": PropertyPresenter,
-    "individual": IndividualPresenter, "concept": ConceptPresenter,
+    "class": ClassPresenter,
+    "property": PropertyPresenter,
+    "individual": IndividualPresenter,
+    "concept": ConceptPresenter,
     "scheme": SchemePresenter,
 }
-OVERVIEW_PRESENTERS = {OVERVIEW_URI: OntologyOverviewPresenter,
-                       TAXONOMY_URI: TaxonomyOverviewPresenter}
+OVERVIEW_PRESENTERS = {
+    OVERVIEW_URI: OntologyOverviewPresenter,
+    TAXONOMY_URI: TaxonomyOverviewPresenter,
+}
 ```
 
 `ster/tui/detail.py::_fields_for` becomes a one-liner lookup:
@@ -126,11 +130,11 @@ class PresenterContext:
     tax: Taxonomy
     lang: str = "en"
     configured_langs: tuple[str, ...] = ()
-    activity: dict | None = None      # git edit activity (overview)
-    lint: dict | None = None          # semanticlint counts (overview)
-    metadata: dict | None = None      # metadata-coverage %s (overview)
-    metadata_props: tuple = ()        # ontology-metadata catalog
-    entity_metadata_props: tuple = () # entity-metadata catalog
+    activity: dict | None = None  # git edit activity (overview)
+    lint: dict | None = None  # semanticlint counts (overview)
+    metadata: dict | None = None  # metadata-coverage %s (overview)
+    metadata_props: tuple = ()  # ontology-metadata catalog
+    entity_metadata_props: tuple = ()  # entity-metadata catalog
 ```
 
 ## 5. Per-kind responsibilities

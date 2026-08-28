@@ -117,7 +117,12 @@ def _apply(ctx) -> None:
 
     async def scenario() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
-            await _settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            await _settle(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ProblemsModal) and bool(app.screen.query(".problem-fix"))
+                ),
+            )
             app.screen.query_one(".problem-fix", Button).press()
             ctx["closed"] = await _settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
             dog = app.tax.concepts["http://ex.org/Dog"]

@@ -19,6 +19,7 @@ def launch(
     lang: str = "en",
     path: Path | None = None,
     open_query: bool = False,
+    progressive_startup: bool = False,
 ) -> None:
     """Open the Textual ontology browser for *taxonomy* (blocks until quit).
 
@@ -27,4 +28,33 @@ def launch(
     """
     from .app import OntologyApp
 
-    OntologyApp(taxonomy, source=source, lang=lang, path=path, open_query=open_query).run()
+    OntologyApp(
+        taxonomy,
+        source=source,
+        lang=lang,
+        path=path,
+        open_query=open_query,
+        progressive_startup=progressive_startup,
+    ).run()
+
+
+def launch_file(
+    path: str | Path,
+    source: str | None = None,
+    lang: str = "en",
+    open_query: bool = False,
+) -> Taxonomy | None:
+    """Open one Textual app that loads *path* and then becomes the browser."""
+    from .app import OntologyApp
+
+    path = Path(path)
+    app = OntologyApp(
+        None,
+        source=source or path.name,
+        lang=lang,
+        path=path,
+        open_query=open_query,
+        progressive_startup=True,
+    )
+    app.run()
+    return app.tax if app._loaded_successfully else None

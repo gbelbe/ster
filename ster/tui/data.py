@@ -110,6 +110,24 @@ def individuals_of(tax: Taxonomy, class_uri: str, lang: str = "en") -> list[str]
     return _by_label(tax, inds, lang)
 
 
+def individual_index(tax: Taxonomy, lang: str = "en") -> tuple[dict[str, list[str]], list[str]]:
+    """Build one inverse index for typed individuals and the untyped collection."""
+    by_class: dict[str, list[str]] = defaultdict(list)
+    untyped: list[str] = []
+    for uri, individual in tax.owl_individuals.items():
+        typed = False
+        for class_uri in individual.types:
+            if class_uri in tax.owl_classes:
+                by_class[class_uri].append(uri)
+                typed = True
+        if not typed:
+            untyped.append(uri)
+    return (
+        {class_uri: _by_label(tax, uris, lang) for class_uri, uris in by_class.items()},
+        _by_label(tax, untyped, lang),
+    )
+
+
 def untyped_individuals(tax: Taxonomy, lang: str = "en") -> list[str]:
     inds = [
         u

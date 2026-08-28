@@ -1,5 +1,5 @@
 """CLI wiring for the New-TUI — the ``ster show`` command, the home-menu
-dispatch, and the non-interactive picker. ``ster.tui.launch`` is patched so the
+ dispatch, and the non-interactive picker. ``ster.tui.launch_file`` is patched so the
 Textual app never actually starts.
 """
 
@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
+from ster import store
 from ster.cli import (
     _CHANGE_FILE_SENTINEL,
     _EXT_ONT_SENTINEL,
@@ -28,13 +29,13 @@ DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 
 
 def test_launch_query_opens_the_new_tui_in_query_mode():
-    with patch("ster.tui.launch") as launch:
+    with patch("ster.tui.launch_file") as launch_file:
         _launch_query([DEMO])
-    launch.assert_called_once()
-    (taxonomy,), kwargs = launch.call_args
+    launch_file.assert_called_once()
+    (path,), kwargs = launch_file.call_args
     assert kwargs.get("open_query") is True
     assert kwargs.get("source") == "demo.ttl"
-    assert taxonomy.owl_classes  # a real taxonomy was loaded and handed off
+    assert path == DEMO
 
 
 def test_launch_query_with_no_files_is_noop():
@@ -43,21 +44,59 @@ def test_launch_query_with_no_files_is_noop():
     launch.assert_not_called()
 
 
+def test_launch_file_starts_the_progressive_app(monkeypatch):
+    """The file entry point delegates loading to the Textual app."""
+    from ster.model import Taxonomy
+    from ster.tui import launch_file
+
+    app = MagicMock()
+    app.tax = Taxonomy()
+    app._loaded_successfully = True
+    app_class = MagicMock(return_value=app)
+    # launch_file imports OntologyApp from ster.tui.app at call time.
+    monkeypatch.setattr("ster.tui.app.OntologyApp", app_class)
+
+    result = launch_file(DEMO, source="chosen.ttl", lang="fr", open_query=True)
+
+    assert result is app.tax
+    app_class.assert_called_once_with(
+        None,
+        source="chosen.ttl",
+        lang="fr",
+        path=DEMO,
+        open_query=True,
+        progressive_startup=True,
+    )
+    app.run.assert_called_once()
+
+
+def test_launch_file_returns_none_when_the_app_does_not_load(monkeypatch):
+    """A failed load leaves the caller with no taxonomy to persist."""
+    from ster.tui import launch_file
+
+    app = MagicMock()
+    app._loaded_successfully = False
+    app_class = MagicMock(return_value=app)
+    monkeypatch.setattr("ster.tui.app.OntologyApp", app_class)
+
+    assert launch_file(DEMO) is None
+    app.run.assert_called_once()
+
+
 def test_open_viewer_launches_the_new_tui():
     """`ster show` / the home-menu 'open' now launch the New-TUI (git disabled here)."""
     from ster.cli import _open_viewer
 
     with (
-        patch("ster.tui.launch") as launch,
+        patch("ster.tui.launch_file", return_value=store.load(DEMO)) as launch_file,
         patch("ster.git.manager.GitManager") as gm,
     ):
         gm.return_value.is_enabled.return_value = False
         _open_viewer(DEMO, lang="en")
-    launch.assert_called_once()
-    (taxonomy,), kwargs = launch.call_args
+    launch_file.assert_called_once()
+    (path,), kwargs = launch_file.call_args
     assert kwargs.get("source") == "demo.ttl"
-    assert kwargs.get("path") == DEMO
-    assert taxonomy.owl_classes
+    assert path == DEMO
 
 
 def test_open_viewer_returns_early_when_the_file_fails_to_load():
@@ -65,11 +104,13 @@ def test_open_viewer_returns_early_when_the_file_fails_to_load():
     from ster.cli import _open_viewer
 
     with (
-        patch("ster.cli._load_safe", return_value=None),
-        patch("ster.tui.launch") as launch,
+        patch("ster.cli._prewarm_lint"),
+        patch("ster.tui.launch_file", return_value=None) as launch_file,
+        patch("ster.git.manager.GitManager") as gm,
     ):
+        gm.return_value.is_enabled.return_value = False
         _open_viewer(DEMO, lang="en")
-    launch.assert_not_called()
+    launch_file.assert_called_once()
 
 
 def test_open_viewer_pulls_and_pushes_when_git_is_enabled():
@@ -77,7 +118,7 @@ def test_open_viewer_pulls_and_pushes_when_git_is_enabled():
     from ster.cli import _open_viewer
 
     with (
-        patch("ster.tui.launch") as launch,
+        patch("ster.tui.launch_file", return_value=store.load(DEMO)) as launch_file,
         patch("ster.git.manager.GitManager") as gm_cls,
     ):
         gm = gm_cls.return_value
@@ -85,9 +126,27 @@ def test_open_viewer_pulls_and_pushes_when_git_is_enabled():
         gm.is_configured.return_value = True
         gm.check_and_pull.return_value = ""  # no incoming diff to render
         _open_viewer(DEMO, lang="en")
-    launch.assert_called_once()
+    launch_file.assert_called_once()
     gm.check_and_pull.assert_called_once()  # fetch_event fired → pull path taken
     gm.commit_and_push.assert_called_once()
+
+
+def test_open_viewer_backconverts_after_a_rdfxml_session(monkeypatch):
+    """A viewer session still offers RDF/XML back-conversion when the TTL changed."""
+    from ster.cli import _open_viewer
+
+    original = DEMO.with_suffix(".rdf")
+    with (
+        patch("ster.tui.launch_file", return_value=store.load(DEMO)),
+        patch("ster.git.manager.GitManager") as gm,
+        patch("ster.cli._converted_from", original),
+        patch("ster.cli.store.file_hash", return_value="before"),
+        patch("ster.cli._maybe_backconvert") as backconvert,
+    ):
+        gm.return_value.is_enabled.return_value = False
+        _open_viewer(DEMO, lang="en")
+
+    backconvert.assert_called_once_with(DEMO, "before", original)
 
 
 # ── home-menu dispatch ──────────────────────────────────────────────────────--
@@ -285,13 +344,13 @@ def test_select_home_file_quit_returns_none(tmp_path, monkeypatch):
 def test_show_command_opens_the_new_tui():
     """`ster show <file>` opens the New-TUI (via _open_viewer) with git disabled."""
     with (
-        patch("ster.tui.launch") as launch,
+        patch("ster.tui.launch_file") as launch_file,
         patch("ster.git.manager.GitManager") as gm,
     ):
         gm.return_value.is_enabled.return_value = False
         result = _runner.invoke(app, ["show", str(DEMO)])
     assert result.exit_code == 0, result.output
-    launch.assert_called_once()
+    launch_file.assert_called_once()
 
 
 def test_home_screen_opens_selected_file_in_the_new_tui(tmp_path, monkeypatch):

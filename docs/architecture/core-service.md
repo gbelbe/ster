@@ -65,16 +65,21 @@ discovered, not invented. They double as API request bodies.
 
 ```python
 @dataclass(frozen=True)
-class MoveClass:                 # OWL reparent (rdfs:subClassOf)
+class MoveClass:  # OWL reparent (rdfs:subClassOf)
     target_path: Path
     source_uri: str
     new_parent_uri: str | None
     replace: bool = True
 
+
 @dataclass(frozen=True)
 class AddConcept: ...
+
+
 @dataclass(frozen=True)
 class SetLabel: ...
+
+
 # ~30 total, mirroring operations.py
 ```
 
@@ -84,8 +89,9 @@ transaction).
 ### 3.2 Service + result
 
 ```python
-def execute(self, change: Command | ChangeSet,
-            *, base_version: int | None = None) -> CommandResult: ...
+def execute(
+    self, change: Command | ChangeSet, *, base_version: int | None = None
+) -> CommandResult: ...
 ```
 
 `CommandResult` carries: `ok | rejected | failed`, the new `version`, the
@@ -111,23 +117,24 @@ tests inject fakes. The core is unaware of any of them.
 **Rollback strategy: clone-apply-swap** (cleanest for in-memory dataclasses):
 
 ```python
-with self._lock_for(change.target_path):          # serialize writers (§5)
+with self._lock_for(change.target_path):  # serialize writers (§5)
     entry = self._authority[change.target_path]
-    self._check_version(entry, base_version)       # OCC gate (§5)
+    self._check_version(entry, base_version)  # OCC gate (§5)
 
-    working = deepcopy(entry.taxonomy)             # BEGIN: isolated copy
+    working = deepcopy(entry.taxonomy)  # BEGIN: isolated copy
     try:
         for cmd in change.commands:
-            apply_domain_mutation(working, cmd)    # operations.py — may raise
+            apply_domain_mutation(working, cmd)  # operations.py — may raise
         report = self._validate(working)
-        if report.blocks():                        # policy: block on error
+        if report.blocks():  # policy: block on error
             return CommandResult.rejected(report)  #   discard clone; model untouched
     except DomainError as e:
-        return CommandResult.failed(e)             #   discard clone; model untouched
+        return CommandResult.failed(e)  #   discard clone; model untouched
 
-    atomic_save(working, change.target_path)       # COMMIT: temp file + os.replace + fsync
-    entry.taxonomy = working                        # swap in new authority
-    entry.version += 1; entry.mtime = stat()
+    atomic_save(working, change.target_path)  # COMMIT: temp file + os.replace + fsync
+    entry.taxonomy = working  # swap in new authority
+    entry.version += 1
+    entry.mtime = stat()
     self._emit(ChangedEvent(change.target_path, entry.version, affected_uris))
     return CommandResult.ok(entry.version, report, affected_uris)
 ```

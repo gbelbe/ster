@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -2447,14 +2448,353 @@ def test_launch_constructs_and_runs_the_app() -> None:
     run.assert_called_once()
 
 
+def test_loading_state_is_visible_before_a_slow_parse_finishes(monkeypatch) -> None:
+    """The single TUI app must paint its loading state before parsing completes."""
+    from textual.widgets import Static
+
+    from ster import store
+    from ster.tui.app import OntologyApp
+
+    started = threading.Event()
+    release = threading.Event()
+    original_load = store.load
+
+    def slow_load(_path, **_kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return original_load(DEMO)
+
+    monkeypatch.setattr(store, "load", slow_load)
+    app = OntologyApp(None, source="slow.ttl", path=DEMO)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 20)) as pilot:
+            await _settle(pilot, started.is_set)
+            assert "Loading slow.ttl..." in str(app.query_one("#loading", Static).render())
+            release.set()
+            await _settle(pilot, lambda: app._loaded_successfully and not app._loading)
+            assert app.query_one("#tree")
+
+    _run(scenario)
+
+
+def test_load_worker_reports_missing_source(monkeypatch) -> None:
+    """A file-loading app reports a missing path through its UI callback."""
+    app = OntologyApp(None, source="missing.ttl")
+    errors: list[Exception] = []
+    monkeypatch.setattr(app, "_show_load_error", errors.append)
+    monkeypatch.setattr(app, "call_from_thread", lambda callback, *args: callback(*args))
+
+    app._load_taxonomy_worker()
+
+    assert len(errors) == 1
+    assert str(errors[0]) == "No taxonomy file was given."
+
+
+def test_load_worker_reports_parse_failure(monkeypatch, tmp_path) -> None:
+    """A parser exception is converted to a loader error instead of escaping the worker."""
+    from ster import store
+
+    source = tmp_path / "broken.ttl"
+    source.write_text("broken", encoding="utf-8")
+    app = OntologyApp(None, source=source.name, path=source)
+    errors: list[Exception] = []
+    monkeypatch.setattr(app, "_show_load_error", errors.append)
+    monkeypatch.setattr(app, "call_from_thread", lambda callback, *args: callback(*args))
+    monkeypatch.setattr(
+        store, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad RDF"))
+    )
+
+    app._load_taxonomy_worker()
+
+    assert [str(error) for error in errors] == ["bad RDF"]
+
+
+def test_loading_stage_guards_ignore_calls_after_browser_ready() -> None:
+    """Preparation stages must be idempotent after the browser is ready."""
+    app = OntologyApp(store.load(DEMO), source="demo.ttl", progressive_startup=True)
+    app._browser_mounted = True
+    app._browser_ready = True
+
+    app._initialize_browser()
+    app._build_property_tree_stage()
+    app._build_main_tree_stage()
+    app._build_ontology_tree_stage()
+    app._finish_browser_initialization()
+
+
+def test_show_load_error_stops_the_loading_timer(monkeypatch) -> None:
+    """A failed load stops the spinner and leaves the error message visible."""
+    from unittest.mock import MagicMock
+
+    app = OntologyApp(None, source="broken.ttl", path=DEMO)
+    timer = MagicMock()
+    app._loading_spinner_timer = timer
+    messages: list[str] = []
+    monkeypatch.setattr(app, "_set_loading_message", messages.append)
+
+    app._show_load_error(ValueError("bad RDF"))
+
+    timer.stop.assert_called_once()
+    assert app._loading_spinner_timer is None
+    assert messages == ["Unable to load broken.ttl: bad RDF\n\nPress q to quit."]
+
+
+def test_search_rows_refresh_clears_large_index_before_rebuilding(monkeypatch) -> None:
+    """Refreshing a large search index clears stale rows before its worker starts."""
+    from ster.model import OWLIndividual, Taxonomy
+
+    taxonomy = Taxonomy()
+    for index in range(10_001):
+        uri = f"https://example.org/search/{index}"
+        taxonomy.owl_individuals[uri] = OWLIndividual(uri)
+    app = OntologyApp(taxonomy, source="large.ttl")
+    app.search_rows = [("old", "old", "individual")]
+    started = []
+    monkeypatch.setattr(app, "_start_search_rows_worker", lambda: started.append(True))
+
+    app._refresh_search_rows()
+
+    assert app.search_rows == []
+    assert started == [True]
+
+
+def test_stale_navigation_index_result_is_ignored() -> None:
+    """A worker result for an old taxonomy must not mutate the current app state."""
+    from ster.model import Taxonomy
+
+    current = Taxonomy()
+    app = OntologyApp(current, source="current.ttl")
+    app._navigation_index_built = False
+    app._navigation_index_ready(Taxonomy(), ({"old": ["uri"]}, ["untyped"]))
+
+    assert not app._navigation_index_built
+    assert app._individuals_by_class == {}
+
+
+def test_loading_spinner_stops_and_ignores_single_line_messages() -> None:
+    """The spinner does nothing after loading and preserves a message without details."""
+    from textual.widgets import Static
+
+    app = OntologyApp(store.load(DEMO), source="demo.ttl", progressive_startup=True)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 20)):
+            app._loading = False
+            frame = app._loading_spinner_frame
+            app._advance_loading_spinner()
+            assert app._loading_spinner_frame == frame
+            app._loading = True
+            app._set_loading_message("Working")
+            app._advance_loading_spinner()
+            assert str(app.query_one("#loading", Static).render()) == "Working"
+
+    _run(scenario)
+
+
+def test_loading_callbacks_cover_progression_and_error_guards(monkeypatch) -> None:
+    """The loader handles missing widgets and stale navigation results safely."""
+    from ster.model import Taxonomy
+
+    app = OntologyApp(Taxonomy(), source="empty.ttl", progressive_startup=True)
+    monkeypatch.setattr(app, "_set_loading_message", lambda message: None)
+    app._set_loading_progress("Preparing", 42, "working")
+    app._browser_mounted = True
+    monkeypatch.setattr(app, "call_after_refresh", lambda callback: None)
+    app._navigation_index_ready(app.tax, ({}, []))
+    app._browser_ready = True
+    app._initialize_browser()
+
+    assert app._navigation_index_built
+    assert app._loading
+    app._show_load_error(ValueError("bad RDF"))
+    assert not app._loading
+
+
+def test_progressive_stages_ignore_calls_before_browser_mount() -> None:
+    """Each deferred startup stage is harmless until browser widgets are mounted."""
+    app = OntologyApp(store.load(DEMO), source="demo.ttl", progressive_startup=True)
+    app._browser_mounted = False
+    app._browser_ready = False
+
+    app._build_property_tree_stage()
+    app._build_main_tree_stage()
+    app._build_ontology_tree_stage()
+    app._finish_browser_initialization()
+
+
+def test_launch_file_loads_in_the_textual_worker(tmp_path, monkeypatch) -> None:
+    """The real file entry point must defer store.load until the app is running."""
+    source = tmp_path / "worker.ttl"
+    source.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    loaded_threads: list[int] = []
+    original_load = store.load
+
+    def tracked_load(path, **kwargs):
+        loaded_threads.append(threading.get_ident())
+        return original_load(path, **kwargs)
+
+    monkeypatch.setattr(store, "load", tracked_load)
+
+    app = OntologyApp(None, source=source.name, path=source)
+    assert app._loading
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 20)) as pilot:
+            await _settle(pilot, lambda: bool(loaded_threads))
+
+    _run(scenario)
+    assert loaded_threads
+    assert loaded_threads[0] != threading.get_ident()
+
+
+def test_loading_spinner_changes_between_progress_updates() -> None:
+    """The loader animation moves even when its phase percentage stays fixed."""
+    from textual.widgets import Static
+
+    app = OntologyApp(store.load(DEMO), source="demo.ttl", progressive_startup=True)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 20)):
+            app._set_loading_progress("Preparing", 20, "Indexing individuals")
+            before = str(app.query_one("#loading", Static).render()).split()[0]
+            app._advance_loading_spinner()
+            after = str(app.query_one("#loading", Static).render()).split()[0]
+            assert before != after
+
+    _run(scenario)
+
+
+def test_large_taxonomy_defers_individual_nodes_until_expanded() -> None:
+    """A large instance collection must not freeze the first TUI frame."""
+    from ster.model import OWLIndividual, RDFClass, Taxonomy
+
+    taxonomy = Taxonomy()
+    class_uri = "https://example.org/large/Class"
+    taxonomy.owl_classes[class_uri] = RDFClass(class_uri)
+    individual_count = 10_001
+    for index in range(individual_count):
+        uri = f"https://example.org/large/individual-{index}"
+        taxonomy.owl_individuals[uri] = OWLIndividual(uri, types=[class_uri])
+
+    app = OntologyApp(taxonomy, source="large.ttl")
+    assert app.search_rows == []
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#ont-tree", Tree)
+
+            def count_nodes(node) -> int:
+                return 1 + sum(count_nodes(child) for child in node.children)
+
+            assert count_nodes(tree.root) < 100
+            assert "https://example.org/large/individual-0" not in app._uri_nodes
+
+            def find_group(node):
+                if "Individuals (10,001)" in str(node.label):
+                    return node
+                return next(
+                    (found for child in node.children if (found := find_group(child))), None
+                )
+
+            group = find_group(tree.root)
+            assert group is not None
+            group.expand()
+            await _settle(
+                pilot,
+                lambda: "https://example.org/large/individual-0" in app._uri_nodes,
+            )
+            assert "https://example.org/large/individual-0" in app._uri_nodes
+
+    _run(scenario)
+
+
+def test_progressive_startup_finishes_with_only_untyped_individuals() -> None:
+    """An empty class index must still count as a completed navigation index."""
+    from ster.model import OWLIndividual, Taxonomy
+
+    taxonomy = Taxonomy()
+    uri = "https://example.org/untyped"
+    taxonomy.owl_individuals[uri] = OWLIndividual(uri)
+    app = OntologyApp(taxonomy, source="untyped.ttl", progressive_startup=True)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _settle(pilot, lambda: app._browser_ready)
+            assert app._navigation_index_built
+            assert app._untyped_individuals == [uri]
+
+    _run(scenario)
+
+
+def test_large_class_hierarchy_loads_descendants_on_expansion() -> None:
+    """A large class hierarchy renders its descendants only when opened."""
+    from ster.model import RDFClass, Taxonomy
+
+    taxonomy = Taxonomy()
+    root_uri = "https://example.org/large/Root"
+    taxonomy.owl_classes[root_uri] = RDFClass(root_uri)
+    parent = root_uri
+    for index in range(10_000):
+        child = f"https://example.org/large/Class-{index}"
+        taxonomy.owl_classes[child] = RDFClass(child, sub_class_of=[parent])
+        parent = child
+
+    app = OntologyApp(taxonomy, source="large-classes.ttl", progressive_startup=True)
+
+    async def scenario() -> None:
+        from textual.widgets import Tree
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _settle(pilot, lambda: app._browser_ready)
+            tree = app.query_one("#ont-tree", Tree)
+            assert len(tree.root.children) < 10
+            root = app._uri_nodes[root_uri]
+            assert root_uri not in app._uri_nodes or len(root.children) == 1
+            root.expand()
+            await _settle(pilot, lambda: "https://example.org/large/Class-0" in app._uri_nodes)
+            assert "https://example.org/large/Class-0" in app._uri_nodes
+
+    _run(scenario)
+
+
+def test_context_server_start_does_not_block_the_ui_thread(monkeypatch) -> None:
+    """Starting the optional API server must happen outside Textual's UI thread."""
+    import ster.tui.app as app_module
+    from ster.model import Taxonomy
+
+    started = threading.Event()
+    worker_threads: list[int] = []
+
+    def fake_start(_taxonomy, _path):
+        worker_threads.append(threading.get_ident())
+        started.set()
+        return True
+
+    monkeypatch.setattr(app_module, "_start_context_server", fake_start)
+    app = OntologyApp(Taxonomy(), source="empty.ttl")
+    ui_thread = threading.get_ident()
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 20)) as pilot:
+            await _settle(pilot, started.is_set)
+
+    _run(scenario)
+    assert worker_threads
+    assert worker_threads[0] != ui_thread
+
+
 def test_dunder_main_launches(monkeypatch) -> None:
     from unittest.mock import patch
 
-    with patch("ster.tui.launch") as launch:
+    with patch("ster.tui.launch_file") as launch_file:
         import ster.tui.__main__ as entry
 
         entry.main([str(DEMO)])
-    launch.assert_called_once()
+    launch_file.assert_called_once_with(DEMO, source=DEMO.name)
 
 
 @pytest.mark.skipif(

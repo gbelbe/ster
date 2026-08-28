@@ -430,6 +430,14 @@ def _try_save_cache(cache_path: Path, taxonomy: Taxonomy) -> None:
         pass
 
 
+def _report_progress(
+    callback: Callable[[int, str], None] | None, percent: int, message: str
+) -> None:
+    """Report a coarse load phase without making progress callbacks mandatory."""
+    if callback is not None:
+        callback(percent, message)
+
+
 # ──────────────────────────── public API ─────────────────────────────────────
 
 
@@ -445,7 +453,10 @@ def _parse_to_taxonomy(path: Path) -> Taxonomy:
     return graph_to_taxonomy(_parse_graph(path))
 
 
-def load(path: str | Path) -> Taxonomy:
+def load(
+    path: str | Path,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> Taxonomy:
     """Parse an RDF file and return a fully handle-annotated Taxonomy.
 
     Uses a binary cache file in ~/.cache/ster/bin_cache to speed up subsequent
@@ -453,21 +464,28 @@ def load(path: str | Path) -> Taxonomy:
     disabled by setting STER_NO_CACHE=1 in the environment.
     """
     path = Path(path)
+    _report_progress(progress_callback, 0, "Starting")
     use_cache = os.environ.get("STER_NO_CACHE") != "1"
     cache_path = _get_bin_cache_path(path)
 
     if use_cache and _is_cache_valid(cache_path, path):
         taxonomy = _try_load_cache(cache_path, path)
         if taxonomy:
+            _report_progress(progress_callback, 100, "Loaded from cache")
             return taxonomy
 
+    _report_progress(progress_callback, 5, "Parsing RDF")
+    _report_progress(progress_callback, 45, "Building model")
     taxonomy = _parse_to_taxonomy(path)
     taxonomy.file_path = path
+    _report_progress(progress_callback, 80, "Assigning handles")
     assign_handles(taxonomy)
 
     if use_cache:
         _try_save_cache(cache_path, taxonomy)
+        _report_progress(progress_callback, 95, "Updating cache")
 
+    _report_progress(progress_callback, 100, "Ready")
     return taxonomy
 
 

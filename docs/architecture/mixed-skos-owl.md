@@ -114,10 +114,13 @@ model:
   ```python
   def node_type(self, uri):
       in_concepts = uri in self.concepts
-      in_classes  = uri in self.owl_classes
-      if in_concepts and in_classes: return "promoted"
-      if in_concepts: return "concept"
-      if in_classes:  return "class"
+      in_classes = uri in self.owl_classes
+      if in_concepts and in_classes:
+          return "promoted"
+      if in_concepts:
+          return "concept"
+      if in_classes:
+          return "class"
       ...
   ```
 

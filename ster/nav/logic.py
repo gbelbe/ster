@@ -3613,28 +3613,8 @@ def build_tui_taxonomy_overview_fields(taxonomy: Taxonomy, lang: str) -> list[De
 # ──────────────────────────── OWL property detail ────────────────────────────
 
 
-def build_property_detail(
-    taxonomy: Taxonomy,
-    uri: str,
-    lang: str,
-    configured_langs: list[str] | None = None,
-    entity_metadata_props: list[MetaProp] | None = None,
-) -> list[DetailField]:
-    """Detail panel for an owl:ObjectProperty / DatatypeProperty / etc."""
-    prop = taxonomy.owl_properties.get(uri)
-    if not prop:
-        return []
-
-    clangs = configured_langs or [lang]
-    fields: list[DetailField] = []
-
-    # ── Identity ─────────────────────────────────────────────────────────────
-    fields.append(_sep("Identity"))
-    fields.append(DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}))
-    fields.append(_type_field(taxonomy, uri, display=f"owl:{prop.prop_type}"))
-
-    # ── Labels (rdfs:label) — always shown, with the missing-language affordance ─
-    fields.append(_sep("Labels"))
+def _property_label_fields(prop: OWLProperty, configured_langs: list[str]) -> list[DetailField]:
+    fields = [_sep("Labels")]
     for lbl in sorted(prop.labels, key=lambda l: l.lang):
         fields.append(
             DetailField(
@@ -3646,11 +3626,13 @@ def build_property_detail(
             )
         )
     fields.extend(
-        essential_label_affordances("property", {lbl.lang for lbl in prop.labels}, clangs)
+        essential_label_affordances("property", {lbl.lang for lbl in prop.labels}, configured_langs)
     )
+    return fields
 
-    # ── Notes (rdfs:comment) — always shown ──────────────────────────────────
-    fields.append(_sep("Notes"))
+
+def _property_comment_fields(prop: OWLProperty, configured_langs: list[str]) -> list[DetailField]:
+    fields = [_sep("Notes")]
     for cmt in sorted(prop.comments, key=lambda d: d.lang):
         fields.append(
             DetailField(
@@ -3663,71 +3645,73 @@ def build_property_detail(
         )
     fields.extend(
         _lang_add_actions(
-            clangs,
+            configured_langs,
             "action:add_prop_comment",
             _ADD_RDFS_COMMENT,
             "add_prop_comment",
             present={cmt.lang for cmt in prop.comments},
         )
     )
+    return fields
 
-    # ── Signature (domain / range / subPropertyOf / inverseOf) ───────────────
-    has_sig = bool(prop.domains or prop.ranges or prop.sub_property_of or prop.inverse_of)
-    if has_sig:
-        fields.append(_sep("Signature"))
-        for d_uri in prop.domains:
-            cls = taxonomy.owl_classes.get(d_uri)
-            fields.append(
-                DetailField(
-                    f"prop_domain:{d_uri}",
-                    "domain",
-                    cls.label(lang) if cls else d_uri,
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": d_uri, "nav": bool(cls)},
-                )
-            )
-        for r_uri in prop.ranges:
-            cls = taxonomy.owl_classes.get(r_uri)
-            fields.append(
-                DetailField(
-                    f"prop_range:{r_uri}",
-                    "range",
-                    cls.label(lang) if cls else r_uri,
-                    editable=False,
-                    meta={"type": "rdf_relation", "uri": r_uri, "nav": bool(cls)},
-                )
-            )
-        for sp_uri in prop.sub_property_of:
-            sp = taxonomy.owl_properties.get(sp_uri)
-            fields.append(
-                DetailField(
-                    f"prop_sub:{sp_uri}",
-                    "↑ subPropertyOf",
-                    sp.label(lang) if sp else sp_uri,
-                    editable=False,
-                    meta={"type": "prop_nav", "uri": sp_uri, "nav": bool(sp)},
-                )
-            )
-        for inv_uri in prop.inverse_of:
-            inv = taxonomy.owl_properties.get(inv_uri)
-            fields.append(
-                DetailField(
-                    f"prop_inv:{inv_uri}",
-                    "⟺ inverseOf",
-                    inv.label(lang) if inv else inv_uri,
-                    editable=False,
-                    meta={"type": "prop_nav", "uri": inv_uri, "nav": bool(inv)},
-                )
-            )
 
-    # ── Note (ns1:note markdown) ──────────────────────────────────────────────
-    fields.extend(_note_display_fields(prop.note, "prop:"))
+def _property_class_rel_fields(
+    taxonomy: Taxonomy, uris: list[str], key_prefix: str, display: str, lang: str
+) -> list[DetailField]:
+    fields: list[DetailField] = []
+    for rel_uri in uris:
+        cls = taxonomy.owl_classes.get(rel_uri)
+        fields.append(
+            DetailField(
+                f"{key_prefix}:{rel_uri}",
+                display,
+                cls.label(lang) if cls else rel_uri,
+                editable=False,
+                meta={"type": "rdf_relation", "uri": rel_uri, "nav": bool(cls)},
+            )
+        )
+    return fields
 
-    # ── Metadata (configured annotation catalog) ─────────────────────────────
-    fields.extend(entity_metadata_section(prop, entity_metadata_props))
 
-    # ── Actions ──────────────────────────────────────────────────────────────
-    fields.append(_sep("Actions"))
+def _property_nav_rel_fields(
+    taxonomy: Taxonomy, uris: list[str], key_prefix: str, display: str, lang: str
+) -> list[DetailField]:
+    fields: list[DetailField] = []
+    for rel_uri in uris:
+        rel_prop = taxonomy.owl_properties.get(rel_uri)
+        fields.append(
+            DetailField(
+                f"{key_prefix}:{rel_uri}",
+                display,
+                rel_prop.label(lang) if rel_prop else rel_uri,
+                editable=False,
+                meta={"type": "prop_nav", "uri": rel_uri, "nav": bool(rel_prop)},
+            )
+        )
+    return fields
+
+
+def _property_signature_fields(
+    taxonomy: Taxonomy, prop: OWLProperty, lang: str
+) -> list[DetailField]:
+    if not (prop.domains or prop.ranges or prop.sub_property_of or prop.inverse_of):
+        return []
+    fields = [_sep("Signature")]
+    fields.extend(_property_class_rel_fields(taxonomy, prop.domains, "prop_domain", "domain", lang))
+    fields.extend(_property_class_rel_fields(taxonomy, prop.ranges, "prop_range", "range", lang))
+    fields.extend(
+        _property_nav_rel_fields(
+            taxonomy, prop.sub_property_of, "prop_sub", "↑ subPropertyOf", lang
+        )
+    )
+    fields.extend(
+        _property_nav_rel_fields(taxonomy, prop.inverse_of, "prop_inv", "⟺ inverseOf", lang)
+    )
+    return fields
+
+
+def _property_actions_fields(taxonomy: Taxonomy, prop: OWLProperty, lang: str) -> list[DetailField]:
+    fields = [_sep("Actions")]
     fields.append(
         _add_action_field("action:add_prop_domain", "→ Add domain class", "add_prop_domain")
     )
@@ -3757,7 +3741,33 @@ def build_property_detail(
     fields.append(
         _add_action_field("action:delete_property", "⊘ Delete this property", "delete_property")
     )
+    return fields
 
+
+def build_property_detail(
+    taxonomy: Taxonomy,
+    uri: str,
+    lang: str,
+    configured_langs: list[str] | None = None,
+    entity_metadata_props: list[MetaProp] | None = None,
+) -> list[DetailField]:
+    """Detail panel for an owl:ObjectProperty / DatatypeProperty / etc."""
+    prop = taxonomy.owl_properties.get(uri)
+    if not prop:
+        return []
+
+    clangs = configured_langs or [lang]
+    fields = [
+        _sep("Identity"),
+        DetailField("uri", "URI", uri, editable=True, meta={"type": "uri"}),
+        _type_field(taxonomy, uri, display=f"owl:{prop.prop_type}"),
+    ]
+    fields.extend(_property_label_fields(prop, clangs))
+    fields.extend(_property_comment_fields(prop, clangs))
+    fields.extend(_property_signature_fields(taxonomy, prop, lang))
+    fields.extend(_note_display_fields(prop.note, "prop:"))
+    fields.extend(entity_metadata_section(prop, entity_metadata_props))
+    fields.extend(_property_actions_fields(taxonomy, prop, lang))
     return fields
 
 
