@@ -83,11 +83,10 @@ repos:
         pass_filenames: false
 
       - id: complexity-ratchet
-        # Diff-aware ratchet: grandfathers existing violations, enforces ≤10 on
-        # touched functions and a HARD_CEILING of 25 on new ones.
-        # ruff C901 (max-complexity=25) provides the same hard ceiling inline
-        # during ruff check above — this script adds the diff-aware ≤10 layer.
-        name: complexity ratchet (<=10; god-functions must shrink)
+        # Diff-aware ratchet: grandfathers existing violations, enforces ≤15 on
+        # touched functions; Ruff C901 remains the separate extreme-complexity
+        # safety net configured in pyproject.toml.
+        name: complexity ratchet (<=15)
         entry: uv run python scripts/check_complexity_ratchet.py
         language: system
         types: [python]

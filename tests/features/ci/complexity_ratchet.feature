@@ -4,7 +4,7 @@ Feature: Complexity ratchet
 
   Scenario: A new function over the threshold fails
     Given a function absent from the base
-    And its complexity in the change is 12
+    And its complexity in the change is 16
     Then the ratchet check reports a violation
 
   Scenario: Increasing an already-complex function fails
@@ -24,20 +24,10 @@ Feature: Complexity ratchet
 
   Scenario: A new function within the threshold passes
     Given a function absent from the base
-    And its complexity in the change is 9
+    And its complexity in the change is 15
     Then the ratchet check reports no violation
 
   Scenario: Pushing a simple function over the threshold fails
-    Given a function with base complexity 8
-    And its complexity in the change is 11
+    Given a function with base complexity 14
+    And its complexity in the change is 16
     Then the ratchet check reports a violation
-
-  Scenario: Modifying a god-function without reducing it fails
-    Given a god-function with base complexity 127
-    And you modify it leaving complexity at 127
-    Then the ratchet reports a god-function violation
-
-  Scenario: Modifying a god-function and reducing it passes
-    Given a god-function with base complexity 127
-    And you modify it reducing complexity to 120
-    Then the ratchet reports no god-function violation

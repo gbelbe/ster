@@ -537,7 +537,7 @@ def _load_ontology_node(taxonomy: Taxonomy, ont_uri: str, triples: list[tuple[No
         taxonomy.ontology_description = taxonomy.ontology_label
 
 
-# ── per-entity parsing (dispatch tables keep each helper ≤ complexity 10) ─────
+# ── per-entity parsing (dispatch tables keep each helper ≤ complexity 15) ─────
 
 
 def _lang_label(o: object, label_type: LabelType = LabelType.PREF) -> Label:

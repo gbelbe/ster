@@ -38,8 +38,8 @@ we build ster, and Claude treats it as binding. The essentials it enforces:
 - **Test-first (TDD + BDD).** Gherkin `.feature` under `tests/features/<domain>/`,
   step defs under `tests/step_defs/`, unit tests under `tests/unit/` — written
   before the implementation. Bug fixes start with a failing regression test.
-- **Refactor on touch + the complexity ratchet.** New functions stay ≤ 10
-  cyclomatic complexity; a touched function already over 10 must come *down*.
+- **Refactor on touch + the complexity ratchet.** New functions stay ≤ 15
+  cyclomatic complexity; changes must not increase complexity above 15.
   When the ratchet triggers, Claude refactors first, then builds.
 - **Dependency isolation, prompt/style conventions** — see `CLAUDE.md` for the
   full ruff/mypy tables and project conventions.

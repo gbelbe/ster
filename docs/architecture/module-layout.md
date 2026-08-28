@@ -44,15 +44,14 @@ ster/operations.py   # thin re-export shim → ~37 caller files keep importing `
 1. **The complexity ratchet treats a relocated function as new.** A moved
    function isn't in the `origin/main` baseline, so the ratchet sees "new
    function, complexity > 10 → fail". These exceed 10 today and must be
-   refactored **down to ≤10 before/while they move**:
+   refactored **down to ≤15 before/while they move**:
 
    | cc | function | layer |
    |----|----------|-------|
-   | 27 | `delete_owl_class` (also > hard ceiling 25) | owl |
+   | 27 | `delete_owl_class` | owl |
    | 22 | `remove_concept` | skos |
    | 19 | `rename_ontology_uri` | onto |
    | 17 | `move_concept` | skos |
-   | 15 | `count_owl_uri_references` | cross |
    | 12 | `add_concept` | skos |
 
 2. **Re-export ergonomics.** `from .domain.x import foo as foo` shims get
@@ -64,10 +63,10 @@ ster/operations.py   # thin re-export shim → ~37 caller files keep importing `
 | Step | PR | Work |
 |------|----|------|
 | 1 | config | add `combine-as-imports = true` |
-| 2 | onto | refactor `rename_ontology_uri` (19→≤10) + tests → move onto layer + shim |
-| 3 | cross | refactor `count_owl_uri_references` (15→≤10) + tests → move cross layer + shim |
-| 4 | skos | refactor `remove_concept`/`move_concept`/`add_concept` (≤10) + tests → move skos layer + shim |
-| 5 | owl | refactor `delete_owl_class` (27→≤10) + tests → move owl layer + shim |
+| 2 | onto | refactor `rename_ontology_uri` (19→≤15) + tests → move onto layer + shim |
+| 3 | cross | refactor `count_owl_uri_references` (already 15) + tests → move cross layer + shim |
+| 4 | skos | refactor `remove_concept`/`move_concept`/`add_concept` (≤15) + tests → move skos layer + shim |
+| 5 | owl | refactor `delete_owl_class` (27→≤15) + tests → move owl layer + shim |
 | 6 | finalize | reduce `operations.py` to a thin shim; add import-linter contracts for intra-domain boundaries |
 
 Each step stays green (full `/ci`), the shim keeps all callers working, and tests

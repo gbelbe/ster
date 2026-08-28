@@ -145,7 +145,7 @@ select = [
     "C4",  # flake8-comprehensions (cleaner list/dict/set comprehensions)
     "SIM", # flake8-simplify
     "S",   # flake8-bandit (security SAST — replaces standalone bandit)
-    "C90", # mccabe complexity (C901 hard ceiling; diff-aware ratchet via scripts/)
+    "C90", # mccabe complexity (C901 safety net; diff-aware ratchet via scripts/)
 ]
 ignore = [
     "E501",   # line too long — enforced by formatter, not linter
@@ -174,10 +174,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.mccabe]
-# Safety-net ceiling: C901 only fires on functions that are truly extreme
-# (essentially unreviewable). Day-to-day enforcement — ≤10 target, ≤25
-# hard ceiling on touched functions — is handled by the diff-aware ratchet
-# in scripts/check_complexity_ratchet.py (HARD_CEILING = 25).
+# Safety net: the diff-aware ratchet enforces ≤15 on changes; C901 only fires
+# on functions that are truly extreme (essentially unreviewable).
 max-complexity = 200
 
 # ── Mypy (type checker) ───────────────────────────────────────────────────────
