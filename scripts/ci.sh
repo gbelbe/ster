@@ -73,7 +73,7 @@ uv sync --extra dev --quiet
 ok "deps synced (Python $(uv run python --version | awk '{print $2}'))"
 
 # ── 2. Static checks via prek ─────────────────────────────────────────────────
-# One runner for ruff (lint+format, incl. S security rules and C90 complexity),
+# One runner for ruff (lint+format, incl. S security rules),
 # mypy, import-linter, the complexity ratchet and file hygiene — defined once in
 # .pre-commit-config.yaml and shared with the GitHub 'checks' job.
 PREK="prek"

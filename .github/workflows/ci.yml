@@ -19,7 +19,7 @@ permissions:
 jobs:
 
   # ── 1. Static checks via prek ────────────────────────────────────────────────
-  # One job drives ruff (lint+format, incl. S security rules + C90 complexity),
+  # One job drives ruff (lint+format, incl. S security rules),
   # mypy, import-linter and file hygiene through prek + .pre-commit-config.yaml
   # — the exact hooks developers run locally, so CI can never drift from local.
   # The complexity ratchet is a separate job below: it needs the PR base ref for

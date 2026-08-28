@@ -54,7 +54,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff (lint, autofix)
-        # Includes S (flake8-bandit) and C90 (mccabe) — replaces standalone bandit.
+        # Includes S (flake8-bandit) — replaces standalone bandit.
         entry: uv run ruff check --fix
         language: system
         types_or: [python, pyi]
@@ -83,10 +83,9 @@ repos:
         pass_filenames: false
 
       - id: complexity-ratchet
-        # Diff-aware ratchet: grandfathers existing violations, enforces ≤15 on
-        # touched functions; Ruff C901 remains the separate extreme-complexity
-        # safety net configured in pyproject.toml.
-        name: complexity ratchet (<=15)
+        # Diff-aware ratchet: grandfathers existing violations and enforces the
+        # configured threshold only on changed complexity.
+        name: complexity ratchet
         entry: uv run python scripts/check_complexity_ratchet.py
         language: system
         types: [python]
