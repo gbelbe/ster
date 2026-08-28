@@ -605,7 +605,7 @@ class OntologyApp(App):
     """
 
     BINDINGS = [
-        Binding("slash", "command_palette", "Search"),
+        Binding("slash,divide", "command_palette", "Search"),
         Binding("full_stop", "context_menu", "Actions"),
         Binding("e", "expand_all", "Expand all"),
         Binding("c", "collapse_all", "Collapse"),

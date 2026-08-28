@@ -2365,12 +2365,13 @@ def test_add_superclass_via_picker_and_saves(tmp_path) -> None:
     _run(scenario)
 
 
-def test_command_palette_search_jumps_end_to_end() -> None:
+@pytest.mark.parametrize("search_key", ["slash", "divide"])
+def test_command_palette_search_jumps_end_to_end(search_key: str) -> None:
     async def scenario() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await pilot.press("slash")  # open the fuzzy search palette
+            await pilot.press(search_key)  # open the fuzzy search palette
             await pilot.pause()
             assert app.screen.__class__.__name__ == "CommandPalette"
             await pilot.press(*"rex")  # type a query
