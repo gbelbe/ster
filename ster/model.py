@@ -276,6 +276,13 @@ class Taxonomy:
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
 
+    # Entities loaded from read-only *context* files, mapped to the file each came
+    # from. Membership is the read-only flag; the value answers "where is this
+    # defined?", which is the first thing asked of an entity you cannot edit.
+    # Everything here is excluded when the taxonomy is serialised, so saving can
+    # never absorb a context file into the editable one.
+    context_source: dict[str, Path] = field(default_factory=dict, compare=False, repr=False)
+
     # ── typed accessors over the generic annotation store ─────────────────────
     # These keep the historical ``taxonomy.ontology_title`` etc. API working
     # while the single source of truth is ``ontology_annotations``.

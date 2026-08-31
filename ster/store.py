@@ -456,8 +456,13 @@ def _parse_to_taxonomy(path: Path) -> Taxonomy:
 def load(
     path: str | Path,
     progress_callback: Callable[[int, str], None] | None = None,
+    context: list[Path] | None = None,
 ) -> Taxonomy:
     """Parse an RDF file and return a fully handle-annotated Taxonomy.
+
+    *context* names further files to merge in **read-only**, so the connected
+    graph is visible while exactly one file stays writable. Their entities are
+    recorded in ``Taxonomy.context_source`` and excluded when saving.
 
     Uses a binary cache file in ~/.cache/ster/bin_cache to speed up subsequent
     loads of large files IF the source file hasn't changed. Caching can be
@@ -468,25 +473,70 @@ def load(
     use_cache = os.environ.get("STER_NO_CACHE") != "1"
     cache_path = _get_bin_cache_path(path)
 
-    if use_cache and _is_cache_valid(cache_path, path):
-        taxonomy = _try_load_cache(cache_path, path)
-        if taxonomy:
-            _report_progress(progress_callback, 100, "Loaded from cache")
-            return taxonomy
+    taxonomy = (
+        _try_load_cache(cache_path, path)
+        if use_cache and _is_cache_valid(cache_path, path)
+        else None
+    )
+    if taxonomy is None:
+        _report_progress(progress_callback, 5, "Parsing RDF")
+        _report_progress(progress_callback, 45, "Building model")
+        taxonomy = _parse_to_taxonomy(path)
+        taxonomy.file_path = path
+        _report_progress(progress_callback, 80, "Assigning handles")
+        assign_handles(taxonomy)
+        if use_cache:
+            _try_save_cache(cache_path, taxonomy)
+            _report_progress(progress_callback, 95, "Updating cache")
+        _report_progress(progress_callback, 100, "Ready")
+    else:
+        _report_progress(progress_callback, 100, "Loaded from cache")
 
-    _report_progress(progress_callback, 5, "Parsing RDF")
-    _report_progress(progress_callback, 45, "Building model")
-    taxonomy = _parse_to_taxonomy(path)
-    taxonomy.file_path = path
-    _report_progress(progress_callback, 80, "Assigning handles")
-    assign_handles(taxonomy)
-
-    if use_cache:
-        _try_save_cache(cache_path, taxonomy)
-        _report_progress(progress_callback, 95, "Updating cache")
-
-    _report_progress(progress_callback, 100, "Ready")
+    # Merged after the cache is written, so the cache stays a faithful copy of
+    # this file alone and never depends on which context happened to be loaded.
+    for other in context or ():
+        _merge_context(taxonomy, Path(other))
+    if context:
+        # Deliberately *not* re-normalising the hierarchy here. A context concept
+        # declaring broader on an editable one would gain the reciprocal narrower
+        # on that editable entity — and saving would then write a synthesised
+        # `narrower` into the user's file, pointing at an entity that does not
+        # exist when the file is opened on its own. The graph reads broader from
+        # the child, so cross-file links already draw; only the tree, which walks
+        # narrower downward, does not yet show them.
+        assign_handles(taxonomy)
     return taxonomy
+
+
+# Entity registries, in the order a URI is resolved. A shared list so merging and
+# editability agree on what an "entity" is.
+_ENTITY_REGISTRIES = ("schemes", "concepts", "owl_classes", "owl_individuals", "owl_properties")
+
+
+def _merge_context(taxonomy: Taxonomy, path: Path) -> None:
+    """Merge *path* into *taxonomy* read-only, recording where each entity came from.
+
+    A URI already present is kept as-is: the editable definition is the one the
+    user can act on, so it must be the one they see.
+    """
+    other = load(path)
+    for registry in _ENTITY_REGISTRIES:
+        target = getattr(taxonomy, registry)
+        for uri, entity in getattr(other, registry).items():
+            if uri in target:
+                continue
+            target[uri] = entity
+            taxonomy.context_source[uri] = path
+    for prefix, namespace in other.namespace_bindings.items():
+        taxonomy.namespace_bindings.setdefault(prefix, namespace)
+
+
+def is_editable(taxonomy: Taxonomy, uri: str) -> bool:
+    """False only for entities that came from a read-only context file.
+
+    An unknown URI is editable: it belongs to whatever is about to be written.
+    """
+    return uri not in taxonomy.context_source
 
 
 def save(taxonomy: Taxonomy, path: str | Path) -> None:
@@ -1040,22 +1090,29 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
     # Try to bind a short prefix for the primary namespace
     _bind_namespace(g, taxonomy)
 
-    for uri, scheme in taxonomy.schemes.items():
+    # `own` filters out anything merged from a read-only context file. This is
+    # the backstop the whole feature rests on: an edit that slips past the UI
+    # guard is merely not persisted, whereas serialising a context entity here
+    # would silently absorb another file into this one.
+    def own(registry: dict) -> list:
+        return [(u, e) for u, e in registry.items() if u not in taxonomy.context_source]
+
+    for uri, scheme in own(taxonomy.schemes):
         _serialize_scheme(g, uri, scheme)
 
     # ── Concepts ─────────────────────────────────────────────────────────────
-    for uri, concept in taxonomy.concepts.items():
+    for uri, concept in own(taxonomy.concepts):
         _serialize_concept(g, uri, concept, taxonomy)
 
     # ── OWL/RDFS Classes ─────────────────────────────────────────────────────
-    for uri, rdf_class in taxonomy.owl_classes.items():
+    for uri, rdf_class in own(taxonomy.owl_classes):
         _serialize_class(g, uri, rdf_class)
 
-    for uri, individual in taxonomy.owl_individuals.items():
+    for uri, individual in own(taxonomy.owl_individuals):
         _serialize_individual(g, uri, individual)
 
     # ── OWL Properties ────────────────────────────────────────────────────────
-    for uri, prop in taxonomy.owl_properties.items():
+    for uri, prop in own(taxonomy.owl_properties):
         _serialize_property(g, uri, prop)
 
     _serialize_ontology(g, taxonomy)
