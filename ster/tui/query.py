@@ -175,3 +175,52 @@ def _merge_standard(index: EntityIndex) -> None:
             continue
         for kind, locals_ in kinds.items():
             buckets[kind].setdefault(prefix, []).extend(locals_)
+
+
+def located_count(graph: rdflib.Graph, result: QueryResult) -> int:
+    """How many result rows carry geographic coordinates.
+
+    Detection lives in :mod:`ster.geo_results` and knows only WGS84, so this
+    works for any ontology rather than one vocabulary.
+    """
+    from ster.geo_results import located_count as _located_count  # noqa: PLC0415
+
+    return _located_count(graph, result)
+
+
+def map_url(sparql: str) -> str:
+    """Address of the running server's map page, carrying *sparql* to run there.
+
+    The page is served by ster itself (same origin as the API) so its re-runs
+    post to ``/mcp`` without CORS, and the token stays out of this URL — the
+    page embeds it, exactly as the VOWL graph viewer does.
+    """
+    from urllib.parse import quote  # noqa: PLC0415
+
+    from ster.api_server import load_server_config  # noqa: PLC0415
+
+    url, port = load_server_config()
+    return f"{url}:{port}/map?q={quote(sparql)}"
+
+
+def server_is_running() -> bool:
+    """True when ster's HTTP server is up to serve the map page.
+
+    The same probe the graph view uses before opening a browser tab
+    (``viz_vowl.is_live_server``), so both views fail the same way: a message in
+    the TUI rather than a browser tab on a dead address.
+    """
+    from ster.api_server import is_running  # noqa: PLC0415
+
+    return is_running()
+
+
+def open_browser(url: str) -> bool:
+    """Open *url* in the user's browser, reporting whether anything opened.
+
+    ``webbrowser.open`` rather than ``App.open_url``: the latter's driver
+    indirection silently no-ops in this app, as ``detail_view`` documents.
+    """
+    import webbrowser  # noqa: PLC0415
+
+    return bool(webbrowser.open(url))

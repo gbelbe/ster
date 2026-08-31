@@ -372,7 +372,8 @@ def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
     if taxonomy.file_path is None:
         return {"error": "no_source_file", "message": "The taxonomy has no file to query."}
 
-    from .sparql_query import run_query  # noqa: PLC0415  (heavy rdflib import)
+    # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
+    from .sparql_query import run_query  # noqa: PLC0415
 
     result = run_query([taxonomy.file_path], query)
     if result.error:

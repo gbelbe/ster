@@ -3994,3 +3994,31 @@ def test_the_background_lint_shows_then_clears_the_checking_indicator(
             assert "lint" not in app._activities  # cleared once results landed
 
     _run(scenario)
+
+
+def test_m_keypress_opens_the_map_view(monkeypatch) -> None:
+    """Press the real key, not just the action: a binding that never fires is the
+    failure mode that shipped once already (ctrl+m is Enter in a terminal)."""
+    from ster.tui import query
+
+    opened: list[str] = []
+    monkeypatch.setattr(query, "server_is_running", lambda: True)
+    monkeypatch.setattr(query, "open_browser", lambda url: bool(opened.append(url) or True))
+
+    async def scenario() -> None:
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("m")
+            await _settle(pilot, lambda: bool(opened))
+
+    _run(scenario)
+    assert opened, "pressing 'm' did not open the map"
+    assert "/map" in opened[0]
+
+
+def test_map_binding_is_registered_on_the_app() -> None:
+    keys = {b.key for b in OntologyApp.BINDINGS}  # type: ignore[union-attr]
+    actions = {b.action for b in OntologyApp.BINDINGS}  # type: ignore[union-attr]
+    assert "m" in keys
+    assert "open_map" in actions

@@ -611,6 +611,7 @@ class OntologyApp(App):
         Binding("c", "collapse_all", "Collapse"),
         Binding("g", "open_graph", "GraphView"),
         Binding("s", "open_query", "SPARQL"),
+        Binding("m", "open_map", "Map"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
@@ -3400,6 +3401,24 @@ class OntologyApp(App):
             self._show_graph(target)
         else:
             self._show_graph(None)
+
+    def action_open_map(self) -> None:
+        """The 'm' shortcut: map everything in the file that carries coordinates.
+
+        A view, not a mutation. The page's default query asks for anything with
+        WGS84 coordinates, so concepts, classes and individuals all appear —
+        what is mapped depends on the data, not the kind of entity.
+        """
+        from . import query as _query
+
+        if not _query.server_is_running():
+            self.notify("Couldn't open the map: the ster server isn't running.", severity="warning")
+            return
+        url = _query.map_url("")  # empty query → the server's "anything located" default
+        if not _query.open_browser(url):
+            self.notify("Couldn't open a browser for the map.", severity="warning")
+            return
+        self.notify(f"Map opened in your browser — {url}")
 
     def action_open_graph(self) -> None:
         """The 'g' shortcut: open (or update) the graph from the tree selection —

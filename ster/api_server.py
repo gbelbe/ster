@@ -219,7 +219,11 @@ def _spawn_uvicorn(app: Any, host: str, port: int, uvicorn: Any) -> dict[str, An
             ready.set()
             try:
                 await server.serve()
-            except BaseException as exc:  # noqa: BLE001  (bind failure must not kill the thread)
+            # A bind failure (OSError: address already in use) must be recorded for
+            # the caller rather than killing this daemon thread. Deliberately not
+            # BaseException: KeyboardInterrupt / SystemExit are shutdown signals and
+            # must keep propagating.
+            except Exception as exc:  # noqa: BLE001
                 holder["error"] = exc
 
         asyncio.run(_serve_async())

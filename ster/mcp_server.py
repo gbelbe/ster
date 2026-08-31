@@ -277,7 +277,9 @@ def _handle_tools_call(params: dict, tax: Taxonomy, selection: str | None) -> di
         return _text_result({"error": "missing_argument", "argument": required}, is_error=True)
     try:
         return _text_result(impl(tax, selection, args))
-    except Exception as exc:  # noqa: BLE001 — a tool fault must not kill the session
+    # A fault inside one tool is reported as an error result; it must not take
+    # down the whole JSON-RPC session.
+    except Exception as exc:  # noqa: BLE001
         return _text_result({"error": "tool_failed", "message": str(exc)}, is_error=True)
 
 

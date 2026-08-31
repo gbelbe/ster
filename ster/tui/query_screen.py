@@ -7,6 +7,9 @@ closes. The engine is reached only through :mod:`ster.tui.query`.
 
 from __future__ import annotations
 
+import webbrowser
+from collections.abc import Callable
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -20,6 +23,12 @@ from . import query
 from .picker_modal import PickerModal
 from .sparql_complete import Completion, replace_start, suggest
 from .sparql_editor import SparqlEditor
+
+# The editor's id, and the selector built from it. Declared once so the widget
+# can be renamed in a single place — and so the four lookups below cannot drift
+# apart from the id used to construct it.
+_EDITOR_ID = "query-editor"
+_EDITOR = f"#{_EDITOR_ID}"
 
 
 class QueryScreen(Screen[None]):
@@ -39,6 +48,9 @@ class QueryScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+r", "run", "Run"),
         Binding("ctrl+p", "presets", "Presets"),
+        # NOT ctrl+m: terminals send carriage return for it, so it is
+        # indistinguishable from Enter and the binding never fires.
+        Binding("ctrl+g", "map", "Map"),
         Binding("escape", "close", "Close"),
     ]
 
@@ -51,16 +63,30 @@ class QueryScreen(Screen[None]):
         self._graph = query.build_graph(tax)
         self._index = query.build_entity_index(tax, graph=self._graph)
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
+        self._located = 0  # rows of the last run that carry coordinates
+        self._status_line = ""  # last status rendered, for tests/introspection
+        # Indirected so tests can capture the URL instead of launching a browser.
+        # ``webbrowser.open`` rather than ``App.open_url``: the latter's driver
+        # indirection silently no-ops here, as detail_view.py already documents.
+        self._open: Callable[[str], object] = webbrowser.open
+        # Indirected for the same reason as _open: tests drive both without a
+        # live server or a browser.
+        self._server_ok: Callable[[], bool] = query.server_is_running
 
     def compose(self) -> ComposeResult:
         with Vertical(id="query-box"):
             yield SparqlEditor(
-                query.starter_query(self._index), suggest_fn=self._suggest, id="query-editor"
+                query.starter_query(self._index), suggest_fn=self._suggest, id=_EDITOR_ID
             )
             yield Static("", id="query-status")
             yield DataTable(id="query-results")
             yield Static(self._trigger_hint(), id="query-hint")
         yield Footer()
+
+    @property
+    def _editor(self) -> TextArea:
+        """The SPARQL editor. The only place its selector is used."""
+        return self.query_one(_EDITOR, TextArea)
 
     def _example_prefix(self) -> str:
         """The file's own prefix (with the colon) — the one the user most likely completes."""
@@ -82,14 +108,14 @@ class QueryScreen(Screen[None]):
         )
 
     def on_mount(self) -> None:
-        editor = self.query_one("#query-editor", TextArea)
-        editor.border_title = "SPARQL  (ctrl+r run · ctrl+p presets · esc close)"
+        editor = self._editor
+        editor.border_title = "SPARQL  (ctrl+r run · ctrl+p presets · ctrl+g map · esc close)"
         self.query_one("#query-results", DataTable).border_title = "Results"
         editor.focus()
 
     def action_run(self) -> None:
         """Execute the editor's query against the session graph and render its result."""
-        text = self.query_one("#query-editor", TextArea).text
+        text = self._editor.text
         self._show_result(query.run_on_graph(self._graph, text))
 
     def _show_result(self, result: QueryResult) -> None:
@@ -98,13 +124,40 @@ class QueryScreen(Screen[None]):
         table.clear(columns=True)
         status = self.query_one("#query-status", Static)
         if result.error:
+            self._status_line = result.error
             status.update(f"[red]{result.error}[/red]")
             return
         if result.columns:
             table.add_columns(*result.columns)
         for row in result.rows:
             table.add_row(*row)
-        status.update(f"{result.query_type} · {len(result.rows)} row(s)")
+        self._status_line = (
+            f"{result.query_type} · {len(result.rows)} row(s){self._geo_hint(result)}"
+        )
+        status.update(self._status_line)
+
+    def _geo_hint(self, result: QueryResult) -> str:
+        """The trailing 'N can be mapped' note, or nothing when none can be.
+
+        Kept out of the way deliberately: the query screen is a refine-and-rerun
+        loop, and a modal on every run would interrupt it.
+        """
+        self._located = query.located_count(self._graph, result)
+        if not self._located:
+            return ""
+        return f" · {self._located} mappable · ctrl+g for map"
+
+    def action_map(self) -> None:
+        """Open the map page on the query that produced the current results."""
+        if self._last_result is None or not self._located:
+            self.notify("No geographic data in these results", severity="warning")
+            return
+        if not self._server_ok():
+            self.notify("Couldn't open the map: the ster server isn't running.", severity="warning")
+            return
+        url = query.map_url(self._editor.text)
+        if not self._open(url):
+            self.notify("Could not open a browser", severity="warning")
 
     def action_presets(self) -> None:
         presets = query.presets()
@@ -117,7 +170,7 @@ class QueryScreen(Screen[None]):
         self.app.push_screen(PickerModal("Preset queries", options), _on_pick)
 
     def _apply_preset(self, sparql: str) -> None:
-        self.query_one("#query-editor", TextArea).text = sparql
+        self._editor.text = sparql
 
     def action_close(self) -> None:
         self.dismiss()

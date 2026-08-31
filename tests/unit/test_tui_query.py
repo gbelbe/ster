@@ -263,3 +263,175 @@ def test_app_opens_query_on_start_when_requested() -> None:
             assert isinstance(app.screen, QueryScreen)
 
     _run(scenario)
+
+
+# ── mapping query results ───────────────────────────────────────────────────
+
+WGS = "http://www.w3.org/2003/01/geo/wgs84_pos#"
+GEO_QUERY = f"SELECT ?i WHERE {{ ?i <{WGS}lat> ?lat }}"
+PLAIN_QUERY = "SELECT ?c WHERE { ?c a <http://www.w3.org/2002/07/owl#Class> }"
+
+
+def _geo_graph():
+    """A graph whose entities carry WGS84 coordinates, standing in for the taxonomy's."""
+    import rdflib
+
+    g = rdflib.Graph()
+    g.parse(
+        data=f"""
+        @prefix wgs:  <{WGS}> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix ex:   <{BASE}> .
+        ex:Brest   rdfs:label "Brest"   ; wgs:lat 48.39 ; wgs:long -4.48 .
+        ex:Lorient rdfs:label "Lorient" ; wgs:lat 47.75 ; wgs:long -3.37 .
+        """,
+        format="turtle",
+    )
+    return g
+
+
+def _run_screen(sparql, geo, after=None):
+    """Push a QueryScreen, run *sparql*, and hand the screen to *after*."""
+    captured: list[str] = []
+
+    async def scenario() -> None:
+        app: App[None] = App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            screen = QueryScreen(_tax())
+            app.push_screen(screen)
+            await pilot.pause()
+            if geo:
+                screen._graph = _geo_graph()
+            screen.query_one("#query-editor", TextArea).text = sparql
+            screen.action_run()
+            await pilot.pause()
+            captured.append(screen._status_line)
+            if after is not None:
+                after(screen)
+                await pilot.pause()
+
+    asyncio.run(scenario())
+    return captured[0]
+
+
+def test_status_reports_located_count_when_geodata_present() -> None:
+    status = _run_screen(GEO_QUERY, geo=True)
+    assert "2" in status
+    assert "map" in status.lower()
+
+
+def test_status_omits_geo_hint_when_no_geodata() -> None:
+    status = _run_screen(PLAIN_QUERY, geo=False)
+    assert "map" not in status.lower()
+
+
+def test_map_binding_opens_url_with_current_query() -> None:
+    opened: list[str] = []
+
+    def press_map(screen) -> None:
+        screen._open = opened.append
+        screen._server_ok = lambda: True
+        screen.action_map()
+
+    _run_screen(GEO_QUERY, geo=True, after=press_map)
+    assert opened, "expected a browser to be opened"
+    assert "/map" in opened[0]
+    assert "wgs84_pos" in opened[0]  # the query travelled with it
+
+
+def test_map_action_does_nothing_without_geodata() -> None:
+    opened: list[str] = []
+
+    def press_map(screen) -> None:
+        screen._open = opened.append
+        screen.action_map()
+
+    _run_screen(PLAIN_QUERY, geo=False, after=press_map)
+    assert opened == []
+
+
+# Terminals encode these as another key entirely (ctrl+m == Enter,
+# ctrl+i == Tab, ctrl+j == line feed, ctrl+h == Backspace, ctrl+[ == Escape),
+# so a binding on one can never fire. ctrl+s / ctrl+q are XON/XOFF flow control.
+_TERMINAL_ALIASED_KEYS = {"ctrl+m", "ctrl+i", "ctrl+j", "ctrl+h", "ctrl+[", "ctrl+s", "ctrl+q"}
+
+
+def test_no_binding_uses_a_terminal_aliased_key_regression() -> None:
+    """Root cause: ctrl+m was bound to the map action, but the terminal sends
+    carriage return for it — identical to Enter — so pressing it only inserted a
+    newline in the editor and the action never ran."""
+    bound = {
+        key.strip()
+        for binding in QueryScreen.BINDINGS
+        for key in binding.key.split(",")  # type: ignore[union-attr]
+    }
+    assert not bound & _TERMINAL_ALIASED_KEYS
+
+
+def test_map_action_is_reachable_by_a_binding() -> None:
+    actions = {b.action for b in QueryScreen.BINDINGS}  # type: ignore[union-attr]
+    assert "map" in actions
+
+
+def test_map_keypress_reaches_the_action_with_the_editor_focused() -> None:
+    """The original bug was the *keypress* never arriving, not the action failing:
+    the editor holds focus, so the binding must still fire through it."""
+    opened: list[str] = []
+
+    async def scenario() -> None:
+        app: App[None] = App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            screen = QueryScreen(_tax())
+            app.push_screen(screen)
+            await pilot.pause()
+            screen._graph = _geo_graph()
+            screen.query_one("#query-editor", TextArea).text = GEO_QUERY
+            screen.action_run()
+            await pilot.pause()
+            screen._open = opened.append
+            screen._server_ok = lambda: True
+            screen.query_one("#query-editor", TextArea).focus()
+            await pilot.pause()
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+
+    asyncio.run(scenario())
+    assert opened, "ctrl+g did not reach action_map while the editor had focus"
+    assert "/map" in opened[0]
+
+
+def _drive_map(*, server_ok: bool) -> tuple[list[str], list[str]]:
+    """Run a geo query then trigger the map action; return (opened, notices)."""
+    opened: list[str] = []
+    notices: list[str] = []
+
+    async def scenario() -> None:
+        app: App[None] = App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            screen = QueryScreen(_tax())
+            app.push_screen(screen)
+            await pilot.pause()
+            screen._graph = _geo_graph()
+            screen.query_one("#query-editor", TextArea).text = GEO_QUERY
+            screen.action_run()
+            await pilot.pause()
+            screen._open = opened.append
+            screen._server_ok = lambda: server_ok
+            screen.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            screen.action_map()
+            await pilot.pause()
+
+    asyncio.run(scenario())
+    return opened, notices
+
+
+def test_map_action_reports_when_the_server_is_not_running() -> None:
+    """Same courtesy the graph view extends: say so rather than opening a dead tab."""
+    opened, notices = _drive_map(server_ok=False)
+    assert opened == []
+    assert notices and "server" in notices[0].lower()
+
+
+def test_map_action_opens_when_the_server_is_running() -> None:
+    opened, _ = _drive_map(server_ok=True)
+    assert opened and "/map" in opened[0]

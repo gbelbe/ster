@@ -145,6 +145,17 @@ class SSEBroadcaster:
 # ── App factory ───────────────────────────────────────────────────────────────
 
 
+# Starter query for GET /map when none is supplied: anything with WGS84
+# coordinates, in any vocabulary.
+_DEFAULT_MAP_QUERY = """\
+PREFIX wgs: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+
+SELECT ?thing ?lat ?long
+WHERE { ?thing wgs:lat ?lat ; wgs:long ?long }
+LIMIT 200
+"""
+
+
 def create_app(
     taxonomy: Taxonomy,
     token: str,
@@ -209,6 +220,26 @@ def create_app(
 
     # ── Endpoints ─────────────────────────────────────────────────────────────
 
+    _register_pages(app, _st, token)
+    _register_schema_routes(app, _st, _tax, _check_auth, save_fn, broadcaster)
+    _register_graph_routes(app, _tax, _check_auth)
+    _register_events(app, token, broadcaster)
+    _register_mcp(app, _st, _tax, _check_auth)
+
+    return app
+
+
+# ── Route groups ──────────────────────────────────────────────────────────────
+# create_app used to define every endpoint inline, which made it a 260-line
+# function. Each group is now registered by its own function: the handlers are
+# unchanged, but each concern can be read on its own and create_app is a short
+# assembly step. They take the shared state explicitly rather than closing over
+# it, so what each group touches is visible in its signature.
+
+
+def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
+    """HTML landing pages and the raw-ontology endpoint (no auth: read-only views)."""
+
     def _graph_html_response(root_uri: str | None) -> HTMLResponse:
         # no-store: the page inlines its JS, so caching it served stale builds
         # until a manual hard-reload.
@@ -232,12 +263,35 @@ def create_app(
     ) -> HTMLResponse:
         return _graph_html_response(root_uri)
 
+    @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
+    def map_page(sparql: str = Query(default="", alias="q")) -> HTMLResponse:
+        """A live map of a SPARQL result — see :mod:`ster.geo_map_html`.
+
+        Open like ``/viz``: the page itself needs no token, and embeds one so its
+        own ``/mcp`` calls authenticate. Keeping the token out of the URL means it
+        does not land in browser history.
+        """
+        from .geo_map_html import render_map_html  # noqa: PLC0415
+
+        return HTMLResponse(render_map_html(sparql or _DEFAULT_MAP_QUERY, token))
+
     @app.get("/onto", response_class=Response, include_in_schema=False)
     def serve_ontology(request: Request) -> Response:
         accept = request.headers.get("accept", "")
         if "text/html" in accept:
             return _serve_pylode(_st["file_path"])
         return _serve_turtle(_st["taxonomy"])
+
+
+def _register_schema_routes(
+    app: FastAPI,
+    _st: dict[str, Any],
+    _tax: Any,
+    _check_auth: Any,
+    save_fn: Any,
+    broadcaster: SSEBroadcaster,
+) -> None:
+    """Class / individual introspection and individual creation."""
 
     @app.get(
         "/api/classes",
@@ -265,23 +319,7 @@ def create_app(
         type: str | None = Query(default=None, description="Filter by rdf:type class URI"),
         _: None = Depends(_check_auth),
     ) -> dict[str, list[IndividualOut]]:
-        tax = _tax()
-        result: list[IndividualOut] = []
-        for u, ind in tax.owl_individuals.items():
-            if type is not None and type not in ind.types:
-                continue
-            result.append(
-                IndividualOut(
-                    uri=u,
-                    class_uri=ind.types[0] if ind.types else None,
-                    labels=[LabelIn(lang=lb.lang, value=lb.value) for lb in ind.labels],
-                    property_values=[
-                        PropertyAssertionOut(property_uri=pv[0], target_uri=pv[1])
-                        for pv in ind.property_values
-                    ],
-                )
-            )
-        return {"individuals": result}
+        return {"individuals": _individuals_out(_tax(), type)}
 
     @app.post(
         "/api/individuals",
@@ -295,32 +333,15 @@ def create_app(
         _: None = Depends(_check_auth),
     ) -> IndividualOut:
         tax = _tax()
-        if body.class_uri not in tax.owl_classes:
-            raise HTTPException(status_code=422, detail=f"Unknown class URI: {body.class_uri}")
-        hint = body.local_name or (_slugify(body.labels[0].value) if body.labels else "individual")
-        ns = _namespace(tax)
-        new_uri = _unique_uri(tax, ns, hint)
-        ind = OWLIndividual(
-            uri=new_uri,
-            labels=[Label(lang=lb.lang, value=lb.value, type=LabelType.PREF) for lb in body.labels],
-            types=[body.class_uri],
-            property_values=[(pv.property_uri, pv.target_uri) for pv in body.property_values],
-            schema_urls=list(body.schema_urls),
-            schema_images=list(body.schema_images),
-        )
-        tax.owl_individuals[new_uri] = ind
+        new_uri = _add_individual(tax, body)
         assign_handles(tax)
         save_fn(tax)
         await broadcaster._broadcast()
-        return IndividualOut(
-            uri=new_uri,
-            class_uri=body.class_uri,
-            labels=list(body.labels),
-            property_values=[
-                PropertyAssertionOut(property_uri=pv.property_uri, target_uri=pv.target_uri)
-                for pv in body.property_values
-            ],
-        )
+        return _individual_out(new_uri, tax.owl_individuals[new_uri])
+
+
+def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
+    """VOWL graph payloads and relation lookups."""
 
     @app.get(
         "/api/graph",
@@ -361,6 +382,10 @@ def create_app(
 
         return build_class_links_graph(_tax(), uri, subclass_only=subclass_only)  # type: ignore[return-value]
 
+
+def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> None:
+    """The SSE stream that drives live graph refresh."""
+
     @app.get(
         "/api/events",
         summary="SSE stream — fires 'updated' whenever the ontology changes",
@@ -372,6 +397,10 @@ def create_app(
         if token_param != token:
             raise HTTPException(status_code=401, detail="Unauthorized")
         return StreamingResponse(broadcaster.subscribe(), media_type="text/event-stream")
+
+
+def _register_mcp(app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any) -> None:
+    """The read-only MCP endpoint (see :mod:`ster.mcp_server`)."""
 
     @app.post(
         "/mcp",
@@ -393,7 +422,9 @@ def create_app(
 
         try:
             message = await request.json()
-        except Exception:  # noqa: BLE001 — malformed body is a protocol error, not a 500
+        # A malformed body is a JSON-RPC protocol error, not a server fault: answer
+        # with -32700 rather than letting it become a 500.
+        except Exception:  # noqa: BLE001
             return _json_response(
                 {
                     "jsonrpc": "2.0",
@@ -406,8 +437,6 @@ def create_app(
             return Response(status_code=202)
         return _json_response(reply)
 
-    return app
-
 
 def _json_response(payload: dict) -> Response:
     """A JSON body without FastAPI's response-model machinery (payloads are dynamic)."""
@@ -417,6 +446,44 @@ def _json_response(payload: dict) -> Response:
 
 
 # ── Domain helpers ────────────────────────────────────────────────────────────
+
+
+def _individual_out(uri: str, ind: OWLIndividual) -> IndividualOut:
+    """The wire shape of one individual."""
+    return IndividualOut(
+        uri=uri,
+        class_uri=ind.types[0] if ind.types else None,
+        labels=[LabelIn(lang=lb.lang, value=lb.value) for lb in ind.labels],
+        property_values=[
+            PropertyAssertionOut(property_uri=pv[0], target_uri=pv[1]) for pv in ind.property_values
+        ],
+    )
+
+
+def _individuals_out(tax: Taxonomy, type_uri: str | None) -> list[IndividualOut]:
+    """Every individual, or only those carrying *type_uri* as an rdf:type."""
+    return [
+        _individual_out(uri, ind)
+        for uri, ind in tax.owl_individuals.items()
+        if type_uri is None or type_uri in ind.types
+    ]
+
+
+def _add_individual(tax: Taxonomy, body: IndividualIn) -> str:
+    """Create the individual described by *body* and return its new URI."""
+    if body.class_uri not in tax.owl_classes:
+        raise HTTPException(status_code=422, detail=f"Unknown class URI: {body.class_uri}")
+    hint = body.local_name or (_slugify(body.labels[0].value) if body.labels else "individual")
+    new_uri = _unique_uri(tax, _namespace(tax), hint)
+    tax.owl_individuals[new_uri] = OWLIndividual(
+        uri=new_uri,
+        labels=[Label(lang=lb.lang, value=lb.value, type=LabelType.PREF) for lb in body.labels],
+        types=[body.class_uri],
+        property_values=[(pv.property_uri, pv.target_uri) for pv in body.property_values],
+        schema_urls=list(body.schema_urls),
+        schema_images=list(body.schema_images),
+    )
+    return new_uri
 
 
 def _class_out(tax: Taxonomy, uri: str) -> ClassOut:
