@@ -367,6 +367,19 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         return build_individual_relations_graph(_tax(), uri)  # type: ignore[return-value]
 
     @app.get(
+        "/api/concept-relations",
+        summary="Return the broader/narrower subgraph for a SKOS concept",
+        tags=["Visualisation"],
+    )
+    def get_concept_relations(
+        uri: str = Query(description="URI of the concept to explore"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import build_concept_relations_graph
+
+        return build_concept_relations_graph(_tax(), uri)  # type: ignore[return-value]
+
+    @app.get(
         "/api/class-links",
         summary="Return the linked-classes subgraph for a class",
         tags=["Visualisation"],

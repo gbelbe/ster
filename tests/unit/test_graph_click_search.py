@@ -11,12 +11,20 @@ def test_app_js_defines_activate_node():
     assert "function activateNode" in _app_js()
 
 
-def test_node_click_does_not_activate():
-    # Tapping a node must NOT trigger activate/explore/extend; only empty-canvas
-    # taps remain wired (to clear the selection).
+def test_node_click_selects_without_expanding():
+    # Tapping a node selects it — panel plus neighbourhood highlight — but never
+    # swaps the graph out. Replacing the whole view stays a deliberate action on
+    # the hover overlay, so a stray click cannot lose the reader's place.
+    # Empty-canvas taps still clear the selection.
     js = _app_js().replace(" ", "")
-    assert "cy.on('tap','node'" not in js
+    assert "cy.on('tap','node',e=>selectNode(e.target.id()));" in js
     assert "cy.on('tap',function(e){if(e.target===cy)" in js
+
+
+def test_node_click_never_reaches_explore():
+    """The tap handler must not route through activateNode, which can expand."""
+    js = _app_js().replace(" ", "")
+    assert "cy.on('tap','node',e=>activateNode(" not in js
 
 
 def test_search_enter_activates_first_match():

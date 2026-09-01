@@ -474,6 +474,81 @@ def build_class_links_graph(
 # ── individual relations subgraph ─────────────────────────────────────────────
 
 
+def build_concept_relations_graph(taxonomy: Taxonomy, concept_uri: str) -> dict:
+    """Serialise the SKOS neighbourhood of *concept_uri* into a payload.
+
+    Centred on one concept, the subgraph contains:
+      * the focus concept;
+      * its full broader chain, so the focus keeps its place in the hierarchy
+        rather than floating free — the same context the class explorer gives
+        through the subClassOf trail;
+      * its direct narrower concepts, which is what digging down means here.
+
+    Only *direct* narrower are included: pulling the whole subtree would hand
+    back most of the thesaurus for a top concept, which is the hairball the
+    explorer exists to avoid. Extending from a narrower node walks one more
+    level, so depth stays a decision the reader makes per step.
+
+    Returns an empty payload when *concept_uri* is not a known concept.
+    """
+    if concept_uri not in taxonomy.concepts:
+        return {"nodes": [], "edges": [], "layout": "preset"}
+
+    pairs = _broader_chain(taxonomy, concept_uri)
+    pairs += [(child, concept_uri) for child in sorted(_direct_narrower(taxonomy, concept_uri))]
+
+    seen: set[str] = set()
+    nodes: list[dict] = []
+    for uri in [concept_uri, *(u for pair in pairs for u in pair)]:
+        if uri not in seen:
+            seen.add(uri)
+            nodes.append(_concept_node(taxonomy, uri))
+    edges = [
+        {"id": f"e{i}", "source": source, "target": target, "type": "broader", "label": ""}
+        for i, (source, target) in enumerate(pairs)
+    ]
+    return {"nodes": nodes, "edges": edges, "layout": "cose"}
+
+
+def _concept_node(taxonomy: Taxonomy, uri: str) -> dict:
+    concept = taxonomy.concepts[uri]
+    return {
+        "id": uri,
+        "label": concept.pref_label("en"),
+        "type": "topconcept" if concept.top_concept_of else "concept",
+        "detail": _detail_concept(concept, taxonomy),
+        "rootClass": 0,
+    }
+
+
+def _broader_chain(taxonomy: Taxonomy, uri: str) -> list[tuple[str, str]]:
+    """(child, parent) pairs walking root-ward from *uri*.
+
+    Cycle-safe: a thesaurus with a broader-loop stops instead of hanging.
+    """
+    pairs: list[tuple[str, str]] = []
+    current, walked = uri, {uri}
+    while True:
+        parents = (p for p in taxonomy.concepts[current].broader if p in taxonomy.concepts)
+        nxt = next((p for p in parents if p not in walked), None)
+        if nxt is None:
+            return pairs
+        pairs.append((current, nxt))
+        walked.add(nxt)
+        current = nxt
+
+
+def _direct_narrower(taxonomy: Taxonomy, uri: str) -> set[str]:
+    """Children of *uri*, however the file states the relation.
+
+    A thesaurus may assert only ``narrower`` on the parent or only ``broader`` on
+    the child; digging down has to work either way.
+    """
+    children = set(taxonomy.concepts[uri].narrower)
+    children.update(u for u, c in taxonomy.concepts.items() if uri in c.broader)
+    return {c for c in children if c in taxonomy.concepts}
+
+
 def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
     """Serialise the object-property neighbourhood of *ind_uri* into a payload.
 
@@ -1277,6 +1352,15 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 .dp-indiv-btn{background:none;border:1px solid #cbd5e1;color:#475569;border-radius:6px;cursor:pointer;font-size:10px;padding:2px 8px;margin:5px 0 2px;display:block}
 .dp-indiv-btn:hover{background:#f1f5f9}
 .dp-hint{font-size:10px;color:#94a3b8;margin:4px 0 0;line-height:1.4}
+.dp-a{color:#3b82f6;text-decoration:none;word-break:break-all}
+.dp-a:hover{text-decoration:underline}
+.dp-fig{margin:8px 0}
+/* min-height keeps a still-loading image from collapsing to nothing, which reads
+   as "this concept has no media" until the bytes arrive. */
+.dp-img,.dp-video{max-width:100%;height:auto;border-radius:6px;display:block;background:#f1f5f9;min-height:40px}
+.dp-video{width:100%}
+.dp-cap{font-size:10px;color:#94a3b8;margin-top:3px}
+.dp-broken{font-size:10px;color:#94a3b8;font-style:italic;padding:8px;border:1px dashed #cbd5e1;border-radius:6px;text-align:center}
 .lr{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px;color:#334155}
 #search-wrap{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 #search-box{border:none;background:transparent;outline:none;font-size:13px;color:#1e293b;width:200px}

@@ -116,3 +116,76 @@ def test_output_warns_when_the_clipboard_is_unreachable():
 
     assert "could not reach the clipboard" in out
     assert "copied to clipboard" not in out
+
+
+# ── the example command has to survive a copy-paste ───────────────────────────
+
+
+def test_no_markup_tag_leaks_into_the_output():
+    """Regression: the reader saw a literal "[/dim]" in the command.
+
+    Rich treats ``\\[`` as the escape for a literal bracket. The example command
+    ends in a shell line-continuation backslash, which landed immediately before
+    ``[/dim]`` — so Rich read the pair as "print a [", swallowed the backslash and
+    emitted the closing tag as text.
+    """
+    out = _printed(copied=True)
+
+    for tag in ("[/dim]", "[dim]", "[/bold]", "[bold]", "[/cyan]", "[cyan]"):
+        assert tag not in out, f"unrendered markup in output: {tag}"
+
+
+def test_the_example_command_keeps_its_line_continuation():
+    """Without the trailing backslash the two printed lines are two broken commands."""
+    out = _printed(copied=True)
+
+    command_line = next(line for line in out.splitlines() if "claude mcp add" in line)
+    assert command_line.rstrip().endswith("\\"), command_line
+
+
+def test_the_example_command_pastes_as_one_runnable_line():
+    """Join on the continuation and the result must be the command we meant to show."""
+    out = _printed(copied=True)
+    lines = out.splitlines()
+    start = next(i for i, line in enumerate(lines) if "claude mcp add" in line)
+    joined = " ".join(line.strip().rstrip("\\").strip() for line in lines[start : start + 2])
+
+    assert joined == (
+        "claude mcp add --transport http ster http://127.0.0.1:8765/mcp "
+        '--header "Authorization: Bearer $(cat ~/.config/ster/api_token)"'
+    )
+
+
+# ── the reader gets a chance to actually use what was printed ─────────────────
+
+
+def test_the_menu_waits_before_redrawing_over_the_output():
+    """Regression: the endpoint scrolled away before it could be read.
+
+    Returning to the home menu reprints an 18-line banner and a 12-line action
+    list right after these 25 lines, so on any terminal under 55 rows the whole
+    thing was off-screen by the time the user looked at it.
+    """
+    prompted: list[str] = []
+
+    cli._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=True)
+
+    assert prompted, "must wait for the reader before the menu redraws"
+
+
+def test_the_pause_is_skipped_when_there_is_no_terminal():
+    """A piped or scripted run has nobody to press Enter — waiting would hang it."""
+    prompted: list[str] = []
+
+    cli._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=False)
+
+    assert not prompted
+
+
+def test_the_pause_survives_a_closed_stdin():
+    """Ctrl-D at the prompt should return to the menu, not raise through the loop."""
+
+    def closed(_msg: str) -> str:
+        raise EOFError
+
+    cli._pause_until_acknowledged(read=closed, is_tty=True)  # must not raise

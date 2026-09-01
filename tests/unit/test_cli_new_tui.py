@@ -8,9 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
-from ster import store
+from ster import cli, store
 from ster.cli import (
     _CHANGE_FILE_SENTINEL,
     _EXT_ONT_SENTINEL,
@@ -23,6 +24,18 @@ from ster.cli import (
     _select_home_file,
     app,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pretend_there_is_a_terminal(monkeypatch):
+    """`_open_viewer` refuses to start the Textual app without a tty.
+
+    Under pytest neither stream is a terminal, and the guard exists because the
+    app spins its event loop at ~100% CPU forever there. These tests are about
+    the launch wiring, so they stand in for the terminal the real user has.
+    """
+    monkeypatch.setattr(cli, "_is_interactive_terminal", lambda: True)
+
 
 _runner = CliRunner()
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"

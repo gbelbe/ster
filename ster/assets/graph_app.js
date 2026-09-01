@@ -21,7 +21,10 @@ function buildElements(data){
   ];
 }
 const CY_STYLE=[
-  {selector:'node',style:{'label':'data(label)','text-halign':'center','text-valign':'center','color':'white','font-family':'system-ui,sans-serif','text-wrap':'wrap','text-max-width':'80px','font-size':12}},
+  // Dark text with a white halo: a long label wraps past the node onto the white
+  // canvas, where white text was invisible. The halo keeps it legible on top of a
+  // dark node too, so one colour works both on and off the shape.
+  {selector:'node',style:{'label':'data(label)','text-halign':'center','text-valign':'center','color':'#0f172a','text-outline-color':'#ffffff','text-outline-width':2.5,'text-outline-opacity':1,'font-family':'system-ui,sans-serif','text-wrap':'wrap','text-max-width':'80px','font-size':12}},
   {selector:'node[type="class"]',style:{'shape':'ellipse','width':84,'height':84,'background-color':'#3c6ebf','border-color':'#5a87cc','border-width':2,'font-weight':600}},
   {selector:'node[type="class"][rootClass=1]',style:{'width':104,'height':104,'border-color':'#6694d1','border-width':5,'font-size':13,'text-max-width':'92px'}},
   {selector:'node[type="individual"]',style:{'shape':'ellipse','width':68,'height':68,'background-color':'#7fb8e0','border-color':'#4a90c4','border-width':1.5,'color':'#0f172a'}},
@@ -33,7 +36,14 @@ const CY_STYLE=[
   // dashed border — visibly present in the graph, visibly not yours to edit.
   {selector:'node[readOnly=1]',style:{'border-style':'dashed','border-width':2,'opacity':.55}},
   {selector:'node.searched',style:{'overlay-color':'#fbbf24','overlay-opacity':.45,'overlay-padding':7}},
-  {selector:'node.dimmed',style:{'opacity':.08}},
+  // Dimming recedes a node; it must not take it out of play. Nodes once carried
+  // events:'no' here, so a click on a dimmed one fell through to the canvas and
+  // cleared the selection — reaching a neighbour meant starting over. They stay
+  // clickable, and .hovered below is what stops an unseen node stealing a click.
+  {selector:'node.dimmed',style:{'opacity':.15}},
+  // The node under the cursor is always fully readable, whatever else is dimmed,
+  // so you see what you are about to select before committing to it.
+  {selector:'node.hovered',style:{'opacity':1,'overlay-color':'#2563eb','overlay-opacity':.25,'overlay-padding':6,'z-index':999}},
   {selector:'node.hidden',style:{'display':'none'}},
   {selector:'edge',style:{'curve-style':'bezier','width':1.5,'target-arrow-shape':'triangle'}},
   {selector:'edge[type="subClassOf"]',style:{'line-color':'#94a3b8','target-arrow-color':'#94a3b8','target-arrow-fill':'hollow'}},
@@ -42,7 +52,7 @@ const CY_STYLE=[
   {selector:'edge[type="instanceOf"]',style:{'line-color':'#c4b5fd','target-arrow-color':'#c4b5fd','line-style':'dotted','opacity':.5,'width':1}},
   {selector:'edge[type="broader"]',style:{'line-color':'#6b7280','target-arrow-color':'#6b7280','line-style':'dashed'}},
   {selector:'edge[type="inScheme"]',style:{'line-color':'#a78bfa','target-arrow-color':'#a78bfa','line-style':'dotted','opacity':.6,'width':1}},
-  {selector:'edge.dimmed',style:{'opacity':.04}},
+  {selector:'edge.dimmed',style:{'opacity':.04,'events':'no'}},
   {selector:'edge.hidden',style:{'display':'none'}},
 ];
 function makeLayout(){
@@ -132,9 +142,22 @@ function zoomBy(f){const c=cy.container();cy.zoom({level:cy.zoom()*f,renderedPos
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 const tipEl=document.getElementById('tip');
 const KM={class:'Class',individual:'Individual',concept:'Concept',topconcept:'Top Concept',scheme:'Scheme'};
-cy.on('mouseover','node',e=>{const d=e.target.data();tipEl.innerHTML=`<b>${KM[d.type]||d.type}</b><br>${esc(d.label)}<br><span style="color:#64748b;font-size:10px">${esc(d.id)}</span>`;tipEl.style.display='block';});
+// Hovering lights the node up and turns the cursor into a pointer: every node is
+// a click target, so the one under the cursor has to be unmistakable — including
+// when it is dimmed, which is the only reason dimmed nodes can stay clickable.
+cy.on('mouseover','node',e=>{
+  const d=e.target.data();
+  e.target.addClass('hovered');
+  cy.container().style.cursor='pointer';
+  tipEl.innerHTML=`<b>${KM[d.type]||d.type}</b><br>${esc(d.label)}<br><span style="color:#64748b;font-size:10px">${esc(d.id)}</span>`;
+  tipEl.style.display='block';
+});
 cy.on('mousemove','node',e=>{tipEl.style.left=(e.originalEvent.clientX+14)+'px';tipEl.style.top=(e.originalEvent.clientY+10)+'px';});
-cy.on('mouseout','node',()=>{tipEl.style.display='none';});
+cy.on('mouseout','node',e=>{
+  e.target.removeClass('hovered');
+  cy.container().style.cursor='';
+  tipEl.style.display='none';
+});
 
 // ── Individuals toggle ────────────────────────────────────────────────────────
 const classIndMap={};
@@ -293,17 +316,28 @@ document.getElementById('search-box').addEventListener('keydown',e=>{
 // Activating a node (Enter on a search match) expands its relations by default:
 // individuals → object-property relations, classes → linked classes. Node types
 // without an expansion endpoint fall back to the detail panel.
+// Select: pin the node in the panel and dim everything but its direct
+// neighbourhood. Selecting the same node again clears it.
+function selectNode(uri){
+  clearSearch();
+  const n=cy.$('#'+CSS.escape(uri));
+  if(!n.length)return;
+  if(highlighted===uri){highlighted=null;applyHighlight();showDefault();return;}
+  highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());
+}
+// Activate (search Enter): expand when the node type supports it, else select.
 function activateNode(uri){
   clearSearch();
   const n=cy.$('#'+CSS.escape(uri));
   if(!n.length)return;
   if(API_TOKEN&&_EXPLORE_ENDPOINT[n.data('type')]){exploreOrExtend(uri);return;}
-  if(highlighted===uri){highlighted=null;applyHighlight();showDefault();return;}
-  highlighted=uri;applyHighlight();togglePanel(true);showDetail(n.data());
+  selectNode(uri);
 }
-// Clicking a node itself does nothing: expansion is driven only by the hover
-// overlay ("explore/extend relations", "hide node + parents"). Tapping empty
-// canvas still clears the current selection.
+// Clicking a node selects it; it never swaps the graph out. Replacing the whole
+// view is a deliberate action and stays on the hover overlay ("explore/extend
+// relations"), so a stray click cannot lose your place. Tapping empty canvas
+// clears the selection.
+cy.on('tap','node',e=>selectNode(e.target.id()));
 cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
@@ -355,7 +389,11 @@ let _savedGraph=null;
 // only its subClassOf trail (subclass_only) — no redundant T-Box object-property
 // links. A class-rooted session shows those links.
 let _rootType=null;
-const _EXPLORE_ENDPOINT={individual:'/api/individual-relations',class:'/api/class-links'};
+// Concepts and top concepts share one endpoint: the broader chain for context
+// plus the direct narrower, so each explore/extend walks exactly one level down
+// rather than dumping a whole subtree.
+const _EXPLORE_ENDPOINT={individual:'/api/individual-relations',class:'/api/class-links',
+  concept:'/api/concept-relations',topconcept:'/api/concept-relations'};
 function exploreNode(uri){
   if(!API_TOKEN)return;
   const node=cy.$('#'+CSS.escape(uri));
@@ -688,7 +726,91 @@ function detailLabelsHtml(labels){
 function detailCommentsHtml(comments){
   if(!comments.length)return '';
   let h='<hr class="dp-hr"><div class="dp-sub">Comments</div>';
-  for(const c of comments)h+='<div class="dp-desc">'+esc(c.value)+'</div>';
+  // linkify, not esc: OWL keeps its prose in rdfs:comment where SKOS uses
+  // skos:definition, and a URL should not be clickable on a concept but dead on
+  // a class.
+  for(const c of comments)h+='<div class="dp-desc">'+linkify(c.value)+'</div>';
+  return h;
+}
+// Everything below renders values loaded from the user's ontology file, so it is
+// untrusted input: escape all text, and never emit a URL without vetting it.
+
+// A URL is safe to put in href/src only if it parses and speaks http(s). A
+// `javascript:` or `data:` value in a schema:url would otherwise become a script
+// the reader runs by clicking. Returns '' when the value cannot be trusted.
+function safeUrl(raw){
+  try{
+    const parsed=new URL(String(raw),globalThis.location.href);
+    if(parsed.protocol==='http:'||parsed.protocol==='https:')return parsed.href;
+  }catch{/* not a URL — fall through */}
+  return '';
+}
+function extLink(url,text){
+  const safe=safeUrl(url);
+  if(!safe)return esc(text);
+  // noopener noreferrer: an ontology can link anywhere, and window.opener would
+  // let the target reach back into this page.
+  return '<a class="dp-a" href="'+esc(safe)+'" target="_blank" rel="noopener noreferrer">'+esc(text)+'</a>';
+}
+// Free text (a definition, say) often mentions a URL. Split on URL-looking runs
+// and escape every piece, so linkifying never widens what markup can get through.
+function linkify(text){
+  const parts=String(text).split(/(https?:\/\/[^\s<>"']+)/g);
+  return parts.map((p,i)=>i%2?extLink(p,p):esc(p)).join('');
+}
+function detailScopeHtml(scope){
+  if(!scope)return '';
+  return '<hr class="dp-hr"><div class="dp-sub">Scope note</div><div class="dp-desc">'+linkify(scope)+'</div>';
+}
+function detailMediaHtml(images,videos){
+  const imgs=images||[],vids=videos||[];
+  if(!imgs.length&&!vids.length)return '';
+  let h='<hr class="dp-hr"><div class="dp-sub">Media</div>';
+  for(const src of imgs){
+    const safe=safeUrl(src);
+    if(!safe)continue;
+    // referrerpolicy="no-referrer": many image hosts (Wikimedia among them) refuse a
+    // request whose Referer is another origin, so without this the picture the
+    // ontology points at simply never paints.
+    h+='<figure class="dp-fig"><img class="dp-img" src="'+esc(safe)+'" alt="" decoding="async"'
+      +' referrerpolicy="no-referrer"><figcaption class="dp-cap">'+extLink(safe,'open in a new tab')+'</figcaption></figure>';
+  }
+  for(const src of vids){
+    const safe=safeUrl(src);
+    if(!safe)continue;
+    h+='<figure class="dp-fig"><video class="dp-video" src="'+esc(safe)+'" controls preload="metadata"'
+      +' referrerpolicy="no-referrer"></video><figcaption class="dp-cap">'+extLink(safe,'open in a new tab')+'</figcaption></figure>';
+  }
+  return h;
+}
+// Error handlers are attached here rather than as inline onerror attributes: the
+// panel is rebuilt with innerHTML on every selection, and an attribute handler is
+// the first thing a future Content-Security-Policy would silently drop.
+function wireMedia(){
+  for(const img of panelEl.querySelectorAll('.dp-img')){
+    // A load that already failed fires no further event — catch it on the spot.
+    if(img.complete&&img.naturalWidth===0)mediaFailed(img);
+    else img.addEventListener('error',()=>mediaFailed(img),{once:true});
+  }
+  for(const vid of panelEl.querySelectorAll('.dp-video')){
+    vid.addEventListener('error',()=>mediaFailed(vid,'video unavailable'),{once:true});
+  }
+}
+// Ontology media is usually an off-site URL, and a dead one leaves a zero-height
+// box that reads as "there is no media here" — say so instead.
+function mediaFailed(el,text){
+  const fig=el.parentNode;
+  if(!fig||fig.querySelector('.dp-broken'))return;
+  el.remove();
+  const note=document.createElement('div');
+  note.className='dp-broken';
+  note.textContent=text||'image unavailable';
+  fig.prepend(note);
+}
+function detailUrlsHtml(urls){
+  if(!urls?.length)return '';
+  let h='<hr class="dp-hr"><div class="dp-sub">Links</div>';
+  for(const u of urls)h+='<div class="dp-lbl">'+extLink(u,u)+'</div>';
   return h;
 }
 function detailRelationsHtml(relations){
@@ -710,9 +832,12 @@ function showDetail(d){
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
   h+=detailLabelsHtml(showLbls);
   h+=detailCommentsHtml(det.comments||[]);
-  if(det.description)h+='<hr class="dp-hr"><div class="dp-desc">'+esc(det.description)+'</div>';
+  if(det.description)h+='<hr class="dp-hr"><div class="dp-desc">'+linkify(det.description)+'</div>';
+  h+=detailScopeHtml(det.scopeNote);
   h+=detailRelationsHtml(det.relations||[]);
-  h+='</div>';panelEl.innerHTML=h;
+  h+=detailMediaHtml(det.images,det.videos);
+  h+=detailUrlsHtml(det.urls);
+  h+='</div>';panelEl.innerHTML=h;wireMedia();
 }
 function navigateTo(uri){
   const n=cy.$('#'+CSS.escape(uri));if(!n.length)return;

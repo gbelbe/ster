@@ -1161,10 +1161,33 @@ def _handle_viewer_git(
     _offer_git_tracking(gm, taxonomy, taxonomy_file)
 
 
+def _is_interactive_terminal() -> bool:
+    """True when both halves of the console are a real terminal.
+
+    Either half being a pipe is enough to break Textual's input driver, so this
+    deliberately requires both rather than stdin alone.
+    """
+    import sys
+
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
     """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit."""
     from .git.manager import GitManager
     from .tui import launch_file
+
+    # Without a terminal the Textual app spins its event loop at ~100% CPU and
+    # never exits: the input driver selects on a non-tty stdin that stays readable
+    # at EOF, and no quit ever arrives. `ster` in a pipeline hung there until
+    # killed, so refuse the launch and say why.
+    if not _is_interactive_terminal():
+        err.print(
+            "[red]The viewer needs an interactive terminal.[/red] "
+            "Run ster directly instead of through a pipe, "
+            "or use a non-interactive command such as [bold]ster show --help[/bold]."
+        )
+        return
 
     _prewarm_lint(taxonomy_file)
     pre_hash = store.file_hash(taxonomy_file) if _converted_from else ""
@@ -2203,13 +2226,22 @@ def _print_mcp_connection(endpoint: str, token: str, snippet: str, copied: bool)
     console.print()
     console.print("  Point any MCP-capable agent at it — add this to its config:")
     console.print()
+    # markup=False throughout: these lines carry a URL, a token and JSON, and a
+    # "[" anywhere in them would otherwise be parsed as a Rich tag. It is also what
+    # keeps the trailing "\" below intact — Rich reads "\[" as an escaped bracket,
+    # so the continuation backslash used to be swallowed and "[/dim]" printed as
+    # text, leaving a command that could not be pasted.
     for line in snippet.splitlines():
-        console.print(f"    [dim]{line}[/dim]")
+        console.print(f"    {line}", style="dim", markup=False)
     console.print()
     console.print("  Claude Code, for example:")
     console.print(
-        f"    [dim]claude mcp add --transport http ster {endpoint} \\[/dim]\n"
-        f'      [dim]--header "Authorization: Bearer $(cat ~/.config/ster/api_token)"[/dim]'
+        f"    claude mcp add --transport http ster {endpoint} \\", style="dim", markup=False
+    )
+    console.print(
+        '      --header "Authorization: Bearer $(cat ~/.config/ster/api_token)"',
+        style="dim",
+        markup=False,
     )
     console.print()
     if copied:
@@ -2217,6 +2249,32 @@ def _print_mcp_connection(endpoint: str, token: str, snippet: str, copied: bool)
     else:
         console.print("  [yellow]![/yellow] could not reach the clipboard — copy the URL above")
     console.print()
+
+
+def _pause_until_acknowledged(
+    read: Callable[[str], object] | None = None, is_tty: bool | None = None
+) -> None:
+    """Hold the screen until the reader is done with what was just printed.
+
+    Returning to the home menu reprints the banner and the action list — about 30
+    lines — directly over whatever an action left on screen. Without this pause a
+    25-line block like the MCP connection details is gone before it can be read on
+    any terminal shorter than 55 rows.
+
+    Skipped when there is no terminal: a piped or scripted run has nobody to press
+    Enter, and waiting would hang it.
+    """
+    import sys
+
+    if is_tty is None:
+        is_tty = sys.stdin.isatty() and sys.stdout.isatty()
+    if not is_tty:
+        return
+    reader = read if read is not None else input
+    try:
+        reader("  Press Enter to return to the menu… ")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
 
 
 def _run_mcp_connect_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
@@ -2246,6 +2304,7 @@ def _run_mcp_connect_interactive(files: list[Path]) -> None:  # pragma: no cover
 
     endpoint, snippet = mcp_connection_info(base_url, load_token())
     _print_mcp_connection(endpoint, load_token(), snippet, copy_to_system_clipboard(endpoint))
+    _pause_until_acknowledged()
 
 
 def _run_publish_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
@@ -2539,11 +2598,14 @@ def _home_screen(initial_file: Path | None = None) -> None:
             project = Project.load(Path.cwd())
             selected_file, action = _home_obtain_action(pending_open, selected_file, found)
             pending_open = None
-        except (KeyboardInterrupt, EOFError):
+            outcome = _home_perform(action, selected_file, found, project)
+        # typer.Exit too: this loop runs outside typer's own runner, so an Exit
+        # raised by a picker deep inside an action had nothing to translate it and
+        # reached the user as a raw traceback on what is simply a quit.
+        except (KeyboardInterrupt, EOFError, typer.Exit):
             console.print()
             break
 
-        outcome = _home_perform(action, selected_file, found, project)
         if outcome == "quit":
             break
         if outcome == "change":
