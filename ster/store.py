@@ -8,6 +8,7 @@ import pickle
 import re
 import tempfile
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 
 from rdflib import RDF, BNode, Dataset, Graph, Literal, Namespace, URIRef
@@ -373,13 +374,56 @@ def _bin_cache_dir() -> Path:
     return Path.home() / ".cache" / "ster" / "bin_cache"
 
 
-def _get_bin_cache_path(path: Path) -> Path:
-    """Return a unique, safe cache path for the Given RDF file."""
+@lru_cache(maxsize=1)
+def _model_schema_fingerprint() -> str:
+    """A short hash of every model dataclass and its field names.
+
+    Unpickling does not validate the class: a Taxonomy pickled before a field
+    existed is restored *without* it, no exception raised, and the first access
+    to the missing attribute fails somewhere unrelated — as a 500 from the graph
+    server, say. Mixing this into the cache key means a build whose model has
+    changed simply looks elsewhere instead of reading the older build's file.
+    """
+    from dataclasses import fields, is_dataclass  # noqa: PLC0415
+
+    from . import model as _model  # noqa: PLC0415
+
+    shape = [
+        f"{name}:{','.join(f.name for f in fields(obj))}"
+        for name in sorted(dir(_model))
+        if isinstance(obj := getattr(_model, name), type) and is_dataclass(obj)
+    ]
+    return hashlib.md5("|".join(shape).encode(), usedforsecurity=False).hexdigest()[:8]
+
+
+def _cache_stem(path: Path) -> str:
+    """The cache filename prefix for *path*, without the schema fingerprint."""
     # Keyed by absolute path hash to avoid collisions and keep it house-trained
     abs_path = str(path.resolve())
     h = hashlib.md5(abs_path.encode(), usedforsecurity=False).hexdigest()[:16]
     # Use stem to keep it somewhat readable in the cache dir
-    return _bin_cache_dir() / f"{path.stem}_{h}.pickle"
+    return f"{path.stem}_{h}"
+
+
+def _get_bin_cache_path(path: Path) -> Path:
+    """Return a unique, safe cache path for the given RDF file and model schema."""
+    return _bin_cache_dir() / f"{_cache_stem(path)}_{_model_schema_fingerprint()}.pickle"
+
+
+def _prune_stale_schema_caches(path: Path) -> None:
+    """Delete this file's caches written under a different model schema.
+
+    Without it every release that touches the model leaves an orphan per cached
+    file behind, forever. Scoped to one source file's own prefix, so it can never
+    reach anything else in the directory.
+    """
+    keep = _get_bin_cache_path(path)
+    try:
+        for stale in keep.parent.glob(f"{_cache_stem(path)}_*.pickle"):
+            if stale != keep and not stale.is_symlink():
+                stale.unlink(missing_ok=True)
+    except OSError:  # a read-only or vanished cache dir is not worth failing a load
+        pass
 
 
 def _is_cache_valid(cache_path: Path, source_path: Path) -> bool:
@@ -472,6 +516,12 @@ def load(
     _report_progress(progress_callback, 0, "Starting")
     use_cache = os.environ.get("STER_NO_CACHE") != "1"
     cache_path = _get_bin_cache_path(path)
+
+    if use_cache:
+        # Unconditionally, not just on a miss: a hit still means any cache of this
+        # file under a different model schema is dead weight, and one glob is
+        # nothing beside a parse. Otherwise an orphan survives every load.
+        _prune_stale_schema_caches(path)
 
     taxonomy = (
         _try_load_cache(cache_path, path)
