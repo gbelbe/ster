@@ -2092,10 +2092,18 @@ class OntologyApp(App):
 
         try:
             with self._save_lock:
-                self._save_dirty = False  # cleared first: a concurrent edit re-marks it
                 tax, path = self.tax, self._path
                 if path is not None:
                     store.save(tax, path)
+                    # Cleared only once the bytes are on disk, and only if this is
+                    # still the authority. A save can be cancelled — run_worker is
+                    # exclusive, so a later edit kills this one — or raise; clearing
+                    # first left the app believing it was clean, so the quit-time
+                    # flush wrote nothing and the edit was lost silently. If an edit
+                    # swapped the authority mid-write, that newer one is still
+                    # unwritten, so the flag stays up for the next save to catch.
+                    if self.tax is tax:
+                        self._save_dirty = False
         finally:
             self.call_from_thread(self._end_activity, "save")  # clear the spinner on the UI thread
 
