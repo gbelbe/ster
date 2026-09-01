@@ -2165,36 +2165,34 @@ class OntologyApp(App):
         problems = [(issue, fixes.fix_for(issue, self.tax)) for issue in errors]
         self.push_screen(ProblemsModal(problems, self._apply_fix), self._after_problems)
 
-    def _apply_fix(self, issue: dict, choice: str) -> bool:
+    def _apply_fix(self, issue: dict, choice: str) -> str | None:
         """Apply an inline fix from the Problems modal: build its command(s) and run them
-        through the service. True on success (the modal then drops the row)."""
+        through the service. None on success (the modal then drops the row); otherwise the
+        reason it did not apply, which the modal shows on the row."""
         from ster.plugins.semanticlint import fixes
 
         if self._path is None:
-            return False
+            return _READ_ONLY_MESSAGE
         commands = fixes.commands_for(issue, self.tax, self._path, choice)
         if not commands:
-            self.notify("Nothing to apply for this fix.", severity="warning")
-            return False
+            return "Nothing to apply for this fix."
         return self._apply_fix_commands(commands)
 
-    def _apply_fix_commands(self, commands: list) -> bool:
+    def _apply_fix_commands(self, commands: list) -> str | None:
         """Execute fix *commands* via the service — no UI rebuild (the modal is on top;
-        the panes refresh when it closes). False on the first failure."""
+        the panes refresh when it closes). Returns the first failure's message, else None."""
         if self._service is None or self._path is None:
-            self.notify(_READ_ONLY_MESSAGE, severity="warning")
-            return False
+            return _READ_ONLY_MESSAGE
         for command in commands:
             result = self._service.execute(command, persist=False)  # type: ignore[arg-type]
             if not result.ok:
-                self.notify(result.error or "Fix failed.", severity="error")
-                return False
+                return result.error or "Fix failed."
         self.tax = self._workspace.taxonomies[self._path]
         self._refresh_search_rows()
         self._invalidate_lint()
         self._dirty_after_fix = True
         self._schedule_save()
-        return True
+        return None
 
     def _after_problems(self, _result: object) -> None:
         """The Problems modal closed — if a fix ran, rebuild the panes so the tree/detail

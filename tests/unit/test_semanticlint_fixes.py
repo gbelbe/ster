@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster.core.commands.cross import RenameEntity
+from ster.core.commands.cross import RenameEntity, RetargetReferences
 from ster.core.commands.skos import SkosMoveConcept, SkosRemoveLabel, SkosSetLabel
 from ster.model import Concept, Label, LabelType, Taxonomy
 from ster.plugins.semanticlint import fixes
@@ -137,12 +137,23 @@ def test_rdf003_prefill_percent_encodes_a_space():
     assert "%20" in fix.prefill
 
 
-def test_rdf003_renames_to_the_corrected_uri():
+def test_rdf003_renames_a_defined_entity_to_the_corrected_uri():
+    bad = "http://ex.org/my concept"
+    tax = Taxonomy()
+    tax.concepts[bad] = Concept(uri=bad)
+    cmds = fixes.commands_for(
+        _issue("RDF003", subject=bad), tax, PATH, choice="http://ex.org/concept"
+    )
+    assert cmds == [RenameEntity(PATH, bad, "http://ex.org/concept")]
+
+
+def test_rdf003_retargets_a_uri_nothing_defines():
+    """A malformed URI is usually a typo'd *link*, with no entity behind it to rename."""
     bad = "http://ex.org/my concept"
     cmds = fixes.commands_for(
         _issue("RDF003", subject=bad), Taxonomy(), PATH, choice="http://ex.org/concept"
     )
-    assert cmds == [RenameEntity(PATH, bad, "http://ex.org/concept")]
+    assert cmds == [RetargetReferences(PATH, bad, "http://ex.org/concept")]
 
 
 def test_rdf003_no_rename_when_unchanged_or_blank():

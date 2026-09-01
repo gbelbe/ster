@@ -14,6 +14,7 @@ from ...operations import (
     remove_language,
     remove_schema_media,
     rename_entity_uri,
+    retarget_uri_references,
     tag_individual_with_concept,
     unlink_concept_from_class,
 )
@@ -34,6 +35,24 @@ class RenameEntity:
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
+        return (self.new_uri,)
+
+
+@dataclass(frozen=True)
+class RetargetReferences:
+    """Repoint every reference to *old_uri* at *new_uri*, defining nothing.
+
+    The counterpart to :class:`RenameEntity` for a URI that only ever appears as
+    an object — a mistyped ``skos:broader`` target and the like. There is no
+    entity to rename there, so a rename raises; this fixes the links instead.
+    """
+
+    target_path: Path
+    old_uri: str
+    new_uri: str
+
+    def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
+        retarget_uri_references(taxonomy, self.old_uri, self.new_uri)
         return (self.new_uri,)
 
 

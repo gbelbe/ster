@@ -21,6 +21,7 @@ from .domain.cross import remove_language as remove_language
 from .domain.cross import remove_schema_media as remove_schema_media
 from .domain.cross import rename_entity_uri as rename_entity_uri
 from .domain.cross import resolve as resolve
+from .domain.cross import retarget_uri_references as retarget_uri_references
 from .domain.cross import tag_individual_with_concept as tag_individual_with_concept
 from .domain.cross import unlink_concept_from_class as unlink_concept_from_class
 

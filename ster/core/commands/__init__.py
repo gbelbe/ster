@@ -24,6 +24,7 @@ from .cross import (
     RemoveLanguage,
     RemoveSchemaMedia,
     RenameEntity,
+    RetargetReferences,
     TagIndividuals,
     UnlinkConceptFromClass,
 )
@@ -133,6 +134,7 @@ __all__ = [
     "RemoveLanguage",
     "RemoveSchemaMedia",
     "RenameEntity",
+    "RetargetReferences",
     "SkosAddConcept",
     "SkosAddMappingLink",
     "SkosAddRelated",

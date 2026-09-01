@@ -9,9 +9,11 @@ control sized to its :class:`~ster.plugins.semanticlint.fixes.Fix` —
 * ``pick``   — one button per option;
 * ``suggest``— no control, just concrete guidance.
 
-Applying a fix calls back into the app (``apply_fix(issue, choice) -> bool``); on
-success the row drops out of the list, and the modal closes once none remain — so the
-user never leaves the modal to fix the file.
+Applying a fix calls back into the app (``apply_fix(issue, choice) -> str | None``);
+on success — ``None`` — the row drops out of the list, and the modal closes once none
+remain, so the user never leaves the modal to fix the file. A returned string is the
+reason it did not apply, shown on the row itself: a toast alone left a failed row
+indistinguishable from one nobody had touched.
 """
 
 from __future__ import annotations
@@ -64,6 +66,9 @@ class ProblemRow(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(_headline(self.issue, self.fix), classes="problem-headline")
         yield from self._control()
+        # Composed empty and hidden by CSS rather than mounted on demand, so the
+        # failure notice cannot race the modal's own mount.
+        yield Static("", classes="problem-status")
 
     def _control(self) -> ComposeResult:
         kind = self.fix.kind
@@ -86,6 +91,22 @@ class ProblemRow(Vertical):
             return self.query_one(Input).value
         return button.name or ""
 
+    def report_failure(self, reason: str) -> None:
+        """Show *reason* on the row and mark it as tried-and-failed."""
+        self.add_class("problem-failed")
+        # Segment-built Text, like the headline: a message carrying the file's own
+        # URIs must never be parsed as console markup.
+        self._status.update(Text(f"✗ {reason}", style="bold red"))
+
+    def clear_failure(self) -> None:
+        """Drop any previous failure notice, so a retry is not read against a stale one."""
+        self.remove_class("problem-failed")
+        self._status.update("")
+
+    @property
+    def _status(self) -> Static:
+        return self.query_one(".problem-status", Static)
+
 
 class ProblemsModal(ModalBase[None]):
     """A worklist of ERROR violations, each fixed in place. Dismisses (``None``) when
@@ -102,6 +123,9 @@ class ProblemsModal(ModalBase[None]):
     }
     .problem-headline { margin-bottom: 1; }
     .problem-controls { height: auto; }
+    .problem-row.problem-failed { border: round $error; }
+    .problem-status { display: none; }
+    .problem-row.problem-failed .problem-status { display: block; margin-top: 1; }
     .problem-row .problem-fix { width: auto; min-width: 8; margin-right: 1; }
     .problem-row .problem-edit { width: 1fr; margin-right: 1; }
     """
@@ -112,7 +136,7 @@ class ProblemsModal(ModalBase[None]):
     ]
 
     def __init__(
-        self, problems: list[tuple[dict, Fix]], apply_fix: Callable[[dict, str], bool]
+        self, problems: list[tuple[dict, Fix]], apply_fix: Callable[[dict, str], str | None]
     ) -> None:
         super().__init__()
         self._problems = problems
@@ -142,15 +166,22 @@ class ProblemsModal(ModalBase[None]):
     async def _on_edit_submit(self, event: Input.Submitted) -> None:
         event.stop()
         row = self._row_of(event.input)
-        if row is not None and self._apply_fix(row.issue, event.value):
-            await self._drop(row)
+        if row is not None:
+            await self._apply(row, event.value)
 
     async def _try_apply(self, button: Button) -> None:
         row = self._row_of(button)
-        if row is None:
-            return
-        if self._apply_fix(row.issue, row.choice(button)):
+        if row is not None:
+            await self._apply(row, row.choice(button))
+
+    async def _apply(self, row: ProblemRow, choice: str) -> None:
+        """Run the row's fix: drop it when it lands, say why on the row when it does not."""
+        row.clear_failure()
+        reason = self._apply_fix(row.issue, choice)
+        if reason is None:
             await self._drop(row)
+        else:
+            row.report_failure(reason)
 
     @staticmethod
     def _row_of(widget: object) -> ProblemRow | None:

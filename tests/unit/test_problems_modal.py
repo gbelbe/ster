@@ -49,7 +49,7 @@ def test_auto_row_fix_button_applies_and_drops_the_row() -> None:
     problems = [(_issue("SKO003"), Fix("auto", "Remove dup"))]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c)) or True))
+        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c))))
         await pilot.pause()
         await pilot.pause()
         app.screen.query_one(".problem-fix", Button).press()
@@ -72,7 +72,7 @@ def test_edit_row_passes_field_value_as_choice() -> None:
     ]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c)) or True))
+        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c))))
         await pilot.pause()
         await pilot.pause()
         app.screen.query_one(".problem-fix", Button).press()
@@ -88,7 +88,7 @@ def test_pick_row_offers_a_button_per_option_and_passes_its_value() -> None:
     problems = [(_issue("SKO001"), fix)]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c)) or True))
+        app.push_screen(ProblemsModal(problems, lambda i, c: calls.append((i, c))))
         await pilot.pause()
         await pilot.pause()
         buttons = list(app.screen.query(".problem-fix").results(Button))
@@ -104,7 +104,7 @@ def test_suggest_row_has_no_fix_control() -> None:
     problems = [(_issue("RDF007"), Fix("suggest", "Give distinct URIs"))]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: True))
+        app.push_screen(ProblemsModal(problems, lambda i, c: None))
         await pilot.pause()
         await pilot.pause()
         assert not app.screen.query(".problem-fix")  # guidance only
@@ -117,12 +117,13 @@ def test_failed_fix_keeps_the_row() -> None:
     problems = [(_issue("SKO003"), Fix("auto", "Remove dup"))]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: False))  # fix fails
+        app.push_screen(ProblemsModal(problems, lambda i, c: "Concept not found"))  # fix fails
         await pilot.pause()
         await pilot.pause()
         app.screen.query_one(".problem-fix", Button).press()
         await pilot.pause()
-        assert app.screen.query(ProblemRow)  # row stays
+        row = app.screen.query_one(ProblemRow)  # row stays
+        assert row.has_class("problem-failed")  # and says so, rather than looking untried
 
     _run(scenario)
 
@@ -134,7 +135,7 @@ def test_resolving_one_of_two_keeps_the_modal_open() -> None:
     ]
 
     async def scenario(app, pilot) -> None:
-        app.push_screen(ProblemsModal(problems, lambda i, c: True))
+        app.push_screen(ProblemsModal(problems, lambda i, c: None))
         await pilot.pause()
         await pilot.pause()
         list(app.screen.query(".problem-fix").results(Button))[0].press()

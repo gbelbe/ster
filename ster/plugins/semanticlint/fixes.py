@@ -203,25 +203,37 @@ class _Sko010Fixer(_Fixer):
 
 
 class _Rdf003Fixer(_Fixer):
-    """A malformed URI — offer a sanitized suggestion to rename the entity to."""
+    """A malformed URI — offer a sanitized URI to rename or repoint it to.
+
+    A malformed URI reaches a file two ways, and they need different repairs. If
+    something *defines* it, renaming that entity carries its links along. If it
+    only ever appears as an object — a typo'd ``skos:broader`` target, the common
+    case — there is no entity to rename, so the links themselves are repointed.
+    """
 
     def describe(self, issue: dict, tax: Taxonomy) -> Fix:
         subject = issue.get("subject", "")
+        defined = tax.uri_taken(subject)
         return Fix(
             "edit",
-            "Rename to a valid URI (no spaces, a single “#”, valid %-encoding).",
+            "Rename to a valid URI (no spaces, a single “#”, valid %-encoding)."
+            if defined
+            else "Nothing defines this URI — links to it will be repointed. "
+            "Enter a valid URI, or an existing concept's URI to link to it instead.",
             subject,
             prefill=_sanitize_uri(subject),
         )
 
     def commands(self, issue: dict, tax: Taxonomy, path: Path, choice: str) -> list:
-        from ster.core.commands.cross import RenameEntity
+        from ster.core.commands.cross import RenameEntity, RetargetReferences
 
         subject = issue.get("subject", "")
         new_uri = choice.strip()
         if not new_uri or new_uri == subject:
             return []
-        return [RenameEntity(path, subject, new_uri)]
+        if tax.uri_taken(subject):
+            return [RenameEntity(path, subject, new_uri)]
+        return [RetargetReferences(path, subject, new_uri)]
 
 
 class _Rdf007Fixer(_Fixer):

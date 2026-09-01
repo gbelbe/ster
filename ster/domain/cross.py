@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ..exceptions import ConceptNotFoundError, HandleNotFoundError, URIAlreadyExistsError
 from ..handles import assign_handles
-from ..model import Label, LabelType, RDFClass, Taxonomy
+from ..model import Label, LabelType, OntologyAnnotation, OWLIndividual, RDFClass, Taxonomy
 from .owl import (
     _scrub_class_references,
     count_owl_uri_references,
@@ -182,6 +182,111 @@ def count_uri_references(taxonomy: Taxonomy, uri: str) -> int:
     if _owns_owl(taxonomy, uri):
         total += count_owl_uri_references(taxonomy, uri)
     return total
+
+
+# URI-valued list fields, per layer. Named here rather than spelled out inline so
+# the retarget walk covers the same reference sites the rename paths do.
+_CONCEPT_LINK_FIELDS = (
+    "broader",
+    "narrower",
+    "related",
+    "broad_match",
+    "narrow_match",
+    "related_match",
+    "exact_match",
+    "close_match",
+)
+_CLASS_LINK_FIELDS = ("sub_class_of", "equivalent_class", "disjoint_with")
+_PROPERTY_LINK_FIELDS = ("domains", "ranges", "sub_property_of", "inverse_of")
+
+
+def retarget_uri_references(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> int:
+    """Point every reference to *old_uri* at *new_uri*; return how many changed.
+
+    For a URI that is *referenced* but never defined — a typo'd ``skos:broader``
+    target, say.  :func:`rename_entity_uri` cannot help there: it renames an
+    entity and raises :class:`ConceptNotFoundError` when there is none, yet a
+    dangling link is the likeliest way a malformed URI reaches a file at all.
+
+    Nothing is created.  If *new_uri* names no entity either, the link is still
+    dangling, only spelled correctly — repairing the spelling and choosing a real
+    target are separate decisions, and this makes the first without guessing at
+    the second.
+    """
+    changed = _retarget_annotations(taxonomy.ontology_annotations, old_uri, new_uri)
+    for scheme in taxonomy.schemes.values():
+        changed += _retarget_list(scheme.top_concepts, old_uri, new_uri)
+        changed += _retarget_annotations(scheme.annotations, old_uri, new_uri)
+    for concept in taxonomy.concepts.values():
+        changed += _retarget_fields(concept, _CONCEPT_LINK_FIELDS, old_uri, new_uri)
+        for attr in ("top_concept_of", "focus"):
+            if getattr(concept, attr) == old_uri:
+                setattr(concept, attr, new_uri)
+                changed += 1
+    for cls in taxonomy.owl_classes.values():
+        changed += _retarget_fields(cls, _CLASS_LINK_FIELDS, old_uri, new_uri)
+        changed += _retarget_annotations(cls.annotations, old_uri, new_uri)
+    for prop in taxonomy.owl_properties.values():
+        changed += _retarget_fields(prop, _PROPERTY_LINK_FIELDS, old_uri, new_uri)
+        changed += _retarget_annotations(prop.annotations, old_uri, new_uri)
+    for individual in taxonomy.owl_individuals.values():
+        changed += _retarget_individual(individual, old_uri, new_uri)
+    return changed
+
+
+def _retarget_annotations(annotations: list[OntologyAnnotation], old_uri: str, new_uri: str) -> int:
+    """Retarget the generic annotation triples, as predicate or as IRI object.
+
+    These matter more than they look: a pun's class facet parks every predicate it
+    does not model — ``skos:broader`` included — in this list, so a link repaired
+    only on the concept was serialised straight back out from the class and the
+    error returned on the next open.
+
+    A literal is left alone even when its text is exactly the URI. A note that
+    *mentions* a bad URI is prose, and rewriting prose is not this function's job.
+    """
+    changed = 0
+    for annotation in annotations:
+        if annotation.predicate == old_uri:
+            annotation.predicate = new_uri
+            changed += 1
+        if annotation.is_iri and annotation.value == old_uri:
+            annotation.value = new_uri
+            changed += 1
+    return changed
+
+
+def _retarget_individual(individual: OWLIndividual, old_uri: str, new_uri: str) -> int:
+    """Retarget an individual's types and its assertions, as predicate or as object."""
+    changed = _retarget_list(individual.types, old_uri, new_uri)
+    for index, (prop, target) in enumerate(individual.property_values):
+        if old_uri not in (prop, target):
+            continue
+        individual.property_values[index] = (
+            new_uri if prop == old_uri else prop,
+            new_uri if target == old_uri else target,
+        )
+        changed += 1
+    for index, (prop, value, kind) in enumerate(individual.literal_values):
+        if prop == old_uri:
+            individual.literal_values[index] = (new_uri, value, kind)
+            changed += 1
+    return changed
+
+
+def _retarget_fields(entity: object, fields: tuple[str, ...], old_uri: str, new_uri: str) -> int:
+    """Retarget *old_uri* across several URI-list attributes of one entity."""
+    return sum(_retarget_list(getattr(entity, f), old_uri, new_uri) for f in fields)
+
+
+def _retarget_list(values: list[str], old_uri: str, new_uri: str) -> int:
+    """Replace *old_uri* in *values* in place; return how many entries changed."""
+    changed = 0
+    for index, value in enumerate(values):
+        if value == old_uri:
+            values[index] = new_uri
+            changed += 1
+    return changed
 
 
 def rename_entity_uri(taxonomy: Taxonomy, old_uri: str, new_uri: str) -> None:
