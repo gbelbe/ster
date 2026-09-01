@@ -370,12 +370,21 @@ document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
 document.getElementById('ft-first-order').addEventListener('click',toggleFirstOrderClasses);
 document.getElementById('ft-second-order').addEventListener('click',toggleSecondOrderClasses);
-for(const [t,id] of [['instanceOf','ft-instanceOf'],['inScheme','ft-inScheme'],['datatypeProperty','ft-datatypeProperty']]){
-  const btn=document.getElementById(id);
-  if(!btn)return;
-  if(cy.edges('[type="'+t+'"]').length===0){btn.style.display='none';return;}
-  btn.addEventListener('click',()=>toggleEdgeType(t));
+// A named function rather than an inline loop, because the containing IIFE is
+// the whole file: an early exit at its top level abandons every wiring step
+// below — the panel wrappers, the hover overlay and live refresh — for any
+// ontology missing one of these edge types. A pure-SKOS thesaurus has no
+// instanceOf edges, which used to disable all of it. Inside a function the worst
+// an early exit can do is skip the rest of this one step.
+function wireEdgeTypeFilters(){
+  for(const [t,id] of [['instanceOf','ft-instanceOf'],['inScheme','ft-inScheme'],['datatypeProperty','ft-datatypeProperty']]){
+    const btn=document.getElementById(id);
+    if(!btn)continue;
+    if(cy.edges('[type="'+t+'"]').length===0){btn.style.display='none';continue;}
+    btn.addEventListener('click',()=>toggleEdgeType(t));
+  }
 }
+wireEdgeTypeFilters();
 const _scBtn=document.getElementById('ft-superclasses');
 if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);
 refreshSuperclassesBtn();
