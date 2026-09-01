@@ -16,7 +16,7 @@ let W=globalThis.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:
 function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
 function buildElements(data){
   return[
-    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,detail:n.detail||{},rootClass:n.rootClass||0,superclass:n.superclass||0}})),
+    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,detail:n.detail||{},readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0}})),
     ...data.edges.map(e=>({group:'edges',data:{id:e.id,source:e.source,target:e.target,type:e.type,label:e.label||'',cardinality:e.cardinality||''}})),
   ];
 }
@@ -29,6 +29,9 @@ const CY_STYLE=[
   {selector:'node[type="topconcept"]',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#0e7490','border-color':'#22d3ee','border-width':2}},
   {selector:'node[type="concept"]',style:{'shape':'ellipse','width':56,'height':56,'background-color':'#166534','border-color':'#4ade80','border-width':1.5}},
   {selector:'node[type="datatype"]',style:{'shape':'round-rectangle','background-color':'#fef3c7','border-color':'#f59e0b','border-width':1.5,'color':'#92400e','font-size':10,'padding':'4px 8px','width':'label','height':22}},
+  // Read-only: defined in a context file, not this one. Desaturated with a
+  // dashed border — visibly present in the graph, visibly not yours to edit.
+  {selector:'node[readOnly=1]',style:{'border-style':'dashed','border-width':2,'opacity':.55}},
   {selector:'node.searched',style:{'overlay-color':'#fbbf24','overlay-opacity':.45,'overlay-padding':7}},
   {selector:'node.dimmed',style:{'opacity':.08}},
   {selector:'node.hidden',style:{'display':'none'}},
@@ -647,11 +650,13 @@ function legendHtml(hasRoot,hasSub,ntypes,etypes){
   const indToggle=individualToggleHtml();
   let legend='<hr class="dp-hr"><div class="dp-sub">Legend</div>';
   const nodeLegend=[['class-root','Root Class',hasRoot],['class-sub','Class',hasSub],['individual','Individual',ntypes.has('individual')],['topconcept','Top Concept',ntypes.has('topconcept')],['concept','Concept',ntypes.has('concept')],['scheme','Scheme',ntypes.has('scheme')]];
+  const hasReadOnly=cy.nodes('[readOnly=1]').length>0;
   for(const [type,label,show] of nodeLegend){
     if(!show)continue;
     legend+='<div class="lr">'+nodeSvg(type)+label+'</div>';
     if(type==='individual')legend+=indToggle;
   }
+  if(hasReadOnly)legend+='<div class="lr" style="opacity:.55">'+nodeSvg('concept')+'read-only (context file)</div>';
   legend+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';
   const edgeLegend=[['subClassOf','subClassOf'],['objectProperty','objectProperty'],['datatypeProperty','datatypeProperty'],['instanceOf','rdf:type'],['broader','broader'],['inScheme','inScheme']];
   for(const [type,label] of edgeLegend){

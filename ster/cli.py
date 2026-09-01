@@ -695,6 +695,51 @@ def _run(fn, *args, **kwargs):
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
 
 
+def parse_context_choice(answer: str, options: list[Path]) -> list[Path]:
+    """Read a context-file answer: "all", "none"/"" , or numbers like "1,3".
+
+    Unparseable or out-of-range entries are ignored rather than rejected — the
+    prompt is an optional extra, and refusing the whole answer over one typo
+    would be worse than loading the files that were named clearly.
+    """
+    reply = answer.strip().lower()
+    if reply in {"", "none", "n"}:
+        return []
+    if reply in {"all", "a"}:
+        return list(options)
+    chosen: list[Path] = []
+    for part in reply.replace(" ", ",").split(","):
+        if part.isdigit() and 1 <= int(part) <= len(options):
+            candidate = options[int(part) - 1]
+            if candidate not in chosen:
+                chosen.append(candidate)
+    return chosen
+
+
+def prompt_for_context_files(editable: Path, found: list[Path]) -> list[Path]:
+    """Ask which other files to load read-only alongside *editable*.
+
+    Skipped entirely when there is nothing else to offer, so the common
+    single-file case is unchanged.
+    """
+    options = [f for f in found if f != editable]
+    if not options:
+        return []
+    console.print()
+    console.print(
+        f"  [bold]{editable.name}[/bold] is editable. "
+        "Load others as [bold]read-only context[/bold] to see the connected graph?"
+    )
+    for i, f in enumerate(options, 1):
+        console.print(f"    [cyan]{i}[/cyan]  {f.name}")
+    console.print("  [dim]numbers (1,3) · all · none[/dim]")
+    try:
+        answer = Prompt.ask("  Context files", default="none")
+    except (KeyboardInterrupt, EOFError):
+        return []
+    return parse_context_choice(answer, options)
+
+
 def _select_home_file(found: list[Path]) -> Path | None:
     """Step 1 of the home menu: pick the file every action will operate on — from the local
     files *plus* a 'Load demo' entry. Always shown (even for one file), so the demo is always

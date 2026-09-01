@@ -58,7 +58,12 @@ from .viz import (
 
 
 def build_vowl_graph(taxonomy: Taxonomy) -> dict:
-    """Serialise *taxonomy* into a Cytoscape.js-compatible {nodes, edges, layout} payload."""
+    """Serialise *taxonomy* into a Cytoscape.js-compatible {nodes, edges, layout} payload.
+
+    Entities merged from a read-only context file carry ``readOnly: 1`` so the
+    browser can show that they belong to another file — a node you cannot edit
+    must not look like one you can.
+    """
     nodes: list[dict] = []
     edges: list[dict] = []
     seen_nodes: set[str] = set()
@@ -79,6 +84,7 @@ def build_vowl_graph(taxonomy: Taxonomy) -> dict:
                     "label": label,
                     "type": node_type,
                     "detail": detail or {},
+                    "readOnly": 1 if uri in taxonomy.context_source else 0,
                     "rootClass": 0,
                 }
             )
@@ -250,6 +256,7 @@ def build_focused_vowl_graph(taxonomy: Taxonomy, root_uri: str) -> dict:
                     "label": label,
                     "type": node_type,
                     "detail": detail or {},
+                    "readOnly": 1 if uri in taxonomy.context_source else 0,
                     "rootClass": 0,
                 }
             )
@@ -506,6 +513,7 @@ def build_individual_relations_graph(taxonomy: Taxonomy, ind_uri: str) -> dict:
                     "label": label,
                     "type": node_type,
                     "detail": detail or {},
+                    "readOnly": 1 if uri in taxonomy.context_source else 0,
                     "rootClass": 0,
                     "superclass": superclass,
                 }
@@ -649,6 +657,7 @@ def build_query_result_graph(taxonomy: Taxonomy, uris: set[str]) -> dict:
                     "label": label,
                     "type": node_type,
                     "detail": detail or {},
+                    "readOnly": 1 if uri in taxonomy.context_source else 0,
                     "rootClass": 0,
                 }
             )

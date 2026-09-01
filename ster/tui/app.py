@@ -1379,10 +1379,21 @@ class OntologyApp(App):
             return set(_subtree_concept_uris(self.tax, uri))
         return {uri}
 
+    # Trailing glyph on entities that came from a read-only context file, so a row
+    # you cannot edit never looks like one you can.
+    _LOCK = " [dim]🔒[/dim]"
+
+    def _row_text(self, uri: str, glyph: str, label: str, suffix: str = "") -> str:
+        """The rendered text of a tree row — icon, name, and the read-only lock.
+
+        Every row is built here so the lock cannot be forgotten by one of the
+        three node-creating paths (leaf, class, concept).
+        """
+        lock = "" if uri not in self.tax.context_source else self._LOCK
+        return f"{self._node_icon(uri, glyph)} {label}{suffix}{lock}"
+
     def _leaf(self, parent: TreeNode, uri: str, kind: str, suffix: str = "") -> TreeNode:
-        text = (
-            f"{self._node_icon(uri, kind)} {data.node_name(self.tax, uri, self.lang, kind)}{suffix}"
-        )
+        text = self._row_text(uri, kind, data.node_name(self.tax, uri, self.lang, kind), suffix)
         node = parent.add_leaf(text, data=uri)
         self._index(uri, node)
         return node
@@ -1483,7 +1494,7 @@ class OntologyApp(App):
             self._add_class_shallow(parent, uri, skip_puns=skip_puns)
             return
         label = data.label_of(self.tax, uri, self.lang)
-        node = parent.add(f"{self._node_icon(uri, 'class')} {label}", data=uri)
+        node = parent.add(self._row_text(uri, "class", label), data=uri)
         self._index(uri, node)
         for sub in data.subclasses(self.tax, uri, self.lang):
             if not skip_puns or self.tax.node_type(sub) != "promoted":
@@ -1497,7 +1508,7 @@ class OntologyApp(App):
         kind = self.tax.node_type(uri)  # "concept", "promoted" (pun), or "linked" (foaf:focus)
         glyph = kind if kind in ("promoted", "linked") else "concept"
         label = data.label_of(self.tax, uri, self.lang)
-        node = parent.add(f"{self._node_icon(uri, glyph)} {label}", data=uri)
+        node = parent.add(self._row_text(uri, glyph, label), data=uri)
         self._index(uri, node)
         for child in data.concept_children(self.tax, uri, self.lang):
             self._add_concept(node, child)
@@ -1539,8 +1550,9 @@ class OntologyApp(App):
         tax_sec = root.add("Unified tree (SKOS/OWL)", data=detail.TAXONOMY_URI)
         self._index(detail.TAXONOMY_URI, tax_sec)  # focusable (e.g. after deleting a scheme)
         for s_uri in data.scheme_roots(tax, self.lang):
+            # A whole scheme can come from a context file, so it carries the lock too.
             sec = tax_sec.add(
-                f"{data.ICON['scheme']} {data.label_of(tax, s_uri, self.lang)}", data=s_uri
+                self._row_text(s_uri, "scheme", data.label_of(tax, s_uri, self.lang)), data=s_uri
             )
             self._index(s_uri, sec)
             for c_uri in data.concept_children(tax, s_uri, self.lang):
@@ -2250,6 +2262,15 @@ class OntologyApp(App):
         uri, path = field.meta.get("target_uri") or self._detail_uri, self._path
         if self._service is None or uri is None or path is None:
             self.notify(_READ_ONLY_MESSAGE, severity="warning")
+            return
+        # Entities merged from a context file belong to another file; naming it is
+        # the difference between "you can't" and "you can, over there".
+        if (source := self.tax.context_source.get(uri)) is not None:
+            self.notify(
+                f"Read-only — defined in {source.name}. Open that file to edit it.",
+                title="Context file",
+                severity="warning",
+            )
             return
 
         def _on_submit(value: str | None) -> None:

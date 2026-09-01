@@ -176,3 +176,32 @@ def simple_taxonomy() -> Taxonomy:
 
     assign_handles(t)
     return t
+
+
+@pytest.fixture
+def settle():
+    """Wait for a Textual condition on a wall clock, not a turn count.
+
+    ``pilot.pause()`` yields one event-loop turn, so a fixed number of pauses
+    bounds the wait in *turns* while the work being waited on — a lint scan, a
+    worker thread, a timer — takes *time*. Under ``-n auto`` the workers compete
+    for CPU and a turn-bounded wait can expire before the work lands, which made
+    the scan-on-open tests fail intermittently in CI while passing in isolation.
+
+    A deadline holds regardless of how loaded the machine is; a passing test
+    still returns as soon as the predicate is true, so this costs nothing when
+    things are fast.
+    """
+    import asyncio
+    import time
+
+    async def _settle(pilot, predicate, *, timeout: float = 15.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            await pilot.pause()
+            await asyncio.sleep(0.01)
+        return predicate()
+
+    return _settle

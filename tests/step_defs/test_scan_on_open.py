@@ -47,14 +47,6 @@ def ctx(tmp_path, monkeypatch):
     return {"dir": tmp_path}
 
 
-async def _settle(pilot, predicate, *, tries=80) -> bool:
-    for _ in range(tries):
-        if predicate():
-            return True
-        await pilot.pause()
-    return predicate()
-
-
 def _write(ctx, ttl: str) -> None:
     src = ctx["dir"] / "onto.ttl"
     src.write_text(ttl, encoding="utf-8")
@@ -87,21 +79,22 @@ def _clean_file(ctx) -> None:
 
 
 @given("I have opened it in the TUI")
-def _opened(ctx) -> None:
-    _open(ctx)
+def _opened(ctx, settle) -> None:
+    # Delegates to the When step, so it needs the same fixture injected.
+    _open(ctx, settle)
 
 
 # ── When ────────────────────────────────────────────────────────────────────────
 
 
 @when("I open it in the TUI")
-def _open(ctx) -> None:
+def _open(ctx, settle) -> None:
     app = OntologyApp(store.load(ctx["path"]), source="onto.ttl", path=ctx["path"])
     ctx["app"] = app
 
     async def scenario() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
-            await _settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
             for _ in range(20):  # give a clean file time to prove it stays silent
                 await pilot.pause()
             ctx["modal_open"] = isinstance(app.screen, ProblemsModal)
@@ -111,20 +104,20 @@ def _open(ctx) -> None:
 
 
 @when("I apply the inline fix")
-def _apply(ctx) -> None:
+def _apply(ctx, settle) -> None:
     app = OntologyApp(store.load(ctx["path"]), source="onto.ttl", path=ctx["path"])
     ctx["app"] = app
 
     async def scenario() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
-            await _settle(
+            await settle(
                 pilot,
                 lambda: (
                     isinstance(app.screen, ProblemsModal) and bool(app.screen.query(".problem-fix"))
                 ),
             )
             app.screen.query_one(".problem-fix", Button).press()
-            ctx["closed"] = await _settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
+            ctx["closed"] = await settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
             dog = app.tax.concepts["http://ex.org/Dog"]
             ctx["alts"] = [lbl.value for lbl in dog.labels if lbl.type == LabelType.ALT]
 

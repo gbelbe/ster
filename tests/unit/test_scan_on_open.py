@@ -72,20 +72,12 @@ def _open(tmp_path, ttl: str) -> OntologyApp:
     return OntologyApp(store.load(src), source="onto.ttl", path=src)
 
 
-async def _settle(pilot, predicate, *, tries=80) -> bool:
-    for _ in range(tries):
-        if predicate():
-            return True
-        await pilot.pause()
-    return predicate()
-
-
-def test_scan_on_open_shows_the_problems_modal_for_an_error(_plugin_env):
+def test_scan_on_open_shows_the_problems_modal_for_an_error(_plugin_env, settle):
     app = _open(_plugin_env, SKO003_TTL)
 
     async def scenario():
         async with app.run_test(size=(120, 40)) as pilot:
-            shown = await _settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            shown = await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
             assert shown, "Problems modal did not open"
             assert len(app.screen.query(ProblemRow)) == 1
 
@@ -104,7 +96,7 @@ def test_clean_file_opens_silently(_plugin_env):
     asyncio.run(scenario())
 
 
-def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env):
+def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env, settle):
     from textual.widgets import Button
 
     from ster.model import LabelType
@@ -113,10 +105,10 @@ def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env):
 
     async def scenario():
         async with app.run_test(size=(120, 40)) as pilot:
-            await _settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
             app.screen.query_one(".problem-fix", Button).press()
             # The auto-fix drops the last row → the modal dismisses itself.
-            closed = await _settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
+            closed = await settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
             assert closed
             dog = app.tax.concepts["http://ex.org/Dog"]
             alts = [lbl.value for lbl in dog.labels if lbl.type == LabelType.ALT]
@@ -140,7 +132,7 @@ def test_scan_skipped_when_check_on_open_is_off(_plugin_env):
     asyncio.run(scenario())
 
 
-def test_problems_action_reopens_after_dismissal(_plugin_env):
+def test_problems_action_reopens_after_dismissal(_plugin_env, settle):
     config.set_feature("check_on_open", False)  # no auto-open; test the '!' action
     app = _open(_plugin_env, SKO003_TTL)
 
@@ -150,7 +142,7 @@ def test_problems_action_reopens_after_dismissal(_plugin_env):
                 await pilot.pause()
             assert not isinstance(app.screen, ProblemsModal)
             app.action_problems()
-            shown = await _settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            shown = await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
             assert shown
 
     asyncio.run(scenario())
