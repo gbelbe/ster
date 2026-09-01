@@ -929,13 +929,56 @@ def _app_js() -> str:
     return (files("ster") / "assets" / "graph_app.js").read_text(encoding="utf-8")
 
 
+def strip_detail(graph: dict) -> dict:
+    """Return *graph* without per-node ``detail``, which the page fetches on click.
+
+    Detail (labels, comments, description, relations) is only ever read by the
+    side panel for one node at a time, yet it is 91% of the payload — a 5.6k-node
+    thesaurus ships 17.2MB where the graph itself is 1.6MB. Splitting it out is
+    what keeps the first render, and the 2.5s static-mode refresh poll, small.
+
+    The graph is mutated in place: callers build it purely to serialise it.
+    """
+    for node in graph.get("nodes", []):
+        node.pop("detail", None)
+    return graph
+
+
+def node_detail(taxonomy: Taxonomy, uri: str) -> dict:
+    """The detail payload for a single *uri*, or ``{}`` when it is not an entity.
+
+    The lookup order matches ``add_node`` in :func:`build_vowl_graph`, which keeps
+    the first kind it sees — so a URI that is both an OWL class and a SKOS concept
+    resolves the same way here as it does in the graph.
+    """
+    if (cls := taxonomy.owl_classes.get(uri)) is not None:
+        return _detail_class(cls, taxonomy)
+    if (individual := taxonomy.owl_individuals.get(uri)) is not None:
+        return _detail_individual(individual, taxonomy)
+    if (scheme := taxonomy.schemes.get(uri)) is not None:
+        return _detail_scheme(scheme, taxonomy)
+    if (concept := taxonomy.concepts.get(uri)) is not None:
+        return _detail_concept(concept, taxonomy)
+    return {}
+
+
+def build_detail_map(taxonomy: Taxonomy) -> dict[str, dict]:
+    """``{uri: detail}`` for every entity — the static-mode companion to the graph.
+
+    A page served without the live API has no endpoint to ask, so it fetches this
+    once, on the first node click, instead of carrying it from the start.
+    """
+    graph = build_vowl_graph(taxonomy)
+    return {n["id"]: n["detail"] for n in graph["nodes"] if n.get("detail")}
+
+
 def _data_script(graph: dict, meta: dict, api_token: str) -> str:
     """Return the per-render *data injection* layer.
 
     Keeps ontology data out of both the library and the app code: the app reads
     everything from ``window.__STER_GRAPH__``.
     """
-    payload = {"data": graph, "meta": meta, "token": api_token}
+    payload = {"data": strip_detail(graph), "meta": meta, "token": api_token}
     return "<script>window.__STER_GRAPH__=" + json.dumps(payload, ensure_ascii=False) + ";</script>"
 
 
@@ -1200,13 +1243,25 @@ def _data_path(out_path: Path) -> Path:
     return out_path.with_name(stem + "_data.json")
 
 
+def _detail_path(out_path: Path) -> Path:
+    stem = out_path.stem.removesuffix("_vowl")
+    return out_path.with_name(stem + "_detail.json")
+
+
 def _write_data_json(taxonomy: Taxonomy, out_path: Path) -> None:
-    """Write companion JSON polled by the browser for static-mode live updates."""
+    """Write companion JSON polled by the browser for static-mode live updates.
+
+    Detail is excluded: this file is re-fetched every 2.5s to compare a version
+    stamp, so anything carried here is paid for on every tick.
+    """
     import time as _t  # noqa: PLC0415
 
-    graph = build_vowl_graph(taxonomy)
+    graph = strip_detail(build_vowl_graph(taxonomy))
     graph["_v"] = str(int(_t.time()))
     _data_path(out_path).write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
+    _detail_path(out_path).write_text(
+        json.dumps(build_detail_map(taxonomy), ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -> str | None:

@@ -16,7 +16,8 @@ let W=globalThis.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:
 function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
 function buildElements(data){
   return[
-    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,detail:n.detail||{},readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0}})),
+    // No `detail` here: it is fetched per node on click (see loadDetail).
+    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0}})),
     ...data.edges.map(e=>({group:'edges',data:{id:e.id,source:e.source,target:e.target,type:e.type,label:e.label||'',cardinality:e.cardinality||''}})),
   ];
 }
@@ -61,7 +62,11 @@ function makeLayout(){
     gravity:60,numIter:1000,initialTemp:200,coolingFactor:.95,minTemp:1};
 }
 // Create cy without running any layout — positions applied below
-const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:globalThis.devicePixelRatio||1});
+// textureOnViewport / hideEdgesOnViewport keep pan+zoom smooth on big graphs by
+// drawing a cached bitmap instead of re-rendering every element per frame;
+// minZoomedFontSize stops Cytoscape laying out text that is too small to read,
+// which is both the biggest render cost and the worst of the clutter.
+const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:globalThis.devicePixelRatio||1,textureOnViewport:true,hideEdgesOnViewport:true,minZoomedFontSize:8});
 
 // ── Graph state persistence (positions + viewport, survives browser/ster restart) ──
 // Keyed per-path AND guarded by a signature of the current node set, so a
@@ -824,8 +829,46 @@ function detailRelationsHtml(relations){
   }
   return h;
 }
+// ── Lazy node detail ────────────────────────────────────────────────────────
+// The graph payload carries no per-node detail (91% of its size, and only ever
+// read one node at a time). It is fetched on first click: from the API when a
+// live server backs the page, otherwise once from the _detail.json companion.
+const _detailCache=new Map();
+let _detailBulk=null;
+function _bulkDetail(){
+  if(_detailBulk)return _detailBulk;
+  const url=globalThis.location.pathname.replace(/_vowl\.html$/,'_detail.json');
+  _detailBulk=fetch(url,{cache:'no-store'}).then(r=>r.ok?r.json():{}).catch(()=>({}));
+  return _detailBulk;
+}
+async function loadDetail(uri){
+  if(_detailCache.has(uri))return _detailCache.get(uri);
+  let det={};
+  try{
+    if(API_TOKEN){
+      const r=await fetch('/api/node-detail?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}});
+      if(r.ok)det=await r.json();
+    }else{
+      det=(await _bulkDetail())[uri]||{};
+    }
+  }catch(err){
+    // Never block the panel on a failed fetch — the node's own label, type and
+    // URI are already in hand and are what the header shows.
+    console.debug('Detail fetch failed:',err);
+  }
+  _detailCache.set(uri,det);
+  return det;
+}
 function showDetail(d){
-  const det=d.detail||{};let h='<div class="dp">';
+  if(!_detailCache.has(d.id)){
+    renderDetail(d,{});
+    loadDetail(d.id).then(det=>{if(highlighted===d.id)renderDetail(d,det);});
+    return;
+  }
+  renderDetail(d,_detailCache.get(d.id));
+}
+function renderDetail(d,det){
+  let h='<div class="dp">';
   h+='<button class="dp-back" onclick="globalThis._sterBack()">← Overview</button>';
   h+='<span class="dp-badge dp-'+d.type+'">'+(KM[d.type]||d.type)+'</span>';
   h+='<div class="dp-h3">'+esc(d.label)+'</div><div class="dp-uri">'+esc(d.id)+'</div>';

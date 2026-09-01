@@ -349,9 +349,24 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         tags=["Visualisation"],
     )
     def get_graph(_: None = Depends(_check_auth)) -> dict[str, Any]:
-        from .viz_vowl import build_vowl_graph
+        from .viz_vowl import build_vowl_graph, strip_detail
 
-        return build_vowl_graph(_tax())  # type: ignore[return-value]
+        # Detail is fetched per node from /api/node-detail; sending it here would
+        # put the whole side-panel corpus on every live-refresh tick.
+        return strip_detail(build_vowl_graph(_tax()))  # type: ignore[return-value]
+
+    @app.get(
+        "/api/node-detail",
+        summary="Return the side-panel detail for a single node",
+        tags=["Visualisation"],
+    )
+    def get_node_detail(
+        uri: str = Query(description="URI of the entity to describe"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import node_detail
+
+        return node_detail(_tax(), uri)  # type: ignore[return-value]
 
     @app.get(
         "/api/individual-relations",
