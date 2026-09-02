@@ -63,6 +63,11 @@ class Concept:
     schema_images: list[str] = field(default_factory=list)  # schema:image URLs
     schema_videos: list[str] = field(default_factory=list)  # schema:video URLs
     schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
+    # Any *other* predicate on the concept (wgs:lat, geo:asWKT, a project's own
+    # property, …), captured generically so the triple round-trips. Classes,
+    # properties and schemes have always had this; without it a concept lost every
+    # unmodelled predicate on save, silently.
+    annotations: list[OntologyAnnotation] = field(default_factory=list)
 
     @property
     def local_name(self) -> str:

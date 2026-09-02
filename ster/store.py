@@ -665,21 +665,31 @@ def _set_note(entity: object, o: object) -> None:
 # never a descriptive annotation, so the generic catch-all skips it.
 _ENTITY_ANNOTATION_SKIP: frozenset[str] = frozenset({str(RDF.type)})
 
+# skos:inScheme has no concept handler, but it is *derived* on save from
+# topConceptOf or the broader chain (see _serialize_concept_scheme). Capturing it
+# as an annotation would write it a second time, and a concept later moved to
+# another scheme would keep asserting the old one.
+_CONCEPT_ANNOTATION_SKIP: frozenset[str] = frozenset({str(SKOS.inScheme)})
+
 
 def _dispatch_predicates(
     triples: list[tuple[Node, Node]],
     handlers: dict[str, Callable[[object], None]],
     annotations: list[OntologyAnnotation] | None = None,
+    skip: frozenset[str] = frozenset(),
 ) -> None:
     """Apply ``handlers[predicate](object)`` over a subject's triples. A predicate with
     no handler is captured into *annotations* (the generic bucket) when given — every
-    descriptive predicate the structured fields don't model, so it round-trips."""
+    descriptive predicate the structured fields don't model, so it round-trips.
+
+    *skip* names predicates that have no handler and must still not be captured,
+    because serialisation derives them rather than storing them."""
     for p, o in triples:
         ps = str(p)
         handler = handlers.get(ps)
         if handler is not None:
             handler(o)
-        elif annotations is not None and ps not in _ENTITY_ANNOTATION_SKIP:
+        elif annotations is not None and ps not in _ENTITY_ANNOTATION_SKIP and ps not in skip:
             anno = _annotation_from(ps, o)
             if anno is not None:
                 annotations.append(anno)
@@ -742,7 +752,9 @@ def _parse_concept(uri: str, triples: list[tuple[Node, Node]]) -> Concept:
         str(SCHEMA.video): lambda o: c.schema_videos.append(str(o)),
         str(SCHEMA.url): lambda o: c.schema_urls.append(str(o)),
     }
-    _dispatch_predicates(triples, handlers)
+    _dispatch_predicates(
+        triples, handlers, annotations=c.annotations, skip=_CONCEPT_ANNOTATION_SKIP
+    )
     return c
 
 
@@ -1009,6 +1021,10 @@ def _serialize_concept(g: Graph, uri: str, concept: Concept, taxonomy: Taxonomy)
             g.add((ref, pred, URIRef(u)))
     if concept.focus:
         g.add((ref, FOAF.focus, URIRef(concept.focus)))
+    # The generic bucket, exactly as classes/properties/schemes do: every
+    # predicate ster does not model goes back out as it came in.
+    for a in concept.annotations:
+        g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
 def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass) -> None:
