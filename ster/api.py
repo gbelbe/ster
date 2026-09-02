@@ -13,6 +13,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
+import rdflib
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -69,6 +70,12 @@ class ClassOut(BaseModel):
     sub_class_of: list[str]
     child_classes: list[str]
     applicable_properties: list[PropertySummary]
+
+
+class LocateIn(BaseModel):
+    """The row URIs a map wants placed."""
+
+    uris: list[str] = []
 
 
 class SchemaOut(BaseModel):
@@ -223,6 +230,7 @@ def create_app(
     _register_pages(app, _st, token)
     _register_schema_routes(app, _st, _tax, _check_auth, save_fn, broadcaster)
     _register_graph_routes(app, _tax, _check_auth)
+    _register_locate(app, _tax, _check_auth)
     _register_events(app, token, broadcaster)
     _register_mcp(app, _st, _tax, _check_auth)
 
@@ -409,6 +417,93 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         from .viz_vowl import build_class_links_graph
 
         return build_class_links_graph(_tax(), uri, subclass_only=subclass_only)  # type: ignore[return-value]
+
+
+def _places_wanted(graph: rdflib.Graph, uris: list[str]) -> list[tuple[str, bool]]:
+    """The requested URIs, plus every place containing one, flagged as context.
+
+    The result decides the hierarchy. Rows come back as results; the places
+    containing them come back as context, so a query for stores groups under
+    exactly the cities and countries that hold one — and a city with no store
+    never appears. A query for cities gets every city for the same reason.
+    """
+    from .geo_shapes import place_ancestors  # noqa: PLC0415
+
+    wanted: list[tuple[str, bool]] = [(uri, True) for uri in uris]
+    seen = set(uris)
+    for uri in uris:
+        for ancestor in place_ancestors(graph, rdflib.URIRef(uri)):
+            if ancestor not in seen:
+                seen.add(ancestor)
+                wanted.append((ancestor, False))
+    return wanted
+
+
+def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, Any] | None:
+    """One place as the map wants it, or None when it carries no geography."""
+    from .geo_results import label_of  # noqa: PLC0415
+    from .geo_shapes import (  # noqa: PLC0415
+        geometry_of,
+        numeric_literals,
+        place_ancestors,
+        place_level,
+        place_parent,
+        place_type,
+    )
+
+    node = rdflib.URIRef(uri)
+    geometry = geometry_of(graph, node)
+    if geometry is None:
+        return None
+    latitude, longitude = geometry.centroid
+    return {
+        "uri": uri,
+        "label": label_of(graph, node),
+        "lat": latitude,
+        "long": longitude,
+        # A bare point is already carried by lat/long.
+        "shape": None if geometry.kind == "Point" else geometry.geojson,
+        # Depth in the class hierarchy, and the containing place: together these
+        # let the map draw one level at a time and descend, without knowing what
+        # the levels are called.
+        "level": place_level(graph, node),
+        "parent": place_parent(graph, node),
+        "kind": place_type(graph, node),
+        "ancestors": place_ancestors(graph, node),
+        # False for a place pulled in only to group the results.
+        "result": is_result,
+        # Numeric properties, so the panel can total a branch.
+        "figures": numeric_literals(graph, node),
+    }
+
+
+def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
+    """Place result rows on the earth — the map's half of geo_shapes."""
+
+    @app.post(
+        "/api/locate",
+        summary="Resolve entity URIs to points and geometries",
+        tags=["Visualisation"],
+    )
+    def locate_uris(body: LocateIn, _: None = Depends(_check_auth)) -> dict[str, Any]:
+        """Points and shapes for *uris*, skipping any that carry no geography.
+
+        Resolved here rather than in the page's JavaScript so there is one
+        implementation of the geometry ladder and of WKT parsing. The map used to
+        query for wgs:lat/long itself, which reported every polygon as unmappable.
+        """
+        from .geo_shapes import map_layers  # noqa: PLC0415
+
+        graph = _graph_for_locate(_tax())
+        records = (
+            _place_record(graph, uri, is_result)
+            for uri, is_result in _places_wanted(graph, body.uris)
+        )
+        # Layers travel with the places so the layer menu needs no second request.
+        return {
+            "places": [record for record in records if record is not None],
+            "layers": map_layers(graph),
+        }
 
 
 def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> None:
@@ -600,6 +695,25 @@ def _derive_slug(file_path: Path | None) -> str:
         return "onto"
     slug = re.sub(r"[^a-z0-9]+", "-", file_path.stem.lower()).strip("-")
     return slug or "onto"
+
+
+def _graph_for_locate(taxonomy: Taxonomy) -> Any:
+    """The source file parsed, for geometry lookups — not the model rebuilt.
+
+    ``taxonomy_to_graph`` returns only what ster's model represents, and a
+    Concept models no arbitrary predicates: rebuilding drops wgs:lat/long and
+    every GeoSPARQL triple, so a map fed from it finds nothing to place. The
+    SPARQL path already reads the file for the same reason.
+    """
+    from .sparql_query import load_graph  # noqa: PLC0415
+    from .store import taxonomy_to_graph  # noqa: PLC0415
+
+    if taxonomy.file_path is not None:
+        try:
+            return load_graph([taxonomy.file_path])
+        except OSError:
+            pass  # unreadable file — fall back rather than fail the request
+    return taxonomy_to_graph(taxonomy)
 
 
 def _serve_turtle(taxonomy: Taxonomy) -> Response:

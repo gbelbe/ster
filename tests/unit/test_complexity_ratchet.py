@@ -61,3 +61,133 @@ def test_compute_complexity_scores_functions(tmp_path) -> None:  # type: ignore[
     branchy = next(v for k, v in cc.items() if k.endswith("::branchy"))
     assert simple == 1
     assert branchy > simple
+
+
+# ── Cognitive complexity (S3776) ──────────────────────────────────────────────
+# Cyclomatic complexity does not charge for nesting, so a function radon calls
+# simple can still be over SonarQube's limit. These two rules cost this project
+# three round-trips through CI before they were checked locally.
+
+
+def test_cognitive_complexity_charges_for_nesting(tmp_path) -> None:
+    """The same four conditions, flat and nested — the metric must tell them apart."""
+    from scripts.check_complexity_ratchet import compute_cognitive
+
+    (tmp_path / "m.py").write_text(
+        "def flat(a, b, c, d):\n"
+        "    if a: return 1\n"
+        "    if b: return 2\n"
+        "    if c: return 3\n"
+        "    if d: return 4\n"
+        "    return 0\n"
+        "def nested(a, b, c, d):\n"
+        "    if a:\n"
+        "        if b:\n"
+        "            if c:\n"
+        "                if d:\n"
+        "                    return 1\n"
+        "    return 0\n"
+    )
+
+    scores = compute_cognitive(tmp_path)
+
+    assert scores["m.py::nested"] > scores["m.py::flat"]
+
+
+def test_a_function_is_charged_for_the_one_declared_inside_it(tmp_path) -> None:
+    """SonarQube scored _register_locate 17 for the endpoint declared inside it.
+
+    A registrar whose own body is a single def would otherwise look free, and the
+    branching that actually got flagged would go unmeasured.
+    """
+    from scripts.check_complexity_ratchet import compute_cognitive
+
+    (tmp_path / "m.py").write_text(
+        "def register():\n    def handler(xs):\n        for x in xs:\n"
+        "            if x:\n                return x\n        return None\n    return handler\n"
+    )
+
+    scores = compute_cognitive(tmp_path)
+
+    assert scores["m.py::register"] >= scores["m.py::register.handler"] > 0
+
+
+# ── Invariant return (S3516) ──────────────────────────────────────────────────
+
+
+def test_returning_the_same_mutated_name_twice_is_reported(tmp_path) -> None:
+    """place_ancestors, exactly: a list built up and handed back from two places."""
+    from scripts.check_complexity_ratchet import compute_invariant_returns
+
+    (tmp_path / "m.py").write_text(
+        "def walk(xs):\n"
+        "    chain = []\n"
+        "    for x in xs:\n"
+        "        if x is None:\n"
+        "            return chain\n"
+        "        chain.append(x)\n"
+        "    return chain\n"
+    )
+
+    assert compute_invariant_returns(tmp_path) == {"m.py::walk": "chain"}
+
+
+def test_a_rebound_name_really_does_return_different_values(tmp_path) -> None:
+    """place_level has the same shape but reassigns its counter — not a finding."""
+    from scripts.check_complexity_ratchet import compute_invariant_returns
+
+    (tmp_path / "m.py").write_text(
+        "def depth_of(xs):\n"
+        "    depth = 0\n"
+        "    for x in xs:\n"
+        "        if x is None:\n"
+        "            return depth\n"
+        "        depth = depth + 1\n"
+        "    return depth\n"
+    )
+
+    assert compute_invariant_returns(tmp_path) == {}
+
+
+def test_returns_of_different_things_are_not_a_finding(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_invariant_returns
+
+    (tmp_path / "m.py").write_text(
+        "def f(a):\n    out = []\n    if a:\n        return a\n    return out\n"
+    )
+
+    assert compute_invariant_returns(tmp_path) == {}
+
+
+def test_one_return_is_never_invariant(tmp_path) -> None:
+    """The rule is about two paths that look different and are not."""
+    from scripts.check_complexity_ratchet import compute_invariant_returns
+
+    (tmp_path / "m.py").write_text(
+        "def f(xs):\n    out = []\n    for x in xs:\n        out.append(x)\n    return out\n"
+    )
+
+    assert compute_invariant_returns(tmp_path) == {}
+
+
+def test_a_nested_function_does_not_steal_its_owners_returns(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_invariant_returns
+
+    (tmp_path / "m.py").write_text(
+        "def outer(a):\n"
+        "    def inner():\n"
+        "        acc = []\n"
+        "        if a:\n"
+        "            return acc\n"
+        "        return acc\n"
+        "    return inner\n"
+    )
+
+    assert compute_invariant_returns(tmp_path) == {"m.py::outer.inner": "acc"}
+
+
+def test_the_metric_label_appears_in_the_message() -> None:
+    """One report carries both metrics, so each violation must say which it is."""
+    message = find_violations({}, {"m.py::a": 17}, metric="cognitive complexity")[0]
+
+    assert "cognitive complexity" in message

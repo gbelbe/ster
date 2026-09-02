@@ -80,3 +80,364 @@ gear:jacket-storm a owl:NamedIndividual, gear:Jacket ;
 # An untagged product — use it to try the "Tag with concept…" action.
 gear:pack-summit50 a owl:NamedIndividual, gear:DayPack ;
     rdfs:label "Summit 50L"@en .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retail geography — a class hierarchy, drawn level by level
+#
+# The map drills by CLASS, not by name: gear:Place has subclasses Continent →
+# BusinessArea → Country → City, and every place is an individual of one of them.
+# The map shows one level at a time and descends when you click a shape or zoom
+# in, so adding a level to the ontology adds a level to the map with no code
+# change.
+#
+#   Continent      Europe                          outline
+#   BusinessArea   Northern / Western / …          outline
+#   Country        France, Italy, Sweden, …        outline
+#   City           Paris, Milan, Kraków, …         point
+#
+# gear:withinArea carries the containment; stores hang off cities and link back
+# into the product ontology. Geometry is attached directly to each individual —
+# ster does not preserve bare geometry nodes, see test_concept_annotations.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@prefix geo:  <http://www.opengis.net/ont/geosparql#> .
+@prefix wgs:  <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix schema: <https://schema.org/> .
+@prefix ster:   <https://ster.dev/ns/map#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ── The levels, as a class hierarchy ─────────────────────────────────────────
+gear:Place a owl:Class ; rdfs:label "Place"@en .
+gear:Continent a owl:Class ; rdfs:label "Continent"@en ; rdfs:subClassOf gear:Place .
+gear:BusinessArea a owl:Class ; rdfs:label "Business Area"@en ; rdfs:subClassOf gear:Place .
+gear:Country a owl:Class ; rdfs:label "Country"@en ; rdfs:subClassOf gear:Place .
+gear:City a owl:Class ; rdfs:label "City"@en ; rdfs:subClassOf gear:Place .
+
+gear:withinArea a owl:ObjectProperty ; rdfs:label "within area"@en ;
+    rdfs:domain gear:Place ; rdfs:range gear:Place .
+
+# Facts a place carries about itself — shown in the map's detail panel alongside
+# its relations, and the reason schema:image / schema:url appear on cities below.
+gear:population a owl:DatatypeProperty ; rdfs:label "population"@en ;
+    rdfs:domain gear:City ; rdfs:range xsd:integer .
+gear:founded a owl:DatatypeProperty ; rdfs:label "founded"@en ;
+    rdfs:domain gear:Place ; rdfs:range xsd:string .
+gear:timezone a owl:DatatypeProperty ; rdfs:label "timezone"@en ;
+    rdfs:domain gear:Place ; rdfs:range xsd:string .
+
+# Numbers roll up: the map totals every numeric property of the individuals under
+# whatever you have open, so a country shows its turnover without any triple
+# stating one.
+gear:turnover a owl:DatatypeProperty ; rdfs:label "turnover (EUR)"@en ;
+    rdfs:domain gear:Store ; rdfs:range xsd:decimal .
+gear:employees a owl:DatatypeProperty ; rdfs:label "employees"@en ;
+    rdfs:domain gear:Store ; rdfs:range xsd:integer .
+gear:floorArea a owl:DatatypeProperty ; rdfs:label "floor area (m²)"@en ;
+    rdfs:domain gear:Store ; rdfs:range xsd:integer .
+
+# ── Continent ────────────────────────────────────────────────────────────────
+gear:Europe a owl:NamedIndividual, gear:Continent ;
+    rdfs:label "Europe"@en ;
+    geo:asWKT "POLYGON((-9.5 36.0, -9.5 43.8, -4.0 43.9, -1.8 46.5, -4.8 48.5, -1.0 49.9, 2.0 51.2, 4.3 53.5, 8.5 54.9, 10.6 57.7, 12.9 56.0, 15.0 56.2, 18.0 59.5, 21.0 60.5, 24.5 60.0, 28.0 59.5, 31.5 55.0, 30.5 50.5, 29.7 45.4, 28.0 41.5, 23.7 38.0, 18.5 40.1, 15.6 38.0, 12.5 37.9, 9.0 39.2, 3.2 39.6, -0.5 38.3, -5.6 36.0, -9.5 36.0))"^^geo:wktLiteral .
+
+# ── Business areas: grouping only, deliberately without geometry ─────────────
+# They exist for the taxonomy and the "cluster by" control, but carry no outline:
+# a box drawn round a single country is noise next to that country's real shape.
+# The map skips a level nothing is drawn at, so the drill reads
+# Europe → country → city.
+gear:NorthernEurope a owl:NamedIndividual, gear:BusinessArea ;
+    rdfs:label "Northern Europe"@en ; gear:withinArea gear:Europe .
+
+gear:WesternEurope a owl:NamedIndividual, gear:BusinessArea ;
+    rdfs:label "Western Europe"@en ; gear:withinArea gear:Europe .
+
+gear:SouthernEurope a owl:NamedIndividual, gear:BusinessArea ;
+    rdfs:label "Southern Europe"@en ; gear:withinArea gear:Europe .
+
+gear:EasternEurope a owl:NamedIndividual, gear:BusinessArea ;
+    rdfs:label "Eastern Europe"@en ; gear:withinArea gear:Europe .
+
+# ── Countries ────────────────────────────────────────────────────────────────
+gear:France a owl:NamedIndividual, gear:Country ;
+    rdfs:label "France"@en ; gear:withinArea gear:WesternEurope ;
+    geo:asWKT "POLYGON((-4.8 48.5, -1.9 48.6, -1.3 49.7, 1.6 51.0, 2.6 51.1, 4.2 49.9, 5.9 49.5, 7.6 49.1, 7.6 47.6, 6.0 46.2, 7.0 45.2, 7.5 43.8, 4.8 43.4, 3.0 43.0, 0.7 42.8, -1.4 43.3, -1.8 46.3, -2.2 47.1, -4.8 48.5))"^^geo:wktLiteral .
+
+gear:Italy a owl:NamedIndividual, gear:Country ;
+    rdfs:label "Italy"@en ; gear:withinArea gear:SouthernEurope ;
+    geo:asWKT "POLYGON((7.0 45.9, 8.6 46.5, 10.4 46.9, 12.4 46.7, 13.6 46.5, 13.1 45.6, 12.3 45.4, 14.0 44.0, 15.4 42.0, 16.2 41.9, 17.9 40.7, 18.5 40.1, 17.2 39.0, 16.6 38.8, 15.9 37.9, 15.2 38.3, 15.6 39.9, 14.0 40.6, 12.2 41.3, 10.5 42.9, 9.9 44.0, 8.2 44.3, 7.5 44.1, 7.0 45.9))"^^geo:wktLiteral .
+
+gear:Sweden a owl:NamedIndividual, gear:Country ;
+    rdfs:label "Sweden"@en ; gear:withinArea gear:NorthernEurope ;
+    geo:asWKT "POLYGON((11.2 58.9, 11.5 59.8, 12.9 60.5, 14.5 63.0, 16.0 65.8, 18.0 66.5, 20.0 68.4, 23.2 68.0, 24.2 65.8, 21.5 63.6, 19.0 61.5, 17.9 60.6, 17.0 58.8, 16.5 57.0, 14.5 56.2, 12.9 55.4, 12.5 56.3, 11.2 58.9))"^^geo:wktLiteral .
+
+gear:Poland a owl:NamedIndividual, gear:Country ;
+    rdfs:label "Poland"@en ; gear:withinArea gear:EasternEurope ;
+    geo:asWKT "POLYGON((14.2 53.9, 16.4 54.6, 18.5 54.8, 19.7 54.4, 22.8 54.4, 23.5 53.9, 23.9 52.3, 23.6 51.5, 23.6 50.4, 22.6 49.5, 20.9 49.3, 19.5 49.6, 17.7 50.0, 16.9 50.4, 15.0 50.9, 14.7 52.0, 14.2 53.9))"^^geo:wktLiteral .
+
+gear:Spain a owl:NamedIndividual, gear:Country ;
+    rdfs:label "Spain"@en ; gear:withinArea gear:SouthernEurope ;
+    geo:asWKT "POLYGON((-9.3 43.0, -7.0 43.7, -4.5 43.4, -1.8 43.4, -0.3 42.8, 0.7 42.7, 3.2 42.4, 2.1 41.2, 0.9 40.7, 0.0 39.5, -0.3 38.5, -1.6 37.4, -4.4 36.7, -6.3 36.2, -7.4 37.2, -7.0 38.2, -7.2 39.7, -6.9 41.0, -8.2 42.1, -9.3 43.0))"^^geo:wktLiteral .
+
+# ── Cities ───────────────────────────────────────────────────────────────────
+gear:Paris a owl:NamedIndividual, gear:City ;
+    rdfs:label "Paris"@en ; gear:withinArea gear:France ;
+    wgs:lat "48.86" ; wgs:long "2.35" ;
+    rdfs:comment "Capital of France and the group\u2019s largest market."@en ;
+    gear:population "2100000"^^xsd:integer ;
+    gear:founded "3rd century BC" ;
+    gear:timezone "Europe/Paris" ;
+    schema:image <http://127.0.0.1:8908/paris.png> ;
+    schema:url <https://www.paris.fr/> .
+gear:Lyon a owl:NamedIndividual, gear:City ;
+    rdfs:label "Lyon"@en ; gear:withinArea gear:France ;
+    wgs:lat "45.76" ; wgs:long "4.84" .
+gear:Chamonix a owl:NamedIndividual, gear:City ;
+    rdfs:label "Chamonix"@en ; gear:withinArea gear:France ;
+    wgs:lat "45.92" ; wgs:long "6.87" ;
+    rdfs:comment "Alpine valley town; the highest-altitude store in the group."@en ;
+    gear:population "8600"^^xsd:integer ;
+    gear:founded "1091" ;
+    gear:timezone "Europe/Paris" ;
+    schema:image <http://127.0.0.1:8908/chamonix.png> ;
+    schema:url <https://www.chamonix.com/> .
+gear:Bordeaux a owl:NamedIndividual, gear:City ;
+    rdfs:label "Bordeaux"@en ; gear:withinArea gear:France ;
+    wgs:lat "44.84" ; wgs:long "-0.58" .
+
+gear:Milan a owl:NamedIndividual, gear:City ;
+    rdfs:label "Milan"@en ; gear:withinArea gear:Italy ;
+    wgs:lat "45.46" ; wgs:long "9.19" ;
+    rdfs:comment "Northern Italy hub, closest large city to the Alps."@en ;
+    gear:population "1370000"^^xsd:integer ;
+    gear:founded "590 BC" ;
+    gear:timezone "Europe/Rome" ;
+    schema:image <http://127.0.0.1:8908/milan.png> ;
+    schema:url <https://www.comune.milano.it/> .
+gear:Rome a owl:NamedIndividual, gear:City ;
+    rdfs:label "Rome"@en ; gear:withinArea gear:Italy ;
+    wgs:lat "41.9" ; wgs:long "12.5" .
+gear:Turin a owl:NamedIndividual, gear:City ;
+    rdfs:label "Torino"@en ; gear:withinArea gear:Italy ;
+    wgs:lat "45.07" ; wgs:long "7.69" .
+
+gear:Stockholm a owl:NamedIndividual, gear:City ;
+    rdfs:label "Stockholm"@en ; gear:withinArea gear:Sweden ;
+    wgs:lat "59.33" ; wgs:long "18.06" .
+gear:Goteborg a owl:NamedIndividual, gear:City ;
+    rdfs:label "Göteborg"@en ; gear:withinArea gear:Sweden ;
+    wgs:lat "57.71" ; wgs:long "11.97" .
+gear:Kiruna a owl:NamedIndividual, gear:City ;
+    rdfs:label "Kiruna"@en ; gear:withinArea gear:Sweden ;
+    wgs:lat "67.86" ; wgs:long "20.22" .
+
+gear:Krakow a owl:NamedIndividual, gear:City ;
+    rdfs:label "Kraków"@en ; gear:withinArea gear:Poland ;
+    wgs:lat "50.06" ; wgs:long "19.94" .
+gear:Warsaw a owl:NamedIndividual, gear:City ;
+    rdfs:label "Warsaw"@en ; gear:withinArea gear:Poland ;
+    wgs:lat "52.23" ; wgs:long "21.01" .
+gear:Gdansk a owl:NamedIndividual, gear:City ;
+    rdfs:label "Gdansk"@en ; gear:withinArea gear:Poland ;
+    wgs:lat "54.35" ; wgs:long "18.65" .
+
+gear:Barcelona a owl:NamedIndividual, gear:City ;
+    rdfs:label "Barcelona"@en ; gear:withinArea gear:Spain ;
+    wgs:lat "41.39" ; wgs:long "2.17" ;
+    rdfs:comment "Coastal city; the water-sports range sells strongly here."@en ;
+    gear:population "1620000"^^xsd:integer ;
+    gear:founded "1st century BC" ;
+    gear:timezone "Europe/Madrid" ;
+    schema:image <http://127.0.0.1:8908/barcelona.png> ;
+    schema:url <https://www.barcelona.cat/> .
+gear:Madrid a owl:NamedIndividual, gear:City ;
+    rdfs:label "Madrid"@en ; gear:withinArea gear:Spain ;
+    wgs:lat "40.42" ; wgs:long "-3.7" .
+gear:Bilbao a owl:NamedIndividual, gear:City ;
+    rdfs:label "Bilbao"@en ; gear:withinArea gear:Spain ;
+    wgs:lat "43.26" ; wgs:long "-2.93" .
+
+# ── Stores: the leaf level, linking geography back to the products ───────────
+# Each store carries its own address, not its city's coordinates: a store that
+# sits exactly where its city does makes the drill from city to store look like
+# nothing happened. Several cities hold more than one.
+gear:Store a owl:Class ; rdfs:label "Store"@en ; rdfs:subClassOf gear:Place .
+gear:FlagshipStore a owl:Class ; rdfs:label "Flagship Store"@en ; rdfs:subClassOf gear:Store .
+
+gear:stocks a owl:ObjectProperty ; rdfs:label "stocks"@en ;
+    rdfs:domain gear:Store ; rdfs:range gear:Product .
+gear:specialisesIn a owl:ObjectProperty ; rdfs:label "specialises in"@en ;
+    rdfs:domain gear:Store ; rdfs:range skos:Concept .
+
+gear:store-paris-rivoli a owl:NamedIndividual, gear:FlagshipStore ;
+    rdfs:label "Rivoli Flagship"@en ; gear:withinArea gear:Paris ;
+    wgs:lat "48.862" ; wgs:long "2.3364" ;
+    gear:stocks gear:tent-aeon2, gear:jacket-storm ; gear:specialisesIn gear:Waterproof ;
+    gear:turnover "2450000"^^xsd:decimal ;
+    gear:employees "24"^^xsd:integer ;
+    gear:floorArea "820"^^xsd:integer .
+
+gear:store-paris-bastille a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Bastille Outdoor"@en ; gear:withinArea gear:Paris ;
+    wgs:lat "48.8532" ; wgs:long "2.369" ;
+    gear:stocks gear:pack-trail30 ; gear:specialisesIn gear:Hiking ;
+    gear:turnover "890000"^^xsd:decimal ;
+    gear:employees "9"^^xsd:integer ;
+    gear:floorArea "240"^^xsd:integer .
+
+gear:store-paris-montparnasse a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Montparnasse Gear"@en ; gear:withinArea gear:Paris ;
+    wgs:lat "48.842" ; wgs:long "2.321" ;
+    gear:stocks gear:pack-summit50, gear:tent-vega4 ; gear:specialisesIn gear:Camping ;
+    gear:turnover "1150000"^^xsd:decimal ;
+    gear:employees "11"^^xsd:integer ;
+    gear:floorArea "310"^^xsd:integer .
+
+gear:store-chamonix-alpine a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Alpine Base"@en ; gear:withinArea gear:Chamonix ;
+    wgs:lat "45.9237" ; wgs:long "6.8694" ;
+    gear:stocks gear:pack-trail30, gear:tent-vega4 ; gear:specialisesIn gear:Hiking ;
+    gear:turnover "1320000"^^xsd:decimal ;
+    gear:employees "12"^^xsd:integer ;
+    gear:floorArea "400"^^xsd:integer .
+
+gear:store-chamonix-praz a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Les Praz Depot"@en ; gear:withinArea gear:Chamonix ;
+    wgs:lat "45.935" ; wgs:long "6.889" ;
+    gear:stocks gear:jacket-storm ; gear:specialisesIn gear:Waterproof ;
+    gear:turnover "430000"^^xsd:decimal ;
+    gear:employees "5"^^xsd:integer ;
+    gear:floorArea "150"^^xsd:integer .
+
+gear:store-milan-centro a owl:NamedIndividual, gear:FlagshipStore ;
+    rdfs:label "Centro Outdoor"@en ; gear:withinArea gear:Milan ;
+    wgs:lat "45.4642" ; wgs:long "9.19" ;
+    gear:stocks gear:pack-summit50, gear:jacket-storm ; gear:specialisesIn gear:Hiking ;
+    gear:turnover "2100000"^^xsd:decimal ;
+    gear:employees "21"^^xsd:integer ;
+    gear:floorArea "760"^^xsd:integer .
+
+gear:store-milan-navigli a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Navigli Sport"@en ; gear:withinArea gear:Milan ;
+    wgs:lat "45.451" ; wgs:long "9.175" ;
+    gear:stocks gear:tent-aeon2 ; gear:specialisesIn gear:Camping ;
+    gear:turnover "760000"^^xsd:decimal ;
+    gear:employees "8"^^xsd:integer ;
+    gear:floorArea "220"^^xsd:integer .
+
+gear:store-stockholm-nord a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Nord Friluft"@en ; gear:withinArea gear:Stockholm ;
+    wgs:lat "59.332" ; wgs:long "18.07" ;
+    gear:stocks gear:tent-vega4 ; gear:specialisesIn gear:Camping ;
+    gear:turnover "980000"^^xsd:decimal ;
+    gear:employees "10"^^xsd:integer ;
+    gear:floorArea "280"^^xsd:integer .
+
+gear:store-stockholm-soder a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Söder Utrustning"@en ; gear:withinArea gear:Stockholm ;
+    wgs:lat "59.314" ; wgs:long "18.062" ;
+    gear:stocks gear:jacket-storm, gear:pack-trail30 ; gear:specialisesIn gear:Waterproof ;
+    gear:turnover "640000"^^xsd:decimal ;
+    gear:employees "7"^^xsd:integer ;
+    gear:floorArea "190"^^xsd:integer .
+
+gear:store-krakow-tatry a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Tatry Sport"@en ; gear:withinArea gear:Krakow ;
+    wgs:lat "50.062" ; wgs:long "19.945" ;
+    gear:stocks gear:tent-aeon2, gear:pack-trail30 ; gear:specialisesIn gear:Camping ;
+    gear:turnover "520000"^^xsd:decimal ;
+    gear:employees "6"^^xsd:integer ;
+    gear:floorArea "200"^^xsd:integer .
+
+gear:store-barcelona-mar a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Mar Aventura"@en ; gear:withinArea gear:Barcelona ;
+    wgs:lat "41.383" ; wgs:long "2.19" ;
+    gear:stocks gear:jacket-storm ; gear:specialisesIn gear:WaterSports ;
+    gear:turnover "1080000"^^xsd:decimal ;
+    gear:employees "11"^^xsd:integer ;
+    gear:floorArea "330"^^xsd:integer .
+
+gear:store-barcelona-gracia a owl:NamedIndividual, gear:Store ;
+    rdfs:label "Gràcia Muntanya"@en ; gear:withinArea gear:Barcelona ;
+    wgs:lat "41.403" ; wgs:long "2.156" ;
+    gear:stocks gear:pack-summit50 ; gear:specialisesIn gear:Hiking ;
+    gear:turnover "700000"^^xsd:decimal ;
+    gear:employees "8"^^xsd:integer ;
+    gear:floorArea "240"^^xsd:integer .
+
+
+# ── Overlay layers offered in the map's layer menu ───────────────────────────
+# Declared here rather than in ster: which context is useful is a property of
+# the data being mapped. Both of these are key-free — a service needing an API
+# key would put that key in the page, which is a decision for whoever publishes.
+gear:layer-terrain a ster:MapLayer ;
+    rdfs:label "Terrain"@en ;
+    ster:tileUrl "https://a.tile.opentopomap.org/{z}/{x}/{y}.png" ;
+    ster:attribution "© OpenTopoMap (CC-BY-SA)" ;
+    ster:opacity "0.7" .
+
+gear:layer-satellite a ster:MapLayer ;
+    rdfs:label "Satellite"@en ;
+    ster:tileUrl "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" ;
+    ster:attribution "Esri, Maxar, Earthstar Geographics" ;
+    ster:opacity "0.85" .
+
+# ── Layers needing an API key ────────────────────────────────────────────────
+# The ontology names the environment variable, never the key: this file is
+# committed and shared, and a key written here would be published with it. Set
+# OPENWEATHER_API_KEY before starting ster and these appear in the layer menu;
+# leave it unset and they are simply absent.
+#
+# Note the key still reaches the browser in the tile URL, which is fine for a map
+# served on localhost and is not for a published one — that wants a server-side
+# tile proxy instead.
+gear:layer-owm-precip a ster:MapLayer ;
+    rdfs:label "Rain (OpenWeather)"@en ;
+    ster:tileUrl "https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid={env:OPENWEATHER_API_KEY}" ;
+    ster:attribution "© OpenWeather" ;
+    ster:opacity "0.6" .
+
+gear:layer-owm-clouds a ster:MapLayer ;
+    rdfs:label "Clouds (OpenWeather)"@en ;
+    ster:tileUrl "https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid={env:OPENWEATHER_API_KEY}" ;
+    ster:attribution "© OpenWeather" ;
+    ster:opacity "0.5" .
+
+gear:layer-owm-wind a ster:MapLayer ;
+    rdfs:label "Wind (OpenWeather)"@en ;
+    ster:tileUrl "https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid={env:OPENWEATHER_API_KEY}" ;
+    ster:attribution "© OpenWeather" ;
+    ster:opacity "0.5" .
+
+# ── WMS layers ───────────────────────────────────────────────────────────────
+# Most public geodata is WMS rather than {z}/{x}/{y} tiles: national weather
+# services, environment agencies, everything under INSPIRE. Naming the WMS layer
+# is what selects that request shape; the endpoint itself is a plain URL.
+#
+# The Deutscher Wetterdienst publishes its ICON forecast model openly — no key,
+# no registration. Coverage is global on the reg025 grid despite the source being
+# a national service.
+gear:layer-dwd-temp a ster:MapLayer ;
+    rdfs:label "Air temperature 2m (DWD ICON)"@en ;
+    ster:tileUrl "https://maps.dwd.de/geoserver/dwd/wms" ;
+    ster:wmsLayers "dwd:Icon_reg025_fd_sl_T2M" ;
+    ster:attribution "© Deutscher Wetterdienst — ICON" ;
+    # DWD's own legend runs from below -60 °C in twenty-odd rows, which is a
+    # strip taller than the map. These are that style's real colours, sampled
+    # from it and trimmed to the range weather actually occupies. They are not
+    # a choice: maps.dwd.de answers a restyling request with "Dynamic style
+    # usage is forbidden", so the bar must show what the server paints.
+    ster:legendScale "-30:#7a0177, -20:#0570b0, -10:#bdc9e1, 0:#c7e9b4, 10:#fed976, 20:#fd8d3c, 30:#e31a1c, 40:#b10026" ;
+    ster:legendUnit "°" ;
+    ster:opacity "0.65" .
+
+# 24-hour accumulated precipitation, in millimetres. A 24h accumulation has
+# nothing to show until 24h into the forecast, so the server's default time step
+# is empty and the date must be asked for ahead — {date:+2d} resolves at request
+# time, which a date written here would not. (The Icon-eps layer of the same
+# name renders ensemble probabilities in %, not millimetres.)
+gear:layer-dwd-rain a ster:MapLayer ;
+    rdfs:label "24h accumulated precipitation (DWD ICON)"@en ;
+    ster:tileUrl "https://maps.dwd.de/geoserver/dwd/wms?time={date:+2d}" ;
+    ster:wmsLayers "dwd:Icon_reg025_fd_sl_TOTPREC24H" ;
+    ster:attribution "© Deutscher Wetterdienst — ICON" ;
+    ster:opacity "0.65" .

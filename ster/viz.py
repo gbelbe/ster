@@ -147,7 +147,24 @@ def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
         "videos": ind.schema_videos,
         "urls": ind.schema_urls,
         "relations": relations,
+        # Literal-valued assertions — population, a founding date, a website. The
+        # panel showed relations but not these, so half of what an individual
+        # actually says about itself was invisible.
+        "literals": [
+            {
+                "prop": _property_label(prop_uri, taxonomy),
+                "value": value,
+                "kind": kind,
+            }
+            for prop_uri, value, kind in ind.literal_values
+        ],
     }
+
+
+def _property_label(uri: str, taxonomy: Taxonomy) -> str:
+    """A property's label, falling back to the local part of its URI."""
+    prop = taxonomy.owl_properties.get(uri)
+    return prop.label("en") if prop else _local(uri)
 
 
 def _detail_scheme(scheme: ConceptScheme, _taxonomy: Taxonomy) -> dict:

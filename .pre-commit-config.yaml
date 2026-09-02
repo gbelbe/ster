@@ -84,8 +84,10 @@ repos:
 
       - id: complexity-ratchet
         # Diff-aware ratchet: grandfathers existing violations and enforces the
-        # configured threshold only on changed complexity.
-        name: complexity ratchet
+        # configured threshold only on changed complexity. Covers cyclomatic and
+        # cognitive complexity (SonarQube S3776) plus invariant returns (S3516),
+        # so the rules the PR gate rejects fail here instead of after a push.
+        name: complexity ratchet (cyclomatic · cognitive · invariant return)
         entry: uv run python scripts/check_complexity_ratchet.py
         language: system
         types: [python]

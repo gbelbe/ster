@@ -67,8 +67,12 @@ dev = [
     # Security — CVE scanning
     "pip-audit>=2.7",
     "requests>=2.32.2",       # pin away from GHSA-9wv6-86v2-5v37 (used by pip-audit)
-    # Complexity ratchet (scripts/check_complexity_ratchet.py)
+    # Complexity ratchet (scripts/check_complexity_ratchet.py): radon measures
+    # cyclomatic complexity, cognitive-complexity the metric SonarQube gates on
+    # (S3776). The reference implementation is used rather than a re-derivation
+    # because the point is to agree with the server, not to approximate it.
     "radon>=6.0",
+    "cognitive-complexity>=1.3",
     # Patch-coverage gate (CI + scripts/ci.sh)
     "diff-cover>=9.0",
     # Architecture / dependency-isolation contracts

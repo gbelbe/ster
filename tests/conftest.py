@@ -30,6 +30,41 @@ def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
     monkeypatch.setattr("ster.store._bin_cache_dir", lambda: bin_cache_dir)
 
 
+# Modules that test server startup itself, and so must reach the real function.
+_SERVER_OWN_TESTS = frozenset(
+    {
+        "tests.unit.test_server_startup",
+        "tests.unit.test_api_server_background",
+        "tests.step_defs.test_server_startup",
+    }
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_background_api_server(request, monkeypatch):
+    """Keep unit tests off the network — the TUI opens a real socket otherwise.
+
+    Opening a file makes OntologyApp start the MCP context server on a daemon
+    thread, and that binds the *configured* port — 8765 by default. Under
+    ``-n auto`` every TUI test races for it: the worker that loses gets
+    "address already in use", the app never reaches ready, and the failure
+    surfaces somewhere unrelated as a missing widget. It cost a red CI run on a
+    branch whose tree was byte-identical to a green one.
+
+    No unit test needs that socket. Returning False is the documented
+    best-effort path — "no MCP this session" — which must never stop the editor
+    opening, so this exercises a real code path rather than faking one. Tests
+    marked ``integration`` are left alone, as are the modules whose subject *is*
+    the server: they are the ones that mean it.
+    """
+    if "integration" in request.keywords or request.module.__name__ in _SERVER_OWN_TESTS:
+        return
+
+    from ster import api_server
+
+    monkeypatch.setattr(api_server, "start_background", lambda *args, **kwargs: False)
+
+
 @pytest.fixture(autouse=True)
 def _disable_version_check(request, monkeypatch):
     """Prevent tests from spawning background threads to check PyPI.

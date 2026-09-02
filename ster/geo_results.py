@@ -24,12 +24,10 @@ from dataclasses import dataclass, field
 import rdflib
 from rdflib.namespace import RDFS, SKOS
 
-# The W3C Basic Geo namespace is http, not https — rdflib binds `wgs` to an
-# https variant that real data does not use, so this one is spelled out. Flagged
-# by clear-text-protocol rules; it is an identifier, never a URL to fetch.
-WGS84 = "http://www.w3.org/2003/01/geo/wgs84_pos#"  # NOSONAR - RDF namespace IRI
-LAT = rdflib.URIRef(WGS84 + "lat")
-LONG = rdflib.URIRef(WGS84 + "long")
+# geo_results builds on geo_shapes, never the other way round.
+from .geo_shapes import coordinates_of as coordinates_of
+from .geo_shapes import geometry_of
+
 # Taken from rdflib rather than spelled out: one definition each, no chance of a
 # typo, and nothing for static analysis to read as a hard-coded URL.
 RDFS_LABEL = RDFS.label
@@ -59,6 +57,10 @@ class GeoPoint:
     label: str = ""
     uri: str | None = None
     groups: dict[str, str] = field(default_factory=dict)
+    # The entity's full geometry as GeoJSON, when it has one beyond a bare point.
+    # lat/long stay the representative point, so clustering and zoomed-out
+    # rendering keep working on shapes without knowing anything about them.
+    shape: dict | None = None
 
 
 @dataclass
@@ -88,18 +90,6 @@ def label_of(graph: rdflib.Graph, node: rdflib.URIRef) -> str:
             return str(value)
     text = str(node)
     return text.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
-
-
-def coordinates_of(graph: rdflib.Graph, node: rdflib.URIRef) -> tuple[float, float] | None:
-    """WGS84 coordinates for *node*, or None when it carries none usable."""
-    latitude = graph.value(node, LAT)
-    longitude = graph.value(node, LONG)
-    if latitude is None or longitude is None:
-        return None
-    lat, long = _number(str(latitude)), _number(str(longitude))
-    if lat is None or long is None:
-        return None
-    return lat, long
 
 
 def _column_indexes(columns: list[str], names: frozenset[str]) -> int | None:
@@ -143,22 +133,53 @@ def _locate_row(
     lat_column: int | None,
     long_column: int | None,
 ) -> GeoPoint | None:
-    """Place a single row, explicit coordinates first, then entity lookup."""
-    if lat_column is not None and long_column is not None:
-        lat = _number(row[lat_column]) if lat_column < len(row) else None
-        long = _number(row[long_column]) if long_column < len(row) else None
-        if lat is not None and long is not None:
-            return GeoPoint(row=index, lat=lat, long=long, label=_row_label(columns, row))
+    """Place a single row, explicit coordinates first, then entity lookup.
 
+    Two ways of answering one question, tried in order of directness: a row that
+    states its own coordinates has already answered it, and only one that does
+    not is worth resolving through the graph.
+    """
+    stated = _from_coordinates(columns, row, index, lat_column, long_column)
+    return stated if stated is not None else _from_entity(graph, row, index)
+
+
+def _from_coordinates(
+    columns: list[str],
+    row: list[str],
+    index: int,
+    lat_column: int | None,
+    long_column: int | None,
+) -> GeoPoint | None:
+    """A row placed by its own latitude and longitude columns."""
+    if lat_column is None or long_column is None:
+        return None
+    lat = _number(row[lat_column]) if lat_column < len(row) else None
+    long = _number(row[long_column]) if long_column < len(row) else None
+    if lat is None or long is None:
+        return None
+    return GeoPoint(row=index, lat=lat, long=long, label=_row_label(columns, row))
+
+
+def _from_entity(graph: rdflib.Graph, row: list[str], index: int) -> GeoPoint | None:
+    """A row placed by the first URI in it the graph gives a geometry."""
     for cell in row:
         if not _is_uri(cell):
             continue
         node = rdflib.URIRef(cell)
-        found = coordinates_of(graph, node)
-        if found is not None:
-            return GeoPoint(
-                row=index, lat=found[0], long=found[1], label=label_of(graph, node), uri=cell
-            )
+        geometry = geometry_of(graph, node)
+        if geometry is None:
+            continue
+        latitude, longitude = geometry.centroid
+        return GeoPoint(
+            row=index,
+            lat=latitude,
+            long=longitude,
+            label=label_of(graph, node),
+            uri=cell,
+            # A bare point is already carried by lat/long; only a real shape
+            # needs the geometry sent to the browser as well.
+            shape=None if geometry.kind == "Point" else geometry.geojson,
+        )
     return None
 
 

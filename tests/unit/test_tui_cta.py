@@ -74,8 +74,9 @@ def test_empty_sections_show_add_call_to_actions(tmp_path) -> None:
 
 
 def test_populated_sections_hide_their_call_to_action() -> None:
-    """The mixed demo has classes + a scheme (but no properties): main-pane CTAs gone,
-    property-type CTAs present."""
+    """The mixed demo has classes, a scheme and properties of both kinds, so every
+    call to action in these panes is gone — the counterpart to the empty-file test
+    above, which expects each of them."""
 
     async def scenario() -> None:
         app = OntologyApp(store.load(DEMOMIX), source="mixed-gear-demo.ttl")
@@ -87,7 +88,10 @@ def test_populated_sections_hide_their_call_to_action() -> None:
             props = set(_cta_actions(app.query_one("#prop-tree", Tree)))
             assert "create_owl_class" not in main  # has classes
             assert "add_scheme" not in main  # has a scheme
-            assert "create_object_property" in props  # no properties yet → still nudged
+            # The retail geography brought both kinds: withinArea / stocks /
+            # specialisesIn are object properties, population / turnover /
+            # employees datatype ones. A populated section shows no nudge.
+            assert props == set(), props
 
     _run(scenario)
 
