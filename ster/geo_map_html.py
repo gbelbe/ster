@@ -209,6 +209,11 @@ let layer = null, rows = [], columns = [], points = [], groupBy = null, scope = 
    the ontology, so nothing here knows what the levels are called. */
 let level = 0;            // which level of the hierarchy is on screen
 let focus = null;         // the URI drilled into, or null for "all of this level"
+/* What the panel describes, which is not always what the map is filtered to. A
+   leaf — a store, or any place in a file with no hierarchy at all — can be
+   selected without being drilled into: filtering the map by it would hide its
+   siblings and leave one dot with no way back. */
+let selected = null;
 const levelsOf = ps => [...new Set(ps.map(p => p.level ?? 0))].sort((a, b) => a - b);
 /* fitBounds moves the map itself, and that fires zoomend a tick later. Without
    this the map's own framing reads as the reader zooming, and the level handler
@@ -274,7 +279,7 @@ function drawNav() {
     .sort((a, b) => valueOf(b) - valueOf(a) || a.label.localeCompare(b.label))
     .map((p, i) => {
       const leaf = !hasChildren(p);
-      return `<button class="chip${p.uri === focus ? ' current' : ''}${leaf ? ' leaf' : ''}"` +
+      return `<button class="chip${p.uri === selected ? ' current' : ''}${leaf ? ' leaf' : ''}"` +
              ` data-chip="${i}">${plain(p.label)}<span class="n">${fmt.format(valueOf(p))}</span></button>`;
     }).join('');
 
@@ -285,11 +290,12 @@ function drawNav() {
   for (const a of el.querySelectorAll('#crumbs a')) {
     a.addEventListener('click', () => {
       const idx = a.dataset.up;
-      if (idx === '') { level = levelsOf(points)[0] ?? 0; focus = null; draw(); return; }
+      if (idx === '') { level = levelsOf(points)[0] ?? 0; focus = null; selected = null; draw(); return; }
       const target = trail[Number(idx)];
       const next = childLevel(target);
       level = next === null ? target.level : next;
       focus = target.uri;
+      selected = target.uri;
       draw();
     });
   }
@@ -298,9 +304,11 @@ function drawNav() {
     const p = ordered[Number(btn.dataset.chip)];
     btn.addEventListener('click', () => {
       const next = childLevel(p);
-      if (next !== null) level = next;
+      selected = p.uri;
+      if (next === null) { drawDetail(); drawNav(); return; }  // a leaf: select, do not descend
+      level = next;
       focus = p.uri;
-      draw(next !== null);
+      draw(true);
     });
   }
 }
@@ -544,8 +552,8 @@ function figuresBelow(p) {
 }
 async function drawDetail() {
   const el = document.getElementById('detail');
-  if (focus === null) { el.innerHTML = ''; return; }
-  const here = points.find(p => p.uri === focus);
+  if (selected === null) { el.innerHTML = ''; return; }
+  const here = points.find(p => p.uri === selected);
   if (!here) { el.innerHTML = ''; return; }
   const counts = countsBelow(here);
   const head = () =>
@@ -561,8 +569,8 @@ async function drawDetail() {
     wireMedia(el);
   };
   paint(`<div class="uri">${plain(here.uri)}</div><div class="sub">loading…</div>`);
-  const det = await nodeDetail(focus);
-  if (focus !== here.uri) return;              // drilled on while fetching
+  const det = await nodeDetail(selected);
+  if (selected !== here.uri) return;              // drilled on while fetching
   paint(detailBody(here, counts, det));
 }
 /* The panel keeps the whole path open rather than replacing itself each time
@@ -578,7 +586,7 @@ function treeRows() {
   const walk = (list, depth) => {
     for (const p of list.sort((a, b) => valueOf(b) - valueOf(a) || a.label.localeCompare(b.label))) {
       const open = openPath.includes(p.uri);
-      rows.push({ place: p, depth, open, current: p.uri === focus });
+      rows.push({ place: p, depth, open, current: p.uri === selected });
       if (!open) continue;
       const below = childLevel(p);
       if (below !== null) {
@@ -646,9 +654,15 @@ function findMeasure(cols, data) {
   return null;
 }
 
+/* A place pulled in only to group the results has no row of its own, so it has
+   no value in any result column. Reading rows[null] for one threw a TypeError
+   out of draw(), and the whole map came back empty with nothing on screen to
+   say why. Defined before its first use, and used for every row lookup. */
+const rowOf = p => (p.row === null || p.row === undefined) ? null : rows[p.row];
+
 /* A place's own contribution: nothing for one that is only there to group. */
-const ownValue = p => p.row === null ? 0
-  : (measureCol === null ? 1 : (num(rows[p.row][measureCol]) ?? 0));
+const ownValue = p => rowOf(p) === null ? 0
+  : (measureCol === null ? 1 : (num(rowOf(p)[measureCol]) ?? 0));
 /* What a place is worth on the map: itself plus everything under it. That is
    what makes a country meaningful when the query returned stores — it shows how
    many it holds — and it is why a place with nothing beneath it and no row of
@@ -747,14 +761,19 @@ async function locateOnServer(uris) {
   return body.places || [];
 }
 
-const inScope = p => scope === null || rows[p.row][groupBy] === scope;
+const inScope = p => scope === null || (rowOf(p)?.[groupBy] ?? null) === scope;
 const ramp = (v, lo, hi) => hi === lo ? RAMP[RAMP.length-1]
   : RAMP[Math.min(RAMP.length-1, Math.floor((v - lo) / (hi - lo) * RAMP.length))];
 
 function draw(fit = true) {
   if (layer) map.removeLayer(layer);
   shapeMode = wantsShapes();
-  const visible = atLevel().filter(inScope);
+  /* Clustering by a result column is an alternative to the hierarchy, not a
+     filter inside it: it answers "where are my rows", so it reads the whole
+     result rather than the level currently drilled to. Intersecting the two
+     emptied the map wherever the level held only context places. */
+  const source = groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel();
+  const visible = source.filter(inScope);
   /* Ungrouped, or drilled into one group: every row is its own marker. */
   const grouped = groupBy !== null && scope === null;
   const groups = new Map();
@@ -762,7 +781,7 @@ function draw(fit = true) {
     /* Keyed by URI, not row index: a place pulled in to group the results has no
        row of its own, and keying on that collapsed every one of them into a
        single "null" group — five countries drawn as one dot. */
-    const key = grouped ? (rows[p.row][groupBy] || '—') : (p.uri || 'row:' + p.row);
+    const key = grouped ? (rowOf(p)?.[groupBy] || '—') : (p.uri || 'row:' + p.row);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   }
@@ -788,9 +807,11 @@ function draw(fit = true) {
     const drill = () => {
       if (!only) return;
       const next = childLevel(only);
-      if (next !== null) level = next;
+      selected = only.uri;
+      if (next === null) { drawDetail(); drawNav(); return; }  // a leaf: select, do not descend
+      level = next;
       focus = only.uri;
-      draw(next !== null);
+      draw(true);
     };
     if (!grouped && only) mark.on('click', drill);
     /* One row, its own geometry, and few enough to read: draw the shape and keep
@@ -883,6 +904,7 @@ async function run() {
     addOverlayControl();
     level = levelsOf(points)[0] ?? 0;
     focus = null;
+    selected = null;
       document.getElementById('sub').textContent =
       `${rows.length} row(s) · ${points.length} mappable`;
     clusterControls();
