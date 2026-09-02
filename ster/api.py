@@ -154,11 +154,33 @@ class SSEBroadcaster:
 
 # Starter query for GET /map when none is supplied: anything with WGS84
 # coordinates, in any vocabulary.
+# Used when the map is opened without a query of its own — the TUI's "open map"
+# action does exactly that. Two things matter here and both are easy to undo by
+# accident:
+#
+#   It selects the *entity*, never lat/long columns. geo_map_html places rows
+#   straight from a lat/long column pair and never asks the server to resolve
+#   them, so selecting those columns silently turns off the geometry ladder and
+#   with it every level, parent and ancestor the drill-down needs.
+#
+#   Shapes are found by literal datatype rather than by predicate, as everywhere
+#   else in ster: a registry of predicate names would never be finished, and the
+#   previous default matched wgs:lat alone, so no polygon was ever on this map.
 _DEFAULT_MAP_QUERY = """\
-PREFIX wgs: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX wgs:  <http://www.w3.org/2003/01/geo/wgs84_pos#>
 
-SELECT ?thing ?lat ?long
-WHERE { ?thing wgs:lat ?lat ; wgs:long ?long }
+SELECT DISTINCT ?thing ?name
+WHERE {
+  {
+    ?thing ?geometryProperty ?geometry .
+    FILTER (datatype(?geometry) IN (geo:wktLiteral, geo:geoJSONLiteral))
+  }
+  UNION
+  { ?thing wgs:lat ?lat }
+  OPTIONAL { ?thing rdfs:label ?name }
+}
 LIMIT 200
 """
 
