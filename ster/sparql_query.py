@@ -442,11 +442,11 @@ def warm_graph_caches(paths: list[Path]) -> None:
     _trace(f"warm_graph_caches START {[p.name for p in paths]}")
     path_strs = {str(p) for p in paths}
     with _graph_cache_lock:
-        stale = [k for k in list(_graph_cache) if any(str(e[0]) in path_strs for e in k)]
+        stale = [k for k in _graph_cache if any(str(e[0]) in path_strs for e in k)]
         for k in stale:
             del _graph_cache[k]
     with _uri_index_cache_lock:
-        stale = [k for k in list(_uri_index_cache) if any(str(e[0]) in path_strs for e in k)]
+        stale = [k for k in _uri_index_cache if any(str(e[0]) in path_strs for e in k)]
         for k in stale:
             del _uri_index_cache[k]
     build_uri_index_cached(paths)
@@ -750,8 +750,6 @@ def build_uri_index(taxonomy: Taxonomy) -> UriIndex:
     ``children`` — mapping of parent local name → sorted list of direct child
                    local names within the same namespace.
     """
-    if TYPE_CHECKING:
-        pass
     ns_to_pfx: dict[str, str] = {uri: pfx for pfx, uri in taxonomy.namespace_bindings.items()}
 
     # Collect per-bucket
@@ -1073,7 +1071,7 @@ def qname_level_candidates(
 
 def extract_query_variables(buffer: str) -> list[str]:
     """Return a sorted, deduplicated list of ``?variable`` names in *buffer*."""
-    return sorted(set(re.findall(r"\?([A-Za-z_][A-Za-z0-9_]*)", buffer)))
+    return sorted(set(re.findall(r"\?([A-Za-z_]\w*)", buffer)))
 
 
 def extract_result_uris(rows: list[list[str]]) -> set[str]:

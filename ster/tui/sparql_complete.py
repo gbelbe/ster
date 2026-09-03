@@ -30,7 +30,7 @@ _CLASS_PREDICATES = frozenset(
     {"a", "rdf:type", "rdfs:subClassOf", "rdfs:domain", "rdfs:range", "owl:equivalentClass"}
 )
 
-_VAR_RE = re.compile(r"[?$]([A-Za-z_][A-Za-z0-9_]*)")
+_VAR_RE = re.compile(r"[?$]([A-Za-z_]\w*)")
 
 
 def extract_variables(text: str) -> list[str]:

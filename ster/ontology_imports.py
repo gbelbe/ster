@@ -217,7 +217,7 @@ def fetch_ontology(namespace_url: str, cache_dir: Path = _DEFAULT_CACHE_DIR):
                 continue
         if len(g) > 0:
             g.serialize(destination=str(cache_file), format="turtle")
-    except (urllib.error.URLError, OSError):
+    except OSError:  # urllib.error.URLError is itself an OSError subclass
         pass
 
     return g

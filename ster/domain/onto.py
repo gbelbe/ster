@@ -69,7 +69,7 @@ def _relocate_entities(taxonomy: Taxonomy, old_to_new: dict[str, str]) -> None:
         taxonomy.owl_properties,
     )
     for store in stores:
-        for old, new in list(old_to_new.items()):
+        for old, new in old_to_new.items():
             if old in store:
                 entity = store.pop(old)
                 entity.uri = new

@@ -27,6 +27,9 @@ from .hint_bar import Hint, HintBar
 
 _R = TypeVar("_R")
 
+# Reused by every handler below instead of the literal (S1192).
+_MODAL_BOX_SEL = ".modal-box"
+
 
 class _ModalClose(Static):
     """The top-right ✕ affordance; clicking it cancels (dismisses) the modal."""
@@ -131,7 +134,7 @@ class ModalBase(ModalScreen[_R]):
     def _add_close_button(self) -> None:
         """Mount the ✕ header into the modal box once it exists (runs for every
         subclass, regardless of their own on_mount)."""
-        boxes = self.query(".modal-box")
+        boxes = self.query(_MODAL_BOX_SEL)
         if boxes and not self.query(".modal-close"):
             boxes.first().mount(_ModalClose())
 
@@ -139,7 +142,7 @@ class ModalBase(ModalScreen[_R]):
     def _add_footer_hints(self) -> None:
         """Mount the shared footer HintBar (from :meth:`footer_hints`) into the box, so
         every modal — current and future — gets the clickable shortcut bar for free."""
-        boxes = self.query(".modal-box")
+        boxes = self.query(_MODAL_BOX_SEL)
         hints = self.footer_hints()
         if boxes and hints and not self.query(HintBar):
             boxes.first().mount(HintBar(hints))
@@ -148,7 +151,7 @@ class ModalBase(ModalScreen[_R]):
     def _dismiss_on_click_away(self, event: events.Click) -> None:
         """A click that lands on the dim outside the modal box cancels the modal. A
         click inside the box (that bubbled up here unhandled) is ignored."""
-        boxes = self.query(".modal-box")
+        boxes = self.query(_MODAL_BOX_SEL)
         if not boxes:
             return
         if not boxes.first().region.contains(event.screen_x, event.screen_y):

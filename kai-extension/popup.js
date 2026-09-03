@@ -40,8 +40,9 @@ async function prefillFromTab() {
       $("name").value = tab.title;
       $("name").select();
     }
-  } catch (_) {
+  } catch (err) {
     // activeTab permission may not be granted yet — silently skip
+    console.debug("Ster: could not prefill from active tab:", err);
   }
 }
 

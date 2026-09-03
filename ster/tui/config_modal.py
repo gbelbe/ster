@@ -95,6 +95,11 @@ class EnforceShaclRequested(Message):
         self.scope = scope
 
 
+# CSS selectors reused across several handlers below (S1192).
+_SEL_MPROPS = ".cfg-mprops"
+_SEL_MP_URI = ".cfg-mp-uri"
+_SEL_MP_LABEL = ".cfg-mp-label"
+
 # Common namespaces → prefix, for suggesting a label when registering a predicate.
 _KNOWN_PREFIXES: tuple[tuple[str, str], ...] = (
     ("http://purl.org/dc/terms/", "dcterms"),
@@ -277,7 +282,7 @@ class _MetaCatalog(FocusGroup):
         library picker and the typed-URI add."""
         if not predicate or predicate in {cb.predicate for cb in self.query(_MetaCheckbox)}:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaRow(predicate, label))
+        await self.query_one(_SEL_MPROPS).mount(_MetaRow(predicate, label))
         self.post_message(self.Changed())
 
     @on(Button.Pressed, ".cfg-mp-search")
@@ -333,23 +338,19 @@ class _MetaCatalog(FocusGroup):
 
     async def add_typed(self) -> None:
         """Mount a checkbox for the typed predicate (deduped); clear the fields."""
-        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
-        label = self.query_one(".cfg-mp-label", Input).value.strip()
+        uri = self.query_one(_SEL_MP_URI, Input).value.strip()
+        label = self.query_one(_SEL_MP_LABEL, Input).value.strip()
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
-        await self.query_one(".cfg-mprops").mount(_MetaRow(uri, label))
-        self.query_one(".cfg-mp-uri", Input).value = ""
-        self.query_one(".cfg-mp-label", Input).value = ""
+        await self.query_one(_SEL_MPROPS).mount(_MetaRow(uri, label))
+        self.query_one(_SEL_MP_URI, Input).value = ""
+        self.query_one(_SEL_MP_LABEL, Input).value = ""
         self.post_message(self.Changed())  # ask the modal to auto-save
 
     @on(Button.Pressed, ".cfg-mp-add")
-    async def _on_add(self, event: Button.Pressed) -> None:
-        event.stop()
-        await self._submit()
-
-    @on(Input.Submitted, ".cfg-mp-uri, .cfg-mp-label")
-    async def _on_submit(self, event: Input.Submitted) -> None:
+    @on(Input.Submitted, f"{_SEL_MP_URI}, {_SEL_MP_LABEL}")
+    async def _on_add_or_submit(self, event: Button.Pressed | Input.Submitted) -> None:
         event.stop()
         await self._submit()
 
@@ -375,7 +376,7 @@ class _MetaCatalog(FocusGroup):
         if not name or uri in present:
             return
         label = label.strip() or name
-        await self.query_one(".cfg-mprops").mount(_MetaRow(uri, label))
+        await self.query_one(_SEL_MPROPS).mount(_MetaRow(uri, label))
         self.post_message(self.Changed())  # auto-save the catalog
         self.post_message(DeclareAnnotationProperty(uri, label, comment.strip()))
 
@@ -383,7 +384,7 @@ class _MetaCatalog(FocusGroup):
         """Add the typed predicate. If it is not a known annotation property, warn
         and ask for confirmation first — *Use it* adds it (declared locally as an
         annotation property when a file is open); Esc/Cancel skips the add."""
-        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
+        uri = self.query_one(_SEL_MP_URI, Input).value.strip()
         present = {cb.predicate for cb in self.query(_MetaCheckbox)}
         if not uri or uri in present:
             return
@@ -403,7 +404,7 @@ class _MetaCatalog(FocusGroup):
         """Confirmation result for an unknown predicate (None/`cancel` = skip)."""
         if choice != "use":
             return
-        uri = self.query_one(".cfg-mp-uri", Input).value.strip()
+        uri = self.query_one(_SEL_MP_URI, Input).value.strip()
         await self.add_typed()  # mounts the checkbox, clears the fields, posts Changed
         if self._can_declare and uri:
             self.post_message(DeclareAnnotationProperty(uri))  # app declares it locally
@@ -419,8 +420,8 @@ class _MetaCatalog(FocusGroup):
         return [
             *rows,
             *self.query(".cfg-mp-search"),
-            *self.query(".cfg-mp-uri"),
-            *self.query(".cfg-mp-label"),
+            *self.query(_SEL_MP_URI),
+            *self.query(_SEL_MP_LABEL),
             *self.query(".cfg-mp-add"),
             *self.query(".cfg-mp-new"),
         ]
@@ -741,7 +742,7 @@ class ConfigModal(ModalBase[None]):
         section.border_title = title
         return section
 
-    def _sl_thresholds(self, cfg: dict):  # type: ignore[no-untyped-def]
+    def _sl_threshold_rows(self, cfg: dict):  # type: ignore[no-untyped-def]
         """One group per coverage threshold: the ``name  [nn]%`` row and — for label-type
         coverages — its 'required in language' checkbox row, tucked directly beneath."""
         quality = cfg["quality"]
@@ -812,7 +813,7 @@ class ConfigModal(ModalBase[None]):
                 ),
             )
         )
-        sections.append(self._sl_section("Quality thresholds (%)", *self._sl_thresholds(cfg)))
+        sections.append(self._sl_section("Quality thresholds (%)", *self._sl_threshold_rows(cfg)))
         sections.append(
             self._sl_section(
                 "Check selection",

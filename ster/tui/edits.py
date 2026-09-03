@@ -190,13 +190,15 @@ def is_prose(field: DetailField) -> bool:
 
 # Action rows whose handler collects a single text/URI value via the edit modal.
 # Maps action → (prompt, prefill-kind) where prefill-kind is "base_uri" or "".
+_RDFS_COMMENT = "rdfs:comment"
+_NEW_RDFS_LABEL = "New rdfs:label"
 INPUT_ACTIONS: dict[str, tuple[str, str]] = {
-    "add_rdf_comment": ("rdfs:comment", ""),
-    "add_ind_comment": ("rdfs:comment", ""),
-    "add_prop_comment": ("rdfs:comment", ""),
-    "add_rdf_label": ("New rdfs:label", ""),
-    "add_ind_label": ("New rdfs:label", ""),
-    "add_prop_label": ("New rdfs:label", ""),
+    "add_rdf_comment": (_RDFS_COMMENT, ""),
+    "add_ind_comment": (_RDFS_COMMENT, ""),
+    "add_prop_comment": (_RDFS_COMMENT, ""),
+    "add_rdf_label": (_NEW_RDFS_LABEL, ""),
+    "add_ind_label": (_NEW_RDFS_LABEL, ""),
+    "add_prop_label": (_NEW_RDFS_LABEL, ""),
     "new_subclass": ("New subclass URI", "base_uri"),
     "add_individual": ("New individual URI", "base_uri"),
     "edit_ontology_prefix": ("Ontology prefix", ""),
@@ -372,6 +374,15 @@ def direct_command(field: DetailField, uri: str, path: Path) -> object | None:
     return factory(field, uri, path) if factory else None
 
 
+# Menu-label literals reused across several entity kinds' context-menu rows
+# (S1192: each would otherwise be duplicated 3-6x below) — one definition here.
+_LBL_RENAME_URI = "✎ Rename URI…"
+_LBL_DELETE_ELLIPSIS = "⊘ Delete…"
+_LBL_OPEN_GRAPH = "⊙ Open graph"
+_LBL_ADD_RELATED = "~ Add related…"
+_LBL_MOVE_PARENT = "↷ Move under a different parent…"
+_LBL_TAG_INDIVIDUALS = "🏷 Tag individuals…"
+
 # ── right-click context menu — quick actions per node kind ──────────────────────
 # Each (label, action): "rename" is handled by the app (an edit flow); every other
 # action is dispatched exactly like its detail-pane row (via _run_field_action).
@@ -385,8 +396,8 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("↑ Add superclass…", "link_superclass"),
         ("↷ Move under a different superclass…", "move_class"),
         ("⇢ Change to individual", "class_to_individual"),
-        ("⊙ Open graph", "view_focused_graph"),
-        ("⊘ Delete…", "delete_class"),
+        (_LBL_OPEN_GRAPH, "view_focused_graph"),
+        (_LBL_DELETE_ELLIPSIS, "delete_class"),
     ],
     "individual": [
         ("✎ Edit individual…", "edit_individual"),
@@ -394,7 +405,7 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("🏷 Tag with concept…", "tag_concept"),  # dct:subject → a concept (theme index)
         ("+ Add property value…", "add_prop_value"),
         ("⇢ Change to class", "individual_to_class"),
-        ("✎ Rename URI…", "rename"),
+        (_LBL_RENAME_URI, "rename"),
         ("⊘ Delete", "delete_individual"),
     ],
     "property": [
@@ -402,29 +413,29 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("→ Add range class…", "add_prop_range"),
         ("◆ Enforce with SHACL rule", "enforce_shacl"),
         ("◇ Remove SHACL rule", "unenforce_shacl"),
-        ("✎ Rename URI…", "rename"),
-        ("⊘ Delete…", "delete_property"),
+        (_LBL_RENAME_URI, "rename"),
+        (_LBL_DELETE_ELLIPSIS, "delete_property"),
     ],
     "concept": [
         ("+ Add narrower", "add_narrower"),
-        ("~ Add related…", "add_related"),
-        ("↷ Move under a different parent…", "move"),
-        ("🏷 Tag individuals…", "tag_individuals"),  # bulk dct:subject → this concept
+        (_LBL_ADD_RELATED, "add_related"),
+        (_LBL_MOVE_PARENT, "move"),
+        (_LBL_TAG_INDIVIDUALS, "tag_individuals"),  # bulk dct:subject → this concept
         ("⬆ Promote to class…", "promote"),  # pick: new class (pun) or link to an existing class
-        ("✎ Rename URI…", "rename"),
-        ("⊘ Delete…", "delete"),
+        (_LBL_RENAME_URI, "rename"),
+        (_LBL_DELETE_ELLIPSIS, "delete"),
     ],
     # A concept foaf:focus-linked to an existing OWL class. The class's individuals
     # surface under it; the link is removable ("Unlink"), non-destructively.
     "linked": [
         ("+ Add narrower", "add_narrower"),
-        ("~ Add related…", "add_related"),
-        ("↷ Move under a different parent…", "move"),
-        ("🏷 Tag individuals…", "tag_individuals"),
+        (_LBL_ADD_RELATED, "add_related"),
+        (_LBL_MOVE_PARENT, "move"),
+        (_LBL_TAG_INDIVIDUALS, "tag_individuals"),
         ("⊗ Unlink from class", "unlink"),  # drop the foaf:focus link → plain concept
-        ("⊙ Open graph", "view_focused_graph"),
-        ("✎ Rename URI…", "rename"),
-        ("⊘ Delete…", "delete"),
+        (_LBL_OPEN_GRAPH, "view_focused_graph"),
+        (_LBL_RENAME_URI, "rename"),
+        (_LBL_DELETE_ELLIPSIS, "delete"),
     ],
     # A pun (skos:Concept *and* owl:Class). Its menu carries both facets: the
     # SKOS grouping fork ("Add narrower concept") and the OWL inheritance fork
@@ -434,17 +445,17 @@ _CONTEXT_ACTIONS: dict[str, list[tuple[str, str]]] = {
         ("↓ Add subclass", "new_subclass"),
         ("+ Add narrower concept", "add_narrower"),
         ("+ Add individual", "add_individual"),
-        ("~ Add related…", "add_related"),
-        ("↷ Move under a different parent…", "move"),
-        ("🏷 Tag individuals…", "tag_individuals"),  # bulk dct:subject → this pun
+        (_LBL_ADD_RELATED, "add_related"),
+        (_LBL_MOVE_PARENT, "move"),
+        (_LBL_TAG_INDIVIDUALS, "tag_individuals"),  # bulk dct:subject → this pun
         ("⬇ Demote to concept", "demote"),  # drop the owl:Class facet → back to a plain concept
-        ("⊙ Open graph", "view_focused_graph"),
-        ("⊘ Delete…", "delete"),
+        (_LBL_OPEN_GRAPH, "view_focused_graph"),
+        (_LBL_DELETE_ELLIPSIS, "delete"),
     ],
     "scheme": [
         ("➕ Add top concept", "add_top_concept"),
-        ("✎ Rename URI…", "rename"),
-        ("⊘ Delete…", "delete_scheme"),
+        (_LBL_RENAME_URI, "rename"),
+        (_LBL_DELETE_ELLIPSIS, "delete_scheme"),
     ],
 }
 

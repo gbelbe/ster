@@ -19,6 +19,9 @@ from .ontology_imports import (
 
 console = Console()
 
+# Reused by every "pick a number" prompt below instead of the literal (S1192).
+_INVALID_SELECTION = "[red]Invalid selection.[/red]"
+
 
 def _cached_namespaces() -> list[tuple[str, Path, int]]:
     """Return list of (namespace_url_guess, path, triple_count) from cache."""
@@ -136,7 +139,7 @@ def _action_add(taxonomy) -> None:
     if raw.isdigit():
         idx = int(raw) - 1
         if not (0 <= idx < len(COMMON_ONTOLOGIES)):
-            console.print("[red]Invalid selection.[/red]")
+            console.print(_INVALID_SELECTION)
             return
         _name, prefix, ns_url = COMMON_ONTOLOGIES[idx]
     else:
@@ -165,7 +168,7 @@ def _action_refresh(cached: list[tuple[str, Path, int]]) -> None:
         return
     idx = int(raw) - 1
     if not (0 <= idx < len(cached)):
-        console.print("[red]Invalid selection.[/red]")
+        console.print(_INVALID_SELECTION)
         return
     ns, path, _ = cached[idx]
     if path.exists():
@@ -188,7 +191,7 @@ def _action_delete(cached: list[tuple[str, Path, int]]) -> None:
         return
     idx = int(raw) - 1
     if not (0 <= idx < len(cached)):
-        console.print("[red]Invalid selection.[/red]")
+        console.print(_INVALID_SELECTION)
         return
     ns, path, _ = cached[idx]
     if Confirm.ask(f"  Delete cache for [cyan]{ns}[/cyan]?"):

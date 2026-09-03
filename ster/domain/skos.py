@@ -189,7 +189,7 @@ def _validate_move_target(taxonomy: Taxonomy, uri: str, new_parent_uri: str | No
 
 def _detach_concept_from_hierarchy(taxonomy: Taxonomy, concept: Concept, uri: str) -> None:
     """Remove *concept* from all its current parents and scheme top-concept lists."""
-    for old_parent_uri in list(concept.broader):
+    for old_parent_uri in concept.broader:
         parent = taxonomy.concepts.get(old_parent_uri)
         if parent and uri in parent.narrower:
             parent.narrower.remove(uri)

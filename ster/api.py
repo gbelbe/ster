@@ -125,7 +125,7 @@ class SSEBroadcaster:
             return  # loop closed between the check and the call
 
     async def _broadcast(self) -> None:
-        for q in list(self._queues):
+        for q in self._queues:
             try:
                 q.put_nowait("updated")
             except asyncio.QueueFull:

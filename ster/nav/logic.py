@@ -1380,7 +1380,7 @@ def _concept_action_fields(
 
 
 def _scheme_settings_fields(
-    scheme, lang: str, _configured_langs: list[str] | None = None
+    scheme, _configured_langs: list[str] | None = None
 ) -> list[DetailField]:
     """URI and base URI for a scheme."""
     return [
@@ -1566,7 +1566,7 @@ def build_scheme_detail(
 
     # ── Settings ─────────────────────────────────────────────────────────────
     fields.append(_sep("Settings"))
-    fields.extend(_scheme_settings_fields(scheme, lang, configured_langs))
+    fields.extend(_scheme_settings_fields(scheme, configured_langs))
 
     # ── Labels ───────────────────────────────────────────────────────────────
     fields.append(_sep("Labels"))
