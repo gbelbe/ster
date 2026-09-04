@@ -42,6 +42,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from .branding import FAVICON_LINK_TAG
 from .model import Taxonomy, is_builtin_uri
 from .taxonomy_treemap import build_taxonomy_treemap, has_taxonomy
 from .viz import (
@@ -1488,6 +1489,7 @@ _HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <title>__TITLE__</title>
+__FAVICON__
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-serif;display:flex;overflow:hidden}
@@ -1657,3 +1659,4 @@ __STER_TREEMAP_JS__
 </body>
 </html>
 """
+_HTML_TEMPLATE = _HTML_TEMPLATE.replace("__FAVICON__", FAVICON_LINK_TAG)

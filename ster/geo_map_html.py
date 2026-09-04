@@ -22,12 +22,15 @@ from __future__ import annotations
 import html
 import json
 
+from .branding import FAVICON_LINK_TAG
+
 _PAGE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ster — query map</title>
+__FAVICON__
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -929,6 +932,7 @@ run();
 </body>
 </html>
 """
+_PAGE = _PAGE.replace("__FAVICON__", FAVICON_LINK_TAG)
 
 
 def render_map_html(query: str, token: str) -> str:
