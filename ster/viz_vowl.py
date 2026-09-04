@@ -1155,7 +1155,7 @@ def _listening_pid(port: int) -> int | None:
             text=True,
             timeout=5,
         )
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError):
         return None
     for token in result.stdout.split():
         try:
@@ -1175,7 +1175,7 @@ def _process_name(pid: int) -> str:
             timeout=5,
         )
         name = result.stdout.strip()
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError):
         name = ""
     return name or f"PID {pid}"
 
@@ -1221,7 +1221,7 @@ def free_port(
         return _port_is_free(host, port)
     try:
         os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
+    except OSError:
         return _port_is_free(host, port)  # already gone / not ours → report the port state
     deadline = time.monotonic() + timeout
     while True:

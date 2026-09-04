@@ -323,7 +323,7 @@ function searchNodes(term){
     const tg=cy.$('#'+CSS.escape(e.data('target')));
     if(!s.hasClass('dimmed')&&!tg.hasClass('dimmed')){e.removeClass('dimmed');}else{e.addClass('dimmed');}
   }
-  countEl.textContent=matched.length+' match'+(matched.length!==1?'es':'');
+  countEl.textContent=matched.length+' match'+(matched.length===1?'':'es');
   if(matched.length){
     const ext=cy.extent();
     const anyVisible=matched.toArray().some(n=>{const p=n.position();return p.x>=ext.x1&&p.x<=ext.x2&&p.y>=ext.y1&&p.y<=ext.y2;});
@@ -383,7 +383,7 @@ cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();show
 // ── Panel ─────────────────────────────────────────────────────────────────────
 function togglePanel(show){
   const was=panelVisible;
-  panelVisible=show!==undefined?show:!panelVisible;
+  panelVisible=show===undefined?!panelVisible:show;
   if(panelVisible===was)return;
   panelEl.style.display=panelVisible?'':'none';
   // Keep the button visible always and flip it into a reopen toggle when the
@@ -704,14 +704,16 @@ document.addEventListener('keydown',e=>{
 });
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
+// n===1 ? singular-suffix : plural-suffix, e.g. _plural(3,'','es') -> 'es'.
+function _plural(n,singular,plural){return n===1?singular:plural;}
 (function(){
   const c=taxoMeta.counts,p=[];
-  if(c.classes)p.push(c.classes+' class'+(c.classes!==1?'es':''));
-  if(c.individuals)p.push(c.individuals+' individual'+(c.individuals!==1?'s':''));
-  if(c.properties)p.push(c.properties+' propert'+(c.properties!==1?'ies':'y'));
-  if(c.schemes)p.push(c.schemes+' scheme'+(c.schemes!==1?'s':''));
-  if(c.top_concepts)p.push(c.top_concepts+' top concept'+(c.top_concepts!==1?'s':''));
-  if(c.concepts)p.push(c.concepts+' concept'+(c.concepts!==1?'s':''));
+  if(c.classes)p.push(c.classes+' class'+_plural(c.classes,'','es'));
+  if(c.individuals)p.push(c.individuals+' individual'+_plural(c.individuals,'','s'));
+  if(c.properties)p.push(c.properties+' propert'+_plural(c.properties,'y','ies'));
+  if(c.schemes)p.push(c.schemes+' scheme'+_plural(c.schemes,'','s'));
+  if(c.top_concepts)p.push(c.top_concepts+' top concept'+_plural(c.top_concepts,'','s'));
+  if(c.concepts)p.push(c.concepts+' concept'+_plural(c.concepts,'','s'));
   document.getElementById('stats').textContent=p.join(' · ');
   document.getElementById('stats').style.left=(W/2)+'px';
 })();

@@ -33,6 +33,24 @@ def test_listening_pid_none_when_lsof_missing(monkeypatch) -> None:
     assert vv._listening_pid(8765) is None  # never raises — best-effort
 
 
+# ── _process_name (ps lookup) ────────────────────────────────────────────────
+
+
+def test_process_name_returns_the_command_line(monkeypatch) -> None:
+    monkeypatch.setattr(
+        vv.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="ster show x.ttl\n")
+    )
+    assert vv._process_name(60130) == "ster show x.ttl"
+
+
+def test_process_name_falls_back_to_pid_label_when_ps_fails(monkeypatch) -> None:
+    def _raise(*a, **k):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(vv.subprocess, "run", _raise)
+    assert vv._process_name(60130) == "PID 60130"  # never raises — best-effort
+
+
 # ── port_holder (compose pid + command) ─────────────────────────────────────────
 
 
