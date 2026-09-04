@@ -1,8 +1,8 @@
 """The graph app asset wires up the hover 'explore relations' overlay, the
 class/individual expansion endpoints, escape-restore, and the superclasses
-toggle. The overlay button uses addEventListener (no inline onclick), so the
-only remaining inline-onclick handler is the relation navigation link, which
-must stay single-quoted."""
+toggle. The overlay button and, since the detail panel moved off innerHTML
+templating, the relation navigation link too, use addEventListener — no
+inline onclick handler remains anywhere in the asset."""
 
 from __future__ import annotations
 
@@ -79,31 +79,15 @@ def test_app_js_defines_superclasses_toggle():
 # ── inline onclick discipline (only the nav link remains) ───────────────────────
 
 
-def test_nav_link_onclick_uses_single_quoted_attribute():
+def test_no_inline_onclick_handlers_remain():
+    """The relation-navigation link used to be the last inline onclick handler,
+    built with a JSON.stringify-inside-a-single-quoted-attribute trick — safe
+    only as long as nothing downstream ever double-quoted it. It is now a real
+    button wired with addEventListener like every other panel control, so no
+    inline onclick handler should exist anywhere in the asset any more.
+    """
     js = _app_js()
-    assert "onclick='globalThis._sterNav(" in js
-    assert 'onclick="globalThis._sterNav(' not in js
-
-
-def test_nav_link_markup_survives_html_parsing():
-    from html.parser import HTMLParser
-
-    uri = "https://example.org/onto#Alice"
-
-    class _P(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.onclick = None
-
-        def handle_starttag(self, tag, attrs):
-            for k, v in attrs:
-                if k == "onclick":
-                    self.onclick = v
-
-    markup = f"<button onclick='globalThis._sterNav(\"{uri}\")'>x</button>"
-    p = _P()
-    p.feed(markup)
-    assert p.onclick == f'globalThis._sterNav("{uri}")'
+    assert "onclick=" not in js
 
 
 # ── rendered-page wiring ────────────────────────────────────────────────────────

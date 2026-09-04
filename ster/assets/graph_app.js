@@ -5,7 +5,12 @@
 // only the public global `cytoscape(...)` factory and documented cy.* API,
 // and reads its per-render data from the injected `globalThis.__STER_GRAPH__`.
 
-(function(){
+// Deferred: only invoked once the Relations tab is actually opened (see the
+// boot script in viz_vowl.py's HTML template) — building the full Cytoscape
+// graph and running its force layout is expensive on a large ontology, and
+// paying that cost on every page load even when the Taxonomie tab is what's
+// shown by default made large-taxonomy pages take a very long time to render.
+function initSterRelationsGraph(){
 try{
 const graphData=globalThis.__STER_GRAPH__.data;
 const taxoMeta=globalThis.__STER_GRAPH__.meta;
@@ -13,7 +18,33 @@ const API_TOKEN=globalThis.__STER_GRAPH__.token;
 const panelEl=document.getElementById('detail-panel');
 let panelVisible=true;
 let W=globalThis.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:0);
-function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
+// Small DOM-builder helper — the detail/overview panel and the hover tooltip
+// used to be assembled as HTML strings (escaping each dynamic value on the
+// way in) and dropped in via innerHTML; building them as real nodes instead
+// means nothing dynamic ever passes through the HTML parser, so there is
+// nothing to escape or to get wrong escaping.
+// Split out of el() purely to keep its Cognitive Complexity down.
+function applyElProps(node,props){
+  for(const k in props){
+    const v=props[k];
+    if(v==null)continue;
+    if(k==='class')node.className=v;
+    else if(k==='text')node.textContent=v;
+    else node.setAttribute(k,v);
+  }
+}
+// Split out of el() purely to keep its Cognitive Complexity down. `[children]`
+// wraps a bare (non-array) child so `.flat()` normalizes both call shapes —
+// el('span',{},child) and el('div',{},[child1,child2]) — to one flat array.
+function appendElChildren(node,children){
+  for(const c of [children].flat())if(c!=null)node.append(c);
+}
+function el(tag,props,children){
+  const node=document.createElement(tag);
+  if(props)applyElProps(node,props);
+  if(children)appendElChildren(node,children);
+  return node;
+}
 function buildElements(data){
   return[
     // No `detail` here: it is fetched per node on click (see loadDetail).
@@ -154,7 +185,11 @@ cy.on('mouseover','node',e=>{
   const d=e.target.data();
   e.target.addClass('hovered');
   cy.container().style.cursor='pointer';
-  tipEl.innerHTML=`<b>${KM[d.type]||d.type}</b><br>${esc(d.label)}<br><span style="color:#64748b;font-size:10px">${esc(d.id)}</span>`;
+  tipEl.replaceChildren(
+    el('b',{text:KM[d.type]||d.type}),document.createElement('br'),
+    document.createTextNode(d.label),document.createElement('br'),
+    el('span',{style:'color:#64748b;font-size:10px',text:d.id}),
+  );
   tipEl.style.display='block';
 });
 cy.on('mousemove','node',e=>{tipEl.style.left=(e.originalEvent.clientX+14)+'px';tipEl.style.top=(e.originalEvent.clientY+10)+'px';});
@@ -388,10 +423,15 @@ wireEdgeTypeFilters();
 const _scBtn=document.getElementById('ft-superclasses');
 if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);
 refreshSuperclassesBtn();
-// Expose wrappers for dynamically-created panel buttons (which run in global scope)
+// Every panel button is now wired with addEventListener at creation (see
+// renderDetail/individualToggleNodes/detailRelationsNodes) rather than an
+// inline onclick attribute, so navigateTo no longer needs a global wrapper
+// for markup to call into — kept anyway as a small, harmless debug/test hook.
 globalThis._sterNav=navigateTo;
-globalThis._sterBack=function(){highlighted=null;applyHighlight();showDefault();};
-globalThis._sterToggleIndiv=toggleAllIndividuals;
+// The Taxonomie tab's own asset (taxonomy_app.js) shares this panel but owns no
+// part of its open/close state — it calls this to make sure a click always
+// reveals the panel, exactly like every click handler in this file already does.
+globalThis._sterShowPanel=function(){togglePanel(true);};
 
 // ── Explore: swap in a focused subgraph for a node ────────────────────────────
 // Server-only. Individuals → object-property relations; classes → linked
@@ -686,35 +726,46 @@ function edgeLine(t){
   return `<div style="width:28px;height:0;flex-shrink:0;${S[t]||''}"></div>`;
 }
 function overviewRows(counts){
-  let rows='';
+  const rows=[];
   for(const [label,count] of counts){
-    if(count)rows+='<div class="dp-row"><span>'+label+'</span><span>'+count+'</span></div>';
+    if(count)rows.push(el('div',{class:'dp-row'},[el('span',{text:label}),el('span',{text:String(count)})]));
   }
   return rows;
 }
-function individualToggleHtml(){
+function individualToggleNodes(){
   const classes=Object.keys(classIndMap);
-  if(!classes.length)return '';
+  if(!classes.length)return [];
   const allHid=classes.every(c=>hiddenIndivClasses.has(c));
-  return '<button id="btn-toggle-indivs" class="dp-indiv-btn" onclick="globalThis._sterToggleIndiv()">'+(allHid?'Show all individuals':'Hide all individuals')+'</button><div class="dp-hint">Click a class to view details and highlight connections.</div>';
+  const btn=el('button',{id:'btn-toggle-indivs',class:'dp-indiv-btn',text:allHid?'Show all individuals':'Hide all individuals'});
+  btn.addEventListener('click',toggleAllIndividuals);
+  const hint=el('div',{class:'dp-hint',text:'Click a class to view details and highlight connections.'});
+  return [btn,hint];
 }
-function legendHtml(hasRoot,hasSub,ntypes,etypes){
-  const indToggle=individualToggleHtml();
-  let legend='<hr class="dp-hr"><div class="dp-sub">Legend</div>';
+// nodeSvg/edgeLine (above) return SVG markup picked from a small hardcoded
+// lookup table keyed by a handful of literal type strings ster itself
+// controls — never anything from the loaded ontology — so parsing that fixed
+// markup here carries no more risk than a literal template in the source.
+function iconEl(svgMarkup){
+  const wrap=document.createElement('span');
+  wrap.innerHTML=svgMarkup;
+  return wrap.firstChild;
+}
+function legendNodes(hasRoot,hasSub,ntypes,etypes){
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Legend'})];
   const nodeLegend=[['class-root','Root Class',hasRoot],['class-sub','Class',hasSub],['individual','Individual',ntypes.has('individual')],['topconcept','Top Concept',ntypes.has('topconcept')],['concept','Concept',ntypes.has('concept')],['scheme','Scheme',ntypes.has('scheme')]];
   const hasReadOnly=cy.nodes('[readOnly=1]').length>0;
   for(const [type,label,show] of nodeLegend){
     if(!show)continue;
-    legend+='<div class="lr">'+nodeSvg(type)+label+'</div>';
-    if(type==='individual')legend+=indToggle;
+    nodes.push(el('div',{class:'lr'},[iconEl(nodeSvg(type)),document.createTextNode(label)]));
+    if(type==='individual')nodes.push(...individualToggleNodes());
   }
-  if(hasReadOnly)legend+='<div class="lr" style="opacity:.55">'+nodeSvg('concept')+'read-only (context file)</div>';
-  legend+='<hr class="dp-hr"><div class="dp-sub">Relations</div>';
+  if(hasReadOnly)nodes.push(el('div',{class:'lr',style:'opacity:.55'},[iconEl(nodeSvg('concept')),document.createTextNode('read-only (context file)')]));
+  nodes.push(el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Relations'}));
   const edgeLegend=[['subClassOf','subClassOf'],['objectProperty','objectProperty'],['datatypeProperty','datatypeProperty'],['instanceOf','rdf:type'],['broader','broader'],['inScheme','inScheme']];
   for(const [type,label] of edgeLegend){
-    if(etypes.has(type))legend+='<div class="lr">'+edgeLine(type)+label+'</div>';
+    if(etypes.has(type))nodes.push(el('div',{class:'lr'},[iconEl(edgeLine(type)),document.createTextNode(label)]));
   }
-  return legend;
+  return nodes;
 }
 function showDefault(){
   highlighted=null;
@@ -723,31 +774,39 @@ function showDefault(){
   const hasRoot=cy.nodes('[type="class"][rootClass=1]').length>0,hasSub=cy.nodes('[type="class"][rootClass=0]').length>0;
   const ntypes=new Set(cy.nodes().map(n=>n.data('type')));
   const etypes=new Set(cy.edges().map(e=>e.data('type')));
-  const leg=legendHtml(hasRoot,hasSub,ntypes,etypes);
-  panelEl.innerHTML='<div class="dp"><div class="dp-h2">'+esc(taxoMeta.title)+'</div>'+(taxoMeta.ontology_uri?'<div class="dp-uri">'+esc(taxoMeta.ontology_uri)+'</div>':'')+'<div class="dp-sub" style="margin-top:6px">Overview</div><div class="dp-section">'+rows+'</div>'+leg+'</div>';
+  const leg=legendNodes(hasRoot,hasSub,ntypes,etypes);
+  const panel=el('div',{class:'dp'});
+  panel.append(el('div',{class:'dp-h2',text:taxoMeta.title}));
+  if(taxoMeta.ontology_uri)panel.append(el('div',{class:'dp-uri',text:taxoMeta.ontology_uri}));
+  panel.append(el('div',{class:'dp-sub',style:'margin-top:6px',text:'Overview'}));
+  panel.append(el('div',{class:'dp-section'},rows));
+  panel.append(...leg);
+  panelEl.replaceChildren(panel);
 }
 showDefault();
-function detailLabelsHtml(labels){
-  if(!labels.length)return '';
-  let h='<hr class="dp-hr"><div class="dp-sub">Labels</div>';
+function detailLabelsNodes(labels){
+  if(!labels.length)return [];
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Labels'})];
   for(const l of labels){
-    h+='<div class="dp-lbl">';
-    if(l.lang)h+='<span class="dp-lang">['+esc(l.lang)+']</span>';
-    h+='<span class="'+(l.kind==='alt'?'dp-alt':'dp-pref')+'">'+esc(l.value)+'</span></div>';
+    const row=el('div',{class:'dp-lbl'});
+    if(l.lang)row.append(el('span',{class:'dp-lang',text:'['+l.lang+']'}));
+    row.append(el('span',{class:l.kind==='alt'?'dp-alt':'dp-pref',text:l.value}));
+    nodes.push(row);
   }
-  return h;
+  return nodes;
 }
-function detailCommentsHtml(comments){
-  if(!comments.length)return '';
-  let h='<hr class="dp-hr"><div class="dp-sub">Comments</div>';
-  // linkify, not esc: OWL keeps its prose in rdfs:comment where SKOS uses
-  // skos:definition, and a URL should not be clickable on a concept but dead on
-  // a class.
-  for(const c of comments)h+='<div class="dp-desc">'+linkify(c.value)+'</div>';
-  return h;
+function detailCommentsNodes(comments){
+  if(!comments.length)return [];
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Comments'})];
+  // linkify, not plain text: OWL keeps its prose in rdfs:comment where SKOS
+  // uses skos:definition, and a URL should not be clickable on a concept but
+  // dead on a class.
+  for(const c of comments)nodes.push(el('div',{class:'dp-desc'},linkifyNodes(c.value)));
+  return nodes;
 }
-// Everything below renders values loaded from the user's ontology file, so it is
-// untrusted input: escape all text, and never emit a URL without vetting it.
+// Everything below renders values loaded from the user's ontology file, so it
+// is untrusted input: build it as DOM nodes (never a markup string) and never
+// emit a URL without vetting it.
 
 // A URL is safe to put in href/src only if it parses and speaks http(s). A
 // `javascript:` or `data:` value in a schema:url would otherwise become a script
@@ -759,47 +818,56 @@ function safeUrl(raw){
   }catch{/* not a URL — fall through */}
   return '';
 }
-function extLink(url,text){
+function extLinkNode(url,text){
   const safe=safeUrl(url);
-  if(!safe)return esc(text);
+  if(!safe)return document.createTextNode(text);
   // noopener noreferrer: an ontology can link anywhere, and window.opener would
   // let the target reach back into this page.
-  return '<a class="dp-a" href="'+esc(safe)+'" target="_blank" rel="noopener noreferrer">'+esc(text)+'</a>';
+  return el('a',{class:'dp-a',href:safe,target:'_blank',rel:'noopener noreferrer',text:text});
 }
-// Free text (a definition, say) often mentions a URL. Split on URL-looking runs
-// and escape every piece, so linkifying never widens what markup can get through.
-function linkify(text){
+// Free text (a definition, say) often mentions a URL. Split on URL-looking
+// runs and turn each into its own real anchor/text node — nothing here is
+// ever concatenated into a markup string, so there is no meta-character to
+// smuggle regardless of what the URL or the surrounding text contains.
+function linkifyNodes(text){
   const parts=String(text).split(/(https?:\/\/[^\s<>"']+)/g);
-  return parts.map((p,i)=>i%2?extLink(p,p):esc(p)).join('');
+  const frag=document.createDocumentFragment();
+  for(const [i,p] of parts.entries()){
+    if(i%2)frag.append(extLinkNode(p,p));
+    else if(p)frag.append(document.createTextNode(p));
+  }
+  return frag;
 }
-function detailScopeHtml(scope){
-  if(!scope)return '';
-  return '<hr class="dp-hr"><div class="dp-sub">Scope note</div><div class="dp-desc">'+linkify(scope)+'</div>';
+function detailScopeNodes(scope){
+  if(!scope)return [];
+  return [el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Scope note'}),el('div',{class:'dp-desc'},linkifyNodes(scope))];
 }
-function detailMediaHtml(images,videos){
+function detailMediaNodes(images,videos){
   const imgs=images||[],vids=videos||[];
-  if(!imgs.length&&!vids.length)return '';
-  let h='<hr class="dp-hr"><div class="dp-sub">Media</div>';
+  if(!imgs.length&&!vids.length)return [];
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Media'})];
   for(const src of imgs){
     const safe=safeUrl(src);
     if(!safe)continue;
     // referrerpolicy="no-referrer": many image hosts (Wikimedia among them) refuse a
     // request whose Referer is another origin, so without this the picture the
     // ontology points at simply never paints.
-    h+='<figure class="dp-fig"><img class="dp-img" src="'+esc(safe)+'" alt="" decoding="async"'
-      +' referrerpolicy="no-referrer"><figcaption class="dp-cap">'+extLink(safe,'open in a new tab')+'</figcaption></figure>';
+    const img=el('img',{class:'dp-img',src:safe,alt:'',decoding:'async',referrerpolicy:'no-referrer'});
+    const cap=el('figcaption',{class:'dp-cap'},extLinkNode(safe,'open in a new tab'));
+    nodes.push(el('figure',{class:'dp-fig'},[img,cap]));
   }
   for(const src of vids){
     const safe=safeUrl(src);
     if(!safe)continue;
-    h+='<figure class="dp-fig"><video class="dp-video" src="'+esc(safe)+'" controls preload="metadata"'
-      +' referrerpolicy="no-referrer"></video><figcaption class="dp-cap">'+extLink(safe,'open in a new tab')+'</figcaption></figure>';
+    const vid=el('video',{class:'dp-video',src:safe,controls:'',preload:'metadata',referrerpolicy:'no-referrer'});
+    const cap=el('figcaption',{class:'dp-cap'},extLinkNode(safe,'open in a new tab'));
+    nodes.push(el('figure',{class:'dp-fig'},[vid,cap]));
   }
-  return h;
+  return nodes;
 }
 // Error handlers are attached here rather than as inline onerror attributes: the
-// panel is rebuilt with innerHTML on every selection, and an attribute handler is
-// the first thing a future Content-Security-Policy would silently drop.
+// panel is rebuilt on every selection, and an attribute handler is the first
+// thing a future Content-Security-Policy would silently drop.
 function wireMedia(){
   for(const img of panelEl.querySelectorAll('.dp-img')){
     // A load that already failed fires no further event — catch it on the spot.
@@ -812,31 +880,37 @@ function wireMedia(){
 }
 // Ontology media is usually an off-site URL, and a dead one leaves a zero-height
 // box that reads as "there is no media here" — say so instead.
-function mediaFailed(el,text){
-  const fig=el.parentNode;
+function mediaFailed(mediaEl,text){
+  const fig=mediaEl.parentNode;
   if(!fig||fig.querySelector('.dp-broken'))return;
-  el.remove();
+  mediaEl.remove();
   const note=document.createElement('div');
   note.className='dp-broken';
   note.textContent=text||'image unavailable';
   fig.prepend(note);
 }
-function detailUrlsHtml(urls){
-  if(!urls?.length)return '';
-  let h='<hr class="dp-hr"><div class="dp-sub">Links</div>';
-  for(const u of urls)h+='<div class="dp-lbl">'+extLink(u,u)+'</div>';
-  return h;
+function detailUrlsNodes(urls){
+  if(!urls?.length)return [];
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Links'})];
+  for(const u of urls)nodes.push(el('div',{class:'dp-lbl'},extLinkNode(u,u)));
+  return nodes;
 }
-function detailRelationsHtml(relations){
-  if(!relations.length)return '';
-  let h='<hr class="dp-hr"><div class="dp-sub">Relations</div>';
+function detailRelationsNodes(relations){
+  if(!relations.length)return [];
+  const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Relations'})];
   for(const r of relations){
     const lbl=r.label||r.uri,inG=cy.$('#'+CSS.escape(r.uri)).length>0;
-    h+='<div class="dp-rel"><span class="dp-rel-tag">'+esc(r.rel)+'</span>';
-    h+=inG?`<button class="dp-link" onclick='globalThis._sterNav(${JSON.stringify(r.uri)})'>${esc(lbl)}</button>`:'<span>'+esc(lbl)+'</span>';
-    h+='</div>';
+    const row=el('div',{class:'dp-rel'},el('span',{class:'dp-rel-tag',text:r.rel}));
+    if(inG){
+      const btn=el('button',{class:'dp-link',text:lbl});
+      btn.addEventListener('click',()=>navigateTo(r.uri));
+      row.append(btn);
+    }else{
+      row.append(el('span',{text:lbl}));
+    }
+    nodes.push(row);
   }
-  return h;
+  return nodes;
 }
 // ── Lazy node detail ────────────────────────────────────────────────────────
 // The graph payload carries no per-node detail (91% of its size, and only ever
@@ -877,19 +951,26 @@ function showDetail(d){
   renderDetail(d,_detailCache.get(d.id));
 }
 function renderDetail(d,det){
-  let h='<div class="dp">';
-  h+='<button class="dp-back" onclick="globalThis._sterBack()">← Overview</button>';
-  h+='<span class="dp-badge dp-'+d.type+'">'+(KM[d.type]||d.type)+'</span>';
-  h+='<div class="dp-h3">'+esc(d.label)+'</div><div class="dp-uri">'+esc(d.id)+'</div>';
+  const panel=el('div',{class:'dp'});
+  const back=el('button',{class:'dp-back',text:'← Overview'});
+  back.addEventListener('click',()=>{highlighted=null;applyHighlight();showDefault();});
+  panel.append(back);
+  panel.append(el('span',{class:'dp-badge dp-'+d.type,text:KM[d.type]||d.type}));
+  panel.append(el('div',{class:'dp-h3',text:d.label}));
+  panel.append(el('div',{class:'dp-uri',text:d.id}));
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
-  h+=detailLabelsHtml(showLbls);
-  h+=detailCommentsHtml(det.comments||[]);
-  if(det.description)h+='<hr class="dp-hr"><div class="dp-desc">'+linkify(det.description)+'</div>';
-  h+=detailScopeHtml(det.scopeNote);
-  h+=detailRelationsHtml(det.relations||[]);
-  h+=detailMediaHtml(det.images,det.videos);
-  h+=detailUrlsHtml(det.urls);
-  h+='</div>';panelEl.innerHTML=h;wireMedia();
+  panel.append(...detailLabelsNodes(showLbls));
+  panel.append(...detailCommentsNodes(det.comments||[]));
+  if(det.description){
+    panel.append(el('hr',{class:'dp-hr'}));
+    panel.append(el('div',{class:'dp-desc'},linkifyNodes(det.description)));
+  }
+  panel.append(...detailScopeNodes(det.scopeNote));
+  panel.append(...detailRelationsNodes(det.relations||[]));
+  panel.append(...detailMediaNodes(det.images,det.videos));
+  panel.append(...detailUrlsNodes(det.urls));
+  panelEl.replaceChildren(panel);
+  wireMedia();
 }
 function navigateTo(uri){
   const n=cy.$('#'+CSS.escape(uri));if(!n.length)return;
@@ -932,4 +1013,5 @@ initLiveRefresh();
   el.textContent='Graph error — see browser console (F12):\n\n'+(err.stack||err);
   document.body.appendChild(el);
 }
-})();
+}
+globalThis.initSterRelationsGraph=initSterRelationsGraph;

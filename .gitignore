@@ -41,3 +41,4 @@ snapshot_report.html
 
 # VS Code
 .vscode/
+.priv/

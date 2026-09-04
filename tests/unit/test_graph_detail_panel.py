@@ -64,17 +64,17 @@ def test_the_builder_emits_media_and_scope_note(rich):
 def test_panel_renders_images_and_videos():
     js = _app_js()
 
-    assert "detailMediaHtml" in js
-    assert '<img class="dp-img"' in js
-    assert '<video class="dp-video"' in js
+    assert "detailMediaNodes" in js
+    assert "class:'dp-img'" in js.replace('"', "'")
+    assert "class:'dp-video'" in js.replace('"', "'")
 
 
 def test_panel_renders_a_links_section():
-    assert "detailUrlsHtml" in _app_js()
+    assert "detailUrlsNodes" in _app_js()
 
 
 def test_panel_renders_the_scope_note():
-    assert "detailScopeHtml" in _app_js()
+    assert "detailScopeNodes" in _app_js()
 
 
 def test_every_new_section_is_shown_by_show_detail():
@@ -82,9 +82,9 @@ def test_every_new_section_is_shown_by_show_detail():
     js = _app_js().replace(" ", "")
 
     for call in (
-        "detailScopeHtml(det.scopeNote)",
-        "detailMediaHtml(det.images,det.videos)",
-        "detailUrlsHtml(det.urls)",
+        "detailScopeNodes(det.scopeNote)",
+        "detailMediaNodes(det.images,det.videos)",
+        "detailUrlsNodes(det.urls)",
     ):
         assert call in js, call
 
@@ -101,15 +101,15 @@ def test_only_http_urls_become_links():
 
 
 def test_external_links_cannot_reach_back_through_window_opener():
-    assert 'rel="noopener noreferrer"' in _app_js()
+    assert "rel:'noopener noreferrer'" in _app_js().replace('"', "'")
 
 
 def test_free_text_urls_are_linkified_not_left_bare():
     """A definition mentioning a URL should be clickable, still escaped."""
     js = _app_js()
 
-    assert "function linkify" in js
-    assert "linkify(det.description)" in js.replace(" ", "")
+    assert "function linkifyNodes" in js
+    assert "linkifyNodes(det.description)" in js.replace(" ", "")
 
 
 def test_a_broken_image_does_not_leave_a_torn_layout():
@@ -127,9 +127,9 @@ def test_media_is_requested_without_a_referrer():
     origin. Without this the <img> is in the DOM, reports complete with
     naturalWidth 0, and the panel shows only the caption link.
     """
-    js = _app_js()
+    js = _app_js().replace('"', "'")
 
-    assert js.count('referrerpolicy="no-referrer"') >= 2  # images and videos
+    assert js.count("referrerpolicy:'no-referrer'") >= 2  # images and videos
 
 
 def test_the_failure_handler_is_bound_not_an_inline_attribute():
@@ -151,7 +151,8 @@ def test_an_image_that_already_failed_is_still_caught():
 
 def test_showdetail_wires_the_media_it_just_rendered():
     """Binding handlers is useless if the render path never calls it."""
-    assert "panelEl.innerHTML=h;wireMedia();" in _app_js().replace(" ", "")
+    js = _app_js().replace(" ", "").replace("\n", "")
+    assert "panelEl.replaceChildren(panel);wireMedia();" in js
 
 
 # ── the OWL layer gets the same panel as the SKOS one ─────────────────────────
@@ -201,7 +202,7 @@ def test_urls_in_an_rdfs_comment_are_clickable_too():
     text was clickable on a concept and inert on a class — the panel is shared, and
     the two layers should not differ in what it does with them.
     """
-    assert "linkify(c.value)" in _app_js().replace(" ", "")
+    assert "linkifyNodes(c.value)" in _app_js().replace(" ", "")
 
 
 def test_the_panel_renders_media_for_every_node_type():
@@ -209,7 +210,7 @@ def test_the_panel_renders_media_for_every_node_type():
     js = _app_js().replace(" ", "")
 
     # a single, type-independent render path — not a SKOS-only branch
-    assert js.count("detailMediaHtml(det.images,det.videos)") == 1
+    assert js.count("detailMediaNodes(det.images,det.videos)") == 1
     assert "if(d.type==='concept')" not in js
 
 

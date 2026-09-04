@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from .model import Taxonomy, is_builtin_uri
+from .taxonomy_treemap import build_taxonomy_treemap, has_taxonomy
 from .viz import (
     _detail_class,
     _detail_concept,
@@ -831,8 +832,12 @@ def _build_query_result_html(
     html = (
         _HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _cytoscape_script_tag())
+        .replace("__D3_SCRIPT__", _d3_hierarchy_script_tag())
+        .replace("__D3_PATH_SCRIPT__", _d3_path_script_tag())
+        .replace("__D3_SHAPE_SCRIPT__", _d3_shape_script_tag())
         .replace("__STER_DATA_SCRIPT__", _data_script(graph, meta, ""))
         .replace("__STER_APP_JS__", _app_js())
+        .replace("__STER_TREEMAP_JS__", _treemap_js())
         .replace("__SHOW_ALL_BTN__", show_all_btn)
         .replace("__OFFLINE_BANNER__", _offline_banner(""))
     )
@@ -850,8 +855,7 @@ def open_query_result_in_browser(
     Raises ``ValueError`` when none of the URIs match any node.
     Returns ``(url, out_path)`` so callers can track the file for later refresh.
     """
-    cache = Path.home() / ".cache" / "ster"
-    cache.mkdir(parents=True, exist_ok=True)
+    cache = _ster_cache_dir()
     # Write the full ontology graph so the "Show all nodes" button has a target.
     full_path = _graph_path(file_path)
     _write_html(taxonomy, file_path, full_path)
@@ -887,6 +891,17 @@ def refresh_query_result_in_browser(
     webbrowser.open(url)
 
 
+def _ster_cache_dir() -> Path:
+    """``~/.cache/ster``, created on demand — the one place shared by every
+    vendored-library download (:func:`_cytoscape_script_tag` and friends) and
+    every generated-file cache (:func:`_graph_path` and friends), so the
+    ``".cache"``/``"ster"`` path components live in exactly one spot.
+    """
+    cache_dir = Path.home() / ".cache" / "ster"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 # ── JS dependency ─────────────────────────────────────────────────────────────
 # To upgrade: bump _CY_VERSION, then delete ~/.cache/ster/cytoscape.min.js.
 
@@ -902,8 +917,7 @@ def _cytoscape_script_tag() -> str:
     own graph code (:func:`_app_js`): swapping the library here — e.g. on a
     version bump — must never touch the application layer.
     """
-    cache_dir = Path.home() / ".cache" / "ster"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = _ster_cache_dir()
     cy_path = cache_dir / _CY_CACHE_FILE
     if not cy_path.exists():
         try:
@@ -912,6 +926,100 @@ def _cytoscape_script_tag() -> str:
         except Exception:
             return f'<script src="{_CY_CDN}"></script>'
     return f"<script>{cy_path.read_text()}</script>"
+
+
+# To upgrade: bump _D3_HIERARCHY_VERSION, then delete ~/.cache/ster/d3-hierarchy.min.js.
+# cdnjs does not host a browser (UMD) build of d3-hierarchy, so this is pinned to
+# jsdelivr's npm passthrough instead, which serves the package's own dist/ build.
+
+_D3_HIERARCHY_VERSION = "3.1.2"
+_D3_HIERARCHY_CDN = (
+    f"https://cdn.jsdelivr.net/npm/d3-hierarchy@{_D3_HIERARCHY_VERSION}/dist/d3-hierarchy.min.js"
+)
+_D3_HIERARCHY_CACHE_FILE = "d3-hierarchy.min.js"  # stored under ~/.cache/ster/
+
+
+def _d3_hierarchy_script_tag() -> str:
+    """Return an inline <script> tag with d3-hierarchy, downloading once to ~/.cache/ster.
+
+    Mirrors :func:`_cytoscape_script_tag` exactly: the vendored library stays
+    separate from ster's own treemap code (:func:`_treemap_js`), so a version
+    bump here can never touch the application layer, and the treemap keeps
+    working offline once this file is cached.
+    """
+    cache_dir = _ster_cache_dir()
+    d3_path = cache_dir / _D3_HIERARCHY_CACHE_FILE
+    if not d3_path.exists():
+        try:
+            with urllib.request.urlopen(_D3_HIERARCHY_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                d3_path.write_bytes(resp.read())
+        except Exception:
+            return f'<script src="{_D3_HIERARCHY_CDN}"></script>'
+    return f"<script>{d3_path.read_text()}</script>"
+
+
+# To upgrade: bump _D3_PATH_VERSION, then delete ~/.cache/ster/d3-path.min.js.
+# d3-shape's own UMD build treats d3-path as an *external* dependency (it isn't
+# bundled in), so this has to be loaded before d3-shape's script tag or the
+# browser throws trying to build a path serialiser that was never loaded.
+
+_D3_PATH_VERSION = "3.1.0"
+_D3_PATH_CDN = f"https://cdn.jsdelivr.net/npm/d3-path@{_D3_PATH_VERSION}/dist/d3-path.min.js"
+_D3_PATH_CACHE_FILE = "d3-path.min.js"  # stored under ~/.cache/ster/
+
+
+def _d3_path_script_tag() -> str:
+    """Return an inline <script> tag with d3-path, downloading once to ~/.cache/ster.
+
+    Mirrors :func:`_d3_hierarchy_script_tag`. Exists solely as d3-shape's own
+    dependency (see :func:`_d3_shape_script_tag`) — nothing in ster's own code
+    calls into it directly.
+    """
+    cache_dir = _ster_cache_dir()
+    d3_path_path = cache_dir / _D3_PATH_CACHE_FILE
+    if not d3_path_path.exists():
+        try:
+            with urllib.request.urlopen(_D3_PATH_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                d3_path_path.write_bytes(resp.read())
+        except Exception:
+            return f'<script src="{_D3_PATH_CDN}"></script>'
+    return f"<script>{d3_path_path.read_text()}</script>"
+
+
+# To upgrade: bump _D3_SHAPE_VERSION, then delete ~/.cache/ster/d3-shape.min.js.
+# Same jsdelivr npm passthrough as d3-hierarchy (cdnjs has no UMD build either).
+# Loaded after d3-hierarchy: both UMD bundles merge their exports onto the same
+# globalThis.d3 object, exactly like picking individual modules off the real d3
+# bundle does — so the treemap app code sees one combined `d3` with both
+# `d3.hierarchy`/`d3.tree` (layout) and `d3.linkRadial`/`d3.linkHorizontal`
+# (curved-link path generators) on it.
+
+_D3_SHAPE_VERSION = "3.2.0"
+_D3_SHAPE_CDN = f"https://cdn.jsdelivr.net/npm/d3-shape@{_D3_SHAPE_VERSION}/dist/d3-shape.min.js"
+_D3_SHAPE_CACHE_FILE = "d3-shape.min.js"  # stored under ~/.cache/ster/
+
+
+def _d3_shape_script_tag() -> str:
+    """Return an inline <script> tag with d3-shape, downloading once to ~/.cache/ster.
+
+    Mirrors :func:`_d3_hierarchy_script_tag`. The treemap app used to hand-roll
+    its own radial/horizontal link-path construction to avoid this dependency;
+    that reimplementation is exactly what produced the "teardrop" curve bug
+    (interpolating control points at the wrong midpoint), which d3-shape's own
+    ``linkRadial``/``linkHorizontal`` never had. Since d3-hierarchy is already
+    vendored for the layout math, pulling in this small, dependency-free sibling
+    module for the one thing it does better costs little and removes a whole
+    class of bug the hand-rolled version already hit once.
+    """
+    cache_dir = _ster_cache_dir()
+    d3_path = cache_dir / _D3_SHAPE_CACHE_FILE
+    if not d3_path.exists():
+        try:
+            with urllib.request.urlopen(_D3_SHAPE_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                d3_path.write_bytes(resp.read())
+        except Exception:
+            return f'<script src="{_D3_SHAPE_CDN}"></script>'
+    return f"<script>{d3_path.read_text()}</script>"
 
 
 @functools.lru_cache(maxsize=1)
@@ -927,6 +1035,18 @@ def _app_js() -> str:
     from importlib.resources import files  # noqa: PLC0415
 
     return (files("ster") / "assets" / "graph_app.js").read_text(encoding="utf-8")
+
+
+@functools.lru_cache(maxsize=1)
+def _treemap_js() -> str:
+    """Return ster's treemap *application* layer (render/zoom/search/filter/detail)
+    as JavaScript source, fully decoupled from the vendored d3-hierarchy library —
+    mirrors :func:`_app_js`. Reads its per-render data from
+    ``window.__STER_GRAPH__.taxonomy``.
+    """
+    from importlib.resources import files  # noqa: PLC0415
+
+    return (files("ster") / "assets" / "taxonomy_app.js").read_text(encoding="utf-8")
 
 
 def strip_detail(graph: dict) -> dict:
@@ -972,13 +1092,17 @@ def build_detail_map(taxonomy: Taxonomy) -> dict[str, dict]:
     return {n["id"]: n["detail"] for n in graph["nodes"] if n.get("detail")}
 
 
-def _data_script(graph: dict, meta: dict, api_token: str) -> str:
+def _data_script(graph: dict, meta: dict, api_token: str, taxonomy: dict | None = None) -> str:
     """Return the per-render *data injection* layer.
 
     Keeps ontology data out of both the library and the app code: the app reads
-    everything from ``window.__STER_GRAPH__``.
+    everything from ``window.__STER_GRAPH__``. ``taxonomy`` (the treemap payload)
+    is omitted entirely when there is no SKOS content, so the boot script can
+    tell "no taxonomy" apart from "empty taxonomy" with a single key check.
     """
-    payload = {"data": strip_detail(graph), "meta": meta, "token": api_token}
+    payload: dict[str, Any] = {"data": strip_detail(graph), "meta": meta, "token": api_token}
+    if taxonomy is not None:
+        payload["taxonomy"] = taxonomy
     return "<script>window.__STER_GRAPH__=" + json.dumps(payload, ensure_ascii=False) + ";</script>"
 
 
@@ -1197,8 +1321,7 @@ def _ensure_server(directory: Path) -> int:
 
 
 def _graph_path(file_path: Path | None) -> Path:
-    cache = Path.home() / ".cache" / "ster"
-    cache.mkdir(parents=True, exist_ok=True)
+    cache = _ster_cache_dir()
     stem = file_path.stem if file_path else "graph"
     return cache / f"{stem}_vowl.html"
 
@@ -1224,11 +1347,16 @@ def render_vowl_html(
     else:
         graph = build_vowl_graph(taxonomy)
     meta = _taxonomy_meta(taxonomy, file_path)
+    treemap = build_taxonomy_treemap(taxonomy) if has_taxonomy(taxonomy) else None
     return (
         _HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _cytoscape_script_tag())
-        .replace("__STER_DATA_SCRIPT__", _data_script(graph, meta, api_token))
+        .replace("__D3_SCRIPT__", _d3_hierarchy_script_tag())
+        .replace("__D3_PATH_SCRIPT__", _d3_path_script_tag())
+        .replace("__D3_SHAPE_SCRIPT__", _d3_shape_script_tag())
+        .replace("__STER_DATA_SCRIPT__", _data_script(graph, meta, api_token, treemap))
         .replace("__STER_APP_JS__", _app_js())
+        .replace("__STER_TREEMAP_JS__", _treemap_js())
         .replace("__SHOW_ALL_BTN__", "")
         .replace("__OFFLINE_BANNER__", _offline_banner(api_token))
     )
@@ -1343,8 +1471,7 @@ def open_focused_in_browser(
     root_label = root_cls.label("en") if root_cls else _local(root_uri)
     safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", root_label)
     stem = (file_path.stem if file_path else "graph") + f"_focused_{safe_label}"
-    cache = Path.home() / ".cache" / "ster"
-    cache.mkdir(parents=True, exist_ok=True)
+    cache = _ster_cache_dir()
     out = cache / f"{stem}_vowl.html"
     out.write_text(render_vowl_html(taxonomy, file_path, root_uri=root_uri), encoding="utf-8")
     port = _ensure_server(out.parent)
@@ -1364,7 +1491,30 @@ _HTML_TEMPLATE = """\
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-serif;display:flex;overflow:hidden}
-#cy{flex:1;height:100vh;background:#fff}
+/* #cy and #treemap share the same flex slot, stacked via position:absolute, so
+   Cytoscape always measures a real (non-zero) container size even when its tab
+   starts inactive — toggling `visibility` (not `display`) never resizes the box.
+   #app-toolbar floats on top of both (like #view-tabs did before it), so #cy's
+   own rect and size are untouched — explore-btn/hide-btn are positioned by
+   graph_app.js relative to #cy and must never have that rect change. */
+#view-stage{position:relative;flex:1;height:100vh}
+#cy,#treemap{position:absolute;inset:0;height:100%;background:#fff}
+#treemap{overflow:hidden}
+.view-relations,.view-taxonomy{visibility:hidden;pointer-events:none}
+body[data-active-view="relations"] .view-relations{visibility:visible;pointer-events:auto}
+body[data-active-view="taxonomy"] .view-taxonomy{visibility:visible;pointer-events:auto}
+#app-toolbar{position:absolute;top:0;left:0;right:0;height:44px;z-index:32;display:flex;align-items:center;gap:16px;padding:0 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
+#view-tabs{display:flex;gap:4px;flex-shrink:0}
+.vt-btn{background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;font-weight:600;padding:6px 12px;border-radius:6px}
+.vt-btn.active{background:#2563eb;color:#fff}
+.vt-btn:hover:not(.active){background:#e2e8f0}
+/* The breadcrumb/scheme/depth filters are taxonomy-specific (Relations has no
+   equivalent concept), so unlike the shared search box they get their own
+   sub-bar rather than crowding the shared top bar — collapsed entirely
+   (`display`, not `visibility`) when not the active view, so Relations gets
+   the full canvas back instead of an empty reserved strip. */
+#tm-subbar{position:absolute;top:44px;left:0;right:0;height:32px;z-index:31;display:none;align-items:center;gap:16px;padding:0 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0;overflow:hidden}
+body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 #detail-panel{width:25vw;min-width:200px;max-width:380px;height:100vh;overflow-y:auto;background:#f8fafc;border-left:1px solid #e2e8f0;flex-shrink:0}
 #panel-close{position:fixed;top:8px;right:8px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:3px 8px;border-radius:4px;z-index:20}
 #panel-close:hover{background:#e2e8f0;color:#0f172a}
@@ -1417,33 +1567,92 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 .dp-cap{font-size:10px;color:#94a3b8;margin-top:3px}
 .dp-broken{font-size:10px;color:#94a3b8;font-style:italic;padding:8px;border:1px dashed #cbd5e1;border-radius:6px;text-align:center}
 .lr{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px;color:#334155}
-#search-wrap{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
-#search-box{border:none;background:transparent;outline:none;font-size:13px;color:#1e293b;width:200px}
+#search-wrap{display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px 10px;flex:1;max-width:420px}
+#search-box{border:none;background:transparent;outline:none;font-size:13px;color:#1e293b;width:100%}
 #search-box::placeholder{color:#94a3b8}
-#search-count{font-size:11px;color:#64748b;white-space:nowrap;min-width:52px}
-#search-clear{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;display:none}
+#search-count,#tm-search-count{font-size:11px;color:#64748b;white-space:nowrap;min-width:52px}
+#search-clear{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;display:none;flex-shrink:0}
 #search-clear:hover{color:#475569}
 #offline-banner{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:35;display:flex;align-items:center;gap:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:8px;padding:6px 12px;font-size:12px;line-height:1.4;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:80vw}
 #offline-banner code{background:#fde68a;padding:0 4px;border-radius:3px;font-size:11px}
 #offline-banner-close{flex-shrink:0;background:none;border:none;color:#92400e;cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
 #offline-banner-close:hover{color:#451a03}
+#tm-breadcrumb{display:flex;align-items:center;gap:4px;font-size:12px;color:#475569;overflow-x:auto;white-space:nowrap;flex:1;min-width:0}
+#tm-breadcrumb button{background:none;border:none;color:#3b82f6;cursor:pointer;font-size:12px;padding:0;flex-shrink:0}
+#tm-breadcrumb button:hover{text-decoration:underline}
+#tm-filters{display:flex;align-items:center;gap:10px;font-size:11px;color:#475569;flex-shrink:0}
+#tm-filters select{font-size:11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#334155}
 </style>
 </head>
 <body>
 __OFFLINE_BANNER__
-<div id="cy"></div>
+<div id="view-stage">
+<div id="app-toolbar">
+<div id="view-tabs"><button class="vt-btn" data-view="taxonomy">Taxonomie</button><button class="vt-btn" data-view="relations">Relations</button></div>
+<div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search…" autocomplete="off" spellcheck="false" autofocus><span id="search-count" class="view-relations"></span><span id="tm-search-count" class="view-taxonomy"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>
+</div>
+<div id="tm-subbar">
+<div id="tm-breadcrumb"></div>
+<div id="tm-filters"><label>Scheme <select id="tm-filter-scheme"></select></label><label>Depth ≤ <select id="tm-filter-depth"></select></label><label>Layout <select id="tm-filter-layout"><option value="horizontal" selected>Horizontal</option><option value="radial">Radial</option></select></label></div>
+</div>
+<div id="cy" class="view-relations"></div>
+<div id="treemap" class="view-taxonomy"></div>
+</div>
 <div id="detail-panel"></div>
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>
-<div id="stats"></div>
-<div id="hint">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
-<button id="explore-btn">&#8857; explore relations</button><button id="hide-btn">&#8854; hide node + parents</button>
-<div id="zoom-ctrl"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
-<div id="tip"></div>
-<div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search nodes…" autocomplete="off" spellcheck="false" autofocus><span id="search-count"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>
+<div id="stats" class="view-relations"></div>
+<div id="hint" class="view-relations">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
+<button id="explore-btn" class="view-relations">&#8857; explore relations</button><button id="hide-btn" class="view-relations">&#8854; hide node + parents</button>
+<div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
+<div id="tip" class="view-relations"></div>
 __CY_SCRIPT__
+__D3_SCRIPT__
+__D3_PATH_SCRIPT__
+__D3_SHAPE_SCRIPT__
 __STER_DATA_SCRIPT__
 <script>
 __STER_APP_JS__
+</script>
+<script>
+__STER_TREEMAP_JS__
+</script>
+<script>
+(function(){
+  var g=globalThis.__STER_GRAPH__||{};
+  var tax=g.taxonomy||null;
+  var hasTax=!!(tax && tax.nodes && Object.keys(tax.nodes).length);
+  var hasRel=!!(g.data && g.data.nodes && g.data.nodes.length);
+  var body=document.body;
+  var tabs=document.getElementById('view-tabs');
+  if(!hasTax || !hasRel){
+    // Nothing to switch between (e.g. an OWL-only file) — hide the tabs, but
+    // the toolbar itself (and its shared search box) stays, exactly as the
+    // search box worked before the Taxonomie tab existed.
+    tabs.style.display='none';
+  }
+  var initial=hasTax?'taxonomy':'relations';
+  body.dataset.activeView=initial;
+  // The Relations tab's Cytoscape graph (and its force layout) is expensive
+  // to build on a large ontology, so it is only built the first time the tab
+  // is actually shown — not on every page load — see initSterRelationsGraph
+  // in graph_app.js.
+  var relInit=false;
+  function ensureRelations(){
+    if(relInit)return;
+    relInit=true;
+    if(typeof initSterRelationsGraph==='function')initSterRelationsGraph();
+  }
+  if(initial==='relations')ensureRelations();
+  var btns=[].slice.call(document.querySelectorAll('.vt-btn'));
+  btns.forEach(function(btn){
+    btn.classList.toggle('active',btn.dataset.view===initial);
+    btn.addEventListener('click',function(){
+      body.dataset.activeView=btn.dataset.view;
+      btns.forEach(function(b){b.classList.toggle('active',b===btn);});
+      if(btn.dataset.view==='relations')ensureRelations();
+    });
+  });
+})();
 </script>
 </body>
 </html>

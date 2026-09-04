@@ -153,6 +153,11 @@ def _compute_depths(taxonomy: Taxonomy, scheme_uri: str) -> dict[str, int]:
     return depths
 
 
+def scheme_depths(taxonomy: Taxonomy, scheme_uri: str) -> dict[str, int]:
+    """Public entry point for :func:`_compute_depths`, for cross-module reuse."""
+    return _compute_depths(taxonomy, scheme_uri)
+
+
 # ── Stats & completion ────────────────────────────────────────────────────────
 
 

@@ -2,10 +2,10 @@
 //
 // Lints the graph application layer (ster/assets/*.js) and the browser
 // extension (kai-extension/*.js). These are plain browser scripts (no bundler,
-// no modules) that use the vendored Cytoscape global, so the config declares
-// browser + cytoscape globals and keeps the ruleset pragmatic: it catches real
-// bugs (undeclared variables, unreachable code) without forcing a refactor of
-// the existing IIFE style.
+// no modules) that use the vendored Cytoscape/d3-hierarchy globals, so the
+// config declares browser + cytoscape/d3 globals and keeps the ruleset
+// pragmatic: it catches real bugs (undeclared variables, unreachable code)
+// without forcing a refactor of the existing IIFE style.
 
 import js from "@eslint/js";
 import globals from "globals";
@@ -30,6 +30,7 @@ export default [
       globals: {
         ...globals.browser,
         cytoscape: "readonly",
+        d3: "readonly",
         chrome: "readonly",
       },
     },
