@@ -120,11 +120,11 @@ class SSEBroadcaster:
         if target.is_closed():
             return
         try:
-            asyncio.run_coroutine_threadsafe(self._broadcast(), target)
+            target.call_soon_threadsafe(self._broadcast)
         except RuntimeError:
             return  # loop closed between the check and the call
 
-    async def _broadcast(self) -> None:
+    def _broadcast(self) -> None:
         for q in self._queues:
             try:
                 q.put_nowait("updated")
@@ -229,7 +229,10 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost", "http://127.0.0.1"],
+        allow_origins=[
+            "http://localhost",  # NOSONAR - local-only address, not a network destination
+            "http://127.0.0.1",  # NOSONAR - local-only address, not a network destination
+        ],
         allow_origin_regex=r"chrome-extension://.*",
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
@@ -366,7 +369,7 @@ def _register_schema_routes(
         new_uri = _add_individual(tax, body)
         assign_handles(tax)
         save_fn(tax)
-        await broadcaster._broadcast()
+        broadcaster._broadcast()
         return _individual_out(new_uri, tax.owl_individuals[new_uri])
 
 

@@ -27,7 +27,7 @@ def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
     monkeypatch.setattr("ster.analysis_cache._cache_path", lambda: cache)
     # Also isolate the binary cache directory
     bin_cache_dir = tmp_path_factory.mktemp("ster-bin-cache")
-    monkeypatch.setattr("ster.store._bin_cache_dir", lambda: bin_cache_dir)
+    monkeypatch.setattr("ster.store._cache._bin_cache_dir", lambda: bin_cache_dir)
 
 
 # Modules that test server startup itself, and so must reach the real function.
@@ -79,7 +79,7 @@ def _disable_version_check(request, monkeypatch):
     from ster import cli
 
     # Mock the high-level functions that trigger the check
-    monkeypatch.setattr(cli, "_check_new_version", lambda: None)
+    monkeypatch.setattr(cli._app, "_check_new_version", lambda: None)
     monkeypatch.setattr(version_module, "check_update", lambda: None)
 
 

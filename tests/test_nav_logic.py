@@ -47,6 +47,19 @@ def test_count_descendants_missing(simple_taxonomy):
     assert _count_descendants(simple_taxonomy, BASE + "Nonexistent") == 0
 
 
+def test_count_descendants_diamond_revisit_returns_zero():
+    from ster.model import Concept
+
+    t = Taxonomy()
+    top = Concept(uri=BASE + "DTop", narrower=[BASE + "DC1", BASE + "DC2"])
+    c1 = Concept(uri=BASE + "DC1", narrower=[BASE + "DGrand"])
+    c2 = Concept(uri=BASE + "DC2", narrower=[BASE + "DGrand"])
+    grand = Concept(uri=BASE + "DGrand")
+    for c in (top, c1, c2, grand):
+        t.concepts[c.uri] = c
+    assert _count_descendants(t, BASE + "DTop") == 4
+
+
 # ── flatten_tree (single taxonomy) ───────────────────────────────────────────
 
 
@@ -104,6 +117,73 @@ def test_flatten_taxonomy_with_depth_offset(simple_taxonomy, tmp_path):
     assert scheme_line.depth == 1
     assert scheme_line.prefix == "    "
     assert scheme_line.file_path == fp
+
+
+def test_flatten_tree_dangling_narrower_reference_skipped():
+    t = Taxonomy()
+    scheme = ConceptScheme(uri=BASE + "DanglingScheme")
+    top = Concept(uri=BASE + "DanglingTop", narrower=[BASE + "Missing"], top_concept_of=scheme.uri)
+    scheme.top_concepts = [top.uri]
+    t.schemes[scheme.uri] = scheme
+    t.concepts[top.uri] = top
+    assign_handles(t)
+    lines = flatten_tree(t)
+    uris = [l.uri for l in lines]
+    assert BASE + "Missing" not in uris
+    assert BASE + "DanglingTop" in uris
+
+
+def test_flatten_tree_owl_class_tree_multi_parent_and_individuals():
+    from ster.model import OWLIndividual, OWLProperty, RDFClass
+
+    t = Taxonomy()
+    OT = "https://example.org/otree/"
+    animal = RDFClass(uri=OT + "Animal")
+    mammal = RDFClass(uri=OT + "Mammal")
+    dog = RDFClass(uri=OT + "Dog", sub_class_of=[OT + "Animal", OT + "Mammal"])
+    t.owl_classes[animal.uri] = animal
+    t.owl_classes[mammal.uri] = mammal
+    t.owl_classes[dog.uri] = dog
+    rex = OWLIndividual(uri=OT + "Rex", types=[dog.uri])
+    orphan = OWLIndividual(uri=OT + "Orphan", types=[])
+    t.owl_individuals[rex.uri] = rex
+    t.owl_individuals[orphan.uri] = orphan
+    prop = OWLProperty(uri=OT + "hasOwner")
+    t.owl_properties[prop.uri] = prop
+    # A URI colliding with an already-visited individual — the properties pass
+    # must skip it rather than render a duplicate row.
+    t.owl_properties[orphan.uri] = OWLProperty(uri=orphan.uri)
+    assign_handles(t)
+    lines = flatten_tree(t)
+    uris = [l.uri for l in lines]
+    # Dog is a child of both Animal and Mammal but must be rendered only once.
+    assert uris.count(OT + "Dog") == 1
+    assert OT + "Rex" in uris
+    # No known class parent → rendered as its own pseudo-root.
+    assert OT + "Orphan" in uris
+    assert uris.count(OT + "Orphan") == 1
+    assert OT + "hasOwner" in uris
+
+
+def test_flatten_tree_owl_individual_unreachable_via_class_cycle():
+    from ster.model import OWLIndividual, RDFClass
+
+    t = Taxonomy()
+    OC = "https://example.org/ocycle/"
+    cls_a = RDFClass(uri=OC + "A", sub_class_of=[OC + "B"])
+    cls_b = RDFClass(uri=OC + "B", sub_class_of=[OC + "A"])
+    t.owl_classes[cls_a.uri] = cls_a
+    t.owl_classes[cls_b.uri] = cls_b
+    ind = OWLIndividual(uri=OC + "Ind", types=[cls_a.uri])
+    t.owl_individuals[ind.uri] = ind
+    assign_handles(t)
+    lines = flatten_tree(t)
+    uris = [l.uri for l in lines]
+    # Both classes form a cycle with no reachable root, so they never render...
+    assert cls_a.uri not in uris
+    assert cls_b.uri not in uris
+    # ...but the individual falls back to the unplaced-individuals pass.
+    assert OC + "Ind" in uris
 
 
 # ── flatten_tree (workspace) ──────────────────────────────────────────────────
@@ -459,6 +539,17 @@ def test_flatten_ontology_tree_node_type_promoted():
     assert class_lines[0].node_type == "promoted"
 
 
+def test_flatten_ontology_tree_single_file_workspace_sentinel_has_file_path(tmp_path):
+    from ster.nav.logic import _is_ontology_sentinel, flatten_ontology_tree
+
+    fp = tmp_path / "onto.ttl"
+    t = _owl_taxonomy()
+    ws = TaxonomyWorkspace({fp: t})
+    lines = flatten_ontology_tree(ws)
+    root = next(l for l in lines if _is_ontology_sentinel(l.uri))
+    assert root.file_path == fp
+
+
 def test_flatten_ontology_tree_empty():
     from ster.nav.logic import flatten_ontology_tree
 
@@ -510,6 +601,18 @@ def test_taxonomy_treeline_node_type_promoted(simple_taxonomy):
     lines = flatten_tree(simple_taxonomy)
     top_line = next(l for l in lines if l.uri == top_uri)
     assert top_line.node_type == "promoted"
+
+
+def test_inherited_properties_stops_at_dangling_superclass_reference():
+    from ster.model import RDFClass
+    from ster.nav.logic._rdf_class import _inherited_properties
+
+    t = Taxonomy()
+    BASE_D = "https://example.org/dangling/"
+    t.owl_classes[BASE_D + "Dog"] = RDFClass(
+        uri=BASE_D + "Dog", sub_class_of=[BASE_D + "MissingAncestor"]
+    )
+    assert _inherited_properties(t, BASE_D + "Dog") == []
 
 
 # ── build_rdf_class_detail ────────────────────────────────────────────────────
@@ -737,6 +840,46 @@ def test_build_promoted_detail_fallback_class_only():
     assert len(fields) > 0
 
 
+def test_build_promoted_detail_skos_hierarchy_section():
+    from ster.nav.logic import build_promoted_detail
+
+    t = _promoted_taxonomy()
+    BASE_P = "https://example.org/promo/"
+    child = Concept(uri=BASE_P + "Puppy", labels=[Label(lang="en", value="Puppy")])
+    t.concepts[child.uri] = child
+    t.concepts[BASE_P + "Dog"].narrower = [child.uri]
+    assign_handles(t)
+    fields = build_promoted_detail(t, BASE_P + "Dog", "en")
+    sep_displays = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "SKOS Hierarchy" in sep_displays
+
+
+def test_build_promoted_detail_owl_hierarchy_section():
+    from ster.model import RDFClass
+    from ster.nav.logic import build_promoted_detail
+
+    t = _promoted_taxonomy()
+    BASE_P = "https://example.org/promo/"
+    parent = RDFClass(uri=BASE_P + "Animal", labels=[Label(lang="en", value="Animal")])
+    equiv = RDFClass(uri=BASE_P + "Canine", labels=[Label(lang="en", value="Canine")])
+    disjoint = RDFClass(uri=BASE_P + "Cat", labels=[Label(lang="en", value="Cat")])
+    t.owl_classes[parent.uri] = parent
+    t.owl_classes[equiv.uri] = equiv
+    t.owl_classes[disjoint.uri] = disjoint
+    dog_class = t.owl_classes[BASE_P + "Dog"]
+    dog_class.sub_class_of = [parent.uri]
+    dog_class.equivalent_class = [equiv.uri]
+    dog_class.disjoint_with = [disjoint.uri]
+    assign_handles(t)
+    fields = build_promoted_detail(t, BASE_P + "Dog", "en")
+    sep_displays = [f.display for f in fields if f.meta.get("type") == "separator"]
+    assert "OWL Hierarchy" in sep_displays
+    displays = [f.display for f in fields]
+    assert "↑ subClassOf" in displays
+    assert "⟺ equivalentClass" in displays
+    assert "⊥ disjointWith" in displays
+
+
 # ── OWL individuals ───────────────────────────────────────────────────────────
 
 
@@ -852,6 +995,22 @@ def test_build_individual_detail_class_membership():
     assert len(membership) == 1
     assert membership[0].meta["uri"] == BASE_I + "Dog"
     assert membership[0].editable and membership[0].meta["action"] == "change_ind_type"
+
+
+def test_build_individual_detail_missing_uri_returns_empty():
+    from ster.nav.logic import build_individual_detail
+
+    t = _individual_taxonomy()
+    assert build_individual_detail(t, BASE_I + "ghost", "en") == []
+
+
+def test_value_target_label_falls_back_to_class_label():
+    from ster.nav.logic._individual import _value_target_label
+
+    t = _individual_taxonomy()
+    label, navigable = _value_target_label(t, BASE_I + "Dog", "en")
+    assert navigable is True
+    assert label  # a class's own label (or local name fallback), not the URI
 
 
 def test_build_individual_detail_add_label_action():

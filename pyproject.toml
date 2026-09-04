@@ -213,7 +213,7 @@ ignore_imports = [
     "ster.plugins.semanticlint.runner -> semanticlint",
     "ster.plugins.semanticlint.checks -> semanticlint",
     "ster.plugins.semanticlint.config -> semanticlint",
-    "ster.git.manager -> semanticlint",
+    "ster.git.manager._commit -> semanticlint",
 ]
 
 [[tool.importlinter.contracts]]

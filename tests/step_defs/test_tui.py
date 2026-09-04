@@ -173,7 +173,7 @@ def when_run_cli(ctx):
         # _open_viewer refuses to start the Textual app without a tty (it spins the
         # event loop forever there). CliRunner gives us neither stream as a
         # terminal, so stand in for the one the real user has.
-        patch("ster.cli._is_interactive_terminal", return_value=True),
+        patch("ster.cli._viewer._is_interactive_terminal", return_value=True),
     ):
         gm.return_value.is_enabled.return_value = False  # skip the git commit/push flow
         result = CliRunner().invoke(cli_app, ["show", str(DEMO)])

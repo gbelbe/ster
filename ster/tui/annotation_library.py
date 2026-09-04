@@ -56,13 +56,13 @@ class LibraryProp:
     keywords: tuple[str, ...] = field(default_factory=tuple)
 
 
-_RDFS = "http://www.w3.org/2000/01/rdf-schema#"
-_SKOS = "http://www.w3.org/2004/02/skos/core#"
-_DCT = "http://purl.org/dc/terms/"
+_RDFS = "http://www.w3.org/2000/01/rdf-schema#"  # NOSONAR - RDF namespace IRI
+_SKOS = "http://www.w3.org/2004/02/skos/core#"  # NOSONAR - RDF namespace IRI
+_DCT = "http://purl.org/dc/terms/"  # NOSONAR - RDF namespace IRI
 _SCHEMA = "https://schema.org/"
-_FOAF = "http://xmlns.com/foaf/0.1/"
-_OWL = "http://www.w3.org/2002/07/owl#"
-_PROV = "http://www.w3.org/ns/prov#"
+_FOAF = "http://xmlns.com/foaf/0.1/"  # NOSONAR - RDF namespace IRI
+_OWL = "http://www.w3.org/2002/07/owl#"  # NOSONAR - RDF namespace IRI
+_PROV = "http://www.w3.org/ns/prov#"  # NOSONAR - RDF namespace IRI
 
 
 LIBRARY: tuple[LibraryProp, ...] = (

@@ -16,12 +16,14 @@ import ster.viz_vowl as vv
 
 
 def test_listening_pid_parses_first_pid(monkeypatch) -> None:
-    monkeypatch.setattr(vv.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="60130\n"))
+    monkeypatch.setattr(
+        vv._server.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="60130\n")
+    )
     assert vv._listening_pid(8765) == 60130
 
 
 def test_listening_pid_none_when_port_free(monkeypatch) -> None:
-    monkeypatch.setattr(vv.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="\n"))
+    monkeypatch.setattr(vv._server.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="\n"))
     assert vv._listening_pid(8765) is None
 
 
@@ -29,7 +31,7 @@ def test_listening_pid_none_when_lsof_missing(monkeypatch) -> None:
     def _raise(*a, **k):
         raise FileNotFoundError
 
-    monkeypatch.setattr(vv.subprocess, "run", _raise)
+    monkeypatch.setattr(vv._server.subprocess, "run", _raise)
     assert vv._listening_pid(8765) is None  # never raises — best-effort
 
 
@@ -38,7 +40,7 @@ def test_listening_pid_none_when_lsof_missing(monkeypatch) -> None:
 
 def test_process_name_returns_the_command_line(monkeypatch) -> None:
     monkeypatch.setattr(
-        vv.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="ster show x.ttl\n")
+        vv._server.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="ster show x.ttl\n")
     )
     assert vv._process_name(60130) == "ster show x.ttl"
 
@@ -47,7 +49,7 @@ def test_process_name_falls_back_to_pid_label_when_ps_fails(monkeypatch) -> None
     def _raise(*a, **k):
         raise FileNotFoundError
 
-    monkeypatch.setattr(vv.subprocess, "run", _raise)
+    monkeypatch.setattr(vv._server.subprocess, "run", _raise)
     assert vv._process_name(60130) == "PID 60130"  # never raises — best-effort
 
 
@@ -55,13 +57,13 @@ def test_process_name_falls_back_to_pid_label_when_ps_fails(monkeypatch) -> None
 
 
 def test_port_holder_returns_pid_and_command(monkeypatch) -> None:
-    monkeypatch.setattr(vv, "_listening_pid", lambda port: 60130)
-    monkeypatch.setattr(vv, "_process_name", lambda pid: "ster show x.ttl")
+    monkeypatch.setattr(vv._server, "_listening_pid", lambda port: 60130)
+    monkeypatch.setattr(vv._server, "_process_name", lambda pid: "ster show x.ttl")
     assert vv.port_holder(host="127.0.0.1", port=8765) == (60130, "ster show x.ttl")
 
 
 def test_port_holder_none_when_free(monkeypatch) -> None:
-    monkeypatch.setattr(vv, "_listening_pid", lambda port: None)
+    monkeypatch.setattr(vv._server, "_listening_pid", lambda port: None)
     assert vv.port_holder(host="127.0.0.1", port=8765) is None
 
 
@@ -72,7 +74,7 @@ def test_port_holder_ignores_our_own_process(monkeypatch) -> None:
     PID, killing the TUI (terminal left in mouse-tracking mode → garbage on the screen)."""
     import os
 
-    monkeypatch.setattr(vv, "_listening_pid", lambda port: os.getpid())
+    monkeypatch.setattr(vv._server, "_listening_pid", lambda port: os.getpid())
     assert vv.port_holder(host="127.0.0.1", port=8765) is None
 
 
@@ -81,16 +83,16 @@ def test_port_holder_ignores_our_own_process(monkeypatch) -> None:
 
 def test_free_port_terminates_then_reports_free(monkeypatch) -> None:
     killed: list = []
-    monkeypatch.setattr(vv.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(vv._server.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     frees = iter([False, True])  # busy on the first poll, free on the second
-    monkeypatch.setattr(vv, "_port_is_free", lambda host, port: next(frees))
+    monkeypatch.setattr(vv._server, "_port_is_free", lambda host, port: next(frees))
     assert vv.free_port(60130, host="127.0.0.1", port=8765, poll=0) is True
-    assert killed == [(60130, vv.signal.SIGTERM)]
+    assert killed == [(60130, vv._server.signal.SIGTERM)]
 
 
 def test_free_port_false_when_it_never_frees(monkeypatch) -> None:
-    monkeypatch.setattr(vv.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(vv, "_port_is_free", lambda host, port: False)
+    monkeypatch.setattr(vv._server.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(vv._server, "_port_is_free", lambda host, port: False)
     assert vv.free_port(60130, host="127.0.0.1", port=8765, timeout=0.0, poll=0) is False
 
 
@@ -101,8 +103,8 @@ def test_free_port_never_signals_the_current_process(monkeypatch) -> None:
     import os
 
     killed: list = []
-    monkeypatch.setattr(vv.os, "kill", lambda pid, sig: killed.append((pid, sig)))
-    monkeypatch.setattr(vv, "_port_is_free", lambda host, port: False)
+    monkeypatch.setattr(vv._server.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(vv._server, "_port_is_free", lambda host, port: False)
     result = vv.free_port(os.getpid(), host="127.0.0.1", port=8765)
     assert killed == []  # os.kill was never called on ourselves
     assert result is False  # the port is (still) ours — but we did not self-destruct
@@ -114,6 +116,6 @@ def test_free_port_reports_port_state_when_kill_fails(monkeypatch) -> None:
     def _gone(pid, sig):
         raise ProcessLookupError
 
-    monkeypatch.setattr(vv.os, "kill", _gone)
-    monkeypatch.setattr(vv, "_port_is_free", lambda host, port: True)
+    monkeypatch.setattr(vv._server.os, "kill", _gone)
+    monkeypatch.setattr(vv._server, "_port_is_free", lambda host, port: True)
     assert vv.free_port(999999, host="127.0.0.1", port=8765) is True

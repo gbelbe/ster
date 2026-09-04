@@ -9,14 +9,14 @@ from semanticlint.checks.registry import CheckRegistry
 
 # Namespaces that are never user-defined — skip them in URI checks.
 _SAFE_PREFIXES = (
-    "http://www.w3.org/2002/07/owl#",
-    "http://www.w3.org/2000/01/rdf-schema#",
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "http://www.w3.org/2001/XMLSchema#",
-    "http://www.w3.org/2004/02/skos/core#",
-    "http://xmlns.com/foaf/0.1/",
+    "http://www.w3.org/2002/07/owl#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2000/01/rdf-schema#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2001/XMLSchema#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2004/02/skos/core#",  # NOSONAR - RDF namespace IRI
+    "http://xmlns.com/foaf/0.1/",  # NOSONAR - RDF namespace IRI
     "https://schema.org/",
-    "http://schema.org/",
+    "http://schema.org/",  # NOSONAR - RDF namespace IRI
 )
 
 # rdf:type values that identify user-defined entities
@@ -91,6 +91,12 @@ class NonHTTPSchemeURICheck(Check):
                 subject=subj,
             )
             for subj in _user_entity_subjects(graph)
-            if not str(subj).startswith(("http://", "https://", "file:"))
+            if not str(subj).startswith(
+                (
+                    "http://",  # NOSONAR - scheme prefix, not a URL
+                    "https://",
+                    "file:",
+                )
+            )
             # file: is already covered by URI001 — avoid double-reporting
         ]

@@ -21,7 +21,7 @@ from .skos import count_concept_uri_references, rename_uri
 # Dublin Core "subject" — the standard predicate for "this resource is *about* this
 # concept". Tagging an individual with a concept indexes the instance without touching
 # its rdf:type (SKOS's core subject-indexing use).
-DCT_SUBJECT = "http://purl.org/dc/terms/subject"
+DCT_SUBJECT = "http://purl.org/dc/terms/subject"  # NOSONAR - RDF predicate/property IRI
 
 
 def tag_individual_with_concept(taxonomy: Taxonomy, ind_uri: str, concept_uri: str) -> None:

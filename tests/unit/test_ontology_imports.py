@@ -241,6 +241,62 @@ def test_properties_for_class_no_domain():
 # ── suggest_external_properties ──────────────────────────────────────────────
 
 
+# ── _add_local_properties_for_types / _add_external_properties (direct) ────────
+
+
+def test_add_local_properties_skips_non_property_types_and_domain_mismatch():
+    from ster.ontology_imports import _add_local_properties_for_types
+
+    matching = MagicMock(prop_type="ObjectProperty", domains=[_KAI_PERSON])
+    wrong_type = MagicMock(prop_type="AnnotationProperty", domains=[_KAI_PERSON])
+    wrong_domain = MagicMock(prop_type="ObjectProperty", domains=["http://example.org/Other"])
+
+    taxonomy = MagicMock()
+    taxonomy.owl_properties = {
+        _KAI_KNOWS: matching,
+        "http://example.org/wrongType": wrong_type,
+        "http://example.org/wrongDomain": wrong_domain,
+    }
+
+    seen_uris: set[str] = set()
+    result: list = []
+    _add_local_properties_for_types(taxonomy, {_KAI_PERSON}, seen_uris, result)
+
+    assert result == [matching]
+    assert seen_uris == {_KAI_KNOWS}
+
+
+def test_add_external_properties_for_namespace_skips_empty_graph(tmp_path):
+    from rdflib import Graph
+
+    from ster.ontology_imports import _add_external_properties_for_namespace
+
+    seen_uris: set[str] = set()
+    result: list = []
+    with patch("ster.ontology_imports.fetch_ontology", return_value=Graph()):
+        _add_external_properties_for_namespace(
+            _FOAF_PERSON, _FOAF_NS, {_FOAF_PERSON}, seen_uris, result, tmp_path
+        )
+
+    assert result == []
+    assert seen_uris == set()
+
+
+def test_add_external_properties_fetches_each_namespace_once(tmp_path):
+    from ster.ontology_imports import _add_external_properties
+
+    ext_refs = {_FOAF_PERSON, _FOAF_AGENT, _SCHEMA_PERSON}  # 2 refs share the FOAF namespace
+    seen_uris: set[str] = set()
+    result: list = []
+
+    with patch("ster.ontology_imports._add_external_properties_for_namespace") as add_for_ns:
+        _add_external_properties(ext_refs, seen_uris, result, tmp_path)
+
+    called_namespaces = {call.args[1] for call in add_for_ns.call_args_list}
+    assert called_namespaces == {_FOAF_NS, _SCHEMA_NS}
+    assert add_for_ns.call_count == 2  # one call per distinct namespace, not per ref
+
+
 # ── is_external_uri ───────────────────────────────────────────────────────────
 
 

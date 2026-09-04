@@ -48,7 +48,7 @@ def test_humanize(name, expected):
 def test_save_and_load_session(tmp_path, monkeypatch):
     """Session file survives a save/load round-trip."""
     cache = tmp_path / "ster_session"
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: cache)
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
 
     taxonomy_file = tmp_path / "vocab.ttl"
     taxonomy_file.write_text("")
@@ -62,14 +62,14 @@ def test_load_session_missing_file_returns_none(tmp_path, monkeypatch):
     """If the saved path no longer exists, _load_session returns None."""
     cache = tmp_path / "ster_session"
     cache.write_text(json.dumps({"file": str(tmp_path / "gone.ttl")}))
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: cache)
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
 
     assert _load_session() is None
 
 
 def test_load_session_missing_cache_returns_none(tmp_path, monkeypatch):
     """No cache file → _load_session returns None."""
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "nope")
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: tmp_path / "nope")
     assert _load_session() is None
 
 
@@ -78,9 +78,9 @@ def test_load_session_missing_cache_returns_none(tmp_path, monkeypatch):
 
 def test_resolve_file_explicit_path(tmp_path, monkeypatch):
     """Explicit path is returned immediately and saved as session."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
+    monkeypatch.setattr(cli_module._state, "session_file", None)
     cache = tmp_path / "cache"
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: cache)
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
 
     f = tmp_path / "test.ttl"
     f.write_text("")
@@ -92,7 +92,7 @@ def test_resolve_file_uses_in_process_cache(tmp_path, monkeypatch):
     """If _session_file is already set, it is returned without I/O."""
     cached = tmp_path / "cached.ttl"
     cached.write_text("")
-    monkeypatch.setattr(cli_module, "_session_file", cached)
+    monkeypatch.setattr(cli_module._state, "session_file", cached)
 
     # Even if a different file is around, the cache wins
     result = _resolve_file(None)
@@ -101,9 +101,9 @@ def test_resolve_file_uses_in_process_cache(tmp_path, monkeypatch):
 
 def test_resolve_file_single_auto_detect(tmp_path, monkeypatch):
     """Single taxonomy file → confirm prompt → used for session."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
+    monkeypatch.setattr(cli_module._state, "session_file", None)
     cache = tmp_path / "cache"
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: cache)
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
     monkeypatch.chdir(tmp_path)
 
     f = tmp_path / "vocab.ttl"
@@ -118,12 +118,101 @@ def test_resolve_file_single_auto_detect(tmp_path, monkeypatch):
 
 def test_resolve_file_no_files_exits(tmp_path, monkeypatch):
     """No taxonomy files in CWD → Exit(1)."""
-    monkeypatch.setattr(cli_module, "_session_file", None)
-    monkeypatch.setattr("ster.cli._session_cache_path", lambda: tmp_path / "cache")
+    monkeypatch.setattr(cli_module._state, "session_file", None)
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: tmp_path / "cache")
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises((SystemExit, typer.Exit)):
         _resolve_file(None)
+
+
+def test_load_session_corrupted_cache_returns_none(tmp_path, monkeypatch):
+    """Malformed JSON in the cache file is swallowed, not raised."""
+    cache = tmp_path / "ster_session"
+    cache.write_text("not valid json {{{")
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
+    assert _load_session() is None
+
+
+def test_resolve_file_ci_check_prints_when_workflow_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module._state, "session_file", None)
+    monkeypatch.setattr(cli_module._state, "ci_check_done", False)
+    cache = tmp_path / "cache"
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
+    monkeypatch.chdir(tmp_path)
+
+    f = tmp_path / "vocab.ttl"
+    f.write_text("")
+
+    with (
+        patch("ster.project._git_root", return_value=tmp_path),
+        patch("ster.init_ci.prompt_if_missing", return_value=True),
+        patch("ster.cli.Confirm.ask", return_value=True),
+    ):
+        result = _resolve_file(None)
+
+    assert result == f
+    assert cli_module._state.ci_check_done is True
+
+
+def test_resolve_file_uses_persisted_session_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module._state, "session_file", None)
+    monkeypatch.setattr(cli_module._state, "ci_check_done", True)
+    cache = tmp_path / "cache"
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
+    monkeypatch.chdir(tmp_path)
+
+    f = tmp_path / "vocab.ttl"
+    f.write_text("")
+    _save_session(f)
+    monkeypatch.setattr(cli_module._state, "session_file", None)  # force the persisted path
+
+    result = _resolve_file(None)
+    assert result == f.resolve()
+
+
+def test_resolve_file_single_auto_detect_declined_aborts(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module._state, "session_file", None)
+    monkeypatch.setattr(cli_module._state, "ci_check_done", True)
+    cache = tmp_path / "cache"
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
+    monkeypatch.chdir(tmp_path)
+
+    f = tmp_path / "vocab.ttl"
+    f.write_text("")
+
+    with (
+        patch("ster.cli.Confirm.ask", return_value=False),
+        pytest.raises((SystemExit, typer.Exit, typer.Abort)),
+    ):
+        _resolve_file(None)
+
+
+def test_resolve_file_multiple_files_uses_picker(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module._state, "session_file", None)
+    monkeypatch.setattr(cli_module._state, "ci_check_done", True)
+    cache = tmp_path / "cache"
+    monkeypatch.setattr("ster.cli._file_picker._session_cache_path", lambda: cache)
+    monkeypatch.chdir(tmp_path)
+
+    a = tmp_path / "a.ttl"
+    b = tmp_path / "b.ttl"
+    a.write_text("")
+    b.write_text("")
+
+    with patch("ster.cli._file_picker._pick_file_interactive", return_value=a):
+        result = _resolve_file(None)
+    assert result == a
+
+
+def test_pick_file_none_result_exits_gracefully(tmp_path, monkeypatch):
+    from ster.cli._file_picker import _pick_file
+
+    with (
+        patch("ster.cli._file_picker._pick_file_interactive", return_value=None),
+        pytest.raises(typer.Exit),
+    ):
+        _pick_file([tmp_path / "a.ttl"])
 
 
 # ── _pick_file_interactive ────────────────────────────────────────────────────
@@ -153,7 +242,7 @@ def test_pick_file_delegates_to_arrow_picker_in_a_tty(tmp_path, monkeypatch):
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    with patch("ster.cli._arrow_file_picker", return_value=files[1]) as arrow:
+    with patch("ster.cli._file_picker._arrow_file_picker", return_value=files[1]) as arrow:
         assert _pick_file_interactive(files) == files[1]
     arrow.assert_called_once()
 
@@ -320,6 +409,83 @@ def test_arrow_picker_preselect_is_initial(tmp_path):
     assert result == files[1]
 
 
+# ── extracted picker helpers (direct unit tests) ────────────────────────────────
+
+from ster.cli import (
+    _DEMO_SENTINEL,
+    _QUIT_SENTINEL,
+    _handle_arrow_escape,
+    _handle_escape_key,
+    _handle_picker_key,
+    _parse_typed_number,
+    _picker_item_label,
+    _resolve_picker_digit_choice,
+)
+
+
+def test_resolve_picker_digit_choice_quit_returns_quit_sentinel(tmp_path):
+    """Selecting the last (quit) number returns the quit sentinel."""
+    files = [tmp_path / "a.ttl"]
+    result = _resolve_picker_digit_choice("3", files, create_idx=2, quit_idx=3)
+    assert result is _QUIT_SENTINEL
+
+
+def test_picker_item_label_quit_and_demo_entries(tmp_path):
+    """Quit and demo sentinel entries get their own label text."""
+    item_values = [tmp_path / "a.ttl", _DEMO_SENTINEL, None, _QUIT_SENTINEL]
+    quit_label = _picker_item_label(item_values, 3, selected=False, preselect=None)
+    assert "Quit" in quit_label
+    demo_label = _picker_item_label(item_values, 1, selected=False, preselect=None)
+    assert "demo" in demo_label.lower()
+
+
+def test_parse_typed_number_non_numeric_returns_sel_unchanged():
+    """Non-numeric input can't happen from the real digit handler, but the
+    helper still falls back to the current selection defensively."""
+    assert _parse_typed_number("", sel=2, n=5) == 2
+
+
+def test_parse_typed_number_out_of_range_returns_sel_unchanged():
+    """A typed number outside 1..n leaves the selection unchanged."""
+    assert _parse_typed_number("99", sel=2, n=5) == 2
+
+
+def test_handle_arrow_escape_unknown_code_returns_unchanged():
+    """An escape code other than up/down (e.g. right-arrow) is a no-op."""
+    import io
+
+    buf = io.BytesIO(b"C")
+    result = _handle_arrow_escape(buf, typed="12", sel=1, n=5)
+    assert result == ("12", 1, False)
+
+
+def test_handle_escape_key_plain_esc_then_enter_confirms():
+    """Esc immediately followed by Enter/newline confirms the current selection."""
+    import io
+
+    buf = io.BytesIO(b"\r")
+    result = _handle_escape_key(buf, typed="3", sel=1, n=5)
+    assert result == ("3", 1, True)
+
+
+def test_handle_escape_key_plain_esc_clears_typed():
+    """A bare Esc (not part of an arrow sequence, not Enter) clears typed digits."""
+    import io
+
+    buf = io.BytesIO(b"x")
+    result = _handle_escape_key(buf, typed="3", sel=1, n=5)
+    assert result == ("", 1, False)
+
+
+def test_handle_picker_key_unrecognized_char_is_a_no_op():
+    """A keypress that matches no branch (e.g. a letter) leaves state unchanged."""
+    import io
+
+    buf = io.BytesIO(b"")
+    result = _handle_picker_key(b"q", buf, typed="12", sel=0, n=5)
+    assert result == ("12", 0, False)
+
+
 # ── _home_action_menu input-flush regression ──────────────────────────────────
 
 
@@ -386,12 +552,14 @@ def test_fresh_file_selection_opens_viewer_directly(tmp_path, monkeypatch):
 
     f = tmp_path / "a.ttl"
     f.touch()
-    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
-    monkeypatch.setattr(cli, "_select_home_file", lambda found: f)
+    monkeypatch.setattr(cli._home, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(cli._workspace_ui, "_select_home_file", lambda found: f)
     menu_calls: list = []
-    monkeypatch.setattr(cli, "_home_action_menu", lambda sel: menu_calls.append(sel) or "MENU")
+    monkeypatch.setattr(
+        cli._workspace_ui, "_home_action_menu", lambda sel: menu_calls.append(sel) or "MENU"
+    )
 
-    selected, action = cli._home_obtain_action(None, None, [f])
+    selected, action = cli._home._home_obtain_action(None, None, [f])
 
     assert selected == f
     assert action == [f]  # the open-in-viewer action
@@ -405,13 +573,15 @@ def test_action_menu_shown_once_a_file_is_selected(tmp_path, monkeypatch):
 
     f = tmp_path / "a.ttl"
     f.touch()
-    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(cli._home, "_print_home_intro", lambda: None)
     monkeypatch.setattr(
-        cli, "_select_home_file", lambda found: pytest.fail("must not reselect a known file")
+        cli._workspace_ui,
+        "_select_home_file",
+        lambda found: pytest.fail("must not reselect a known file"),
     )
-    monkeypatch.setattr(cli, "_home_action_menu", lambda sel: "MENU")
+    monkeypatch.setattr(cli._workspace_ui, "_home_action_menu", lambda sel: "MENU")
 
-    selected, action = cli._home_obtain_action(None, f, [f])  # f already selected & present
+    selected, action = cli._home._home_obtain_action(None, f, [f])  # f already selected & present
 
     assert selected == f
     assert action == "MENU"
@@ -424,22 +594,26 @@ def test_pending_file_argument_opens_viewer_without_menu(tmp_path, monkeypatch):
     f = tmp_path / "a.ttl"
     f.touch()
     monkeypatch.setattr(
-        cli, "_home_action_menu", lambda sel: pytest.fail("no menu for a pending open")
+        cli._workspace_ui,
+        "_home_action_menu",
+        lambda sel: pytest.fail("no menu for a pending open"),
     )
 
-    assert cli._home_obtain_action(f, None, []) == (f, [f])
+    assert cli._home._home_obtain_action(f, None, []) == (f, [f])
 
 
 def test_quit_at_file_selection_returns_quit_sentinel(tmp_path, monkeypatch):
     from ster import cli
 
-    monkeypatch.setattr(cli, "_print_home_intro", lambda: None)
-    monkeypatch.setattr(cli, "_select_home_file", lambda found: None)  # user quit / cancelled
+    monkeypatch.setattr(cli._home, "_print_home_intro", lambda: None)
+    monkeypatch.setattr(
+        cli._workspace_ui, "_select_home_file", lambda found: None
+    )  # user quit / cancelled
 
-    selected, action = cli._home_obtain_action(None, None, [])
+    selected, action = cli._home._home_obtain_action(None, None, [])
 
     assert selected is None
-    assert action is cli._QUIT_SENTINEL
+    assert action is cli._constants._QUIT_SENTINEL
 
 
 # ── _collect_reachable ────────────────────────────────────────────────────────
@@ -646,12 +820,12 @@ def test_check_new_version_uses_cache(tmp_path, monkeypatch):
         "notes": "· big update",
     }
     cache.write_text(json.dumps(data))
-    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
-    monkeypatch.setattr(cli_module, "_VERSION", "0.1.0")
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.1.0")
 
     with patch("threading.Thread") as mock_thread:
         mock_thread.return_value = MagicMock()
-        result = cli_module._check_new_version()
+        result = cli_module._app._check_new_version()
     assert result is not None
     assert result[0] == "99.0.0"
     assert "big update" in result[1]
@@ -663,10 +837,10 @@ def test_check_new_version_no_update_when_same(tmp_path, monkeypatch):
 
     data = {"checked": datetime.now().isoformat(), "latest": "0.3.1", "notes": ""}
     cache.write_text(json.dumps(data))
-    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
-    monkeypatch.setattr(cli_module, "_VERSION", "0.3.1")
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.3.1")
 
-    result = cli_module._check_new_version()
+    result = cli_module._app._check_new_version()
     assert result is None
 
 
@@ -678,15 +852,89 @@ def test_check_new_version_stale_cache(tmp_path, monkeypatch):
     old = datetime.now() - timedelta(days=7)
     data = {"checked": old.isoformat(), "latest": "99.0.0", "notes": ""}
     cache.write_text(json.dumps(data))
-    monkeypatch.setattr(cli_module, "_VERSION_CACHE", cache)
-    monkeypatch.setattr(cli_module, "_VERSION", "0.1.0")
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.1.0")
 
     # Stale cache → background fetch launched, but no cached result returned
     with patch("threading.Thread") as mock_thread:
         mock_thread.return_value = MagicMock()
-        result = cli_module._check_new_version()
+        result = cli_module._app._check_new_version()
     # Stale → no cached result served (fresh fetch pending)
     assert result is None
+
+
+def test_check_new_version_corrupted_cache_ignored(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    cache.write_text("not valid json {{{")
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.1.0")
+
+    with patch("threading.Thread") as mock_thread:
+        mock_thread.return_value = MagicMock()
+        result = cli_module._app._check_new_version()
+    assert result is None
+
+
+def _run_thread_target_synchronously(target, **_kwargs):
+    """A `threading.Thread` stand-in that runs `target` inline instead of on a
+    background thread, so the fetch's effects are observable deterministically
+    (no timing race, no real network access)."""
+    target()
+    return MagicMock()
+
+
+def test_check_new_version_fetch_writes_cache_on_success(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.1.0")
+
+    payload = MagicMock()
+    payload.read.return_value = json.dumps(
+        {"info": {"version": "9.9.9", "description": ""}}
+    ).encode()
+    cm = MagicMock()
+    cm.__enter__.return_value = payload
+    cm.__exit__.return_value = False
+    with (
+        patch("urllib.request.urlopen", return_value=cm),
+        patch("threading.Thread", side_effect=_run_thread_target_synchronously),
+    ):
+        cli_module._app._check_new_version()
+    assert cache.exists()
+    assert json.loads(cache.read_text())["latest"] == "9.9.9"
+
+
+def test_check_new_version_fetch_network_error_is_swallowed(tmp_path, monkeypatch):
+    cache = tmp_path / "version_cache.json"
+    monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
+    monkeypatch.setattr(cli_module._app, "_VERSION", "0.1.0")
+
+    with (
+        patch("urllib.request.urlopen", side_effect=OSError("no network")),
+        patch("threading.Thread", side_effect=_run_thread_target_synchronously),
+    ):
+        cli_module._app._check_new_version()
+    assert not cache.exists()  # the fetch failed before ever writing
+
+
+def test_version_callback_prints_and_exits():
+    with patch("ster.cli._app.console.print") as mock_print, pytest.raises(typer.Exit):
+        cli_module._app._version_callback(True)
+    mock_print.assert_called_once()
+
+
+def test_version_callback_false_is_a_noop():
+    assert cli_module._app._version_callback(False) is None
+
+
+def test_print_welcome_shows_update_banner(monkeypatch):
+    monkeypatch.setattr(cli_module._app, "_check_new_version", lambda: ("9.9.9", "· notes"))
+    with patch("ster.cli._app.console.print") as mock_print:
+        cli_module._app._print_welcome()
+    panel = next(
+        c.args[0] for c in mock_print.call_args_list if c.args and hasattr(c.args[0], "renderable")
+    )
+    assert "9.9.9" in str(panel.renderable)
 
 
 # ── _load / _save / _resolve / _run error paths ───────────────────────────────
@@ -696,7 +944,7 @@ def test_load_bad_file_exits(tmp_path):
     bad = tmp_path / "bad.ttl"
     bad.write_text("NOT TURTLE @@@@")
     with pytest.raises((SystemExit, typer.Exit)):
-        cli_module._load(bad)
+        cli_module._taxonomy_io._load(bad)
 
 
 def test_save_unwritable_exits(tmp_path, monkeypatch):
@@ -706,19 +954,21 @@ def test_save_unwritable_exits(tmp_path, monkeypatch):
     from ster.model import Taxonomy
 
     with pytest.raises((SystemExit, typer.Exit)):
-        cli_module._save(Taxonomy(), tmp_path / "out.ttl")
+        cli_module._taxonomy_io._save(Taxonomy(), tmp_path / "out.ttl")
 
 
 def test_resolve_missing_handle_exits(simple_taxonomy):
     with pytest.raises((SystemExit, typer.Exit)):
-        cli_module._resolve(simple_taxonomy, "NONEXISTENT")
+        cli_module._taxonomy_io._resolve(simple_taxonomy, "NONEXISTENT")
 
 
 def test_run_converts_skostax_error_to_exit(simple_taxonomy):
     from ster.exceptions import ConceptNotFoundError
 
     with pytest.raises((SystemExit, typer.Exit)):
-        cli_module._run(lambda: (_ for _ in ()).throw(ConceptNotFoundError("https://x.org/Ghost")))
+        cli_module._taxonomy_io._run(
+            lambda: (_ for _ in ()).throw(ConceptNotFoundError("https://x.org/Ghost"))
+        )
 
 
 # ── CLI commands via CliRunner ─────────────────────────────────────────────────
@@ -772,6 +1022,23 @@ t:Top a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme .
     result = _runner.invoke(app, ["validate", "--file", str(ttl)])
     assert result.exit_code == 1
     assert "prefLabel" in result.output or "label" in result.output.lower()
+
+
+def test_cmd_validate_finds_duplicate_pref_label(tmp_path):
+    ttl = tmp_path / "duplabel.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:Top .
+t:Top a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+      skos:prefLabel "Top"@en, "Top Again"@en .
+"""
+    )
+    result = _runner.invoke(app, ["validate", "--file", str(ttl)])
+    assert result.exit_code == 1
+    assert "duplicate" in result.output.lower()
 
 
 def test_cmd_add_creates_concept(tmp_ttl):
@@ -941,7 +1208,7 @@ def test_resolve_broken_mappings_no_issues(tmp_ttl):
 
     workspace = TaxonomyWorkspace.from_files([tmp_ttl])
     # Should silently return when no broken mappings
-    cli_module._resolve_broken_mappings_at_load(workspace, [tmp_ttl])
+    cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [tmp_ttl])
 
 
 def test_resolve_broken_mappings_no_unloaded_files(tmp_path):
@@ -961,7 +1228,7 @@ t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
     )
     workspace = TaxonomyWorkspace.from_files([ttl])
     # found_files == workspace files → no unloaded files → prints warning, no prompt
-    cli_module._resolve_broken_mappings_at_load(workspace, [ttl])
+    cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl])
 
 
 # ── _load_workspace ───────────────────────────────────────────────────────────
@@ -970,7 +1237,7 @@ t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
 def test_load_workspace_returns_workspace(tmp_ttl):
     from ster.workspace import TaxonomyWorkspace
 
-    ws = cli_module._load_workspace([tmp_ttl], [tmp_ttl])
+    ws = cli_module._workspace_ui._load_workspace([tmp_ttl], [tmp_ttl])
     assert isinstance(ws, TaxonomyWorkspace)
     assert tmp_ttl in ws.taxonomies
 
@@ -1112,3 +1379,445 @@ def test_run_arrow_menu_bare_escape_quits(tmp_path, monkeypatch):
 
     _fake_tty(monkeypatch, [b"\x1b", b"x"])  # Esc not followed by '[' → quit
     assert _run_arrow_menu(tmp_path / "f.ttl", [(True, "Open"), (object(), "Two")]) is None
+
+
+# ── cmd_export ────────────────────────────────────────────────────────────────
+
+
+def test_cmd_export_generates_html_and_prints_created_files(tmp_ttl, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out_file = tmp_path / "html" / "test_en.html"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("<html></html>", encoding="utf-8")
+    with (
+        patch("ster.html_export.generate_html", return_value=[out_file]),
+        patch("webbrowser.open") as browser_open,
+    ):
+        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
+    assert result.exit_code == 0
+    assert "Generated 1 file(s)" in result.stdout
+    browser_open.assert_called_once()
+
+
+def test_cmd_export_reports_runtime_error(tmp_ttl):
+    with patch("ster.html_export.generate_html", side_effect=RuntimeError("pyLODE missing")):
+        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
+    assert result.exit_code == 1
+
+
+def test_cmd_export_reports_unexpected_error(tmp_ttl):
+    with patch("ster.html_export.generate_html", side_effect=ValueError("boom")):
+        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
+    assert result.exit_code == 1
+
+
+def test_cmd_export_stops_when_ontology_uri_is_declined(tmp_path):
+    bare = tmp_path / "bare.ttl"
+    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
+    with patch("ster.cli._export._ensure_ontology_uri", return_value=False):
+        result = _runner.invoke(app, ["export", "--file", str(bare)])
+    assert result.exit_code == 1
+
+
+# ── _ensure_ontology_uri ────────────────────────────────────────────────────────
+
+
+def test_ensure_ontology_uri_true_when_scheme_present(tmp_ttl):
+    from ster.cli._export import _ensure_ontology_uri
+
+    assert _ensure_ontology_uri(tmp_ttl) is True
+
+
+def test_ensure_ontology_uri_prompts_and_saves_when_missing(tmp_path):
+    from ster.cli._export import _ensure_ontology_uri
+
+    bare = tmp_path / "bare.ttl"
+    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
+    with patch(
+        "ster.cli._export.Prompt.ask", side_effect=["My Ontology", "https://example.org/onto"]
+    ):
+        assert _ensure_ontology_uri(bare) is True
+    from ster import store
+
+    saved = store.load(bare)
+    assert saved.ontology_uri == "https://example.org/onto"
+
+
+def test_ensure_ontology_uri_rejects_uri_with_space(tmp_path):
+    from ster.cli._export import _ensure_ontology_uri
+
+    bare = tmp_path / "bare.ttl"
+    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
+    with patch("ster.cli._export.Prompt.ask", side_effect=["Name", "not a valid uri"]):
+        assert _ensure_ontology_uri(bare) is False
+
+
+def test_ensure_ontology_uri_cancelled(tmp_path):
+    from ster.cli._export import _ensure_ontology_uri
+
+    bare = tmp_path / "bare.ttl"
+    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
+    with patch("ster.cli._export.Prompt.ask", side_effect=KeyboardInterrupt):
+        assert _ensure_ontology_uri(bare) is False
+
+
+def test_ensure_ontology_uri_false_when_load_fails(tmp_path):
+    from ster.cli._export import _ensure_ontology_uri
+
+    missing = tmp_path / "does-not-exist.ttl"
+    assert _ensure_ontology_uri(missing) is False
+
+
+# ── init-ci / serve (ster/cli/_serve.py) ────────────────────────────────────
+
+
+def test_cmd_init_ci_creates_workflow(tmp_path):
+    result = _runner.invoke(app, ["init-ci", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".github" / "workflows" / "taxonomy-ci.yml").exists()
+    assert "created" in result.output.lower()
+
+
+def test_cmd_init_ci_already_exists_without_force(tmp_path):
+    workflow = tmp_path / ".github" / "workflows" / "taxonomy-ci.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("existing", encoding="utf-8")
+    result = _runner.invoke(app, ["init-ci", str(tmp_path), "--no-config"])
+    assert result.exit_code == 0
+    assert "already exists" in result.output.lower()
+
+
+def test_cmd_serve_import_error_exits(tmp_ttl):
+    with patch.dict("sys.modules", {"ster.api_server": None}):
+        result = _runner.invoke(app, ["serve", str(tmp_ttl)])
+    assert result.exit_code == 1
+    assert "graph server" in result.output.lower() or "fastapi" in result.output.lower()
+
+
+def test_cmd_serve_invokes_api_server(tmp_ttl):
+    mock_serve = MagicMock()
+    with patch("ster.api_server.serve", mock_serve):
+        result = _runner.invoke(
+            app, ["serve", str(tmp_ttl), "--host", "127.0.0.1", "--port", "9999"]
+        )
+    assert result.exit_code == 0
+    mock_serve.assert_called_once()
+    _, kwargs = mock_serve.call_args
+    assert kwargs["host"] == "127.0.0.1"
+    assert kwargs["port"] == 9999
+
+
+def test_open_dev_artifacts_in_browser_live_server(tmp_path, tmp_ttl):
+    from ster.cli._serve import _open_dev_artifacts_in_browser
+
+    with (
+        patch("ster.viz_vowl.ensure_published_server", return_value="http://127.0.0.1:8000"),
+        patch(
+            "ster.publish.open_dev_artifacts",
+            return_value=["http://127.0.0.1:8000/a", "http://127.0.0.1:8000/b"],
+        ),
+    ):
+        _open_dev_artifacts_in_browser(
+            MagicMock(), tmp_ttl, tmp_path, [tmp_path / "a.html", tmp_path / "b.html"]
+        )
+
+
+def test_open_dev_artifacts_in_browser_no_live_server_falls_back(tmp_path, tmp_ttl):
+    from ster.cli._serve import _open_dev_artifacts_in_browser
+
+    with (
+        patch("ster.viz_vowl.ensure_published_server", return_value=None),
+        patch(
+            "ster.publish.open_dev_artifacts",
+            return_value=["file:///a.html"],
+        ),
+    ):
+        _open_dev_artifacts_in_browser(MagicMock(), tmp_ttl, tmp_path, [tmp_path / "a.html"])
+
+
+def test_open_dev_artifacts_in_browser_no_urls_returns_early(tmp_path, tmp_ttl):
+    from ster.cli._serve import _open_dev_artifacts_in_browser
+
+    with (
+        patch("ster.viz_vowl.ensure_published_server", return_value=None),
+        patch("ster.publish.open_dev_artifacts", return_value=[]),
+    ):
+        _open_dev_artifacts_in_browser(MagicMock(), tmp_ttl, tmp_path, [])
+
+
+def test_resolve_broken_mappings_declined(tmp_path):
+    from ster.workspace import TaxonomyWorkspace
+
+    ttl = tmp_path / "mapped.ttl"
+    other = tmp_path / "other.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+@prefix o: <https://other.org/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:A .
+t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+    skos:prefLabel "A"@en ; skos:exactMatch o:B .
+"""
+    )
+    other.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix o: <https://other.org/> .
+
+o:Scheme2 a skos:ConceptScheme ; skos:hasTopConcept o:B .
+o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
+    skos:prefLabel "B"@en .
+"""
+    )
+    workspace = TaxonomyWorkspace.from_files([ttl])
+    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=False):
+        cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
+    assert other not in workspace.taxonomies
+
+
+def test_resolve_broken_mappings_loads_the_unloaded_file(tmp_path):
+    from ster.workspace import TaxonomyWorkspace
+
+    ttl = tmp_path / "mapped.ttl"
+    other = tmp_path / "other.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+@prefix o: <https://other.org/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:A .
+t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+    skos:prefLabel "A"@en ; skos:exactMatch o:B .
+"""
+    )
+    other.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix o: <https://other.org/> .
+
+o:Scheme2 a skos:ConceptScheme ; skos:hasTopConcept o:B .
+o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
+    skos:prefLabel "B"@en .
+"""
+    )
+    workspace = TaxonomyWorkspace.from_files([ttl])
+    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=True):
+        cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
+    assert other in workspace.taxonomies
+
+
+def test_resolve_broken_mappings_load_failure_is_reported(tmp_path):
+    from ster.workspace import TaxonomyWorkspace
+
+    ttl = tmp_path / "mapped.ttl"
+    other = tmp_path / "other.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+@prefix o: <https://other.org/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:A .
+t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+    skos:prefLabel "A"@en ; skos:exactMatch o:B .
+"""
+    )
+    other.write_text("not a valid taxonomy file at all {{{", encoding="utf-8")
+    workspace = TaxonomyWorkspace.from_files([ttl])
+    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=True):
+        cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
+    assert other not in workspace.taxonomies
+
+
+def test_resolve_broken_mappings_cancelled_treated_as_declined(tmp_path):
+    from ster.workspace import TaxonomyWorkspace
+
+    ttl = tmp_path / "mapped.ttl"
+    other = tmp_path / "other.ttl"
+    ttl.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix t: <https://example.org/t/> .
+@prefix o: <https://other.org/> .
+
+t:Scheme a skos:ConceptScheme ; skos:hasTopConcept t:A .
+t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
+    skos:prefLabel "A"@en ; skos:exactMatch o:B .
+"""
+    )
+    other.write_text(
+        """\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix o: <https://other.org/> .
+
+o:Scheme2 a skos:ConceptScheme ; skos:hasTopConcept o:B .
+o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
+    skos:prefLabel "B"@en .
+"""
+    )
+    workspace = TaxonomyWorkspace.from_files([ttl])
+    with patch("ster.cli._workspace_ui.Confirm.ask", side_effect=KeyboardInterrupt):
+        cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
+    assert other not in workspace.taxonomies
+
+
+def test_prompt_for_context_files_cancelled_returns_empty(tmp_path):
+    from ster.cli._workspace_ui import prompt_for_context_files
+
+    a = tmp_path / "a.ttl"
+    b = tmp_path / "b.ttl"
+    with patch("ster.cli._workspace_ui.Prompt.ask", side_effect=KeyboardInterrupt):
+        assert prompt_for_context_files(a, [a, b]) == []
+
+
+def test_cmd_show_opens_the_viewer_by_default(tmp_ttl):
+    """No --plain / --handles → falls through to the interactive viewer."""
+    with patch("ster.cli._viewer._open_viewer") as open_viewer:
+        result = _runner.invoke(app, ["show", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+    open_viewer.assert_called_once()
+
+
+def test_cmd_add_with_french_label_and_definition(tmp_ttl):
+    result = _runner.invoke(
+        app,
+        [
+            "add",
+            "FrConcept",
+            "--fr",
+            "Concept Français",
+            "--def-fr",
+            "Une définition.",
+            "--file",
+            str(tmp_ttl),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_cmd_remove_without_yes_declined(tmp_ttl):
+    with patch("ster.cli._commands_edit.Confirm.ask", return_value=False):
+        result = _runner.invoke(app, ["remove", "GRA", "--file", str(tmp_ttl)])
+    assert result.exit_code != 0
+
+
+def test_cmd_remove_without_yes_confirmed_cascade_message(tmp_ttl):
+    with patch("ster.cli._commands_edit.Confirm.ask", return_value=True) as confirm:
+        result = _runner.invoke(app, ["remove", "CHI", "--cascade", "--file", str(tmp_ttl)])
+    assert result.exit_code == 0, result.output
+    (msg,), _ = confirm.call_args
+    assert "child" in msg.lower()
+
+
+def test_cmd_subclass(tmp_path):
+    ttl = tmp_path / "classes.ttl"
+    ttl.write_text(
+        """\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix t: <https://example.org/t/> .
+
+t:Animal a owl:Class ; rdfs:label "Animal"@en .
+t:Dog a owl:Class ; rdfs:label "Dog"@en .
+"""
+    )
+    result = _runner.invoke(
+        app,
+        [
+            "subclass",
+            "https://example.org/t/Dog",
+            "--parent",
+            "https://example.org/t/Animal",
+            "--file",
+            str(ttl),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "subClassOf" in result.output
+
+
+def test_cmd_convert_default_output(tmp_ttl, tmp_path):
+    out = tmp_path / f"{tmp_ttl.stem}.ttl"
+    if out == tmp_ttl:
+        out = tmp_path / "converted.ttl"
+    result = _runner.invoke(app, ["convert", str(tmp_ttl), str(out)])
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+
+
+def test_cmd_convert_bad_input_reports_value_error(tmp_path):
+    bogus = tmp_path / "bogus.unknownext"
+    bogus.write_text("not rdf", encoding="utf-8")
+    result = _runner.invoke(app, ["convert", str(bogus)])
+    assert result.exit_code == 1
+
+
+def test_cmd_convert_missing_file_reports_generic_error(tmp_path):
+    missing = tmp_path / "does-not-exist.ttl"
+    result = _runner.invoke(app, ["convert", str(missing)])
+    assert result.exit_code == 1
+
+
+# ── _offer_keep_demo_edits (ster/cli/_query_launcher.py) ────────────────────
+
+
+def test_offer_keep_demo_edits_noop_when_not_a_tty(tmp_path, monkeypatch):
+    from ster.cli._query_launcher import _offer_keep_demo_edits
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    dest = tmp_path / "demo.ttl"
+    dest.write_text("edited", encoding="utf-8")
+    with patch("ster.cli._query_launcher.Confirm.ask") as confirm:
+        _offer_keep_demo_edits(dest)
+    confirm.assert_not_called()
+
+
+def test_offer_keep_demo_edits_declined(tmp_path, monkeypatch):
+    from ster.cli._query_launcher import _offer_keep_demo_edits
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    dest = tmp_path / "demo.ttl"
+    dest.write_text("edited", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("ster.cli._query_launcher.Confirm.ask", return_value=False):
+        _offer_keep_demo_edits(dest)
+    assert not (tmp_path / "my-ontology.ttl").exists()
+
+
+def test_offer_keep_demo_edits_saves_under_chosen_name(tmp_path, monkeypatch):
+    from ster.cli._query_launcher import _offer_keep_demo_edits
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    dest = tmp_path / "demo.ttl"
+    dest.write_text("edited content", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._query_launcher.Confirm.ask", return_value=True),
+        patch("ster.cli._query_launcher.Prompt.ask", return_value="mywork"),
+    ):
+        _offer_keep_demo_edits(dest)
+    saved = tmp_path / "mywork.ttl"
+    assert saved.exists()
+    assert saved.read_text(encoding="utf-8") == "edited content"
+
+
+def test_offer_keep_demo_edits_blank_name_falls_back_to_default(tmp_path, monkeypatch):
+    from ster.cli._query_launcher import _offer_keep_demo_edits
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    dest = tmp_path / "demo.ttl"
+    dest.write_text("edited", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._query_launcher.Confirm.ask", return_value=True),
+        patch("ster.cli._query_launcher.Prompt.ask", return_value=""),
+    ):
+        _offer_keep_demo_edits(dest)
+    assert (tmp_path / "my-ontology.ttl").exists()

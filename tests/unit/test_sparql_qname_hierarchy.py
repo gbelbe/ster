@@ -73,6 +73,50 @@ def test_leaf_class_absent_from_children_keys() -> None:
     assert "Switch" not in children
 
 
+def test_unbound_namespace_class_excluded_from_hierarchy():
+    """A class whose URI matches no declared namespace binding is skipped
+    when building the hierarchy (no crash, just absent from the index)."""
+    tax = _make_hierarchy_taxonomy()
+    tax.owl_classes["https://other.org/Unrelated"] = RDFClass(uri="https://other.org/Unrelated")
+    idx = build_uri_index(tax)
+    assert "kai" in idx
+    all_roots_and_children = set(idx["kai"]["roots"])
+    for children in idx["kai"]["children"].values():
+        all_roots_and_children |= set(children)
+    assert "Unrelated" not in all_roots_and_children
+
+
+def test_class_uri_equal_to_bare_namespace_is_skipped():
+    """A class URI identical to the namespace itself (empty local name after
+    stripping the prefix) is skipped rather than producing a blank entry."""
+    tax = _make_hierarchy_taxonomy()
+    tax.owl_classes[_NS] = RDFClass(uri=_NS)
+    idx = build_uri_index(tax)
+    all_roots = idx["kai"]["roots"]
+    assert "" not in all_roots
+
+
+def test_unbound_namespace_individual_excluded_from_hierarchy():
+    from ster.model import OWLIndividual
+
+    tax = _make_hierarchy_taxonomy()
+    tax.owl_individuals["https://other.org/ghost"] = OWLIndividual(
+        uri="https://other.org/ghost", types=[_NS + "Thing"]
+    )
+    idx = build_uri_index(tax)
+    # No crash, and the individual doesn't leak into the kai namespace bucket
+    assert "kai" in idx
+
+
+def test_individual_uri_equal_to_bare_namespace_is_skipped():
+    from ster.model import OWLIndividual
+
+    tax = _make_hierarchy_taxonomy()
+    tax.owl_individuals[_NS] = OWLIndividual(uri=_NS, types=[_NS + "Thing"])
+    # No crash — the bare-namespace individual has no local name to index
+    build_uri_index(tax)
+
+
 def test_children_sorted_alphabetically() -> None:
     tax = _make_hierarchy_taxonomy()
     # Add two children to Thing

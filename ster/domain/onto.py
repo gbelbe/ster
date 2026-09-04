@@ -140,7 +140,7 @@ def count_ontology_rename_changes(
 def ontology_domain(taxonomy: Taxonomy) -> str:
     """Return the host of the ontology URI (e.g. 'www.adeo.com'), or '' if none/non-http."""
     uri = taxonomy.ontology_uri or ""
-    if not uri.startswith(("http://", "https://")):
+    if not uri.startswith(("http://", "https://")):  # NOSONAR - scheme prefix, not a URL
         return ""
     return urlsplit(uri).netloc
 

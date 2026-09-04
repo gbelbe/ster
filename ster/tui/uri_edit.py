@@ -45,6 +45,6 @@ def mint_base(taxonomy: Taxonomy, action: str, parent_uri: str) -> str:
         return taxonomy.base_uri()
     onto = taxonomy.ontology_uri or ""
     root = onto.rstrip("#/")
-    if root and onto.startswith(("http://", "https://")):
+    if root and onto.startswith(("http://", "https://")):  # NOSONAR - scheme prefix, not a URL
         return root + _ontology_separator(taxonomy)
     return taxonomy.base_uri()

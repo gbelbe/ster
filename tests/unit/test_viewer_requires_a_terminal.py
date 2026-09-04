@@ -15,12 +15,12 @@ from ster import cli
 
 def test_the_viewer_is_skipped_without_a_terminal(tmp_path, monkeypatch, capsys):
     launched: list[object] = []
-    monkeypatch.setattr(cli, "_is_interactive_terminal", lambda: False)
+    monkeypatch.setattr(cli._viewer, "_is_interactive_terminal", lambda: False)
     monkeypatch.setattr("ster.tui.launch_file", lambda *a, **k: launched.append(a))
 
     src = tmp_path / "o.ttl"
     src.write_text("", encoding="utf-8")
-    cli._open_viewer(src)
+    cli._viewer._open_viewer(src)
 
     assert not launched, "the TUI must not run its event loop without a tty"
     assert "terminal" in capsys.readouterr().err.lower()  # a refusal belongs on stderr
@@ -29,14 +29,14 @@ def test_the_viewer_is_skipped_without_a_terminal(tmp_path, monkeypatch, capsys)
 def test_a_real_terminal_still_opens_the_viewer(tmp_path, monkeypatch):
     """The guard must not break the normal interactive path."""
     launched: list[object] = []
-    monkeypatch.setattr(cli, "_is_interactive_terminal", lambda: True)
-    monkeypatch.setattr(cli, "_prewarm_lint", lambda _p: None)
-    monkeypatch.setattr(cli, "_start_git_fetch", lambda _gm: None)
+    monkeypatch.setattr(cli._viewer, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(cli._viewer, "_prewarm_lint", lambda _p: None)
+    monkeypatch.setattr(cli._viewer, "_start_git_fetch", lambda _gm: None)
     monkeypatch.setattr("ster.tui.launch_file", lambda *a, **k: launched.append(a))
 
     src = tmp_path / "o.ttl"
     src.write_text("", encoding="utf-8")
-    cli._open_viewer(src)
+    cli._viewer._open_viewer(src)
 
     assert launched
 
@@ -50,7 +50,7 @@ def test_both_streams_must_be_a_terminal(monkeypatch, stdin_tty, stdout_tty, exp
     monkeypatch.setattr("sys.stdin.isatty", lambda: stdin_tty, raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: stdout_tty, raising=False)
 
-    assert cli._is_interactive_terminal() is expected
+    assert cli._viewer._is_interactive_terminal() is expected
 
 
 # ── quitting is not a crash ───────────────────────────────────────────────────
@@ -68,11 +68,11 @@ def test_a_quit_from_inside_an_action_is_not_a_traceback(tmp_path, monkeypatch, 
     def quits(_action, _files):
         raise typer.Exit(0)
 
-    monkeypatch.setattr(cli, "_found_taxonomy_files", lambda: [])
+    monkeypatch.setattr(cli._home, "_found_taxonomy_files", lambda: [])
     chosen = tmp_path / "o.ttl"
-    monkeypatch.setattr(cli, "_home_obtain_action", lambda *a: (chosen, [chosen]))
-    monkeypatch.setattr(cli, "_dispatch_menu_action", quits)
+    monkeypatch.setattr(cli._home, "_home_obtain_action", lambda *a: (chosen, [chosen]))
+    monkeypatch.setattr(cli._query_launcher, "_dispatch_menu_action", quits)
 
-    cli._home_screen()  # must return, not raise
+    cli._home._home_screen()  # must return, not raise
 
     assert "Traceback" not in capsys.readouterr().err

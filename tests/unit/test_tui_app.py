@@ -2764,7 +2764,7 @@ def test_large_class_hierarchy_loads_descendants_on_expansion() -> None:
 
 def test_context_server_start_does_not_block_the_ui_thread(monkeypatch) -> None:
     """Starting the optional API server must happen outside Textual's UI thread."""
-    import ster.tui.app as app_module
+    import ster.tui.app._lifecycle as lifecycle_module
     from ster.model import Taxonomy
 
     started = threading.Event()
@@ -2775,7 +2775,9 @@ def test_context_server_start_does_not_block_the_ui_thread(monkeypatch) -> None:
         started.set()
         return True
 
-    monkeypatch.setattr(app_module, "_start_context_server", fake_start)
+    # _lifecycle imports _start_context_server by name (it's the thread target),
+    # so the patch targets that binding rather than the ster.tui.app re-export.
+    monkeypatch.setattr(lifecycle_module, "_start_context_server", fake_start)
     app = OntologyApp(Taxonomy(), source="empty.ttl")
     ui_thread = threading.get_ident()
 

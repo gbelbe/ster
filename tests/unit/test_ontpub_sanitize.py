@@ -139,3 +139,13 @@ def test_returns_path_to_existing_file():
     assert tmp.exists()
     assert tmp.suffix == ".ttl"
     tmp.unlink(missing_ok=True)
+
+
+def test_blank_node_ontology_is_skipped_without_error():
+    """A blank-node owl:Ontology subject (no URI) is skipped, not crashed on."""
+    ttl = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n[] a owl:Ontology .\n"
+    g, tmp = _load_sanitized(ttl)
+    tmp.unlink(missing_ok=True)
+    # No dcterms:title/description was added for the blank node — nothing to
+    # assert on the value, only that sanitization completed without raising.
+    assert len(list(g.subjects(RDF.type, OWL.Ontology))) == 1

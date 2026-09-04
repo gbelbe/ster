@@ -32,7 +32,7 @@ ex:Tent a skos:Concept ; skos:prefLabel "Tent"@en ; skos:inScheme ex:Scheme .
 def source(tmp_path, monkeypatch) -> Path:
     # conftest disables the cache for the suite at large; these tests are about it.
     monkeypatch.delenv("STER_NO_CACHE", raising=False)
-    monkeypatch.setattr(store, "_bin_cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(store._cache, "_bin_cache_dir", lambda: tmp_path / "cache")
     path = tmp_path / "o.ttl"
     path.write_text(TTL, encoding="utf-8")
     return path
@@ -82,7 +82,7 @@ def test_a_cache_from_another_schema_is_not_used(source, monkeypatch):
     stale = store._get_bin_cache_path(source)
     assert stale.is_file(), "precondition: the cache was written"
 
-    monkeypatch.setattr(store, "_model_schema_fingerprint", lambda: "0ldschema")
+    monkeypatch.setattr(store._cache, "_model_schema_fingerprint", lambda: "0ldschema")
     store._model_schema_fingerprint.cache_clear() if hasattr(
         store._model_schema_fingerprint, "cache_clear"
     ) else None

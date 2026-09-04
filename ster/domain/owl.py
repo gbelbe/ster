@@ -240,7 +240,7 @@ def add_owl_individual(taxonomy: Taxonomy, uri: str, class_uri: str | None = Non
     return individual
 
 
-_XSD = "http://www.w3.org/2001/XMLSchema#"
+_XSD = "http://www.w3.org/2001/XMLSchema#"  # NOSONAR - RDF namespace IRI
 
 # Datatypes offered when defining an attribute (datatype property) on a class.
 SUPPORTED_DATATYPES: list[tuple[str, str]] = [
@@ -379,6 +379,18 @@ def _retype_individuals_after_delete(
                 ind.types.append(parent)
 
 
+def _reparent_single_class(
+    cls: RDFClass, other_uri: str, deleted_uris: set[str], surviving_parents: list[str]
+) -> None:
+    for dead in deleted_uris:
+        if dead not in cls.sub_class_of:
+            continue
+        cls.sub_class_of.remove(dead)
+        for parent in surviving_parents:
+            if parent not in cls.sub_class_of and parent != other_uri:
+                cls.sub_class_of.append(parent)
+
+
 def _reparent_classes_after_delete(
     taxonomy: Taxonomy, deleted_uris: set[str], surviving_parents: list[str]
 ) -> None:
@@ -386,12 +398,7 @@ def _reparent_classes_after_delete(
     for other_uri, cls in taxonomy.owl_classes.items():
         if other_uri in deleted_uris:
             continue
-        for dead in deleted_uris:
-            if dead in cls.sub_class_of:
-                cls.sub_class_of.remove(dead)
-                for parent in surviving_parents:
-                    if parent not in cls.sub_class_of and parent != other_uri:
-                        cls.sub_class_of.append(parent)
+        _reparent_single_class(cls, other_uri, deleted_uris, surviving_parents)
 
 
 def _strip_property_refs_to_deleted(taxonomy: Taxonomy, deleted_uris: set[str]) -> None:

@@ -95,7 +95,7 @@ def when_broadcaster_notified(ctx):
     async def _run():
         task = asyncio.create_task(ctx["_collect_coro"]())
         await asyncio.sleep(0.01)
-        await ctx["broadcaster"]._broadcast()
+        ctx["broadcaster"]._broadcast()
         await asyncio.wait_for(task, timeout=2.0)
 
     asyncio.run(_run())

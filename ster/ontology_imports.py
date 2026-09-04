@@ -10,26 +10,34 @@ from pathlib import Path
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "ster" / "ontologies"
 
 _LOCAL_PREFIXES = (
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "http://www.w3.org/2000/01/rdf-schema#",
-    "http://www.w3.org/2002/07/owl#",
-    "http://www.w3.org/2004/02/skos/core#",
-    "http://www.w3.org/XML/1998/namespace",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2000/01/rdf-schema#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2002/07/owl#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2004/02/skos/core#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/XML/1998/namespace",  # NOSONAR - RDF predicate/property IRI
 )
 
 # Well-known ontologies users commonly import.
 # Each entry: (display name, short prefix, namespace URL)
 COMMON_ONTOLOGIES: list[tuple[str, str, str]] = [
-    ("FOAF (Friend of a Friend)", "foaf", "http://xmlns.com/foaf/0.1/"),
+    (
+        "FOAF (Friend of a Friend)",
+        "foaf",
+        "http://xmlns.com/foaf/0.1/",  # NOSONAR - RDF namespace IRI
+    ),
     ("Schema.org", "schema", "https://schema.org/"),
-    ("Dublin Core Terms", "dc", "http://purl.org/dc/terms/"),
-    ("VOID (Vocabulary of Interlinked Datasets)", "void", "http://rdfs.org/ns/void#"),
-    ("DBpedia Ontology", "dbo", "http://dbpedia.org/ontology/"),
-    ("OWL-Time", "time", "http://www.w3.org/2006/time#"),
-    ("WGS84 Geo", "geo", "http://www.w3.org/2003/01/geo/wgs84_pos#"),
-    ("PROV-O", "prov", "http://www.w3.org/ns/prov#"),
-    ("SIOC", "sioc", "http://rdfs.org/sioc/ns#"),
-    ("GoodRelations", "gr", "http://purl.org/goodrelations/v1#"),
+    ("Dublin Core Terms", "dc", "http://purl.org/dc/terms/"),  # NOSONAR - RDF namespace IRI
+    (
+        "VOID (Vocabulary of Interlinked Datasets)",
+        "void",
+        "http://rdfs.org/ns/void#",  # NOSONAR - RDF namespace IRI
+    ),
+    ("DBpedia Ontology", "dbo", "http://dbpedia.org/ontology/"),  # NOSONAR - RDF namespace IRI
+    ("OWL-Time", "time", "http://www.w3.org/2006/time#"),  # NOSONAR - RDF namespace IRI
+    ("WGS84 Geo", "geo", "http://www.w3.org/2003/01/geo/wgs84_pos#"),  # NOSONAR - RDF namespace IRI
+    ("PROV-O", "prov", "http://www.w3.org/ns/prov#"),  # NOSONAR - RDF namespace IRI
+    ("SIOC", "sioc", "http://rdfs.org/sioc/ns#"),  # NOSONAR - RDF namespace IRI
+    ("GoodRelations", "gr", "http://purl.org/goodrelations/v1#"),  # NOSONAR - RDF namespace IRI
 ]
 
 
@@ -146,7 +154,14 @@ def _make_ssl_context():
 def _cache_file(namespace_url: str, cache_dir: Path) -> Path:
     """The disk-cache path for *namespace_url* (deterministic, slug + md5 key)."""
     key = hashlib.md5(namespace_url.encode(), usedforsecurity=False).hexdigest()[:8]
-    slug = namespace_url.replace("https://", "").replace("http://", "").replace("/", "_")
+    slug = (
+        namespace_url.replace("https://", "")
+        .replace(
+            "http://",  # NOSONAR - scheme prefix, not a URL
+            "",
+        )
+        .replace("/", "_")
+    )
     return cache_dir / f"{slug}{key}.ttl"
 
 
@@ -265,6 +280,43 @@ def get_properties_for_class(graph, class_uri: str, superclasses: set[str]):
     return props
 
 
+def _add_local_properties_for_types(
+    taxonomy, eff: set[str], seen_uris: set[str], result: list
+) -> None:
+    for p_uri, prop in taxonomy.owl_properties.items():
+        if prop.prop_type not in ("ObjectProperty", "DatatypeProperty", "Property"):
+            continue
+        if prop.domains and not any(t in prop.domains for t in eff):
+            continue
+        seen_uris.add(p_uri)
+        result.append(prop)
+
+
+def _add_external_properties_for_namespace(
+    ext_uri: str, ns: str, ext_refs: set[str], seen_uris: set[str], result: list, cache_dir: Path
+) -> None:
+    g = fetch_ontology(ns, cache_dir=cache_dir)
+    if len(g) == 0:
+        return
+    ext_supers: set[str] = {uri for uri in ext_refs if namespace_url_from_uri(uri) == ns}
+    for p in get_properties_for_class(g, ext_uri, superclasses=ext_supers):
+        if p.uri not in seen_uris:
+            seen_uris.add(p.uri)
+            result.append(p)
+
+
+def _add_external_properties(
+    ext_refs: set[str], seen_uris: set[str], result: list, cache_dir: Path
+) -> None:
+    fetched_ns: set[str] = set()
+    for ext_uri in ext_refs:
+        ns = namespace_url_from_uri(ext_uri)
+        if ns in fetched_ns:
+            continue
+        fetched_ns.add(ns)
+        _add_external_properties_for_namespace(ext_uri, ns, ext_refs, seen_uris, result, cache_dir)
+
+
 def suggest_external_properties(
     taxonomy, individual_types: list[str], cache_dir: Path = _DEFAULT_CACHE_DIR
 ):
@@ -280,34 +332,10 @@ def suggest_external_properties(
     result: list[OWLProperty] = []
 
     eff = _effective_types_inline(taxonomy, individual_types)
-
-    for p_uri, prop in taxonomy.owl_properties.items():
-        if prop.prop_type not in ("ObjectProperty", "DatatypeProperty", "Property"):
-            continue
-        if prop.domains and not any(t in prop.domains for t in eff):
-            continue
-        seen_uris.add(p_uri)
-        result.append(prop)
+    _add_local_properties_for_types(taxonomy, eff, seen_uris, result)
 
     ext_refs = find_external_class_refs(taxonomy)
-    fetched_ns: set[str] = set()
-
-    for ext_uri in ext_refs:
-        ns = namespace_url_from_uri(ext_uri)
-        if ns in fetched_ns:
-            continue
-        fetched_ns.add(ns)
-        g = fetch_ontology(ns, cache_dir=cache_dir)
-        if len(g) == 0:
-            continue
-        ext_supers: set[str] = set()
-        for uri in ext_refs:
-            if namespace_url_from_uri(uri) == ns:
-                ext_supers.add(uri)
-        for p in get_properties_for_class(g, ext_uri, superclasses=ext_supers):
-            if p.uri not in seen_uris:
-                seen_uris.add(p.uri)
-                result.append(p)
+    _add_external_properties(ext_refs, seen_uris, result, cache_dir)
 
     return result
 
@@ -317,13 +345,13 @@ def suggest_external_properties(
 # vocabularies — accepted without a per-ontology lookup. The long tail is covered
 # by checking an imported ontology's own `rdf:type owl:AnnotationProperty`.
 
-_RDFS = "http://www.w3.org/2000/01/rdf-schema#"
-_SKOS = "http://www.w3.org/2004/02/skos/core#"
-_OWL = "http://www.w3.org/2002/07/owl#"
-_DCT = "http://purl.org/dc/terms/"
-_DC = "http://purl.org/dc/elements/1.1/"
-_FOAF = "http://xmlns.com/foaf/0.1/"
-_VANN = "http://purl.org/vocab/vann/"
+_RDFS = "http://www.w3.org/2000/01/rdf-schema#"  # NOSONAR - RDF namespace IRI
+_SKOS = "http://www.w3.org/2004/02/skos/core#"  # NOSONAR - RDF namespace IRI
+_OWL = "http://www.w3.org/2002/07/owl#"  # NOSONAR - RDF namespace IRI
+_DCT = "http://purl.org/dc/terms/"  # NOSONAR - RDF namespace IRI
+_DC = "http://purl.org/dc/elements/1.1/"  # NOSONAR - RDF namespace IRI
+_FOAF = "http://xmlns.com/foaf/0.1/"  # NOSONAR - RDF namespace IRI
+_VANN = "http://purl.org/vocab/vann/"  # NOSONAR - RDF namespace IRI
 _SCHEMA = "https://schema.org/"
 
 WELL_KNOWN_ANNOTATION_PROPS: frozenset[str] = frozenset(

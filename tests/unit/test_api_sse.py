@@ -18,7 +18,7 @@ async def test_broadcaster_emits_updated_event() -> None:
 
     task = asyncio.create_task(collect())
     await asyncio.sleep(0.01)  # let subscribe() register its queue
-    await bc._broadcast()
+    bc._broadcast()
     await asyncio.wait_for(task, timeout=2.0)
 
     assert len(received) == 1
@@ -65,7 +65,7 @@ async def test_broadcaster_multiple_listeners() -> None:
     t1 = asyncio.create_task(collect(0))
     t2 = asyncio.create_task(collect(1))
     await asyncio.sleep(0.01)
-    await bc._broadcast()
+    bc._broadcast()
     await asyncio.gather(
         asyncio.wait_for(t1, timeout=2.0),
         asyncio.wait_for(t2, timeout=2.0),

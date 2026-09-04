@@ -51,24 +51,24 @@ def mixed() -> Taxonomy:
 def test_context_choice_parsing(answer, expected):
     options = [Path("a.ttl"), Path("b.ttl"), Path("c.ttl")]
 
-    assert [p.name for p in cli.parse_context_choice(answer, options)] == expected
+    assert [p.name for p in cli._workspace_ui.parse_context_choice(answer, options)] == expected
 
 
 def test_context_choice_ignores_junk_rather_than_refusing():
     """One typo should not discard the files that were named clearly."""
     options = [Path("a.ttl"), Path("b.ttl")]
 
-    assert [p.name for p in cli.parse_context_choice("x,2", options)] == ["b.ttl"]
+    assert [p.name for p in cli._workspace_ui.parse_context_choice("x,2", options)] == ["b.ttl"]
 
 
 def test_context_choice_ignores_out_of_range():
-    assert cli.parse_context_choice("9", [Path("a.ttl")]) == []
+    assert cli._workspace_ui.parse_context_choice("9", [Path("a.ttl")]) == []
 
 
 def test_context_choice_deduplicates():
     options = [Path("a.ttl"), Path("b.ttl")]
 
-    assert [p.name for p in cli.parse_context_choice("1,1", options)] == ["a.ttl"]
+    assert [p.name for p in cli._workspace_ui.parse_context_choice("1,1", options)] == ["a.ttl"]
 
 
 def test_no_prompt_when_there_is_nothing_else_to_offer(monkeypatch):
@@ -76,7 +76,7 @@ def test_no_prompt_when_there_is_nothing_else_to_offer(monkeypatch):
     asked = []
     monkeypatch.setattr(cli.Prompt, "ask", lambda *a, **k: asked.append(1) or "all")
 
-    result = cli.prompt_for_context_files(Path("only.ttl"), [Path("only.ttl")])
+    result = cli._workspace_ui.prompt_for_context_files(Path("only.ttl"), [Path("only.ttl")])
 
     assert result == []
     assert asked == [], "no question when there is no choice"
@@ -85,7 +85,9 @@ def test_no_prompt_when_there_is_nothing_else_to_offer(monkeypatch):
 def test_prompt_offers_the_other_files(monkeypatch):
     monkeypatch.setattr(cli.Prompt, "ask", lambda *a, **k: "all")
 
-    result = cli.prompt_for_context_files(Path("a.ttl"), [Path("a.ttl"), Path("b.ttl")])
+    result = cli._workspace_ui.prompt_for_context_files(
+        Path("a.ttl"), [Path("a.ttl"), Path("b.ttl")]
+    )
 
     assert [p.name for p in result] == ["b.ttl"], "the editable file is not its own context"
 

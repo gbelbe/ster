@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from rdflib import Graph
@@ -81,85 +82,98 @@ def test_cmd_convert_prints_success_message(tmp_path):
 
 
 def test_prompt_shown_for_rdfxml_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
-    monkeypatch.setattr(cli_module, "_converted_from", None)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "converted_from", None)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask", return_value=False) as mock_ask:
-        cli_module._maybe_prompt_rdfxml_convert(src)
+        cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
     mock_ask.assert_called_once()
 
 
 def test_no_prompt_for_ttl_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
     src = tmp_path / "onto.ttl"
     src.write_text(_TTL)
 
     with patch("ster.cli.Confirm.ask") as mock_ask:
-        cli_module._maybe_prompt_rdfxml_convert(src)
+        cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
     mock_ask.assert_not_called()
 
 
 def test_prompt_not_repeated_when_already_checked(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", True)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", True)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask") as mock_ask:
-        cli_module._maybe_prompt_rdfxml_convert(src)
+        cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
     mock_ask.assert_not_called()
 
 
 def test_accept_conversion_creates_ttl(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
-    monkeypatch.setattr(cli_module, "_converted_from", None)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "converted_from", None)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask", return_value=True):
-        result = cli_module._maybe_prompt_rdfxml_convert(src)
+        result = cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
     assert result == tmp_path / "onto.ttl"
     assert (tmp_path / "onto.ttl").exists()
 
 
 def test_accept_conversion_sets_converted_from(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
-    monkeypatch.setattr(cli_module, "_converted_from", None)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "converted_from", None)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask", return_value=True):
-        cli_module._maybe_prompt_rdfxml_convert(src)
+        cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
-    assert cli_module._converted_from == src
+    assert cli_module._state.converted_from == src
 
 
 def test_decline_conversion_returns_original(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
-    monkeypatch.setattr(cli_module, "_converted_from", None)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "converted_from", None)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask", return_value=False):
-        result = cli_module._maybe_prompt_rdfxml_convert(src)
+        result = cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
     assert result == src
-    assert cli_module._converted_from is None
+    assert cli_module._state.converted_from is None
 
 
 def test_decline_conversion_no_ttl_created(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli_module, "_rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
     src = tmp_path / "onto.owl"
     src.write_text(_RDF_XML)
 
     with patch("ster.cli.Confirm.ask", return_value=False):
-        cli_module._maybe_prompt_rdfxml_convert(src)
+        cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
 
+    assert not (tmp_path / "onto.ttl").exists()
+
+
+def test_prompt_cancelled_treated_as_declined(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module._state, "rdfxml_checked", False)
+    monkeypatch.setattr(cli_module._state, "converted_from", None)
+    src = tmp_path / "onto.owl"
+    src.write_text(_RDF_XML)
+
+    with patch("ster.cli.Confirm.ask", side_effect=KeyboardInterrupt):
+        result = cli_module._rdfxml._maybe_prompt_rdfxml_convert(src)
+
+    assert result == src
     assert not (tmp_path / "onto.ttl").exists()
 
 
@@ -218,6 +232,19 @@ def test_backconvert_declined_leaves_original(tmp_path):
     assert original.read_text() == original_content
 
 
+def test_backconvert_cancelled_treated_as_declined(tmp_path):
+    ttl = tmp_path / "onto.ttl"
+    ttl.write_text(_TTL)
+    original = tmp_path / "onto.owl"
+    original.write_text(_RDF_XML)
+    original_content = original.read_text()
+
+    with patch("ster.cli.Confirm.ask", side_effect=KeyboardInterrupt):
+        _maybe_backconvert(ttl, "stale-hash", original)
+
+    assert original.read_text() == original_content
+
+
 def test_load_safe_returns_taxonomy_on_valid_file(tmp_path):
     from ster.cli import _load_safe
 
@@ -251,13 +278,81 @@ def test_graph_viz_file_prompt_can_be_cancelled(tmp_path):
         _run_graph_viz_interactive(files)
 
 
+def test_graph_viz_no_files_prints_error():
+    from ster.cli import _run_graph_viz_interactive
+
+    with patch("ster.cli._export.console"):
+        _run_graph_viz_interactive([])  # should return without raising
+
+
+def test_graph_viz_invalid_choice_prints_error(tmp_path):
+    from ster.cli import _run_graph_viz_interactive
+
+    files = [tmp_path / "one.ttl", tmp_path / "two.ttl"]
+    with patch("ster.cli._export.Prompt.ask", return_value="not-a-number"):
+        _run_graph_viz_interactive(files)  # should return without raising
+
+
+def test_graph_viz_single_file_opens_directly(tmp_ttl):
+    from ster.cli import _run_graph_viz_interactive
+
+    with (
+        patch("ster.viz_vowl.open_in_browser", return_value="http://127.0.0.1:8765/vowl") as opener,
+        patch("ster.viz_vowl.is_live_server", return_value=True),
+        patch("ster.cli._export._free_graph_port"),
+    ):
+        _run_graph_viz_interactive([tmp_ttl])
+    opener.assert_called_once()
+
+
+def test_graph_viz_static_snapshot_warning_when_not_live(tmp_ttl):
+    from ster.cli import _run_graph_viz_interactive
+
+    with (
+        patch("ster.viz_vowl.open_in_browser", return_value="http://127.0.0.1:8765/vowl"),
+        patch("ster.viz_vowl.is_live_server", return_value=False),
+        patch("ster.cli._export._free_graph_port"),
+        patch("ster.cli._export.console") as mock_console,
+    ):
+        _run_graph_viz_interactive([tmp_ttl])
+    printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+    assert "static" in printed.lower() or "busy" in printed.lower()
+
+
+def test_graph_viz_reports_error_from_viz_backend(tmp_ttl):
+    from ster.cli import _run_graph_viz_interactive
+
+    with (
+        patch("ster.viz_vowl.open_in_browser", side_effect=RuntimeError("boom")),
+        patch("ster.cli._export._free_graph_port"),
+    ):
+        _run_graph_viz_interactive([tmp_ttl])  # should not raise
+
+
+def test_graph_viz_multi_file_numeric_selection(tmp_path, tmp_ttl):
+    from ster.cli import _run_graph_viz_interactive
+
+    second = tmp_path / "second.ttl"
+    second.write_text(tmp_ttl.read_text(), encoding="utf-8")
+    with (
+        patch("ster.viz_vowl.open_in_browser", return_value="http://127.0.0.1:8765/vowl") as opener,
+        patch("ster.viz_vowl.is_live_server", return_value=True),
+        patch("ster.cli._export._free_graph_port"),
+        patch("ster.cli._export.Prompt.ask", return_value="2"),
+    ):
+        _run_graph_viz_interactive([tmp_ttl, second])
+    opener.assert_called_once()
+    called_file = opener.call_args[0][1]
+    assert called_file == second
+
+
 def test_html_export_profile_prompt_can_be_cancelled(tmp_path):
     from ster.cli import _run_html_export_interactive
 
     source = tmp_path / "onto.ttl"
     source.write_text(_TTL)
     with (
-        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="both"),
         patch("ster.cli.Prompt.ask", side_effect=EOFError),
     ):
@@ -270,7 +365,7 @@ def test_html_export_language_prompt_can_be_cancelled(tmp_path):
     source = tmp_path / "onto.ttl"
     source.write_text(_TTL)
     with (
-        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="vocpub"),
         patch("ster.cli.Prompt.ask", side_effect=EOFError),
     ):
@@ -283,11 +378,104 @@ def test_html_export_output_prompt_can_be_cancelled(tmp_path):
     source = tmp_path / "onto.ttl"
     source.write_text(_TTL)
     with (
-        patch("ster.cli._ensure_pylode", return_value=True),
+        patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="ontpub"),
         patch("ster.cli.Prompt.ask", side_effect=EOFError),
     ):
         _run_html_export_interactive([source])
+
+
+def test_html_export_full_run_generates_and_opens_files(tmp_ttl, tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    out_dir = tmp_path / "html-out"
+    created = [tmp_path / "html-out" / "test_en.html"]
+    with (
+        patch("ster.cli._export._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="vocpub"),
+        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("ster.html_export.generate_html", return_value=created),
+        patch("webbrowser.open") as browser_open,
+    ):
+        _run_html_export_interactive([tmp_ttl])
+    browser_open.assert_called_once()
+
+
+def test_html_export_skipped_without_pylode():
+    from ster.cli import _run_html_export_interactive
+
+    with patch("ster.cli._export._ensure_pylode", return_value=False):
+        _run_html_export_interactive([Path("whatever.ttl")])  # returns immediately, no error
+
+
+def test_html_export_no_files_prints_error():
+    from ster.cli import _run_html_export_interactive
+
+    with patch("ster.cli._export._ensure_pylode", return_value=True):
+        _run_html_export_interactive([])
+
+
+def test_html_export_stops_when_ontology_uri_declined(tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    bare = tmp_path / "bare.ttl"
+    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
+    out_dir = tmp_path / "html-out"
+    with (
+        patch("ster.cli._export._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="vocpub"),
+        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("ster.cli._export._ensure_ontology_uri", return_value=False),
+    ):
+        _run_html_export_interactive([bare])
+
+
+def test_html_export_reports_generate_html_error(tmp_ttl, tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    out_dir = tmp_path / "html-out"
+    with (
+        patch("ster.cli._export._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="vocpub"),
+        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("ster.html_export.generate_html", side_effect=RuntimeError("no pylode")),
+    ):
+        _run_html_export_interactive([tmp_ttl])
+
+
+def test_html_export_profile_choice_persists_and_generates(tmp_path):
+    from ster.cli import _run_html_export_interactive
+
+    source = tmp_path / "onto.ttl"
+    source.write_text(_TTL, encoding="utf-8")
+    out_dir = tmp_path / "html-out"
+    with (
+        patch("ster.cli._export._ensure_pylode", return_value=True),
+        patch("ster.html_export.detect_profile", return_value="both"),
+        patch(
+            "ster.cli._export.Prompt.ask",
+            side_effect=["ontpub", str(out_dir)],
+        ),
+        patch("ster.cli._export._ensure_ontology_uri", return_value=True),
+        patch("ster.html_export.generate_html", return_value=[]),
+    ):
+        _run_html_export_interactive([source])
+
+
+def test_show_html_export_preview_lists_each_file(tmp_ttl):
+    from ster.cli._export import _show_html_export_preview
+
+    with patch("ster.html_export.detect_profile", return_value="vocpub"):
+        _show_html_export_preview([tmp_ttl])  # should not raise
+
+
+def test_show_html_export_preview_skips_unloadable_file(tmp_path):
+    from ster.cli._export import _show_html_export_preview
+
+    broken = tmp_path / "broken.ttl"
+    broken.write_text("this is not valid turtle {{{", encoding="utf-8")
+    with patch("ster.html_export.detect_profile", return_value="vocpub"):
+        _show_html_export_preview([broken])  # should not raise
 
 
 def test_load_warns_on_format_mismatch(tmp_path, monkeypatch):
@@ -298,7 +486,7 @@ def test_load_warns_on_format_mismatch(tmp_path, monkeypatch):
     f.write_text(_RDF_XML)
     output: list[str] = []
     monkeypatch.setattr(
-        cli_module,
+        cli_module._taxonomy_io,
         "console",
         type(
             "C",

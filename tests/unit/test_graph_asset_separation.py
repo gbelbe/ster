@@ -45,7 +45,7 @@ def stub_lib(monkeypatch):
     def _make(version: str):
         return f"<script>{_LIB_MARKER} window.cytoscape=function(){{return{{}};}}; // {version}</script>"
 
-    monkeypatch.setattr(viz_vowl, "_cytoscape_script_tag", lambda: _make("3.29.2"))
+    monkeypatch.setattr(viz_vowl._js_assets, "_cytoscape_script_tag", lambda: _make("3.29.2"))
     return _make
 
 

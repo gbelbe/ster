@@ -17,7 +17,7 @@ from pathlib import Path
 
 #: semanticlint discovers any ``*.shapes.ttl`` sibling — match that suffix exactly.
 SHAPES_SUFFIX = ".shapes.ttl"
-_SH = "http://www.w3.org/ns/shacl#"
+_SH = "http://www.w3.org/ns/shacl#"  # NOSONAR - RDF namespace IRI
 _SH_PREFIX = f"@prefix sh: <{_SH}> ."
 
 

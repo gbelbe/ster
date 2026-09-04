@@ -58,10 +58,10 @@ def test_open_query_result_generates_full_graph_file(tmp_path: Path) -> None:
     file_path.write_text("", encoding="utf-8")
 
     with (
-        patch("ster.viz_vowl._ensure_server", return_value=8000),
-        patch("ster.viz_vowl.webbrowser.open"),
-        patch("ster.viz_vowl._cytoscape_script_tag", return_value="<script></script>"),
-        patch("ster.viz_vowl.Path.home", return_value=tmp_path),
+        patch("ster.viz_vowl._server._ensure_server", return_value=8000),
+        patch("ster.viz_vowl._query_result.webbrowser.open"),
+        patch("ster.viz_vowl._js_assets._cytoscape_script_tag", return_value="<script></script>"),
+        patch("ster.viz_vowl._query_result.Path.home", return_value=tmp_path),
     ):
         _url, out_path = open_query_result_in_browser(tax, {_URI}, file_path)
 

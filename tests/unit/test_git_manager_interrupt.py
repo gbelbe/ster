@@ -24,17 +24,17 @@ def mgr(tmp_path: Path) -> GitManager:
 
 
 def test_check_and_pull_returns_none_on_keyboard_interrupt(mgr: GitManager) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         result = mgr.check_and_pull()
     assert result is None
 
 
 def test_pre_edit_check_returns_none_on_keyboard_interrupt(mgr: GitManager) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         result = mgr.pre_edit_check()
     assert result is None
 
 
 def test_fetch_remote_returns_none_on_keyboard_interrupt(mgr: GitManager) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         mgr.fetch_remote()  # returns None implicitly — must not raise

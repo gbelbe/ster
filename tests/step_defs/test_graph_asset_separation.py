@@ -50,16 +50,16 @@ def when_load_asset(ctx: dict) -> None:
 
 @when("I render the graph page with a stub Cytoscape library")
 def when_render_stub(ctx: dict, monkeypatch) -> None:
-    monkeypatch.setattr(viz_vowl, "_cytoscape_script_tag", lambda: _stub("3.29.2"))
+    monkeypatch.setattr(viz_vowl._js_assets, "_cytoscape_script_tag", lambda: _stub("3.29.2"))
     ctx["html"] = render_vowl_html(ctx["taxonomy"], file_path=None)
 
 
 @when("I render the page with the old library and again with a new library")
 def when_render_two_libs(ctx: dict, monkeypatch) -> None:
-    monkeypatch.setattr(viz_vowl, "_cytoscape_script_tag", lambda: _stub("3.29.2-old"))
+    monkeypatch.setattr(viz_vowl._js_assets, "_cytoscape_script_tag", lambda: _stub("3.29.2-old"))
     ctx["html_old"] = render_vowl_html(ctx["taxonomy"], file_path=None)
     monkeypatch.setattr(
-        viz_vowl,
+        viz_vowl._js_assets,
         "_cytoscape_script_tag",
         lambda: (
             "<script>/* 9.9.9 NEW different bytes */window.cytoscape=function(){return 42;};</script>"

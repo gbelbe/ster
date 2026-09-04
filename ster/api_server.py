@@ -26,7 +26,7 @@ HtmlRenderer = Callable[[Any, str | None, str], str]
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
 
-_DEFAULT_SERVER_URL = "http://127.0.0.1"
+_DEFAULT_SERVER_URL = "http://127.0.0.1"  # NOSONAR - local-only address, not a network destination
 _DEFAULT_SERVER_PORT = 8765
 
 
@@ -341,10 +341,13 @@ def serve(
 
     app.router.on_startup.append(_on_startup)  # type: ignore[attr-defined]
 
+    # Printed for the user's own terminal — the server it just started, on
+    # their own machine, not a remote address.
+    _local_prefix = "http://"  # NOSONAR - local-only address, not a network destination
     print("\n  ster API server")
-    print(f"  URL  : http://{_host}:{_port}/")
-    print(f"  Docs : http://{_host}:{_port}/docs")
-    print(f"  MCP  : http://{_host}:{_port}/mcp   (read-only ontology context)")
+    print(f"  URL  : {_local_prefix}{_host}:{_port}/")
+    print(f"  Docs : {_local_prefix}{_host}:{_port}/docs")
+    print(f"  MCP  : {_local_prefix}{_host}:{_port}/mcp   (read-only ontology context)")
     print(f"  Token: {token}")
     print(f"  (token persisted at {_TOKEN_FILE})\n")
 

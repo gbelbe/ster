@@ -22,7 +22,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .model import LabelType, Taxonomy
+from .model import Concept, LabelType, Taxonomy
 
 # ── Severity constants ────────────────────────────────────────────────────────
 
@@ -187,6 +187,49 @@ def _compute_stats(taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str])
     )
 
 
+def _accumulate_concept_completions(
+    c: Concept,
+    pref_by_lang: dict[str, int],
+    alt_by_lang: dict[str, int],
+    def_by_lang: dict[str, int],
+    scope_by_lang: dict[str, int],
+) -> None:
+    pref_langs: set[str] = set()
+    alt_langs: set[str] = set()
+    for lbl in c.labels:
+        if lbl.type == LabelType.PREF:
+            pref_langs.add(lbl.lang)
+        elif lbl.type == LabelType.ALT:
+            alt_langs.add(lbl.lang)
+    for lg in pref_langs:
+        pref_by_lang[lg] = pref_by_lang.get(lg, 0) + 1
+    for lg in alt_langs:
+        alt_by_lang[lg] = alt_by_lang.get(lg, 0) + 1
+    for d in c.definitions:
+        def_by_lang[d.lang] = def_by_lang.get(d.lang, 0) + 1
+    for s in c.scope_notes:
+        scope_by_lang[s.lang] = scope_by_lang.get(s.lang, 0) + 1
+
+
+def _build_completion_list(
+    total: int,
+    pref_by_lang: dict[str, int],
+    alt_by_lang: dict[str, int],
+    def_by_lang: dict[str, int],
+    scope_by_lang: dict[str, int],
+) -> list[PropertyCompletion]:
+    result: list[PropertyCompletion] = []
+    if pref_by_lang:
+        result.append(PropertyCompletion("pref_label", "prefLabel", total, pref_by_lang))
+    if alt_by_lang:
+        result.append(PropertyCompletion("alt_label", "altLabel", total, alt_by_lang))
+    if def_by_lang:
+        result.append(PropertyCompletion("definition", "definition", total, def_by_lang))
+    if scope_by_lang:
+        result.append(PropertyCompletion("scope_note", "scopeNote", total, scope_by_lang))
+    return result
+
+
 def _compute_completions(taxonomy: Taxonomy, concept_uris: list[str]) -> list[PropertyCompletion]:
     """Compute per-language completion for core SKOS properties."""
     total = len(concept_uris)
@@ -199,32 +242,9 @@ def _compute_completions(taxonomy: Taxonomy, concept_uris: list[str]) -> list[Pr
         c = taxonomy.concepts.get(uri)
         if not c:
             continue
-        pref_langs: set[str] = set()
-        alt_langs: set[str] = set()
-        for lbl in c.labels:
-            if lbl.type == LabelType.PREF:
-                pref_langs.add(lbl.lang)
-            elif lbl.type == LabelType.ALT:
-                alt_langs.add(lbl.lang)
-        for lg in pref_langs:
-            pref_by_lang[lg] = pref_by_lang.get(lg, 0) + 1
-        for lg in alt_langs:
-            alt_by_lang[lg] = alt_by_lang.get(lg, 0) + 1
-        for d in c.definitions:
-            def_by_lang[d.lang] = def_by_lang.get(d.lang, 0) + 1
-        for s in c.scope_notes:
-            scope_by_lang[s.lang] = scope_by_lang.get(s.lang, 0) + 1
+        _accumulate_concept_completions(c, pref_by_lang, alt_by_lang, def_by_lang, scope_by_lang)
 
-    result: list[PropertyCompletion] = []
-    if pref_by_lang:
-        result.append(PropertyCompletion("pref_label", "prefLabel", total, pref_by_lang))
-    if alt_by_lang:
-        result.append(PropertyCompletion("alt_label", "altLabel", total, alt_by_lang))
-    if def_by_lang:
-        result.append(PropertyCompletion("definition", "definition", total, def_by_lang))
-    if scope_by_lang:
-        result.append(PropertyCompletion("scope_note", "scopeNote", total, scope_by_lang))
-    return result
+    return _build_completion_list(total, pref_by_lang, alt_by_lang, def_by_lang, scope_by_lang)
 
 
 def compute_completions(taxonomy: Taxonomy, concept_uris: list[str]) -> list[PropertyCompletion]:
@@ -345,40 +365,67 @@ def _detect_broken_top_concepts(
     ]
 
 
+_HIER_WHITE, _HIER_GRAY, _HIER_BLACK = 0, 1, 2
+
+
+def _report_hierarchy_cycle(
+    taxonomy: Taxonomy, issues: list[TaxonomyIssue], reported: set[str], child: str
+) -> None:
+    if child in reported:
+        return
+    reported.add(child)
+    h = taxonomy.uri_to_handle(child) or child
+    issues.append(
+        TaxonomyIssue(
+            "circular_hierarchy",
+            SEVERITY_ERROR,
+            child,
+            f"Circular hierarchy  [{h}]",
+        )
+    )
+
+
+def _visit_narrower_child(
+    taxonomy: Taxonomy,
+    color: dict[str, int],
+    issues: list[TaxonomyIssue],
+    reported: set[str],
+    child: str,
+) -> None:
+    if child not in color:
+        return
+    if color[child] == _HIER_GRAY:
+        _report_hierarchy_cycle(taxonomy, issues, reported, child)
+    elif color[child] == _HIER_WHITE:
+        _dfs_hierarchy_cycles(taxonomy, color, issues, reported, child)
+
+
+def _dfs_hierarchy_cycles(
+    taxonomy: Taxonomy,
+    color: dict[str, int],
+    issues: list[TaxonomyIssue],
+    reported: set[str],
+    uri: str,
+) -> None:
+    color[uri] = _HIER_GRAY
+    c = taxonomy.concepts.get(uri)
+    if c:
+        for child in c.narrower:
+            _visit_narrower_child(taxonomy, color, issues, reported, child)
+    color[uri] = _HIER_BLACK
+
+
 def _detect_circular_hierarchy(
     taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
 ) -> list[TaxonomyIssue]:
     """DFS with white/gray/black colouring to detect hierarchy cycles."""
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = dict.fromkeys(concept_uris, WHITE)
+    color: dict[str, int] = dict.fromkeys(concept_uris, _HIER_WHITE)
     issues: list[TaxonomyIssue] = []
     reported: set[str] = set()
 
-    def dfs(uri: str) -> None:
-        color[uri] = GRAY
-        c = taxonomy.concepts.get(uri)
-        if c:
-            for child in c.narrower:
-                if child not in color:
-                    continue
-                if color[child] == GRAY and child not in reported:
-                    reported.add(child)
-                    h = taxonomy.uri_to_handle(child) or child
-                    issues.append(
-                        TaxonomyIssue(
-                            "circular_hierarchy",
-                            SEVERITY_ERROR,
-                            child,
-                            f"Circular hierarchy  [{h}]",
-                        )
-                    )
-                elif color[child] == WHITE:
-                    dfs(child)
-        color[uri] = BLACK
-
     for uri in concept_uris:
-        if color[uri] == WHITE:
-            dfs(uri)
+        if color[uri] == _HIER_WHITE:
+            _dfs_hierarchy_cycles(taxonomy, color, issues, reported, uri)
     return issues
 
 
@@ -407,10 +454,9 @@ def _detect_alt_same_as_pref(
     return issues
 
 
-def _detect_duplicate_pref_label(
-    taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
-) -> list[TaxonomyIssue]:
-    """Warn when two concepts share the same prefLabel in the same language."""
+def _collect_pref_label_groups(
+    taxonomy: Taxonomy, concept_uris: list[str]
+) -> dict[tuple[str, str], list[str]]:
     seen: dict[tuple[str, str], list[str]] = {}
     for uri in concept_uris:
         c = taxonomy.concepts.get(uri)
@@ -420,23 +466,42 @@ def _detect_duplicate_pref_label(
             if lbl.type == LabelType.PREF:
                 key = (lbl.lang, lbl.value.lower())
                 seen.setdefault(key, []).append(uri)
+    return seen
+
+
+def _report_duplicate_group(
+    taxonomy: Taxonomy,
+    issues: list[TaxonomyIssue],
+    reported: set[str],
+    lang: str,
+    uris: list[str],
+) -> None:
+    for uri in uris:
+        if uri in reported:
+            continue
+        reported.add(uri)
+        h = taxonomy.uri_to_handle(uri) or uri
+        issues.append(
+            TaxonomyIssue(
+                "duplicate_pref_label",
+                SEVERITY_WARNING,
+                uri,
+                f"Duplicate prefLabel [{lang}]  [{h}]",
+            )
+        )
+
+
+def _detect_duplicate_pref_label(
+    taxonomy: Taxonomy, scheme_uri: str, concept_uris: list[str]
+) -> list[TaxonomyIssue]:
+    """Warn when two concepts share the same prefLabel in the same language."""
+    seen = _collect_pref_label_groups(taxonomy, concept_uris)
 
     issues: list[TaxonomyIssue] = []
     reported: set[str] = set()
     for (lang, _val), uris in seen.items():
         if len(uris) > 1:
-            for uri in uris:
-                if uri not in reported:
-                    reported.add(uri)
-                    h = taxonomy.uri_to_handle(uri) or uri
-                    issues.append(
-                        TaxonomyIssue(
-                            "duplicate_pref_label",
-                            SEVERITY_WARNING,
-                            uri,
-                            f"Duplicate prefLabel [{lang}]  [{h}]",
-                        )
-                    )
+            _report_duplicate_group(taxonomy, issues, reported, lang, uris)
     return issues
 
 

@@ -155,6 +155,35 @@ def _inject_switcher(html: str, stem: str, current: str, all_langs: list[str]) -
 # ── OntPub graph sanitiser ───────────────────────────────────────────────────
 
 
+def _strip_bare_namespace_subjects(g) -> None:
+    from rdflib import URIRef
+
+    for subj in set(g.subjects()):
+        if isinstance(subj, URIRef) and str(subj).endswith("#"):
+            # list() is required, not redundant: g.remove() below mutates the
+            # graph mid-loop, and predicate_objects() is a live view over it.
+            for p, o in list(g.predicate_objects(subj)):  # NOSONAR - materialized before mutating g
+                g.remove((subj, p, o))
+
+
+def _ensure_ontology_title_and_description(g) -> None:
+    from rdflib import Literal as RdfLiteral
+    from rdflib import URIRef
+    from rdflib.namespace import DCTERMS, OWL, RDF, RDFS
+
+    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
+        if not isinstance(ont_ref, URIRef):
+            continue
+        label = g.value(ont_ref, RDFS.label)
+        label_str = str(label) if label else None
+        fallback = str(ont_ref).rstrip("#/").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+        if not g.value(ont_ref, DCTERMS.title):
+            g.add((ont_ref, DCTERMS.title, RdfLiteral(label_str or fallback)))
+        if not g.value(ont_ref, DCTERMS.description):
+            g.add((ont_ref, DCTERMS.description, RdfLiteral(label_str or "")))
+        break
+
+
 def _sanitize_ontpub_graph(taxonomy_path: Path) -> Path:
     """Return a path to a sanitized temp TTL safe for pyLODE's OntPub.
 
@@ -170,30 +199,13 @@ def _sanitize_ontpub_graph(taxonomy_path: Path) -> Path:
     """
     import tempfile
 
-    from rdflib import Graph, Literal, URIRef
-    from rdflib.namespace import DCTERMS, OWL, RDF, RDFS
+    from rdflib import Graph
 
     g = Graph()
     g.parse(str(taxonomy_path))
 
-    # 1. Strip bare-namespace subjects (URI ends with '#')
-    for subj in set(g.subjects()):
-        if isinstance(subj, URIRef) and str(subj).endswith("#"):
-            for p, o in list(g.predicate_objects(subj)):
-                g.remove((subj, p, o))
-
-    # 2. Ensure dcterms:title and dcterms:description on the owl:Ontology
-    for ont_ref in g.subjects(RDF.type, OWL.Ontology):
-        if not isinstance(ont_ref, URIRef):
-            continue
-        label = g.value(ont_ref, RDFS.label)
-        label_str = str(label) if label else None
-        fallback = str(ont_ref).rstrip("#/").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-        if not g.value(ont_ref, DCTERMS.title):
-            g.add((ont_ref, DCTERMS.title, Literal(label_str or fallback)))
-        if not g.value(ont_ref, DCTERMS.description):
-            g.add((ont_ref, DCTERMS.description, Literal(label_str or "")))
-        break
+    _strip_bare_namespace_subjects(g)
+    _ensure_ontology_title_and_description(g)
 
     with tempfile.NamedTemporaryFile(suffix=".ttl", delete=False) as _f:
         tmp = Path(_f.name)

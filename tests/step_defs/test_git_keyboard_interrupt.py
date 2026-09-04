@@ -34,19 +34,19 @@ def configured_manager(ctx: dict[str, Any]) -> None:
 
 @when("subprocess is interrupted during check_and_pull")
 def interrupt_check_and_pull(ctx: dict[str, Any]) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         ctx["result"] = ctx["mgr"].check_and_pull()
 
 
 @when("subprocess is interrupted during pre_edit_check")
 def interrupt_pre_edit_check(ctx: dict[str, Any]) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         ctx["result"] = ctx["mgr"].pre_edit_check()
 
 
 @when("subprocess is interrupted during fetch_remote")
 def interrupt_fetch_remote(ctx: dict[str, Any]) -> None:
-    with patch("ster.git.manager._git", side_effect=KeyboardInterrupt):
+    with patch("ster.git.manager._subprocess._git", side_effect=KeyboardInterrupt):
         ctx["mgr"].fetch_remote()
         ctx["result"] = None
 

@@ -66,8 +66,8 @@ def when_open_viz(ctx):
         ctx["opened_url"] = url
 
     with (
-        patch("ster.viz_vowl.webbrowser.open", side_effect=_capture),
-        patch("ster.viz_vowl._ensure_server", return_value=8080),
+        patch("ster.viz_vowl._query_result.webbrowser.open", side_effect=_capture),
+        patch("ster.viz_vowl._server._ensure_server", return_value=8080),
         patch("pathlib.Path.mkdir"),
         patch("pathlib.Path.write_text"),
     ):

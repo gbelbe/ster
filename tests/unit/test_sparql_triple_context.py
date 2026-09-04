@@ -50,6 +50,12 @@ def test_after_open_brace_position_one_is_subject():
     assert _ctx("SELECT * WHERE { kai:") == "any"
 
 
+def test_no_triple_separator_at_all_defaults_to_subject_position():
+    """No '{' '.' ';' ',' before the cursor at all (e.g. before WHERE even
+    opens) — falls back to subject position, i.e. 'any' context."""
+    assert _ctx("kai:") == "any"
+
+
 def test_predicate_position_with_variable_subject():
     assert _ctx("WHERE { ?x kai:") == "property"
 

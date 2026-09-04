@@ -362,6 +362,43 @@ def test_property_fill_subclass_membership():
     assert a.property_fill_global[BASE + "hasPet"] == 1.0
 
 
+def test_property_fill_skips_unrelated_property_values():
+    """An individual's property_values for a different predicate are skipped
+    while scanning for the one being measured (not the first-checked prop)."""
+    t = Taxonomy()
+    t.owl_classes[BASE + "Dog"] = _cls("Dog")
+    rex = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label(lang="en", value="Rex")],
+        types=[BASE + "Dog"],
+        property_values=[
+            (BASE + "hasColor", BASE + "Brown"),  # unrelated predicate — skipped
+            (BASE + "hasFriend", BASE + "Rex"),
+        ],
+    )
+    t.owl_individuals[BASE + "Rex"] = rex
+    t.owl_properties[BASE + "hasFriend"] = _prop("hasFriend", ["Dog"], ["Dog"])
+    a = compute_ontology_analysis(t)
+    assert a.property_fill_global[BASE + "hasFriend"] == 1.0
+
+
+def test_property_fill_true_immediately_when_property_has_no_range():
+    """A property with no rdfs:range counts any assertion as filled, regardless
+    of the target's types."""
+    t = Taxonomy()
+    t.owl_classes[BASE + "Dog"] = _cls("Dog")
+    rex = OWLIndividual(
+        uri=BASE + "Rex",
+        labels=[Label(lang="en", value="Rex")],
+        types=[BASE + "Dog"],
+        property_values=[(BASE + "hasNote", BASE + "SomeLiteralTarget")],
+    )
+    t.owl_individuals[BASE + "Rex"] = rex
+    t.owl_properties[BASE + "hasNote"] = _prop("hasNote", domains=["Dog"], ranges=None)
+    a = compute_ontology_analysis(t)
+    assert a.property_fill_global[BASE + "hasNote"] == 1.0
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Issue detectors
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -116,8 +116,8 @@ Only after the user approves the simplified scope and test plan should you proce
 
 ## Project conventions
 
-- State machine pattern: one dataclass per viewer mode in `nav_state.py`, pure `_draw_*` / `_on_*` methods in `nav.py`
-- Curses must be suspended (`curses.endwin()`) before any non-curses terminal I/O (Rich, input()), then resumed (`stdscr.refresh()`)
+- **Oversized modules split into a package behind a re-export shim.** A flat file that outgrows a few hundred lines (once it can't be justified as one cohesive concern) becomes a package: submodules by business concern, an `__init__.py` that re-exports every public *and* private name callers/tests rely on (with an explicit `__all__` — required to keep ruff's F401 quiet on the re-exports), so every existing `import`/`from ... import` keeps working unchanged. A single stateful class too large for one file (a Textual `App` or widget) splits into mixin classes by business domain instead, composed in the package's `__init__.py` — Textual merges `BINDINGS`/`CSS`/`reactive()` across mixins automatically via `__mro__`, but a mixin's `@on(...)`-decorated handler is never dispatched (the metaclass hook only fires for the class actually decorated) — use the `on_<event>` naming-convention handler on mixins instead. See `docs/architecture/module-layout.md` for the worked examples (`ster.cli`, `ster.nav.logic`, `ster.viz_vowl`, `ster.tui.app`, `ster.store`, `ster.sparql_query`, `ster.tui.config_modal`, `ster.git.manager`) and the exact re-export/patch-target pitfalls each one hit.
+- Editing routes through `TaxonomyService` (`ster/core/service.py`), the command/service layer both the CLI (`ster/cli/`) and the Textual TUI (`ster/tui/app/`) use — mutations go through it so they're validated and undoable, never applied by writing model state directly from UI code.
 - All new features need tests; run the full suite before committing
 
 ## External dependencies (mandatory)

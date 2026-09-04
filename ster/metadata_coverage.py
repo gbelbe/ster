@@ -27,9 +27,15 @@ class MetaProp:
     enforce: bool = False
 
 
-RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
-RDFS_COMMENT = "http://www.w3.org/2000/01/rdf-schema#comment"
-SKOS_PREFLABEL = "http://www.w3.org/2004/02/skos/core#prefLabel"
+RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"  # NOSONAR - RDF predicate/property IRI
+RDFS_COMMENT = (
+    "http://www.w3.org/2000/01/rdf-schema#comment"  # NOSONAR - RDF predicate/property IRI
+)
+
+SKOS_PREFLABEL = (
+    "http://www.w3.org/2004/02/skos/core#prefLabel"  # NOSONAR - RDF predicate/property IRI
+)
+
 SCHEMA_IMAGE = "https://schema.org/image"
 SCHEMA_VIDEO = "https://schema.org/video"
 SCHEMA_URL = "https://schema.org/url"

@@ -63,7 +63,7 @@ def test_push_taxonomy_is_noop_when_no_server_running():
 def test_notify_is_a_noop_on_a_closed_loop():
     """Regression: a stopped server leaves a closed loop cached in _bg.loop.
 
-    ``run_coroutine_threadsafe`` on a closed loop raises
+    ``call_soon_threadsafe`` on a closed loop raises
     ``RuntimeError: Event loop is closed``, which propagated up through
     viz_vowl.push_update into the TUI's save path. Surfaced as a Python 3.12-only
     CI failure — on 3.13 the fake loop in tests happened to close later.

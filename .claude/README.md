@@ -91,7 +91,10 @@ It encodes the common root causes of local-vs-CI divergence and how to fix them.
 - [`../CLAUDE.md`](../CLAUDE.md) — the full engineering rulebook.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — setup, branching, commits, PRs, releases.
 - [`../docs/architecture/`](../docs/architecture/) — design docs: `module-layout.md`
-  (the `domain/` split), `core-service.md` (commands/undo core),
-  `detail-presenter.md` (entity detail views), `ontology-versioning.md` (publishing).
+  (the package/shim-contract pattern used for every oversized-file split —
+  `domain/`, `cli/`, `nav/logic/`, `viz_vowl/`, `tui/app/`, `store/`,
+  `sparql_query/`, `tui/config_modal/`, `git/manager/`), `core-service.md`
+  (commands/undo core), `detail-presenter.md` (entity detail views),
+  `ontology-versioning.md` (publishing).
 - Try it: open the app with `uv run ster show ster/tui/mixed-gear-demo.ttl`, then
   run `/ci` once to see the gate.

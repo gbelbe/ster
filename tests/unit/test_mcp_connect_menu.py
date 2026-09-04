@@ -13,20 +13,20 @@ from ster import cli
 
 
 def test_endpoint_is_the_mcp_path_on_the_running_server():
-    endpoint, _snippet = cli.mcp_connection_info("http://127.0.0.1:8765", "tok")
+    endpoint, _snippet = cli._publish.mcp_connection_info("http://127.0.0.1:8765", "tok")
 
     assert endpoint == "http://127.0.0.1:8765/mcp"
 
 
 def test_endpoint_does_not_double_the_slash():
-    endpoint, _snippet = cli.mcp_connection_info("http://127.0.0.1:8765/", "tok")
+    endpoint, _snippet = cli._publish.mcp_connection_info("http://127.0.0.1:8765/", "tok")
 
     assert endpoint == "http://127.0.0.1:8765/mcp"
 
 
 def test_snippet_is_the_vendor_neutral_mcp_servers_object():
     """Every MCP-capable client reads this shape; nothing here is Claude-specific."""
-    _endpoint, snippet = cli.mcp_connection_info("http://127.0.0.1:8765", "tok")
+    _endpoint, snippet = cli._publish.mcp_connection_info("http://127.0.0.1:8765", "tok")
 
     config = json.loads(snippet)
 
@@ -39,21 +39,21 @@ def test_snippet_is_the_vendor_neutral_mcp_servers_object():
 
 def test_snippet_carries_the_live_token():
     """The token is per-install, so a copied snippet has to be usable as-is."""
-    _endpoint, snippet = cli.mcp_connection_info("http://127.0.0.1:8765", "secret-value")
+    _endpoint, snippet = cli._publish.mcp_connection_info("http://127.0.0.1:8765", "secret-value")
 
     assert "Bearer secret-value" in snippet
 
 
 def test_menu_offers_the_mcp_entry():
-    labels = [label for _sentinel, label in cli._home_actions()]
+    labels = [label for _sentinel, label in cli._workspace_ui._home_actions()]
 
     assert any("MCP" in label for label in labels)
 
 
 def test_menu_row_uses_the_mcp_sentinel():
-    sentinels = [s for s, _label in cli._home_actions()]
+    sentinels = [s for s, _label in cli._workspace_ui._home_actions()]
 
-    assert cli._MCP_SENTINEL in sentinels
+    assert cli._constants._MCP_SENTINEL in sentinels
 
 
 def test_mcp_sentinel_is_wired_to_a_handler():
@@ -65,10 +65,10 @@ def test_mcp_sentinel_is_wired_to_a_handler():
     """
     import inspect
 
-    source = inspect.getsource(cli)
+    source = inspect.getsource(cli._query_launcher)
 
-    assert "_MCP_SENTINEL: _run_mcp_connect_interactive" in source
-    assert callable(cli._run_mcp_connect_interactive)
+    assert "_MCP_SENTINEL: _publish._run_mcp_connect_interactive" in source
+    assert callable(cli._publish._run_mcp_connect_interactive)
 
 
 # ── what the menu actually prints ─────────────────────────────────────────────
@@ -78,9 +78,9 @@ def test_mcp_sentinel_is_wired_to_a_handler():
 
 
 def _printed(*, copied: bool) -> str:
-    endpoint, snippet = cli.mcp_connection_info("http://127.0.0.1:8765", "tok-xyz")
+    endpoint, snippet = cli._publish.mcp_connection_info("http://127.0.0.1:8765", "tok-xyz")
     with cli.console.capture() as captured:
-        cli._print_mcp_connection(endpoint, "tok-xyz", snippet, copied)
+        cli._publish._print_mcp_connection(endpoint, "tok-xyz", snippet, copied)
     return captured.get()
 
 
@@ -168,7 +168,7 @@ def test_the_menu_waits_before_redrawing_over_the_output():
     """
     prompted: list[str] = []
 
-    cli._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=True)
+    cli._publish._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=True)
 
     assert prompted, "must wait for the reader before the menu redraws"
 
@@ -177,7 +177,7 @@ def test_the_pause_is_skipped_when_there_is_no_terminal():
     """A piped or scripted run has nobody to press Enter — waiting would hang it."""
     prompted: list[str] = []
 
-    cli._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=False)
+    cli._publish._pause_until_acknowledged(read=lambda msg: prompted.append(msg), is_tty=False)
 
     assert not prompted
 
@@ -188,4 +188,4 @@ def test_the_pause_survives_a_closed_stdin():
     def closed(_msg: str) -> str:
         raise EOFError
 
-    cli._pause_until_acknowledged(read=closed, is_tty=True)  # must not raise
+    cli._publish._pause_until_acknowledged(read=closed, is_tty=True)  # must not raise

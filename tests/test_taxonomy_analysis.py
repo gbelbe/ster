@@ -146,6 +146,17 @@ def test_compute_completions_with_definitions():
     assert defn.total == 2
 
 
+def test_compute_completions_with_scope_notes():
+    t, s = _tax_with_concepts([("en", "A")], [("en", "B")])
+    t.concepts[BASE + "C0"].scope_notes.append(Definition("en", "Scope of A"))
+    uris = get_scheme_concepts(t, s)
+    comps = _compute_completions(t, uris)
+    scope = next((c for c in comps if c.property_key == "scope_note"), None)
+    assert scope is not None
+    assert scope.by_language["en"] == 1
+    assert scope.total == 2
+
+
 # ── Issue detectors ───────────────────────────────────────────────────────────
 
 
@@ -256,6 +267,39 @@ def test_detect_circular_hierarchy():
     assert any(i.severity == SEVERITY_ERROR for i in issues)
 
 
+def test_detect_circular_hierarchy_dedup_diamond():
+    """A is reachable as a GRAY cycle target from both B and C, but reported once."""
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri, b_uri, c_uri = BASE + "A", BASE + "B", BASE + "C"
+    ca = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)], narrower=[b_uri, c_uri])
+    cb = Concept(uri=b_uri, labels=[Label("en", "B", LabelType.PREF)], narrower=[a_uri])
+    cc = Concept(uri=c_uri, labels=[Label("en", "C", LabelType.PREF)], narrower=[a_uri])
+    t.concepts[a_uri] = ca
+    t.concepts[b_uri] = cb
+    t.concepts[c_uri] = cc
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri])
+    issues = _detect_circular_hierarchy(t, s_uri, [a_uri, b_uri, c_uri])
+    assert len([i for i in issues if i.concept_uri == a_uri]) == 1
+
+
+def test_detect_circular_hierarchy_ignores_narrower_outside_scope():
+    """A narrower reference to a concept outside the scheme's own concept list
+    (e.g. belonging to another scheme) is skipped rather than followed."""
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri = BASE + "A"
+    outside_uri = BASE + "Outside"
+    ca = Concept(uri=a_uri, labels=[Label("en", "A", LabelType.PREF)], narrower=[outside_uri])
+    t.concepts[a_uri] = ca
+    t.concepts[outside_uri] = Concept(
+        uri=outside_uri, labels=[Label("en", "Outside", LabelType.PREF)]
+    )
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri])
+    issues = _detect_circular_hierarchy(t, s_uri, [a_uri])
+    assert issues == []
+
+
 def test_detect_alt_same_as_pref():
     t = Taxonomy()
     s_uri = BASE + "S"
@@ -303,6 +347,25 @@ def test_detect_duplicate_pref_label():
     issues = _detect_duplicate_pref_label(t, s_uri, [a_uri, b_uri])
     assert len(issues) == 2  # one per offending concept
     assert all(i.severity == SEVERITY_WARNING for i in issues)
+
+
+def test_detect_duplicate_pref_label_dedup_same_concept_twice():
+    """A single concept with two identically-valued PREF labels in the same
+    language forms a two-entry group pointing at itself; it's reported once."""
+    t = Taxonomy()
+    s_uri = BASE + "S"
+    a_uri = BASE + "A"
+    ca = Concept(
+        uri=a_uri,
+        labels=[
+            Label("en", "Same", LabelType.PREF),
+            Label("en", "Same", LabelType.PREF),
+        ],
+    )
+    t.concepts[a_uri] = ca
+    t.schemes[s_uri] = ConceptScheme(uri=s_uri, top_concepts=[a_uri])
+    issues = _detect_duplicate_pref_label(t, s_uri, [a_uri])
+    assert len(issues) == 1
 
 
 def test_detect_missing_in_scheme():

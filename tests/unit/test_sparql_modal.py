@@ -29,8 +29,8 @@ def test_refresh_writes_html_to_existing_path(tmp_path: Path) -> None:
     out = tmp_path / "result.html"
     out.write_text("old", encoding="utf-8")
     with (
-        patch("ster.viz_vowl.webbrowser.open"),
-        patch("ster.viz_vowl._ensure_server", return_value=_PORT),
+        patch("ster.viz_vowl._query_result.webbrowser.open"),
+        patch("ster.viz_vowl._server._ensure_server", return_value=_PORT),
     ):
         refresh_query_result_in_browser(tax, {uri}, out)
     assert out.read_text(encoding="utf-8") != "old"
@@ -43,8 +43,8 @@ def test_refresh_calls_webbrowser_open(tmp_path: Path) -> None:
     out.write_text("old", encoding="utf-8")
     mock_open = MagicMock()
     with (
-        patch("ster.viz_vowl.webbrowser.open", mock_open),
-        patch("ster.viz_vowl._ensure_server", return_value=_PORT),
+        patch("ster.viz_vowl._query_result.webbrowser.open", mock_open),
+        patch("ster.viz_vowl._server._ensure_server", return_value=_PORT),
     ):
         refresh_query_result_in_browser(tax, {uri}, out)
     mock_open.assert_called_once()
@@ -66,8 +66,8 @@ def test_refresh_preserves_given_path(tmp_path: Path) -> None:
     out = tmp_path / "my_custom_result.html"
     out.write_text("x", encoding="utf-8")
     with (
-        patch("ster.viz_vowl.webbrowser.open"),
-        patch("ster.viz_vowl._ensure_server", return_value=_PORT),
+        patch("ster.viz_vowl._query_result.webbrowser.open"),
+        patch("ster.viz_vowl._server._ensure_server", return_value=_PORT),
     ):
         refresh_query_result_in_browser(tax, {uri}, out)
     assert out.exists()

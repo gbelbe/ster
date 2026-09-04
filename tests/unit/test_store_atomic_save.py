@@ -78,7 +78,7 @@ def test_save_leaves_original_intact_on_serialize_failure(tmp_path: Path) -> Non
     out.write_text(original)
 
     with (
-        patch("ster.store.taxonomy_to_graph", side_effect=RuntimeError("boom")),
+        patch("ster.store._to_graph.taxonomy_to_graph", side_effect=RuntimeError("boom")),
         pytest.raises(RuntimeError),
     ):
         store.save(tax, out)
@@ -94,7 +94,7 @@ def test_save_intact_and_no_temp_when_replace_fails(tmp_path: Path) -> None:
     out.write_text(original)
 
     with (
-        patch("ster.store.os.replace", side_effect=OSError("rename failed")),
+        patch("ster.store._load_save.os.replace", side_effect=OSError("rename failed")),
         pytest.raises(OSError),
     ):
         store.save(tax, out)

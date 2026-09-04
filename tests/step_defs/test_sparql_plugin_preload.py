@@ -16,6 +16,7 @@ from ster.sparql_query import (
     _uri_index_cache,
     warm_graph_caches,
 )
+from ster.sparql_query import _caching as _sq_caching
 
 scenarios("../features/perf/sparql_plugin_preload.feature")
 
@@ -80,7 +81,7 @@ def given_cache_cleared_after_build(ctx: dict) -> None:
         _graph_cache.clear()
         return result
 
-    p = patch.object(_sq, "build_uri_index_cached", _build_then_clear)
+    p = patch.object(_sq_caching, "build_uri_index_cached", _build_then_clear)
     p.start()
     ctx["patches"].append(p)
 

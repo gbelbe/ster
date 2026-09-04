@@ -5,6 +5,7 @@ Textual app never actually starts.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +35,7 @@ def _pretend_there_is_a_terminal(monkeypatch):
     app spins its event loop at ~100% CPU forever there. These tests are about
     the launch wiring, so they stand in for the terminal the real user has.
     """
-    monkeypatch.setattr(cli, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(cli._viewer, "_is_interactive_terminal", lambda: True)
 
 
 _runner = CliRunner()
@@ -117,7 +118,7 @@ def test_open_viewer_returns_early_when_the_file_fails_to_load():
     from ster.cli import _open_viewer
 
     with (
-        patch("ster.cli._prewarm_lint"),
+        patch("ster.cli._viewer._prewarm_lint"),
         patch("ster.tui.launch_file", return_value=None) as launch_file,
         patch("ster.git.manager.GitManager") as gm,
     ):
@@ -152,9 +153,9 @@ def test_open_viewer_backconverts_after_a_rdfxml_session(monkeypatch):
     with (
         patch("ster.tui.launch_file", return_value=store.load(DEMO)),
         patch("ster.git.manager.GitManager") as gm,
-        patch("ster.cli._converted_from", original),
+        patch("ster.cli._state.converted_from", original),
         patch("ster.cli.store.file_hash", return_value="before"),
-        patch("ster.cli._maybe_backconvert") as backconvert,
+        patch("ster.cli._rdfxml._maybe_backconvert") as backconvert,
     ):
         gm.return_value.is_enabled.return_value = False
         _open_viewer(DEMO, lang="en")
@@ -243,7 +244,7 @@ def test_home_obtain_action_loads_a_fresh_demo_when_the_demo_is_picked(tmp_path,
     from ster.cli import _DEMO_SENTINEL, _home_obtain_action
 
     monkeypatch.chdir(tmp_path)
-    with patch("ster.cli._select_home_file", return_value=_DEMO_SENTINEL):
+    with patch("ster.cli._workspace_ui._select_home_file", return_value=_DEMO_SENTINEL):
         selected, action = _home_obtain_action(None, None, [])
     demo = tmp_path / "mixed-gear-demo.ttl"
     assert selected == demo and action == [demo] and demo.exists()  # fresh demo, opened directly
@@ -374,10 +375,12 @@ def test_home_screen_opens_selected_file_in_the_new_tui(tmp_path, monkeypatch):
     src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._open_viewer") as open_viewer,
-        patch("ster.cli._load_workspace") as load_workspace,
-        patch("ster.cli._home_action_menu", return_value=_QUIT_SENTINEL),  # 2nd loop → quit
-        patch("ster.cli._print_welcome"),
+        patch("ster.cli._viewer._open_viewer") as open_viewer,
+        patch("ster.cli._workspace_ui._load_workspace") as load_workspace,
+        patch(
+            "ster.cli._workspace_ui._home_action_menu", return_value=_QUIT_SENTINEL
+        ),  # 2nd loop → quit
+        patch("ster.cli._app._print_welcome"),
     ):
         _home_screen(initial_file=src)  # 1st loop opens the file
     load_workspace.assert_called_once()  # workspace validated
@@ -407,11 +410,19 @@ def test_home_screen_actions_use_the_chosen_file_not_the_first(tmp_path, monkeyp
     # Turn 1: picking b opens the viewer directly. Turns 2-3: the action menu returns
     # Query, then Quit to end the loop.
     with (
-        patch("ster.cli._select_home_file", return_value=b),  # user chose the 2nd file
-        patch("ster.cli._home_action_menu", side_effect=[_QUERY_SENTINEL, _QUIT_SENTINEL]),
-        patch("ster.cli._dispatch_menu_action", side_effect=_fake_dispatch),
-        patch("ster.cli._open_selected_in_viewer", side_effect=lambda sel, *a: opened.append(sel)),
-        patch("ster.cli._print_welcome"),
+        patch(
+            "ster.cli._workspace_ui._select_home_file", return_value=b
+        ),  # user chose the 2nd file
+        patch(
+            "ster.cli._workspace_ui._home_action_menu",
+            side_effect=[_QUERY_SENTINEL, _QUIT_SENTINEL],
+        ),
+        patch("ster.cli._query_launcher._dispatch_menu_action", side_effect=_fake_dispatch),
+        patch(
+            "ster.cli._home._open_selected_in_viewer",
+            side_effect=lambda sel, *a: opened.append(sel),
+        ),
+        patch("ster.cli._app._print_welcome"),
     ):
         _home_screen()
     assert opened == [[b]]  # the freshly picked file opened straight in the viewer
@@ -482,9 +493,9 @@ def test_select_home_file_uses_the_arrow_picker_in_a_tty(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
-    with patch("ster.cli._arrow_file_picker", return_value=files[1]):
+    with patch("ster.cli._file_picker._arrow_file_picker", return_value=files[1]):
         assert _select_home_file(files) == files[1]
-    with patch("ster.cli._arrow_file_picker", return_value=_QUIT_SENTINEL):
+    with patch("ster.cli._file_picker._arrow_file_picker", return_value=_QUIT_SENTINEL):
         assert _select_home_file(files) is None  # Quit → None
 
 
@@ -495,8 +506,10 @@ def test_home_screen_empty_folder_shows_the_picker_and_quits(tmp_path, monkeypat
 
     monkeypatch.chdir(tmp_path)  # empty folder
     with (
-        patch("ster.cli._select_home_file", return_value=None) as select,  # user quits at picker
-        patch("ster.cli._print_welcome"),
+        patch(
+            "ster.cli._workspace_ui._select_home_file", return_value=None
+        ) as select,  # user quits at picker
+        patch("ster.cli._app._print_welcome"),
     ):
         _home_screen()
     select.assert_called_once()  # the picker was offered even with no local files
@@ -511,9 +524,12 @@ def test_home_screen_change_file_reselects(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     select = MagicMock(side_effect=[a, b])
     with (
-        patch("ster.cli._select_home_file", select),
-        patch("ster.cli._home_action_menu", side_effect=[_CHANGE_FILE_SENTINEL, _QUIT_SENTINEL]),
-        patch("ster.cli._print_welcome"),
+        patch("ster.cli._workspace_ui._select_home_file", select),
+        patch(
+            "ster.cli._workspace_ui._home_action_menu",
+            side_effect=[_CHANGE_FILE_SENTINEL, _QUIT_SENTINEL],
+        ),
+        patch("ster.cli._app._print_welcome"),
     ):
         _home_screen()
     assert select.call_count == 2  # picked a file, chose 'Change file', picked again, quit
@@ -526,8 +542,8 @@ def test_open_selected_in_viewer_reports_a_workspace_error(tmp_path, monkeypatch
     src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._load_workspace", side_effect=RuntimeError("bad mapping")),
-        patch("ster.cli._open_viewer") as open_viewer,
+        patch("ster.cli._workspace_ui._load_workspace", side_effect=RuntimeError("bad mapping")),
+        patch("ster.cli._viewer._open_viewer") as open_viewer,
     ):
         _open_selected_in_viewer([src], [src], None)
     open_viewer.assert_not_called()  # a workspace error aborts before opening the viewer
@@ -561,17 +577,17 @@ def test_home_screen_runs_the_intro_and_ci_check_once(tmp_path, monkeypatch):
     src = tmp_path / "o.ttl"
     src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_module, "_ci_check_done", False)
+    monkeypatch.setattr(cli_module._state, "ci_check_done", False)
     with (
-        patch("ster.cli._select_home_file", return_value=src),
-        patch("ster.cli._home_action_menu", return_value=_QUIT_SENTINEL),
-        patch("ster.cli._open_selected_in_viewer"),  # turn 1 opens the viewer directly
-        patch("ster.cli._print_welcome") as welcome,
+        patch("ster.cli._workspace_ui._select_home_file", return_value=src),
+        patch("ster.cli._workspace_ui._home_action_menu", return_value=_QUIT_SENTINEL),
+        patch("ster.cli._home._open_selected_in_viewer"),  # turn 1 opens the viewer directly
+        patch("ster.cli._app._print_welcome") as welcome,
         patch("ster.init_ci.prompt_if_missing", return_value=False),
     ):
         _home_screen()
     welcome.assert_called()  # the banner prints each home turn
-    assert cli_module._ci_check_done is True  # the one-time CI check ran (guarded once)
+    assert cli_module._state.ci_check_done is True  # the one-time CI check ran (guarded once)
 
 
 def test_home_screen_quits_when_no_file_selected(tmp_path, monkeypatch):
@@ -581,9 +597,11 @@ def test_home_screen_quits_when_no_file_selected(tmp_path, monkeypatch):
         (tmp_path / name).write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._select_home_file", return_value=None),  # user quit at file selection
-        patch("ster.cli._home_action_menu") as menu,
-        patch("ster.cli._print_welcome"),
+        patch(
+            "ster.cli._workspace_ui._select_home_file", return_value=None
+        ),  # user quit at file selection
+        patch("ster.cli._workspace_ui._home_action_menu") as menu,
+        patch("ster.cli._app._print_welcome"),
     ):
         _home_screen()
     menu.assert_not_called()  # quitting at file selection never reaches the action menu
@@ -596,7 +614,186 @@ def test_open_selected_in_viewer_reports_a_viewer_error(tmp_path, monkeypatch):
     src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._load_workspace"),
-        patch("ster.cli._open_viewer", side_effect=RuntimeError("boom")),
+        patch("ster.cli._workspace_ui._load_workspace"),
+        patch("ster.cli._viewer._open_viewer", side_effect=RuntimeError("boom")),
     ):
         _open_selected_in_viewer([src], [src], None)  # a viewer error is caught, not raised
+
+
+# ── git-fetch/pull/push helpers (ster/cli/_viewer.py) ───────────────────────
+
+
+def test_start_git_fetch_disabled_returns_none():
+    from ster.cli._viewer import _start_git_fetch
+
+    gm = MagicMock()
+    gm.is_enabled.return_value = False
+    assert _start_git_fetch(gm) is None
+    gm.setup.assert_not_called()
+
+
+def test_start_git_fetch_setup_fails_returns_none():
+    """Not configured, and setup() doesn't fix it → no background fetch is started."""
+    from ster.cli._viewer import _start_git_fetch
+
+    gm = MagicMock()
+    gm.is_enabled.return_value = True
+    gm.is_configured.return_value = False
+    assert _start_git_fetch(gm) is None
+    gm.setup.assert_called_once()
+
+
+def test_start_git_fetch_swallows_fetch_errors():
+    """The background thread's own fetch_remote() exception must not escape."""
+    from ster.cli._viewer import _start_git_fetch
+
+    gm = MagicMock()
+    gm.is_enabled.return_value = True
+    gm.is_configured.return_value = True
+    gm.fetch_remote.side_effect = RuntimeError("network down")
+    event = _start_git_fetch(gm)
+    assert event is not None
+    assert event.wait(timeout=5)  # the finally-block still sets the event
+    gm.record_head.assert_called_once()
+
+
+def test_finish_configured_git_renders_pulled_diff():
+    from ster.cli._viewer import _finish_configured_git
+
+    gm = MagicMock()
+    gm.check_and_pull.return_value = "+added line"
+    event = threading.Event()
+    event.set()
+    with patch("ster.git.manager.render_diff") as render_diff:
+        _finish_configured_git(gm, event)
+    render_diff.assert_called_once_with("+added line")
+    gm.commit_and_push.assert_called_once()
+
+
+def test_finish_configured_git_no_fetch_event_skips_pull():
+    from ster.cli._viewer import _finish_configured_git
+
+    gm = MagicMock()
+    _finish_configured_git(gm, None)
+    gm.check_and_pull.assert_not_called()
+    gm.commit_and_push.assert_called_once()
+
+
+def test_finish_configured_git_swallows_keyboard_interrupt():
+    from ster.cli._viewer import _finish_configured_git
+
+    gm = MagicMock()
+    gm.commit_and_push.side_effect = KeyboardInterrupt
+    _finish_configured_git(gm, None)  # must not propagate
+
+
+def test_finish_configured_git_reports_commit_error():
+    from ster.cli._viewer import _finish_configured_git
+
+    gm = MagicMock()
+    gm.commit_and_push.side_effect = RuntimeError("push rejected")
+    _finish_configured_git(gm, None)  # caught and reported, not raised
+
+
+def test_offer_git_tracking_declined():
+    from ster.cli._viewer import _offer_git_tracking
+
+    gm = MagicMock()
+    with patch("ster.cli._viewer.Confirm.ask", return_value=False):
+        _offer_git_tracking(gm, MagicMock(), Path("t.ttl"))
+    gm.setup.assert_not_called()
+
+
+def test_offer_git_tracking_accepted_and_configured():
+    from ster.cli._viewer import _offer_git_tracking
+
+    gm = MagicMock()
+    gm.is_configured.return_value = True
+    taxonomy = MagicMock()
+    with (
+        patch("ster.cli._viewer.Confirm.ask", return_value=True),
+        patch("ster.cli._export._make_taxonomy_commit_msg", return_value="msg"),
+    ):
+        _offer_git_tracking(gm, taxonomy, Path("t.ttl"))
+    gm.setup.assert_called_once()
+    gm.commit_new_taxonomy.assert_called_once_with("msg")
+
+
+def test_offer_git_tracking_cancelled_treated_as_declined():
+    from ster.cli._viewer import _offer_git_tracking
+
+    gm = MagicMock()
+    with patch("ster.cli._viewer.Confirm.ask", side_effect=KeyboardInterrupt):
+        _offer_git_tracking(gm, MagicMock(), Path("t.ttl"))
+    gm.setup.assert_not_called()
+
+
+def test_handle_viewer_git_disabled_is_a_noop():
+    from ster.cli._viewer import _handle_viewer_git
+
+    gm = MagicMock()
+    gm.is_enabled.return_value = False
+    _handle_viewer_git(gm, MagicMock(), Path("t.ttl"), None)
+    gm.is_configured.assert_not_called()
+
+
+def test_handle_viewer_git_not_configured_offers_tracking():
+    from ster.cli._viewer import _handle_viewer_git
+
+    gm = MagicMock()
+    gm.is_enabled.return_value = True
+    gm.is_configured.return_value = False
+    with patch("ster.cli._viewer._offer_git_tracking") as offer:
+        _handle_viewer_git(gm, MagicMock(), Path("t.ttl"), None)
+    offer.assert_called_once()
+
+
+def test_print_home_intro_reports_ci_workflow_created(tmp_path, monkeypatch):
+    import ster.cli as cli_module
+    from ster.cli import _print_home_intro
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(cli_module._state, "ci_check_done", False)
+    with (
+        patch("ster.cli._app._print_welcome"),
+        patch("ster.project._git_root", return_value=tmp_path),
+        patch("ster.init_ci.prompt_if_missing", return_value=True),
+    ):
+        _print_home_intro()
+    assert cli_module._state.ci_check_done is True
+
+
+def test_found_taxonomy_files_globs_and_dedupes(tmp_path, monkeypatch):
+    from ster.cli._home import _found_taxonomy_files
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.ttl").write_text("", encoding="utf-8")
+    (tmp_path / "b.owl").write_text("", encoding="utf-8")
+    found = _found_taxonomy_files()
+    assert {p.name for p in found} == {"a.ttl", "b.owl"}
+
+
+def test_open_selected_in_viewer_tolerates_project_save_failure(tmp_path, monkeypatch):
+    from ster.cli import _open_selected_in_viewer
+
+    src = tmp_path / "o.ttl"
+    src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.project.Project.save", side_effect=OSError("read-only fs")),
+        patch("ster.cli._workspace_ui._load_workspace"),
+        patch("ster.cli._viewer._open_viewer"),
+    ):
+        _open_selected_in_viewer([src], [src], None)  # save() error is non-fatal
+
+
+def test_home_screen_keyboard_interrupt_breaks_the_loop(tmp_path, monkeypatch):
+    from ster.cli import _home_screen
+
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("ster.cli._app._print_welcome"),
+        patch("ster.cli._home._found_taxonomy_files", side_effect=KeyboardInterrupt),
+    ):
+        _home_screen()  # caught and the loop simply breaks, no traceback

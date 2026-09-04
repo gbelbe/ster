@@ -122,7 +122,7 @@ def when_start_api_server(ctx):
     with (
         patch("uvicorn.Config", FakeConfig),
         patch("uvicorn.Server", FakeServer),
-        patch("ster.viz_vowl.socket", fake_socket_mod),
+        patch("ster.viz_vowl._server.socket", fake_socket_mod),
     ):
         vv._start_api_server(_make_taxonomy(), None)
 

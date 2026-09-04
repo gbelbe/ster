@@ -191,3 +191,247 @@ def test_the_metric_label_appears_in_the_message() -> None:
     message = find_violations({}, {"m.py::a": 17}, metric="cognitive complexity")[0]
 
     assert "cognitive complexity" in message
+
+
+# ── main() end-to-end (regression: the exit code must reflect violations) ────
+# Every test above exercises find_violations()/compute_*() in isolation, which
+# is exactly why this bug went unnoticed: main() computed `violations` but
+# never checked it before printing "OK" and returning 0 — so the prek hook and
+# the CI step calling this script as a subprocess never actually failed,
+# regardless of what was found. Only the slow, separate SonarQube server job
+# ever caught these before this test existed.
+
+
+def _init_git_repo(path):  # type: ignore[no-untyped-def]
+    """Init a throwaway repo and commit whatever files already exist at *path*
+    (or an empty commit, if none do yet) as the base ref every caller diffs
+    against."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.example",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        cwd=path,
+        check=True,
+    )
+
+
+def test_measure_at_ref_resolves_an_absolute_path_regression(tmp_path, monkeypatch) -> None:
+    """``Path(worktree) / path`` silently drops ``worktree`` when *path* is
+    absolute (a pathlib gotcha), so an absolute ``--path`` used to make the
+    base-ref measurement read the real working tree instead of the checked-out
+    ref — making base always equal head and every violation grandfathered
+    away. Every test in this module uses pytest's ``tmp_path``, which is
+    always absolute, so this is also what let the main() bug above hide.
+    """
+    from scripts.check_complexity_ratchet import _measure_at_ref
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    (repo / "m.py").write_text("def simple():\n    return 1\n")
+
+    base_cc, _cog, _inv, _dup = _measure_at_ref("HEAD", str(repo))  # absolute path
+
+    assert base_cc == {}  # the base commit has no m.py at all
+
+
+def test_main_reports_violation_and_fails_regression(tmp_path, monkeypatch, capsys) -> None:
+    """A brand-new, over-threshold function must make main() exit non-zero.
+
+    Reproduces the bug directly: before the fix, this failed with exit code 0
+    and no violation printed, even though the function scores well over 15.
+    """
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    bad = (
+        "def bad(x):\n"
+        + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(20))
+        + "    return -1\n"
+    )
+    (repo / "m.py").write_text(bad)
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code != 0
+    out = capsys.readouterr()
+    assert "m.py::bad" in (out.out + out.err)
+
+
+def test_main_reports_ok_and_succeeds_when_no_violation(tmp_path, monkeypatch, capsys) -> None:
+    """The counterpart: a change with no new violation must exit 0 and say OK."""
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    (repo / "m.py").write_text("def simple():\n    return 1\n")
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code == 0
+    out = capsys.readouterr()
+    assert "OK" in out.out
+
+
+def test_main_flags_a_function_moved_to_a_new_file_as_touched(tmp_path, monkeypatch) -> None:
+    """A file move counts as touching the code — it must meet the threshold now.
+
+    Explicit product decision: no rename-awareness. From the moment a function
+    is moved (even byte-for-byte unchanged), it is treated the same as any
+    other change to it and must respect the current threshold — it is not
+    grandfathered just because an identically-named function existed
+    somewhere else in the base ref.
+    """
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "old.py").write_text(
+        "def helper(x):\n"
+        + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(20))
+        + "    return -1\n"
+    )
+    _init_git_repo(repo)  # base commit: the complex function lives in old.py
+
+    (repo / "old.py").unlink()
+    (repo / "new.py").write_text(
+        "def helper(x):\n"
+        + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(20))
+        + "    return -1\n"
+    )
+    monkeypatch.chdir(repo)
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code != 0
+
+
+# ── Duplicated string literals (SonarQube S1192) ─────────────────────────────
+
+
+def test_compute_duplicate_literals_counts_repeats_in_one_file(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_duplicate_literals
+
+    (tmp_path / "m.py").write_text(
+        'a = "repeated value"\nb = "repeated value"\nc = "repeated value"\nd = "only once"\n'
+    )
+
+    counts = compute_duplicate_literals(tmp_path)
+
+    assert counts["m.py::'repeated value'"] == 3
+    assert "m.py::'only once'" not in counts
+
+
+def test_compute_duplicate_literals_ignores_short_strings(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_duplicate_literals
+
+    (tmp_path / "m.py").write_text('a = "hi"\nb = "hi"\nc = "hi"\n')
+
+    counts = compute_duplicate_literals(tmp_path)
+
+    assert counts == {}  # below the minimum length, never counted
+
+
+def test_compute_duplicate_literals_excludes_docstrings(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_duplicate_literals
+
+    doc = "A repeated docstring line."
+    (tmp_path / "m.py").write_text(
+        f'"""{doc}"""\n\n\ndef f():\n    """{doc}"""\n\n\ndef g():\n    """{doc}"""\n'
+    )
+
+    counts = compute_duplicate_literals(tmp_path)
+
+    assert counts == {}  # three occurrences, but every one is a bare docstring
+
+
+def test_compute_duplicate_literals_counts_are_per_file(tmp_path) -> None:
+    from scripts.check_complexity_ratchet import compute_duplicate_literals
+
+    value = "cross-file value"
+    (tmp_path / "a.py").write_text(f'x = "{value}"\ny = "{value}"\n')
+    (tmp_path / "b.py").write_text(f'z = "{value}"\n')
+
+    counts = compute_duplicate_literals(tmp_path)
+
+    assert counts[f"a.py::{value!r}"] == 2
+    assert f"b.py::{value!r}" not in counts  # one occurrence in its own file
+
+
+def test_main_flags_a_newly_duplicated_literal(tmp_path, monkeypatch) -> None:
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    (repo / "m.py").write_text(
+        'a = "a duplicated value"\nb = "a duplicated value"\nc = "a duplicated value"\n'
+    )
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code != 0
+
+
+def test_main_grandfathers_a_pre_existing_duplicated_literal(tmp_path, monkeypatch) -> None:
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text(
+        'a = "already duplicated"\nb = "already duplicated"\nc = "already duplicated"\n'
+    )
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code == 0
+
+
+def test_main_flags_a_duplicated_literal_moved_to_a_new_file_as_touched(
+    tmp_path, monkeypatch
+) -> None:
+    """Same file-move scenario as the complexity ratchet's own touched-by-move test."""
+    from scripts.check_complexity_ratchet import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "old.py").write_text(
+        'a = "moved duplicated value"\nb = "moved duplicated value"\nc = "moved duplicated value"\n'
+    )
+    _init_git_repo(repo)
+
+    (repo / "old.py").unlink()
+    (repo / "new.py").write_text(
+        'a = "moved duplicated value"\nb = "moved duplicated value"\nc = "moved duplicated value"\n'
+    )
+    monkeypatch.chdir(repo)
+
+    exit_code = main(["--base", "HEAD", "--path", str(repo)])
+
+    assert exit_code != 0

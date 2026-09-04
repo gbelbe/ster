@@ -23,6 +23,16 @@ over, so they fail here rather than after a push:
     never-rebound name. Mutating a list and returning it from two places reads
     as two outcomes but is one, and the rule is asking for a single exit.
 
+    Duplicated string literal (S1192), same ratchet, scoped per file: the same
+    literal (5+ characters) repeated 3+ times in one file should be a named
+    constant instead.
+
+A file move counts as a change to everything it carries — there is no
+rename-awareness here. A function or literal that only moved to a new file
+is evaluated exactly like new code and must meet the threshold on its own,
+not compared against an identically-named entry that happened to live
+somewhere else in the base ref.
+
 Usage:
     python scripts/check_complexity_ratchet.py [--base origin/main] [--path ster]
 """
@@ -199,12 +209,95 @@ def compute_invariant_returns(root: Path) -> dict[str, str]:
     return result
 
 
-def _measure_at_ref(ref: str, path: str) -> tuple[dict[str, int], dict[str, int], dict[str, str]]:
+# ── Duplicated string literals (SonarQube S1192) ─────────────────────────────
+# Scoped per file (not per-function, unlike the metrics above) — that is the
+# rule's own granularity: it flags a literal repeated across a file, not
+# within one function. Defaults approximate SonarQube's own Python defaults.
+
+DUPLICATE_LITERAL_THRESHOLD = 3
+DUPLICATE_LITERAL_MIN_LENGTH = 5
+
+
+def _docstring_node_ids(tree: ast.AST) -> set[int]:
+    """id() of every bare string Expr that is a docstring, to exclude it.
+
+    A docstring is the first statement of a Module/ClassDef/FunctionDef/
+    AsyncFunctionDef body when that statement is itself a bare string
+    constant — the same exclusion SonarQube applies, since a repeated
+    docstring is not the accidental duplication S1192 is looking for.
+    """
+    ids: set[int] = set()
+    candidates: list[ast.AST] = [tree]
+    candidates.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    for node in candidates:
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ids.add(id(first.value))
+    return ids
+
+
+def compute_duplicate_literals(
+    root: Path, min_length: int = DUPLICATE_LITERAL_MIN_LENGTH
+) -> dict[str, int]:
+    """Map ``<relpath>::<repr of literal>`` → occurrence count, for literals repeated ≥2×.
+
+    Counted per file (S1192's own granularity), excluding docstrings and any
+    literal shorter than *min_length*. A literal that appears only once is
+    left out entirely — the ratchet only ever cares about repeats.
+    """
+    result: dict[str, int] = {}
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        docstring_ids = _docstring_node_ids(tree)
+        counts: dict[str, int] = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if id(node) in docstring_ids or len(node.value) < min_length:
+                continue
+            literal = repr(node.value)
+            counts[literal] = counts.get(literal, 0) + 1
+        rel = path.relative_to(root).as_posix()
+        for literal, count in counts.items():
+            if count >= 2:
+                result[f"{rel}::{literal}"] = count
+    return result
+
+
+def _measure_at_ref(
+    ref: str, path: str
+) -> tuple[dict[str, int], dict[str, int], dict[str, str], dict[str, int]]:
     """Every metric for *path* as it exists at git *ref*, via a throwaway worktree.
 
-    One worktree for all three: checking out the base ref is the slow part, and
-    doing it once per metric would triple the cost of every commit.
+    One worktree for all four: checking out the base ref is the slow part, and
+    doing it once per metric would multiply the cost of every commit.
+
+    *path* is resolved relative to the repo root before joining it onto the
+    worktree — ``Path(worktree) / path`` alone silently discards ``worktree``
+    whenever *path* is absolute (a documented ``pathlib`` behaviour: joining an
+    absolute path onto anything replaces the left side entirely), which would
+    make this read the real working tree instead of the checked-out base ref.
     """
+    repo_root = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+    )
+    rel_path = Path(path).resolve().relative_to(repo_root)
     with tempfile.TemporaryDirectory() as tmp:
         worktree = Path(tmp) / "wt"
         subprocess.run(
@@ -214,11 +307,12 @@ def _measure_at_ref(ref: str, path: str) -> tuple[dict[str, int], dict[str, int]
             text=True,
         )
         try:
-            root = worktree / path
+            root = worktree / rel_path
             return (
                 compute_complexity(root),
                 compute_cognitive(root),
                 compute_invariant_returns(root),
+                compute_duplicate_literals(root),
             )
         finally:
             subprocess.run(
@@ -243,8 +337,9 @@ def main(argv: list[str] | None = None) -> int:
     head = {name: cc for name, (cc, _l, _e) in head_funcs.items()}
     head_cog = compute_cognitive(root)
     head_inv = compute_invariant_returns(root)
+    head_dup = compute_duplicate_literals(root)
     try:
-        base, base_cog, base_inv = _measure_at_ref(args.base, args.path)
+        base, base_cog, base_inv, base_dup = _measure_at_ref(args.base, args.path)
     except subprocess.CalledProcessError as exc:
         print(f"error: could not read base ref {args.base!r}: {exc.stderr or exc}", file=sys.stderr)
         return 2
@@ -259,8 +354,20 @@ def main(argv: list[str] | None = None) -> int:
         for name, returned in sorted(head_inv.items())
         if name not in base_inv
     ]
+    violations += find_violations(
+        base_dup,
+        head_dup,
+        threshold=DUPLICATE_LITERAL_THRESHOLD - 1,
+        metric="duplicated string literal",
+    )
 
-    print(f"Complexity ratchet: OK (cyclomatic and cognitive ≤ {THRESHOLD}).")
+    if violations:
+        print(f"Complexity ratchet: {len(violations)} violation(s):", file=sys.stderr)
+        for v in violations:
+            print(f"  - {v}", file=sys.stderr)
+        return 1
+
+    print(f"Complexity ratchet: OK (cyclomatic, cognitive ≤ {THRESHOLD}; no S1192 duplication).")
     return 0
 
 

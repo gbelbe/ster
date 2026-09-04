@@ -48,7 +48,7 @@ def stub_lib(monkeypatch):
     def _make(version: str):
         return f"<script>{_LIB_MARKER} globalThis.d3={{hierarchy(){{}},treemap(){{}}}}; // {version}</script>"
 
-    monkeypatch.setattr(viz_vowl, "_d3_hierarchy_script_tag", lambda: _make("3.1.2"))
+    monkeypatch.setattr(viz_vowl._js_assets, "_d3_hierarchy_script_tag", lambda: _make("3.1.2"))
     return _make
 
 
@@ -124,13 +124,13 @@ def test_owl_only_taxonomy_omits_taxonomy_payload():
 def test_library_upgrade_leaves_treemap_app_block_unchanged(monkeypatch):
     t = _tax()
     monkeypatch.setattr(
-        viz_vowl,
+        viz_vowl._js_assets,
         "_d3_hierarchy_script_tag",
         lambda: "<script>/* d3-hierarchy 3.1.2 — old */ globalThis.d3={};</script>",
     )
     html_old = render_vowl_html(t, file_path=None)
     monkeypatch.setattr(
-        viz_vowl,
+        viz_vowl._js_assets,
         "_d3_hierarchy_script_tag",
         lambda: (
             "<script>/* d3-hierarchy 9.9.9 — NEW, totally different bytes */ globalThis.d3={};</script>"

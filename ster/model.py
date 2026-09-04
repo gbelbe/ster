@@ -9,10 +9,10 @@ from pathlib import Path
 # ── OWL/RDFS layer ────────────────────────────────────────────────────────────
 
 _BUILTIN_PREFIXES = (
-    "http://www.w3.org/2002/07/owl#",
-    "http://www.w3.org/2000/01/rdf-schema#",
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "http://www.w3.org/2001/XMLSchema#",
+    "http://www.w3.org/2002/07/owl#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2000/01/rdf-schema#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",  # NOSONAR - RDF namespace IRI
+    "http://www.w3.org/2001/XMLSchema#",  # NOSONAR - RDF namespace IRI
 )
 
 
@@ -224,12 +224,20 @@ class OntologyAnnotation:
 
 
 # Predicate URIs for the well-known ontology fields exposed as typed accessors.
-_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
-_DCT_TITLE = "http://purl.org/dc/terms/title"
-_DCT_DESCRIPTION = "http://purl.org/dc/terms/description"
-_OWL_VERSION_INFO = "http://www.w3.org/2002/07/owl#versionInfo"
-_OWL_VERSION_IRI = "http://www.w3.org/2002/07/owl#versionIRI"
-_OWL_PRIOR_VERSION = "http://www.w3.org/2002/07/owl#priorVersion"
+_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"  # NOSONAR - RDF predicate/property IRI
+_DCT_TITLE = "http://purl.org/dc/terms/title"  # NOSONAR - RDF predicate/property IRI
+_DCT_DESCRIPTION = "http://purl.org/dc/terms/description"  # NOSONAR - RDF predicate/property IRI
+_OWL_VERSION_INFO = (
+    "http://www.w3.org/2002/07/owl#versionInfo"  # NOSONAR - RDF predicate/property IRI
+)
+
+_OWL_VERSION_IRI = (
+    "http://www.w3.org/2002/07/owl#versionIRI"  # NOSONAR - RDF predicate/property IRI
+)
+
+_OWL_PRIOR_VERSION = (
+    "http://www.w3.org/2002/07/owl#priorVersion"  # NOSONAR - RDF predicate/property IRI
+)
 
 
 @dataclass
@@ -406,6 +414,55 @@ class Taxonomy:
                 return u
         return None
 
+    def _base_uri_from_ontology(self) -> str | None:
+        if not (
+            self.ontology_uri
+            and self.ontology_uri.startswith(
+                (
+                    "http://",  # NOSONAR - scheme prefix, not a URL
+                    "https://",
+                )
+            )
+        ):
+            return None
+        uri = self.ontology_uri
+        if uri.endswith(("/", "#")):
+            return uri
+        # Detect separator from existing class / property URIs
+        root = uri.rstrip("#/")
+        for existing in list(self.owl_classes) + list(self.owl_properties):
+            if existing.startswith(root) and len(existing) > len(root):
+                sep = existing[len(root)]
+                if sep in ("#", "/"):
+                    return root + sep
+        return root + "#"
+
+    def _base_uri_from_concepts(self) -> str | None:
+        if not self.concepts:
+            return None
+        uris = list(self.concepts)
+        prefix = uris[0]
+        for u in uris[1:]:
+            while not u.startswith(prefix):
+                idx = max(prefix.rfind("/"), prefix.rfind("#"))
+                if idx <= 0:
+                    prefix = ""
+                    break
+                prefix = prefix[: idx + 1]
+        if prefix.endswith(("/", "#")):
+            return prefix
+        return None
+
+    @staticmethod
+    def _base_uri_from_scheme(scheme: ConceptScheme | None) -> str | None:
+        if not scheme:
+            return None
+        s = scheme.uri.rstrip("/")
+        for sep in ("#", "/"):
+            if sep in s:
+                return s.rsplit(sep, 1)[0] + sep
+        return None
+
     def base_uri(self) -> str:
         """Return the base URI for auto-generating entity URIs.
 
@@ -419,39 +476,12 @@ class Taxonomy:
         scheme = self.primary_scheme()
         if scheme and scheme.base_uri:
             return scheme.base_uri
-        # Use ontology URI as base, skipping filesystem URIs
-        if self.ontology_uri and self.ontology_uri.startswith(("http://", "https://")):
-            uri = self.ontology_uri
-            if uri.endswith(("/", "#")):
-                return uri
-            # Detect separator from existing class / property URIs
-            root = uri.rstrip("#/")
-            for existing in list(self.owl_classes) + list(self.owl_properties):
-                if existing.startswith(root) and len(existing) > len(root):
-                    sep = existing[len(root)]
-                    if sep in ("#", "/"):
-                        return root + sep
-            return root + "#"
-        # Derive from existing concept URIs (common prefix)
-        if self.concepts:
-            uris = list(self.concepts)
-            prefix = uris[0]
-            for u in uris[1:]:
-                while not u.startswith(prefix):
-                    idx = max(prefix.rfind("/"), prefix.rfind("#"))
-                    if idx <= 0:
-                        prefix = ""
-                        break
-                    prefix = prefix[: idx + 1]
-            if prefix.endswith(("/", "#")):
-                return prefix
-        # Derive from scheme URI
-        if scheme:
-            s = scheme.uri.rstrip("/")
-            for sep in ("#", "/"):
-                if sep in s:
-                    return s.rsplit(sep, 1)[0] + sep
-        return ""
+        return (
+            self._base_uri_from_ontology()
+            or self._base_uri_from_concepts()
+            or self._base_uri_from_scheme(scheme)
+            or ""
+        )
 
     def uri_to_handle(self, uri: str) -> str | None:
         for h, u in self.handle_index.items():

@@ -16,6 +16,7 @@ from ster.sparql_query import (
     run_query,
     warm_graph_caches,
 )
+from ster.sparql_query import _caching as _sq_caching
 
 _VALID_TTL = (
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
@@ -137,7 +138,7 @@ def test_warm_preload_skipped_when_no_graph_in_cache(tmp_path: Path) -> None:
         return orig(self, sparql, *a, **kw)  # type: ignore[arg-type]
 
     with (
-        patch.object(_sq, "build_uri_index_cached", _build_then_clear),
+        patch.object(_sq_caching, "build_uri_index_cached", _build_then_clear),
         patch.object(rdflib.Graph, "query", _track),
     ):
         warm_graph_caches([ttl])

@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from .model import LabelType, Taxonomy
+from .model import Concept, LabelType, Taxonomy
 
 # ──────────────────────────── tree rendering ─────────────────────────────────
 
@@ -99,19 +99,7 @@ def _concept_text(handle: str, label: str) -> Text:
 # ──────────────────────────── concept detail ─────────────────────────────────
 
 
-def render_concept_detail(taxonomy: Taxonomy, uri: str, lang: str = "en") -> Panel:
-    """Render a detailed panel for a single concept."""
-    concept = taxonomy.concepts.get(uri)
-    if concept is None:
-        return Panel(f"[red]Concept not found: {uri!r}[/red]")
-
-    handle = taxonomy.uri_to_handle(uri) or "?"
-    title = f"[bold cyan][{handle}] {concept.pref_label(lang)}[/bold cyan]"
-    lines: list[str] = []
-
-    lines.append(f"[dim]URI:[/dim]  {uri}")
-
-    # Labels grouped by type
+def _append_concept_label_lines(lines: list[str], concept: Concept) -> None:
     pref = [(lbl.lang, lbl.value) for lbl in concept.labels if lbl.type == LabelType.PREF]
     alt = [(lbl.lang, lbl.value) for lbl in concept.labels if lbl.type == LabelType.ALT]
     if pref:
@@ -123,31 +111,52 @@ def render_concept_detail(taxonomy: Taxonomy, uri: str, lang: str = "en") -> Pan
         for lg, val in sorted(alt):
             lines.append(f"  [{lg}]  {val}")
 
-    # Definitions
-    if concept.definitions:
-        lines.append("\n[bold]Definitions[/bold]")
-        for defn in sorted(concept.definitions, key=lambda d: d.lang):
-            lines.append(f"  [{defn.lang}]  {defn.value}")
 
-    # Hierarchy
-    def _fmt(u: str) -> str:
-        c = taxonomy.concepts.get(u)
-        h = taxonomy.uri_to_handle(u) or "?"
-        lbl = c.pref_label(lang) if c else u
-        return f"  [{h}]  {lbl}"
+def _append_concept_definition_lines(lines: list[str], concept: Concept) -> None:
+    if not concept.definitions:
+        return
+    lines.append("\n[bold]Definitions[/bold]")
+    for defn in sorted(concept.definitions, key=lambda d: d.lang):
+        lines.append(f"  [{defn.lang}]  {defn.value}")
 
+
+def _format_concept_ref(taxonomy: Taxonomy, u: str, lang: str) -> str:
+    c = taxonomy.concepts.get(u)
+    h = taxonomy.uri_to_handle(u) or "?"
+    lbl = c.pref_label(lang) if c else u
+    return f"  [{h}]  {lbl}"
+
+
+def _append_concept_hierarchy_lines(
+    lines: list[str], taxonomy: Taxonomy, concept: Concept, lang: str
+) -> None:
     if concept.broader:
         lines.append("\n[bold]Broader[/bold]")
         for u in concept.broader:
-            lines.append(_fmt(u))
+            lines.append(_format_concept_ref(taxonomy, u, lang))
     if concept.narrower:
         lines.append("\n[bold]Narrower[/bold]")
         for u in concept.narrower:
-            lines.append(_fmt(u))
+            lines.append(_format_concept_ref(taxonomy, u, lang))
     if concept.related:
         lines.append("\n[bold]Related[/bold]")
         for u in concept.related:
-            lines.append(_fmt(u))
+            lines.append(_format_concept_ref(taxonomy, u, lang))
+
+
+def render_concept_detail(taxonomy: Taxonomy, uri: str, lang: str = "en") -> Panel:
+    """Render a detailed panel for a single concept."""
+    concept = taxonomy.concepts.get(uri)
+    if concept is None:
+        return Panel(f"[red]Concept not found: {uri!r}[/red]")
+
+    handle = taxonomy.uri_to_handle(uri) or "?"
+    title = f"[bold cyan][{handle}] {concept.pref_label(lang)}[/bold cyan]"
+    lines: list[str] = [f"[dim]URI:[/dim]  {uri}"]
+
+    _append_concept_label_lines(lines, concept)
+    _append_concept_definition_lines(lines, concept)
+    _append_concept_hierarchy_lines(lines, taxonomy, concept, lang)
 
     return Panel("\n".join(lines), title=title, border_style="cyan")
 

@@ -35,7 +35,7 @@ from .analysis_base import (
     Issue,
     pct,
 )
-from .model import Taxonomy
+from .model import OWLIndividual, OWLProperty, Taxonomy
 
 # Alias — OntologyIssue and Issue are the same type; both names are public.
 OntologyIssue = Issue
@@ -175,6 +175,40 @@ def _build_class_hierarchy(
     return children_of, roots, depths
 
 
+def _individual_satisfies_property(
+    taxonomy: Taxonomy, ind: OWLIndividual, p_uri: str, range_set: set[str] | None
+) -> bool:
+    for pv_prop_uri, val_uri in ind.property_values:
+        if pv_prop_uri != p_uri:
+            continue
+        if range_set is None:
+            return True
+        val_ind = taxonomy.owl_individuals.get(val_uri)
+        if val_ind and _effective_types(taxonomy, val_ind.types) & range_set:
+            return True
+    return False
+
+
+def _property_fill_ratio(taxonomy: Taxonomy, p_uri: str, prop: OWLProperty) -> float | None:
+    if not prop.domains:
+        return None
+    domain_set = set(prop.domains)
+    domain_inds = [
+        ind_uri
+        for ind_uri, ind in taxonomy.owl_individuals.items()
+        if _effective_types(taxonomy, ind.types) & domain_set
+    ]
+    if not domain_inds:
+        return None
+    range_set: set[str] | None = set(prop.ranges) if prop.ranges else None
+    filled = 0
+    for ind_uri in domain_inds:
+        ind = taxonomy.owl_individuals[ind_uri]
+        if _individual_satisfies_property(taxonomy, ind, p_uri, range_set):
+            filled += 1
+    return filled / len(domain_inds)
+
+
 def _compute_property_fill(taxonomy: Taxonomy) -> dict[str, float]:
     """Fill rate for each property that has rdfs:domain and at least one domain individual.
 
@@ -185,31 +219,9 @@ def _compute_property_fill(taxonomy: Taxonomy) -> dict[str, float]:
     """
     result: dict[str, float] = {}
     for p_uri, prop in taxonomy.owl_properties.items():
-        if not prop.domains:
-            continue
-        domain_set = set(prop.domains)
-        domain_inds = [
-            ind_uri
-            for ind_uri, ind in taxonomy.owl_individuals.items()
-            if _effective_types(taxonomy, ind.types) & domain_set
-        ]
-        if not domain_inds:
-            continue
-        range_set: set[str] | None = set(prop.ranges) if prop.ranges else None
-        filled = 0
-        for ind_uri in domain_inds:
-            ind = taxonomy.owl_individuals[ind_uri]
-            for pv_prop_uri, val_uri in ind.property_values:
-                if pv_prop_uri != p_uri:
-                    continue
-                if range_set is None:
-                    filled += 1
-                    break
-                val_ind = taxonomy.owl_individuals.get(val_uri)
-                if val_ind and _effective_types(taxonomy, val_ind.types) & range_set:
-                    filled += 1
-                    break
-        result[p_uri] = filled / len(domain_inds)
+        fill = _property_fill_ratio(taxonomy, p_uri, prop)
+        if fill is not None:
+            result[p_uri] = fill
     return result
 
 

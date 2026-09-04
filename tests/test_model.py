@@ -474,3 +474,22 @@ def test_base_uri_file_scheme_ontology_uri_falls_through_to_concepts():
         },
     )
     assert t.base_uri() == "https://ex.org/ns/"
+
+
+def test_base_uri_concepts_with_no_common_prefix_falls_through():
+    """Concepts with completely unrelated URIs share no prefix; base_uri falls
+    through to the next priority (empty here, since there's no scheme either)."""
+    t = Taxonomy(
+        concepts={
+            "urn:a": Concept(uri="urn:a"),
+            "https://other.org/b": Concept(uri="https://other.org/b"),
+        }
+    )
+    assert t.base_uri() == ""
+
+
+def test_base_uri_scheme_uri_without_separator_falls_through():
+    """A scheme URI with neither '/' nor '#' yields no derivable base."""
+    s = ConceptScheme(uri="urn:myscheme")
+    t = Taxonomy(schemes={s.uri: s})
+    assert t.base_uri() == ""
