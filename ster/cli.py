@@ -404,6 +404,74 @@ def _pick_file(files: list[Path]) -> Path | list[Path]:
     return result
 
 
+def _parse_numeric_picker_choice(
+    idx: int, create_idx: int, quit_idx: int, files: list[Path]
+) -> tuple[bool, Path | None | object]:
+    if idx == quit_idx:
+        return True, _QUIT_SENTINEL
+    if idx == create_idx:
+        return True, None
+    if 1 <= idx <= len(files):
+        return True, files[idx - 1]
+    err.print(f"[red]Enter a number between 1 and {quit_idx}.[/red]")
+    return False, None
+
+
+def _parse_file_picker_choice(
+    choice: str, files: list[Path], create_idx: int, quit_idx: int
+) -> tuple[bool, Path | None | object]:
+    """Parse string input for _pick_file_interactive. Returns (handled, value)."""
+    if choice.isdigit():
+        return _parse_numeric_picker_choice(int(choice), create_idx, quit_idx, files)
+
+    matches = [f for f in files if f.name == choice or f.name.startswith(choice)]
+    if len(matches) == 1:
+        return True, matches[0]
+    if len(matches) > 1:
+        err.print(f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]")
+    else:
+        err.print(f"[red]{choice!r} not found.[/red]")
+    return False, None
+
+
+def _print_fallback_options(
+    files: list[Path], preselect: Path | None, create_idx: int, quit_idx: int
+) -> None:
+    for i, f in enumerate(files, 1):
+        marker = (
+            " [bold green]←[/bold green] [dim](last session)[/dim]"
+            if preselect and f == preselect
+            else ""
+        )
+        console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}{marker}")
+    console.print(f"  [cyan]{create_idx:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]")
+    console.print(f"  [cyan]{quit_idx:>2}[/cyan]  [bold red]✕  Quit[/bold red]\n")
+
+
+def _fallback_file_picker(
+    files: list[Path], preselect: Path | None, initial_sel: int
+) -> Path | list[Path] | None:
+    create_idx, quit_idx = len(files) + 1, len(files) + 2
+    _print_fallback_options(files, preselect, create_idx, quit_idx)
+
+    default_num = str(initial_sel + 1) if (preselect and preselect in files) else ""
+    prompt_text = (
+        f"Select [bold](number or filename)[/bold] [dim](Enter → {files[initial_sel].name})[/dim]"
+        if default_num
+        else f"Select [bold](1–{quit_idx})[/bold]"
+    )
+    while True:
+        try:
+            choice = Prompt.ask(prompt_text, default=default_num)
+        except (KeyboardInterrupt, EOFError):
+            raise typer.Exit(0)
+        if not choice and default_num:
+            return files[initial_sel]
+        handled, val = _parse_file_picker_choice(choice, files, create_idx, quit_idx)
+        if handled:
+            return val  # type: ignore[return-value]
+
+
 def _pick_file_interactive(
     files: list[Path],
     preselect: Path | None = None,
@@ -417,20 +485,9 @@ def _pick_file_interactive(
     """
     import sys
 
-    CREATE_IDX = len(files) + 1  # 1-based
-    QUIT_IDX = len(files) + 2  # 1-based
+    item_values: list[Path | None] = [*files, None, _QUIT_SENTINEL]
+    initial_sel = files.index(preselect) if (preselect and preselect in files) else 0
 
-    # Flat ordered list of return values matching the numbered items
-    item_values: list[Path | None] = list(files)
-    item_values.append(None)  # "Create new taxonomy"
-    item_values.append(_QUIT_SENTINEL)  # "Quit"
-
-    # Initial arrow selection (0-based index into item_values)
-    initial_sel = 0
-    if preselect and preselect in files:
-        initial_sel = files.index(preselect)
-
-    # ── Arrow-key mode (requires interactive tty + tty/termios) ──────────────
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
             import termios as _termios  # noqa: F401 – import tests availability on this platform
@@ -438,59 +495,9 @@ def _pick_file_interactive(
 
             return _arrow_file_picker(files, item_values, initial_sel, preselect)
         except ImportError:
-            pass  # Windows or restricted environment → fall through
+            pass
 
-    # ── Fallback: plain Rich Prompt.ask ──────────────────────────────────────
-    for i, f in enumerate(files, 1):
-        marker = (
-            " [bold green]←[/bold green] [dim](last session)[/dim]"
-            if preselect and f == preselect
-            else ""
-        )
-        console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}{marker}")
-    console.print(f"  [cyan]{CREATE_IDX:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]")
-    console.print(f"  [cyan]{QUIT_IDX:>2}[/cyan]  [bold red]✕  Quit[/bold red]")
-    console.print()
-
-    default_num: str | None = str(initial_sel + 1) if (preselect and preselect in files) else None
-
-    if default_num:
-        prompt_text = (
-            f"Select [bold](number or filename)[/bold]"
-            f" [dim](Enter → {files[initial_sel].name})[/dim]"
-        )
-    else:
-        prompt_text = f"Select [bold](1–{QUIT_IDX})[/bold]"
-
-    while True:
-        try:
-            choice = Prompt.ask(prompt_text, default=default_num or "")
-        except (KeyboardInterrupt, EOFError):
-            raise typer.Exit(0)
-
-        if not choice and default_num:
-            return files[initial_sel]
-
-        if choice.isdigit():
-            idx = int(choice)
-            if idx == QUIT_IDX:
-                return _QUIT_SENTINEL
-            if idx == CREATE_IDX:
-                return None
-            if 1 <= idx <= len(files):
-                return files[idx - 1]
-            err.print(f"[red]Enter a number between 1 and {QUIT_IDX}.[/red]")
-            continue
-
-        matches = [f for f in files if f.name == choice or f.name.startswith(choice)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            err.print(
-                f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]"
-            )
-        else:
-            err.print(f"[red]{choice!r} not found.[/red]")
+    return _fallback_file_picker(files, preselect, initial_sel)
 
 
 def _is_toggleable_file(val: Path | None) -> bool:
