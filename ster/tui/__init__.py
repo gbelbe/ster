@@ -9,8 +9,12 @@ and renders through Textual; pure view-model adapters live in :mod:`ster.tui.dat
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ster.model import Taxonomy
+
+if TYPE_CHECKING:
+    from ster.workspace import TaxonomyWorkspace
 
 
 def launch(
@@ -19,6 +23,7 @@ def launch(
     lang: str = "en",
     path: Path | None = None,
     open_query: bool = False,
+    workspace: TaxonomyWorkspace | None = None,
 ) -> None:
     """Open the Textual ontology browser for *taxonomy* (blocks until quit).
 
@@ -27,4 +32,11 @@ def launch(
     """
     from .app import OntologyApp
 
-    OntologyApp(taxonomy, source=source, lang=lang, path=path, open_query=open_query).run()
+    OntologyApp(
+        taxonomy,
+        source=source,
+        lang=lang,
+        path=path,
+        open_query=open_query,
+        workspace=workspace,
+    ).run()

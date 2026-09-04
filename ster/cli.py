@@ -228,6 +228,7 @@ _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
 _DEMO_SENTINEL: Path = Path(".__ster_demo__")  # home menu → load the bundled sample
+_ALL_FILES_SENTINEL: Path = Path(".__ster_all_files__")
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 
 # The bundled mixed SKOS+OWL sample, shipped inside the package (ster/tui/).
@@ -371,12 +372,7 @@ def _resolve_file(path: Path | None) -> Path:
         _save_session(saved)
         return _session_file
 
-    # Discover taxonomy files in CWD
-    found: list[Path] = []
-    for pattern in _TAXONOMY_GLOBS:
-        found.extend(Path.cwd().glob(pattern))
-    found = sorted(set(found))
-
+    found = _found_taxonomy_files()
     if not found:
         err.print("[red]No taxonomy file found in the current directory.[/red]")
         err.print("[dim]Pass --file <path> or run 'ster init' to create one.[/dim]")
@@ -391,14 +387,15 @@ def _resolve_file(path: Path | None) -> Path:
         _session_file = found0
         return _session_file
 
-    selected = _pick_file(found)
+    selected_choice = _pick_file(found)
+    selected = selected_choice[0] if isinstance(selected_choice, list) else selected_choice
     selected = _maybe_prompt_rdfxml_convert(selected)
     _save_session(selected)
     _session_file = selected
     return _session_file
 
 
-def _pick_file(files: list[Path]) -> Path:
+def _pick_file(files: list[Path]) -> Path | list[Path]:
     """Interactive file picker (used by _resolve_file for multiple files)."""
     result = _pick_file_interactive(files)
     if result is None:
@@ -410,7 +407,7 @@ def _pick_file(files: list[Path]) -> Path:
 def _pick_file_interactive(
     files: list[Path],
     preselect: Path | None = None,
-) -> Path | None:
+) -> Path | list[Path] | None:
     """Display numbered file list; return chosen Path or None for 'create new'.
 
     The last entry is always '+ Create new taxonomy'.
@@ -496,81 +493,154 @@ def _pick_file_interactive(
             err.print(f"[red]{choice!r} not found.[/red]")
 
 
+def _is_toggleable_file(val: Path | None) -> bool:
+    return isinstance(val, Path) and val not in (
+        _ALL_FILES_SENTINEL,
+        _DEMO_SENTINEL,
+        _QUIT_SENTINEL,
+    )
+
+
+def _collect_checked_paths(item_values: list[Path | None], checked: set[int]) -> list[Path]:
+    res: list[Path] = []
+    for i in sorted(checked):
+        val = item_values[i]
+        if _is_toggleable_file(val) and isinstance(val, Path):
+            res.append(val)
+    return res
+
+
+def _format_picker_item_label(
+    idx: int,
+    val: Path | None,
+    selected: bool,
+    is_checked: bool,
+    num_files: int,
+    preselect: Path | None,
+) -> str:
+    R, B, D, CY, BCY, GR, INV = (
+        _ANSI_RESET,
+        _ANSI_BOLD,
+        _ANSI_DIM,
+        _ANSI_CYAN,
+        _ANSI_BRIGHT_CYAN,
+        _ANSI_GREEN,
+        _ANSI_INVERSE,
+    )
+    num_s = f"{idx + 1:>2}"
+    chk_mark = f"{GR}[✓]{R} " if is_checked else "[ ] "
+
+    if val == _QUIT_SENTINEL:
+        plain = "✕  Quit"
+        coloured = f"{_ANSI_RED}{plain}{R}"
+    elif val == _ALL_FILES_SENTINEL:
+        plain = f"📁 Open all project files ({num_files} files)"
+        coloured = f"{GR}{plain}{R}"
+    elif val == _DEMO_SENTINEL:
+        plain = "🎒 Load demo ontology / taxonomy"
+        coloured = f"{GR}{plain}{R}"
+    elif val is None:
+        plain = "+ Create new taxonomy"
+        coloured = f"{GR}{plain}{R}"
+    else:
+        last = "  ← last session" if preselect and val == preselect else ""
+        plain = f"{chk_mark}{val.name}{last}"
+        coloured = f"{chk_mark}{val.name}{f'  {D}← last session{R}' if last else ''}"
+
+    if selected:
+        return f"  {BCY}{INV} {num_s} {R}  {B}{plain}{R}"
+    return f"    {CY}{num_s}{R}  {coloured}"
+
+
+def _handle_esc_seq(sel: int, n: int) -> tuple[int, str, bool]:
+    import sys
+
+    nxt = sys.stdin.buffer.read(1)
+    if nxt == b"[":
+        code = sys.stdin.buffer.read(1)
+        if code == b"A":
+            return (sel - 1) % n, "", False
+        if code == b"B":
+            return (sel + 1) % n, "", False
+    return (sel, "", nxt in (b"\r", b"\n"))
+
+
+def _handle_digit_key(ch: bytes, sel: int, n: int, typed: str) -> tuple[int, str]:
+    typed += ch.decode()
+    new_sel = int(typed) - 1 if (typed.isdigit() and 1 <= int(typed) <= n) else sel
+    return new_sel, typed
+
+
+def _process_picker_key(
+    ch: bytes,
+    sel: int,
+    n: int,
+    typed: str,
+    checked: set[int],
+    item_values: list[Path | None],
+) -> tuple[int, str, bool]:
+    """Process a single keypress in the file picker. Returns (new_sel, new_typed, is_done)."""
+    if ch in (b"\r", b"\n"):
+        return (int(typed) - 1 if (typed.isdigit() and 1 <= int(typed) <= n) else sel), typed, True
+
+    if ch == b" " and _is_toggleable_file(item_values[sel]):
+        checked.symmetric_difference_update({sel})
+        return sel, typed, False
+
+    if ch == b"\x1b":
+        return _handle_esc_seq(sel, n)
+
+    if ch in (b"\x7f", b"\x08"):
+        return sel, typed[:-1], False
+
+    if ch.isdigit():
+        new_sel, new_typed = _handle_digit_key(ch, sel, n, typed)
+        return new_sel, new_typed, False
+
+    return sel, typed, False
+
+
 def _arrow_file_picker(
     _files: list[Path],
     item_values: list[Path | None],
     initial_sel: int,
     preselect: Path | None,
-) -> Path | None:
-    """Arrow-key file picker using raw terminal I/O + ANSI codes.
-
-    Redraws the list in place as the user navigates.  Digits accumulate into a
-    number that auto-moves the selection; Enter confirms.
-    """
+) -> Path | list[Path] | None:
+    """Arrow-key file picker using raw terminal I/O + ANSI codes."""
     import sys
     import termios
     import tty
 
-    R = _ANSI_RESET
-    B = _ANSI_BOLD
-    D = _ANSI_DIM
-    CY = _ANSI_CYAN
-    BCY = _ANSI_BRIGHT_CYAN
-    GR = _ANSI_GREEN
-    INV = _ANSI_INVERSE
-
-    # \r\033[2K: go to column 0 then erase entire line — works in both cooked
-    # and raw terminal modes (raw mode does NOT auto-add CR before LF).
-    CLEAR = _CLEAR_LINE
-    NL = "\r\n"  # explicit CR+LF so raw mode doesn't drift columns
-
+    R, B, D = _ANSI_RESET, _ANSI_BOLD, _ANSI_DIM
+    CLEAR, NL = _CLEAR_LINE, "\r\n"
     n = len(item_values)
     sel = initial_sel
-
-    def _label(idx: int, selected: bool) -> str:
-        num = idx + 1
-        val = item_values[idx]
-        num_s = f"{num:>2}"
-
-        if val == _QUIT_SENTINEL:
-            plain = "✕  Quit"
-            coloured = f"{_ANSI_RED}{plain}{R}"
-        elif val == _DEMO_SENTINEL:
-            plain = "🎒 Load demo ontology / taxonomy"
-            coloured = f"{GR}{plain}{R}"
-        elif val is None:
-            plain = "+ Create new taxonomy"
-            coloured = f"{GR}{plain}{R}"
-        else:
-            last = "  ← last session" if preselect and val == preselect else ""
-            plain = f"{val.name}{last}"  # type: ignore[union-attr]
-            coloured = f"{val.name}{f'  {D}← last session{R}' if last else ''}"
-
-        if selected:
-            # Reverse-video highlight on number + plain text — readable on any theme
-            return f"  {BCY}{INV} {num_s} {R}  {B}{plain}{R}"
-        return f"    {CY}{num_s}{R}  {coloured}"
+    checked: set[int] = set()
 
     def render(typed: str, first: bool = False) -> None:
         if not first:
-            # cursor-up n+1: n items + 1 hint line, each ended with NL below
             sys.stdout.write(f"\033[{n + 1}A")
         for i in range(n):
-            sys.stdout.write(f"{CLEAR}{_label(i, i == sel)}{NL}")
+            lbl = _format_picker_item_label(
+                i, item_values[i], i == sel, i in checked, len(_files), preselect
+            )
+            sys.stdout.write(f"{CLEAR}{lbl}{NL}")
         if typed:
             sys.stdout.write(
                 f"{CLEAR}  {D}type:{R} {B}{typed}▌{R}  {D}Enter: confirm  Esc: clear{R}"
             )
+        elif checked:
+            sys.stdout.write(
+                f"{CLEAR}  {D}↑↓ nav  Space toggle  Enter open ({len(checked)} selected){R}"
+            )
         else:
-            sys.stdout.write(f"{CLEAR}  {D}↑↓ navigate  Enter select  or type a number{R}")
-        # Always end with NL so cursor is at a consistent position one line
-        # below the hint — makes every cursor-up land at the same start row.
+            sys.stdout.write(
+                f"{CLEAR}  {D}↑↓ nav  Space multi-select  Enter open  or type number{R}"
+            )
         sys.stdout.write(NL)
         sys.stdout.flush()
 
     render(typed="", first=True)
-    # cursor is already below the hint (render() wrote NL); no extra write needed
-
     typed = ""
     fd = sys.stdin.fileno()
     old_cfg = termios.tcgetattr(fd)
@@ -578,56 +648,22 @@ def _arrow_file_picker(
         tty.setraw(fd)
         while True:
             ch = sys.stdin.buffer.read(1)
-
-            if ch in (b"\r", b"\n"):
-                if typed:
-                    try:
-                        num = int(typed)
-                        if 1 <= num <= n:
-                            sel = num - 1
-                    except ValueError:
-                        pass
-                break
-
-            elif ch == b"\x1b":  # escape / arrow keys
-                nxt = sys.stdin.buffer.read(1)
-                if nxt == b"[":
-                    code = sys.stdin.buffer.read(1)
-                    if code == b"A":  # up
-                        typed = ""
-                        sel = (sel - 1) % n
-                    elif code == b"B":  # down
-                        typed = ""
-                        sel = (sel + 1) % n
-                # plain Esc: clear typed number if any, otherwise keep sel
-                elif nxt in (b"\r", b"\n"):
-                    break
-                else:
-                    typed = ""
-
-            elif ch in (b"\x7f", b"\x08"):  # backspace
-                typed = typed[:-1]
-
-            elif ch == b"\x03":  # Ctrl+C
+            if ch == b"\x03":
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
                 raise KeyboardInterrupt
 
-            elif ch.isdigit():
-                typed += ch.decode()
-                try:
-                    num = int(typed)
-                    if 1 <= num <= n:
-                        sel = num - 1
-                except ValueError:
-                    pass
-
+            sel, typed, done = _process_picker_key(ch, sel, n, typed, checked, item_values)
+            if done:
+                break
             render(typed)
-
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
         sys.stdout.write(NL)
         sys.stdout.flush()
 
+    checked_paths = _collect_checked_paths(item_values, checked)
+    if checked_paths:
+        return checked_paths
     return item_values[sel]
 
 
@@ -690,17 +726,20 @@ def _run(fn, *args, **kwargs):
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
 
 
-def _select_home_file(found: list[Path]) -> Path | None:
+def _select_home_file(found: list[Path]) -> Path | list[Path] | None:
     """Step 1 of the home menu: pick the file every action will operate on — from the local
     files *plus* a 'Load demo' entry. Always shown (even for one file), so the demo is always
-    reachable. Returns the chosen file, ``_DEMO_SENTINEL`` (load a fresh demo), or ``None`` on
+    reachable. Returns the chosen file(s), ``_DEMO_SENTINEL`` (load a fresh demo), or ``None`` on
     Quit / Ctrl+C.
     """
     import sys
 
     console.print("[bold]Select a file:[/bold]\n")
-    # Local files, then the (fresh-each-time) demo, then Quit.
-    item_values: list[Path | None] = [*found, _DEMO_SENTINEL, _QUIT_SENTINEL]
+    item_values: list[Path | None] = []
+    if len(found) >= 2:
+        item_values.append(_ALL_FILES_SENTINEL)
+    item_values.extend(found)
+    item_values.extend([_DEMO_SENTINEL, _QUIT_SENTINEL])
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
@@ -715,25 +754,54 @@ def _select_home_file(found: list[Path]) -> Path | None:
     return _select_home_file_numeric(found)
 
 
-def _select_home_file_numeric(found: list[Path]) -> Path | None:
+def _format_home_item_label(val: Path | None, found: list[Path]) -> str:
+    if val == _ALL_FILES_SENTINEL:
+        return f"[green]📁 Open all project files ({len(found)} files)[/green]"
+    if val == _DEMO_SENTINEL:
+        return "[green]🎒 Load demo ontology / taxonomy[/green]"
+    if val == _QUIT_SENTINEL:
+        return "[red]✕  Quit[/red]"
+    return val.name if val else ""
+
+
+def _parse_comma_selection(raw: str, items: list[Path | None]) -> list[Path] | None:
+    selected_files: list[Path] = []
+    for part in raw.split(","):
+        try:
+            idx = int(part.strip()) - 1
+            if 0 <= idx < len(items):
+                val = items[idx]
+                if _is_toggleable_file(val) and isinstance(val, Path):
+                    selected_files.append(val)
+        except ValueError:
+            pass
+    return selected_files if selected_files else None
+
+
+def _select_home_file_numeric(found: list[Path]) -> Path | list[Path] | None:
     """Numbered-prompt fallback for :func:`_select_home_file` when no arrow-key TTY is
     available. Files 1..n, then the demo, then Quit; a non-numeric reply picks the default
     (first file, or the demo when the folder is empty)."""
-    for i, f in enumerate(found, 1):
-        console.print(f"  [cyan]{i}[/cyan]  {f.name}")
-    demo_idx, quit_idx = len(found) + 1, len(found) + 2
-    console.print(f"  [cyan]{demo_idx}[/cyan]  [green]🎒 Load demo ontology / taxonomy[/green]")
-    console.print(f"  [cyan]{quit_idx}[/cyan]  [red]✕  Quit[/red]")
-    choice = Prompt.ask(f"Select (1–{quit_idx})", default=str(demo_idx if not found else 1))
+    items: list[Path | None] = [_ALL_FILES_SENTINEL] if len(found) >= 2 else []
+    items.extend(found)
+    items.extend([_DEMO_SENTINEL, _QUIT_SENTINEL])
+
+    for i, val in enumerate(items, 1):
+        console.print(f"  [cyan]{i}[/cyan]  {_format_home_item_label(val, found)}")
+
+    choice = Prompt.ask(f"Select (1–{len(items)}, or e.g. 2,3)", default="1")
+    raw = choice.strip()
+    if "," in raw:
+        multi = _parse_comma_selection(raw, items)
+        if multi:
+            return multi
+
     try:
-        idx = int(choice.strip()) - 1
+        idx = int(raw) - 1
+        chosen = items[idx] if 0 <= idx < len(items) else _DEMO_SENTINEL
     except ValueError:
-        return _DEMO_SENTINEL if not found else found[0]
-    if idx == quit_idx - 1:
-        return None  # Quit
-    if idx == demo_idx - 1:
-        return _DEMO_SENTINEL
-    return found[idx] if 0 <= idx < len(found) else _DEMO_SENTINEL
+        chosen = found[0] if found else _DEMO_SENTINEL
+    return None if chosen == _QUIT_SENTINEL else chosen
 
 
 def _home_actions() -> list[tuple[object, str]]:
@@ -1048,7 +1116,9 @@ def _prewarm_lint(path: Path) -> None:
         pass
 
 
-def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
+def _open_viewer(
+    taxonomy_file: Path, workspace: TaxonomyWorkspace | None = None, lang: str = "en"
+) -> None:
     """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit."""
     from .git.manager import GitManager, render_diff
     from .tui import launch
@@ -1080,7 +1150,13 @@ def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
 
             threading.Thread(target=_do_fetch, daemon=True).start()
 
-    launch(taxonomy, source=taxonomy_file.name, lang=lang, path=taxonomy_file)
+    launch(
+        taxonomy,
+        source=taxonomy_file.name,
+        lang=lang,
+        path=taxonomy_file,
+        workspace=workspace,
+    )
 
     if gm.is_enabled() and gm.is_configured():
         if fetch_event is not None:
@@ -2246,6 +2322,35 @@ def _publish_stable_channel(path: Path, bump: str, publish_dir: Path, con: objec
         )
 
 
+def _is_taxonomy_arg(a: str) -> bool:
+    return (
+        a not in _SUBCOMMANDS
+        and not a.startswith("-")
+        and Path(a).suffix.lower() in _TAXONOMY_SUFFIXES
+    )
+
+
+def _try_dispatch_file_args(args: list[str]) -> bool:
+    """If *args* are taxonomy files, open them in the home screen. Return True if handled."""
+    import os
+    import sys
+
+    if not args or not _is_taxonomy_arg(args[0]):
+        return False
+
+    if not all(_is_taxonomy_arg(a) for a in args):
+        sys.argv.insert(1, "show")
+        return False
+
+    paths = [p for a in args if (p := Path(a).resolve()).exists()]
+    if not paths:
+        return False
+
+    os.chdir(paths[0].parent)
+    _home_screen(initial_file=paths if len(paths) > 1 else paths[0])
+    return True
+
+
 def main() -> None:
     """Entry point.
 
@@ -2254,25 +2359,14 @@ def main() -> None:
     • ``ster show taxonomy.ttl`` — one-shot viewer (plus the other subcommands)
     • ``ster <subcommand> …``    — delegate to Typer
     """
-    import os
     import sys
 
     args = sys.argv[1:]
 
     # Non-bare invocation → delegate to Typer once (no loop)
     if args:
-        first = args[0]
-        if first not in _SUBCOMMANDS and not first.startswith("-"):
-            p = Path(first)
-            if p.suffix.lower() in _TAXONOMY_SUFFIXES:
-                # `ster PATH/file.ttl` (no other args) behaves like bare `ster`
-                # run inside the file's folder: open the file, then the menu.
-                if len(args) == 1 and p.exists():
-                    target = p.resolve()
-                    os.chdir(target.parent)
-                    _home_screen(initial_file=Path.cwd() / target.name)
-                    return
-                sys.argv.insert(1, "show")
+        if _try_dispatch_file_args(args):
+            return
         app()
         return
 
@@ -2281,10 +2375,14 @@ def main() -> None:
 
 
 def _found_taxonomy_files() -> list[Path]:
-    """Every taxonomy file in the current folder, sorted and de-duplicated."""
+    """Every taxonomy file in project config, current folder, and 1-level subfolders."""
     found: list[Path] = []
+    proj = Project.load(Path.cwd())
+    if proj:
+        found.extend(proj.resolved_files())
     for pattern in _TAXONOMY_GLOBS:
         found.extend(Path.cwd().glob(pattern))
+        found.extend(Path.cwd().glob(f"*/{pattern}"))
     return sorted(set(found))
 
 
@@ -2319,7 +2417,7 @@ def _open_selected_in_viewer(
     except Exception:
         pass  # non-fatal if .ster/ can't be written
     try:
-        _load_workspace(selected, found)  # raises on broken mappings
+        ws = _load_workspace(selected, found)  # raises on broken mappings
     except Exception as exc:
         err.print(f"[red]Failed to load workspace: {exc}[/red]")
         return
@@ -2327,13 +2425,13 @@ def _open_selected_in_viewer(
     _save_session(primary)
     _session_file = primary
     try:
-        _open_viewer(primary, lang=updated_project.lang)
+        _open_viewer(primary, workspace=ws, lang=updated_project.lang)
     except Exception as exc:
         err.print(f"[red]Viewer error: {exc}[/red]")
 
 
 def _home_obtain_action(
-    pending_open: Path | None, selected_file: Path | None, found: list[Path]
+    pending_open: Path | list[Path] | None, selected_file: Path | None, found: list[Path]
 ) -> tuple[Path | None, list[Path] | Path | None]:
     """One home-loop turn's ``(file, action)``.
 
@@ -2341,7 +2439,9 @@ def _home_obtain_action(
     viewer — no action menu in between. Once a file is selected and the viewer has
     closed, the next turn shows its action menu (SPARQL / publish / graph / import /
     change file). Returns ``action = _QUIT_SENTINEL`` when the user quits at selection."""
-    if pending_open is not None:  # ster PATH/file.ttl → open that file directly
+    if pending_open is not None:  # ster PATH/file.ttl → open directly
+        if isinstance(pending_open, list):
+            return pending_open[0], pending_open
         return pending_open, [pending_open]
     _print_home_intro()
     if selected_file is None or selected_file not in found:
@@ -2351,6 +2451,10 @@ def _home_obtain_action(
         if choice == _DEMO_SENTINEL:  # a fresh demo, opened directly
             demo = _load_demo_into_cwd()
             return demo, [demo]
+        if choice == _ALL_FILES_SENTINEL:
+            return found[0], found
+        if isinstance(choice, list):
+            return choice[0], choice
         # A freshly picked file opens straight in the viewer — no action menu in
         # between. The menu (SPARQL / publish / graph / import / change file) is shown
         # only after the viewer closes, on the next loop turn for the same file.
@@ -2377,7 +2481,7 @@ def _home_perform(
     return "continue"
 
 
-def _home_screen(initial_file: Path | None = None) -> None:
+def _home_screen(initial_file: Path | list[Path] | None = None) -> None:
     """Interactive home-screen loop (bare ``ster``).
 
     Pick a single taxonomy file and it opens straight in the Textual viewer. When the
