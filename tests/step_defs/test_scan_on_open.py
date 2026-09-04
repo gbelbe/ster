@@ -94,13 +94,39 @@ def _open(ctx, settle) -> None:
 
     async def scenario() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
-            await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
-            for _ in range(20):  # give a clean file time to prove it stays silent
-                await pilot.pause()
+            # Wait for the scan to have *decided*, then only wait for a modal
+            # when one is actually coming. Polling for the modal unconditionally
+            # cost the full 15s deadline in every scenario whose correct outcome
+            # is "no modal" — two of them, 31s of the suite spent proving
+            # negatives. Once the scan has settled the answer is already known,
+            # so a clean file needs no wait at all and a dirty one keeps its
+            # full slack.
+            await settle(pilot, lambda: _scan_settled(app))
+            if _errors_found(app):
+                assert await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
             ctx["modal_open"] = isinstance(app.screen, ProblemsModal)
             ctx["rows"] = len(app.screen.query(ProblemRow)) if ctx["modal_open"] else 0
 
     asyncio.run(scenario())
+
+
+def _scan_settled(app) -> bool:
+    """True once scan-on-open can no longer change what is on screen.
+
+    Either the lint has been computed — so the decision is made — or the feature
+    is off, in which case the hook returned without computing anything and no
+    modal is ever coming.
+    """
+    from ster.plugins.semanticlint import config
+
+    return bool(app._lint_computed) or not config.feature_enabled("check_on_open")
+
+
+def _errors_found(app) -> bool:
+    """Whether a Problems modal is on its way. Reads the cached lint, so free."""
+    from ster.plugins.semanticlint import config
+
+    return bool(config.feature_enabled("check_on_open") and app._blocking_errors())
 
 
 @when("I apply the inline fix")
