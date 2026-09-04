@@ -364,7 +364,9 @@ def _retype_individuals_after_delete(
     taxonomy: Taxonomy, deleted_uris: set[str], surviving_parents: list[str], mode: str
 ) -> None:
     """Re-type (or, in delete_all mode, delete) individuals typed by a removed class."""
-    for ind_uri in list(taxonomy.owl_individuals):
+    # Materialized: delete_all mode deletes from taxonomy.owl_individuals
+    # mid-loop below.
+    for ind_uri in list(taxonomy.owl_individuals):  # NOSONAR - materialized before mutating dict
         ind = taxonomy.owl_individuals[ind_uri]
         affected_types = [t for t in ind.types if t in deleted_uris]
         if not affected_types:

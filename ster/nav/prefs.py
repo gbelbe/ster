@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Final
 
 from ster.metadata_coverage import MetaProp
+
+_STER_CONFIG_DIR: Final = Path.home() / ".config" / "ster"
 
 # ── lang persistence ──────────────────────────────────────────────────────────
 
 
 def _lang_prefs_path() -> Path:
-    return Path.home() / ".config" / "ster" / "lang_prefs.json"
+    return _STER_CONFIG_DIR / "lang_prefs.json"
 
 
 def _load_lang_pref(file_path: Path) -> str | None:
@@ -45,7 +48,7 @@ def _save_lang_pref(file_path: Path, lang: str) -> None:
 
 
 def _configured_langs_path() -> Path:
-    return Path.home() / ".config" / "ster" / "configured_langs.json"
+    return _STER_CONFIG_DIR / "configured_langs.json"
 
 
 def load_configured_langs(file_path: Path) -> list[str]:
@@ -116,7 +119,7 @@ def _save_props_catalog(path: Path, props: list[MetaProp]) -> None:
 
 
 def _metadata_props_path() -> Path:
-    return Path.home() / ".config" / "ster" / "metadata_props.json"
+    return _STER_CONFIG_DIR / "metadata_props.json"
 
 
 def load_metadata_props() -> list[MetaProp] | None:
@@ -131,7 +134,7 @@ def save_metadata_props(props: list[MetaProp]) -> None:
 
 
 def _entity_metadata_props_path() -> Path:
-    return Path.home() / ".config" / "ster" / "entity_metadata_props.json"
+    return _STER_CONFIG_DIR / "entity_metadata_props.json"
 
 
 def load_entity_metadata_props() -> list[MetaProp] | None:
@@ -149,7 +152,7 @@ def save_entity_metadata_props(props: list[MetaProp]) -> None:
 
 
 def _prefs_path() -> Path:
-    return Path.home() / ".config" / "ster" / "prefs.json"
+    return _STER_CONFIG_DIR / "prefs.json"
 
 
 def _load_prefs() -> dict:

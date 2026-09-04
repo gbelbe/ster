@@ -160,7 +160,7 @@ function applyGraphUpdate(d){
       if(nbrs.length){
         let x=0,y=0;
         for(const nb of nbrs){x+=nb.position().x;y+=nb.position().y;}
-        n.position({x:x/nbrs.length+(Math.random()-.5)*80,y:y/nbrs.length+(Math.random()-.5)*80});
+        n.position({x:x/nbrs.length+(Math.random()-.5)*80,y:y/nbrs.length+(Math.random()-.5)*80});  // NOSONAR - cosmetic layout jitter, not a security context
       }
     }
   }
@@ -510,7 +510,7 @@ function _seedAndSpread(addedNodes,fp){
       for(const a of anchors){const p=a.position();x+=p.x;y+=p.y;}
       x/=anchors.length;y/=anchors.length;
     }
-    n.position({x:x+(Math.random()-.5)*40,y:y+(Math.random()-.5)*40});
+    n.position({x:x+(Math.random()-.5)*40,y:y+(Math.random()-.5)*40});  // NOSONAR - cosmetic layout jitter, not a security context
   }
   const existing=cy.nodes().difference(addedNodes);
   existing.lock();
