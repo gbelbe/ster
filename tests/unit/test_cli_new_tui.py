@@ -253,14 +253,16 @@ def test_select_home_file_single_file_still_shows_the_picker(tmp_path, monkeypat
 def test_select_home_file_picks_from_multiple(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl", tmp_path / "c.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="2"):  # pick the 2nd file
+    with patch("ster.cli.Prompt.ask", return_value="3"):  # pick the 2nd file (b.ttl; 1 is Open all)
         assert _select_home_file(files) == files[1]
 
 
 def test_select_home_file_quit_returns_none(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Quit (2 files, then demo at 3)
+    with patch(
+        "ster.cli.Prompt.ask", return_value="5"
+    ):  # 5 = Quit (Open all at 1, 2 files, demo at 4, quit at 5)
         assert _select_home_file(files) is None
 
 
@@ -497,6 +499,115 @@ def test_home_screen_quits_when_no_file_selected(tmp_path, monkeypatch):
     ):
         _home_screen()
     menu.assert_not_called()  # quitting at file selection never reaches the action menu
+
+
+def test_select_home_file_offers_open_all_when_multiple_files(tmp_path, monkeypatch):
+    """When 2+ files are found, Option 1 is 'Open all project files' returning _ALL_FILES_SENTINEL."""
+    from ster.cli import _ALL_FILES_SENTINEL, _select_home_file
+
+    _no_tty(monkeypatch)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    with patch("ster.cli.Prompt.ask", return_value="1"):  # 1 = Open all project files
+        assert _select_home_file(files) == _ALL_FILES_SENTINEL
+
+
+def test_home_obtain_action_returns_all_files_when_all_files_picked(tmp_path, monkeypatch):
+    """Picking 'Open all' returns the primary file and the list of all files as the action target."""
+    from ster.cli import _ALL_FILES_SENTINEL, _home_obtain_action
+
+    monkeypatch.chdir(tmp_path)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    with patch("ster.cli._select_home_file", return_value=_ALL_FILES_SENTINEL):
+        selected, action = _home_obtain_action(None, None, files)
+    assert selected == files[0] and action == files
+
+
+def test_open_selected_in_viewer_passes_workspace_to_open_viewer(tmp_path, monkeypatch):
+    from ster.cli import _open_selected_in_viewer
+
+    src1 = tmp_path / "a.ttl"
+    src2 = tmp_path / "b.ttl"
+    src1.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    src2.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    passed_ws = []
+
+    def fake_open_viewer(primary, workspace=None, lang="en"):
+        passed_ws.append(workspace)
+
+    with (
+        patch("ster.cli._open_viewer", side_effect=fake_open_viewer),
+    ):
+        _open_selected_in_viewer([src1, src2], [src1, src2], None)
+
+    assert len(passed_ws) == 1
+    assert passed_ws[0] is not None
+    assert set(passed_ws[0].taxonomies.keys()) == {src1, src2}
+
+
+def test_found_taxonomy_files_includes_project_json_and_subdirectories(tmp_path, monkeypatch):
+    """_found_taxonomy_files includes files listed in .ster/project.json and subfolders."""
+    from ster.cli import _found_taxonomy_files
+    from ster.project import Project
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    f1 = sub / "a.ttl"
+    f2 = tmp_path / "b.ttl"
+    f1.write_text("a", encoding="utf-8")
+    f2.write_text("b", encoding="utf-8")
+
+    proj = Project(root=tmp_path, files=[Path("sub/a.ttl"), Path("b.ttl")])
+    proj.save()
+
+    monkeypatch.chdir(tmp_path)
+    found = _found_taxonomy_files()
+    assert f1 in found and f2 in found
+
+
+def test_main_with_multiple_ttl_arguments_opens_all_files(tmp_path, monkeypatch):
+    import sys
+
+    from ster.cli import main
+
+    f1 = tmp_path / "a.ttl"
+    f2 = tmp_path / "b.ttl"
+    f1.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    f2.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+
+    opened = []
+    monkeypatch.setattr(sys, "argv", ["ster", str(f1), str(f2)])
+    with patch(
+        "ster.cli._home_screen", side_effect=lambda initial_file=None: opened.append(initial_file)
+    ):
+        main()
+
+    assert len(opened) == 1
+    assert opened[0] == [f1.resolve(), f2.resolve()]
+
+
+def test_select_home_file_numeric_supports_comma_separated_selection(tmp_path, monkeypatch):
+    """Entering e.g. '2,3' at the file prompt returns a list of selected files."""
+    from ster.cli import _select_home_file
+
+    _no_tty(monkeypatch)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl", tmp_path / "c.ttl"]
+    # 1 is Open all, 2 is a.ttl, 3 is b.ttl, 4 is c.ttl
+    with patch("ster.cli.Prompt.ask", return_value="2, 4"):
+        selected = _select_home_file(files)
+        assert selected == [files[0], files[2]]
+
+
+def test_home_obtain_action_handles_list_choice(tmp_path, monkeypatch):
+    """When _select_home_file returns a list of files, _home_obtain_action returns primary file and list."""
+    from ster.cli import _home_obtain_action
+
+    monkeypatch.chdir(tmp_path)
+    files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
+    with patch("ster.cli._select_home_file", return_value=[files[0], files[1]]):
+        selected, action = _home_obtain_action(None, None, files)
+    assert selected == files[0] and action == [files[0], files[1]]
 
 
 def test_open_selected_in_viewer_reports_a_viewer_error(tmp_path, monkeypatch):

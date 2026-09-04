@@ -15,6 +15,10 @@ import threading
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ster.workspace import TaxonomyWorkspace
 
 from rich.style import Style
 from rich.text import Text
@@ -578,6 +582,7 @@ class OntologyApp(App):
         lang: str = "en",
         path: Path | None = None,
         open_query: bool = False,
+        workspace: TaxonomyWorkspace | None = None,
     ) -> None:
         super().__init__()
         self._open_query_on_start = open_query
@@ -586,7 +591,13 @@ class OntologyApp(App):
         from ster.nav.prefs import _load_prefs
 
         self.theme = _load_prefs().get("theme") or "solarized-light"  # saved pref, else default
-        self.tax = taxonomy
+        self._workspace: TaxonomyWorkspace | None
+        if workspace is not None:
+            self._workspace = workspace
+            self.tax = workspace.merged_taxonomy()
+        else:
+            self.tax = taxonomy
+            self._workspace = None
         if path is not None:
             from ster.nav.prefs import _load_lang_pref
 
@@ -908,7 +919,8 @@ class OntologyApp(App):
         from ster.core.validation import SkosValidatorAdapter
         from ster.workspace import TaxonomyWorkspace
 
-        self._workspace = TaxonomyWorkspace.from_taxonomy(taxonomy, path)
+        if self._workspace is None:
+            self._workspace = TaxonomyWorkspace.from_taxonomy(taxonomy, path)
         return TaxonomyService(self._workspace, _StorePersistence(), SkosValidatorAdapter())
 
     def compose(self) -> ComposeResult:
@@ -1631,7 +1643,7 @@ class OntologyApp(App):
             self.notify(result.error or "Command failed.", severity="error")
             return
         # The service swapped a fresh authority taxonomy into the workspace.
-        self.tax = self._workspace.taxonomies[self._path]
+        self.tax = self._workspace.taxonomies[self._path]  # type: ignore[union-attr]
         self.search_rows = data.search_rows(self.tax, self.lang)
         self._invalidate_lint()  # the edit may fix/introduce issues
         self._rebuild_affected(result.affected_uris, select)  # rebuild only the touched pane(s)
@@ -1755,7 +1767,7 @@ class OntologyApp(App):
             if not result.ok:
                 self.notify(result.error or "Fix failed.", severity="error")
                 return False
-        self.tax = self._workspace.taxonomies[self._path]
+        self.tax = self._workspace.taxonomies[self._path]  # type: ignore[union-attr]
         self.search_rows = data.search_rows(self.tax, self.lang)
         self._invalidate_lint()
         self._dirty_after_fix = True
