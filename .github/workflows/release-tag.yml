@@ -1,0 +1,60 @@
+name: Tag the release
+
+# Every merge to main asks the commit log what version it earned. A feature moves
+# the minor, a fix the patch, a breaking change the major — and housekeeping moves
+# nothing, so a docs-only merge cuts no tag. scripts/next_version.py holds the
+# rules and is unit-tested; this workflow only acts on its answer.
+#
+# It pushes a *tag*, never a commit, so main's branch protection is never involved
+# and no standing write-to-main credential exists.
+#
+# Tagging does not publish. Publishing to PyPI happens when you create a GitHub
+# Release from one of these tags — see publish.yml.
+on:
+  push:
+    branches: ["main", "master"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false   # never race two tags; let each finish
+
+jobs:
+  tag:
+    name: Tag if the commits earned one
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create and push the tag
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0        # the whole history, and every tag, or nothing resolves
+
+      - name: Work out the next version
+        id: next
+        run: |
+          version="$(python3 scripts/next_version.py)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ -z "$version" ]; then
+            echo "No releasable commits since the last tag — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Next version: **${version}**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Create and push the tag
+        if: steps.next.outputs.version != ''
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            echo "Tag ${VERSION} already exists — leaving it alone." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "${VERSION}"
+          git push origin "${VERSION}"
+          echo "Tagged ${VERSION}. Create a GitHub Release from it to publish." >> "$GITHUB_STEP_SUMMARY"

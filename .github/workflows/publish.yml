@@ -1,10 +1,14 @@
 name: Publish to PyPI
 
-# Trigger: push a tag like v0.1.0
+# Trigger: publishing a GitHub Release, or running this workflow by hand.
+#
+# Deliberately NOT every v* tag. release-tag.yml now cuts a tag on every merge to
+# main that earned one, and a routine merge must not ship to PyPI by itself.
+# Tagging is automatic; releasing stays a decision someone makes.
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,6 +54,6 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          # ci.yml publishes on the version-bump push and then tags, which
-          # fires this workflow for a version PyPI already has. Skip, don't fail.
+          # A release may be re-published, or dispatched by hand for a version
+          # PyPI already holds. Skip, don't fail.
           skip-existing: true

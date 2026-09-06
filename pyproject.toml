@@ -1,12 +1,18 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 # ── Project metadata ──────────────────────────────────────────────────────────
 
 [project]
 name = "ster"
-version = "0.10.0"
+# Derived from the git tag by hatch-vcs, never hand-edited: a literal here drifts
+# from the tags the moment someone forgets, as it had at 0.11.0 against v0.10.0.
+# scripts/next_version.py decides what the next tag is; the tag decides this.
+dynamic = ["version"]
 description = "Terminal tool for building and exploring SKOS taxonomies and OWL ontologies"
 readme = "README.md"
 license = { file = "LICENSE" }
