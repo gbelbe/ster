@@ -896,7 +896,16 @@ def test_semanticlint_tab_appears_only_when_the_plugin_is_enabled(tmp_path) -> N
     _run(scenario)
 
 
-def test_toggling_the_plugin_adds_and_removes_its_tab(tmp_path) -> None:
+def test_toggling_the_plugin_adds_and_removes_its_tab(tmp_path, settle) -> None:
+    """Toggling the plugin mounts and unmounts its tab.
+
+    Waits on the tab, not on a turn. Ticking the checkbox schedules a reactive
+    watcher that mounts a widget, and a single pilot.pause() is one event-loop
+    turn — enough when the machine is idle, not when eight xdist workers are
+    competing. This test failed three times in one afternoon on unrelated
+    branches and passed every time in isolation, which is the signature.
+    """
+
     async def scenario() -> None:
         from textual.widgets import Checkbox
 
@@ -904,12 +913,12 @@ def test_toggling_the_plugin_adds_and_removes_its_tab(tmp_path) -> None:
         async with app.run_test(size=(120, 48)) as pilot:
             modal = await _open_app_config(pilot, app)
             assert not modal.query("#cfg-tab-semanticlint")  # off by default
+
             modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = True
-            await pilot.pause()
-            assert modal.query("#cfg-tab-semanticlint")  # appeared live
+            assert await settle(pilot, lambda: bool(modal.query("#cfg-tab-semanticlint")))
+
             modal.query_one("#cfg-plugin-semanticlint", Checkbox).value = False
-            await pilot.pause()
-            assert not modal.query("#cfg-tab-semanticlint")  # removed live
+            assert await settle(pilot, lambda: not modal.query("#cfg-tab-semanticlint"))
 
     _run(scenario)
 

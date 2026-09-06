@@ -74,3 +74,19 @@ def test_the_default_query_detects_shapes_by_datatype(demo) -> None:
     """Not by predicate name — the rule the whole geometry module is built on."""
     assert "wktLiteral" in _DEFAULT_MAP_QUERY
     assert "datatype(" in _DEFAULT_MAP_QUERY
+
+
+def test_the_default_limit_does_not_silently_truncate_a_real_ontology() -> None:
+    """200 was small enough to make a real file look wrong rather than partial.
+
+    On the 34-place demo the cap is invisible. On an ontology of 1,267 places it
+    kept an arbitrary 200 — whichever the graph happened to yield first — and the
+    map read France 2, Spain 164 when the truth is France 588, Spain 266. A map
+    that is confidently wrong is worse than one that is slow.
+    """
+    import re
+
+    limits = [int(n) for n in re.findall(r"LIMIT\s+(\d+)", _DEFAULT_MAP_QUERY)]
+
+    assert limits, "a default query with no limit at all could hang on a huge graph"
+    assert min(limits) >= 5000, f"limit {min(limits)} truncates real ontologies"

@@ -23,7 +23,15 @@ from ..model import (
     Taxonomy,
     is_builtin_uri,
 )
-from ._constants import _RDFLIB_DEFAULT_PREFIXES, NOTE_PROPERTY_URI, SCHEMA, VOID
+from ._constants import (
+    _RDFLIB_DEFAULT_PREFIXES,
+    ALT_IMAGE_PREDICATES,
+    ALT_URL_PREDICATES,
+    ALT_VIDEO_PREDICATES,
+    NOTE_PROPERTY_URI,
+    SCHEMA,
+    VOID,
+)
 from ._graph_io import _graph_index, _Index
 from ._normalize import _normalize_hierarchy
 
@@ -94,6 +102,44 @@ def _set_note(entity: object, o: object) -> None:
         entity.note = str(o)  # type: ignore[attr-defined]
 
 
+def _media_handlers(
+    images: list[str],
+    videos: list[str],
+    urls: list[str],
+    annotations: list[OntologyAnnotation] | None,
+) -> dict[str, Callable[[object], None]]:
+    """Handlers for every media predicate ster understands.
+
+    The canonical predicates are consumed. An alternative is *also* recorded as
+    an annotation, because a handled predicate never reaches the generic bucket —
+    without that, opening a file that used schema:logo and saving it would write
+    schema:image back and lose the author's vocabulary.
+    """
+
+    def keep(target: list[str], predicate: str, alternative: bool):
+        def handler(o: object) -> None:
+            target.append(str(o))
+            if alternative and annotations is not None:
+                anno = _annotation_from(predicate, o)
+                if anno is not None:
+                    annotations.append(anno)
+
+        return handler
+
+    handlers: dict[str, Callable[[object], None]] = {
+        str(SCHEMA.image): keep(images, str(SCHEMA.image), False),
+        str(SCHEMA.video): keep(videos, str(SCHEMA.video), False),
+        str(SCHEMA.url): keep(urls, str(SCHEMA.url), False),
+    }
+    for pred in ALT_IMAGE_PREDICATES:
+        handlers[pred] = keep(images, pred, True)
+    for pred in ALT_VIDEO_PREDICATES:
+        handlers[pred] = keep(videos, pred, True)
+    for pred in ALT_URL_PREDICATES:
+        handlers[pred] = keep(urls, pred, True)
+    return handlers
+
+
 def _dispatch_predicates(
     triples: list[tuple[Node, Node]],
     handlers: dict[str, Callable[[object], None]],
@@ -126,11 +172,11 @@ def _parse_class(uri: str, triples: list[tuple[Node, Node]]) -> RDFClass:
         str(RDFS.subClassOf): lambda o: _append_uri_ref(cls.sub_class_of, o, skip_builtin=True),
         str(OWL.equivalentClass): lambda o: _append_uri_ref(cls.equivalent_class, o),
         str(OWL.disjointWith): lambda o: _append_uri_ref(cls.disjoint_with, o),
-        str(SCHEMA.image): lambda o: cls.schema_images.append(str(o)),
-        str(SCHEMA.video): lambda o: cls.schema_videos.append(str(o)),
-        str(SCHEMA.url): lambda o: cls.schema_urls.append(str(o)),
         NOTE_PROPERTY_URI: lambda o: _set_note(cls, o),
     }
+    handlers.update(
+        _media_handlers(cls.schema_images, cls.schema_videos, cls.schema_urls, cls.annotations)
+    )
     _dispatch_predicates(triples, handlers, annotations=cls.annotations)
     return cls
 
@@ -170,10 +216,8 @@ def _parse_concept(uri: str, triples: list[tuple[Node, Node]]) -> Concept:
         str(SKOS.exactMatch): lambda o: c.exact_match.append(str(o)),
         str(SKOS.closeMatch): lambda o: c.close_match.append(str(o)),
         str(FOAF.focus): lambda o: setattr(c, "focus", str(o)),
-        str(SCHEMA.image): lambda o: c.schema_images.append(str(o)),
-        str(SCHEMA.video): lambda o: c.schema_videos.append(str(o)),
-        str(SCHEMA.url): lambda o: c.schema_urls.append(str(o)),
     }
+    handlers.update(_media_handlers(c.schema_images, c.schema_videos, c.schema_urls, c.annotations))
     _dispatch_predicates(
         triples, handlers, annotations=c.annotations, skip=_CONCEPT_ANNOTATION_SKIP
     )
@@ -196,15 +240,29 @@ def _parse_scheme(uri: str, triples: list[tuple[Node, Node]]) -> ConceptScheme:
     return scheme
 
 
+def _read_alternative_media(ind: OWLIndividual, triples: list[tuple[Node, Node]]) -> None:
+    """Copy pictures, videos and links written in another vocabulary onto *ind*.
+
+    Read, never consumed. An individual falls through to property_values rather
+    than to an annotations bucket, and that fall-through is what makes the
+    author's own predicate round-trip on save — see _media_handlers for the
+    class and concept case, where the bucket does the same job.
+    """
+    for target, predicates in (
+        (ind.schema_images, ALT_IMAGE_PREDICATES),
+        (ind.schema_videos, ALT_VIDEO_PREDICATES),
+        (ind.schema_urls, ALT_URL_PREDICATES),
+    ):
+        for pred in predicates:
+            target.extend(str(o) for q, o in triples if str(q) == pred)
+
+
 def _parse_individual(uri: str, triples: list[tuple[Node, Node]]) -> OWLIndividual:
     """Build an :class:`OWLIndividual` from its triples (structured fields only)."""
     ind = OWLIndividual(uri=uri)
     handlers: dict[str, Callable[[object], None]] = {
         str(RDFS.label): lambda o: ind.labels.append(_lang_label(o)),
         str(RDFS.comment): lambda o: ind.comments.append(_lang_def(o)),
-        str(SCHEMA.image): lambda o: ind.schema_images.append(str(o)),
-        str(SCHEMA.video): lambda o: ind.schema_videos.append(str(o)),
-        str(SCHEMA.url): lambda o: ind.schema_urls.append(str(o)),
         NOTE_PROPERTY_URI: lambda o: _set_note(ind, o),
     }
 
@@ -214,6 +272,10 @@ def _parse_individual(uri: str, triples: list[tuple[Node, Node]]) -> OWLIndividu
             ind.types.append(tu)
 
     handlers[str(RDF.type)] = _type_handler
+    _read_alternative_media(ind, triples)
+    handlers[str(SCHEMA.image)] = lambda o: ind.schema_images.append(str(o))
+    handlers[str(SCHEMA.video)] = lambda o: ind.schema_videos.append(str(o))
+    handlers[str(SCHEMA.url)] = lambda o: ind.schema_urls.append(str(o))
 
     def _generic_handler(p_str: str, o: object) -> None:
         if isinstance(o, URIRef):

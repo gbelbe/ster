@@ -363,7 +363,9 @@ def test_crossing_the_zoom_threshold_redraws_without_refitting():
     """
     js = _map_js()
 
-    assert "if (wantsShapes() !== shapeMode) draw(false)" in js
+    # The guard now also has an else-branch — badges are re-measured in pixels
+    # when the zoom changes — so the redraw itself is what this pins.
+    assert "if (wantsShapes() !== shapeMode) { draw(false); return; }" in js
     assert "function draw(fit = true)" in js
 
 

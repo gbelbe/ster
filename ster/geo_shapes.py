@@ -27,8 +27,9 @@ import datetime as dt
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Final
 
 import rdflib
 from rdflib.namespace import GEO, XSD
@@ -391,9 +392,111 @@ def _declared_containment(graph: rdflib.Graph) -> tuple[str, ...]:
     return result
 
 
+def _containment_classes(graph: rdflib.Graph) -> set[str]:
+    """The classes the drill-down is built on: the containment property's own
+    domain, plus everything beneath it."""
+    from rdflib.namespace import RDFS  # noqa: PLC0415
+
+    roots = {
+        str(d)
+        for prop in _declared_containment(graph)
+        for d in graph.objects(rdflib.URIRef(prop), RDFS.domain)
+    }
+    seen, frontier = set(roots), list(roots)
+    while frontier:
+        current = frontier.pop()
+        for sub in graph.subjects(RDFS.subClassOf, rdflib.URIRef(current)):
+            if str(sub) not in seen:
+                seen.add(str(sub))
+                frontier.append(str(sub))
+    return seen
+
+
+_LIT_LABEL: Final = "label"
+_LIT_VALUES: Final = "values"
+
+
+def _attaches_to_hierarchy(
+    graph: rdflib.Graph, prop: rdflib.term.Node, inside: set[str], rdfs: object
+) -> bool:
+    """True when *prop* hangs a non-place onto the containment tree.
+
+    Range inside the tree, domain outside it, and the domain's instances must
+    actually carry a position — that last test is what separates "is located at"
+    from "has something to do with".
+    """
+    if str(prop) in _declared_containment(graph):
+        return False
+    domains = {str(d) for d in graph.objects(prop, rdfs.domain)}  # type: ignore[attr-defined]
+    ranges = {str(r) for r in graph.objects(prop, rdfs.range)}  # type: ignore[attr-defined]
+    if not (domains and ranges) or not ranges <= inside or domains == ranges:
+        return False
+    return any(_class_is_located(graph, d) for d in domains)
+
+
+def attachment_predicates(graph: rdflib.Graph) -> tuple[str, ...]:
+    """Properties that hang something onto the hierarchy without it being a place.
+
+    Most ontologies model geography as a containment chain and then attach
+    something else to the end of it. A store, a warehouse, a building: none is a
+    *kind of* city, and subclassing them under the geographic class just to get
+    them on a map is modelling for the tool rather than for the truth.
+
+    They say it with a property instead — ``Store --locatedIn--> City`` — and it
+    is recognisable from the declaration: the range is inside the containment
+    tree and the domain is something else. No vocabulary is named here, so any
+    spelling works.
+
+    Pointing into the hierarchy is not enough on its own, though. A business unit
+    may name the country it trades in without being anywhere; taking that as a
+    location would hang phantom nodes under every country. So the domain must be
+    a class whose instances actually carry a position — that is what separates
+    "is located at" from "has something to do with".
+    """
+    from rdflib.namespace import OWL, RDF, RDFS  # noqa: PLC0415
+
+    cached = getattr(graph, "_ster_attachment", None)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+    inside = _containment_classes(graph)
+    found = []
+    if inside:
+        found = [
+            str(prop)
+            for prop in graph.subjects(RDF.type, OWL.ObjectProperty)
+            if _attaches_to_hierarchy(graph, prop, inside, RDFS)
+        ]
+    result = tuple(found)
+    try:
+        graph._ster_attachment = result  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    return result
+
+
+def _class_is_located(graph: rdflib.Graph, cls: str) -> bool:
+    """True when instances of *cls* carry a position of their own.
+
+    Checked against the data rather than assumed from the name: a store has
+    coordinates, a business unit does not, and only the first is somewhere.
+    """
+    from rdflib.namespace import RDF  # noqa: PLC0415
+
+    for i, instance in enumerate(graph.subjects(RDF.type, rdflib.URIRef(cls))):
+        if i > 50:  # a sample settles it; scanning every store proves nothing more
+            break
+        if geometry_of(graph, instance) is not None:  # type: ignore[arg-type]
+            return True
+    return False
+
+
 def place_parent(graph: rdflib.Graph, node: rdflib.URIRef) -> str | None:
-    """The place containing *node*, by whichever containment predicate it uses."""
-    for predicate in (*_declared_containment(graph), *_STANDARD_WITHIN):
+    """The place containing *node*, by containment or by attachment."""
+    for predicate in (
+        *_declared_containment(graph),
+        *attachment_predicates(graph),
+        *_STANDARD_WITHIN,
+    ):
         parent = graph.value(node, rdflib.URIRef(predicate))
         if parent is not None:
             return str(parent)
@@ -532,7 +635,7 @@ def numeric_literals(graph: rdflib.Graph, node: rdflib.URIRef) -> list[dict[str,
             continue
         label = graph.value(predicate, RDFS.label)
         figures.append(
-            {"prop": str(predicate), "label": str(label) if label else name, "value": value}
+            {"prop": str(predicate), _LIT_LABEL: str(label) if label else name, "value": value}
         )
     return figures
 
@@ -559,7 +662,7 @@ def map_layers(graph: rdflib.Graph) -> list[dict[str, object]]:
         url = _usable_url(graph.value(node, STER_MAP.tileUrl))
         if url is not None:
             layers.append(_layer_record(graph, node, url))
-    return sorted(layers, key=lambda layer: str(layer["label"]))
+    return sorted(layers, key=lambda layer: str(layer[_LIT_LABEL]))
 
 
 def _usable_url(raw: object) -> str | None:
@@ -603,7 +706,7 @@ def _layer_record(graph: rdflib.Graph, node: rdflib.term.Node, url: str) -> dict
     # way rather than as {z}/{x}/{y} tiles.
     wms_layers = graph.value(node, STER_MAP.wmsLayers)
     return {
-        "label": _text(graph, node, RDFS.label) or _local(str(node)),
+        _LIT_LABEL: _text(graph, node, RDFS.label) or _local(str(node)),
         "url": url,
         "attribution": _text(graph, node, STER_MAP.attribution),
         "opacity": _opacity(graph, node),
@@ -744,3 +847,218 @@ def _legend_scale(stated: object) -> list[dict[str, object]]:
     if len(stops) < 2:
         return []
     return sorted(stops, key=lambda stop: stop["value"])  # type: ignore[arg-type,return-value]
+
+
+# How far to follow a relation before giving up. Three is enough to reach the
+# far side of the usual shape — a shop names its operator, the operator its
+# owner, the owner its format — without wandering into unrelated parts of a
+# densely linked graph. It is a constant because the right depth is a judgement,
+# not a fact.
+FACET_DEPTH = 3
+
+# Provenance says how we know a thing, not what it is, so it makes a poor filter:
+# an ontology that records its sources properly would otherwise offer "filter by
+# which sitemap this came from" beside "filter by brand". Excluding the vocabulary
+# is general — PROV-O is a W3C standard, not one ontology's private choice.
+_METADATA_NAMESPACES = (
+    "http://www.w3.org/ns/prov#",
+    "http://purl.org/dc/terms/",
+    "http://purl.org/dc/elements/1.1/",
+    "http://www.w3.org/ns/dcat#",
+)
+
+
+def _facet_values_from(
+    graph: rdflib.Graph,
+    current: rdflib.term.Node,
+    containment: set[str],
+    seen: set[str],
+) -> Iterator[tuple[rdflib.URIRef, list[str]]]:
+    """Entities one hop from *current* that are facet values, with their classes.
+
+    Everything that disqualifies a target lives here — containment, metadata,
+    already seen, untyped, or a place the drill-down already draws — so the walk
+    itself reads as a walk.
+    """
+    from rdflib.namespace import RDF  # noqa: PLC0415
+
+    for predicate, target in graph.predicate_objects(current):
+        if str(predicate) in containment or not isinstance(target, rdflib.URIRef):
+            continue
+        if str(predicate).startswith(_METADATA_NAMESPACES):
+            continue
+        key = str(target)
+        if key in seen or (target, RDF.type, None) not in graph:
+            continue
+        seen.add(key)
+        # A place is already on the map; it is a destination, not a facet.
+        if place_parent(graph, target) is not None or _has_children(graph, target):
+            continue
+        classes = [
+            c for c in _facet_classes(graph, target) if not c.startswith(_METADATA_NAMESPACES)
+        ]
+        if classes:
+            yield target, classes
+
+
+def facets_of(
+    graph: rdflib.Graph, node: rdflib.URIRef, depth: int = FACET_DEPTH
+) -> dict[str, list[str]]:
+    """What this place *is*, as opposed to where it is — grouped by class.
+
+    A map of places answers half the question. The other half lives on entities
+    the map never draws: which chain runs this shop, which group owns it, what
+    format it trades as. Those are facets, and which exist is a property of the
+    ontology rather than of ster — so they are discovered, never configured.
+
+    The rule: follow object properties that are not containment, and stop at
+    anything that is itself a place, since the drill-down already covers those.
+    Whatever remains is a facet, keyed by its own most specific class.
+    """
+
+    containment = set(_declared_containment(graph)) | set(_STANDARD_WITHIN)
+    found: dict[str, set[str]] = {}
+    seen = {str(node)}
+    frontier = [node]
+    for _ in range(depth):
+        nxt = []
+        for current in frontier:
+            for target, classes in _facet_values_from(graph, current, containment, seen):
+                for cls in classes:
+                    found.setdefault(cls, set()).add(str(target))
+                nxt.append(target)
+        frontier = nxt
+        if not frontier:
+            break
+    return {k: sorted(v) for k, v in found.items()}
+
+
+def _has_children(graph: rdflib.Graph, node: rdflib.term.Node) -> bool:
+    """True when something names *node* as its container — so it is a place."""
+    for predicate in (*_declared_containment(graph), *_STANDARD_WITHIN):
+        if next(graph.subjects(rdflib.URIRef(predicate), node), None) is not None:
+            return True
+    return False
+
+
+def _superclasses(graph: rdflib.Graph, cls: rdflib.URIRef, rdfs: object) -> set[str]:
+    """Every class above *cls*, transitively. Bounded, so a cycle cannot hang."""
+    seen: set[rdflib.URIRef] = set()
+    frontier = [cls]
+    while frontier and len(seen) < 64:
+        for parent in graph.objects(frontier.pop(), rdfs.subClassOf):  # type: ignore[attr-defined]
+            if isinstance(parent, rdflib.URIRef) and parent not in seen:
+                seen.add(parent)
+                frontier.append(parent)
+    return {str(c) for c in seen}
+
+
+def _facet_classes(graph: rdflib.Graph, node: rdflib.term.Node) -> list[str]:
+    """*node*'s most specific modelled classes — every one, not just the deepest.
+
+    An individual is often classified on more than one axis at once, and the
+    axes need not meet: where brands are modelled as classes, a business unit is
+    both a BusinessUnit and a LeroyMerlin. Neither subsumes the other, both are
+    useful filters, so the entity belongs in both facets. Picking only the
+    deepest would silently retire the other menu.
+
+    A class is dropped only when some *other* declared class already implies it,
+    since offering Person beside Employee adds a filter that says less.
+    """
+    from rdflib.namespace import RDF, RDFS  # noqa: PLC0415
+
+    declared = [
+        cls
+        for cls in graph.objects(node, RDF.type)
+        if isinstance(cls, rdflib.URIRef) and not is_builtin_uri(str(cls))
+    ]
+    implied: set[str] = set()
+    for cls in declared:
+        implied |= _superclasses(graph, cls, RDFS) - {str(cls)}
+    return sorted({str(c) for c in declared} - implied)
+
+
+def facet_catalogue(graph: rdflib.Graph, uris: list[str]) -> dict[str, dict]:
+    """Labels and logos for every facet value reachable from *uris*.
+
+    Sent once beside the places so the menu can draw a button per value without
+    a second request. The image is whatever the ontology offers — schema:image,
+    schema:logo, foaf:depiction — and is empty when it offers none.
+    """
+    from rdflib.namespace import RDFS  # noqa: PLC0415
+
+    from .store import IMAGE_PREDICATES  # noqa: PLC0415
+
+    out: dict[str, dict] = {}
+    for uri in uris:
+        for cls, values in facets_of(graph, rdflib.URIRef(uri)).items():
+            entry = out.setdefault(cls, {_LIT_LABEL: _label_of(graph, cls, RDFS), _LIT_VALUES: {}})
+            for value in values:
+                if value in entry[_LIT_VALUES]:
+                    continue
+                node = rdflib.URIRef(value)
+                image = next(
+                    (
+                        str(o)
+                        for p in IMAGE_PREDICATES
+                        for o in graph.objects(node, rdflib.URIRef(p))
+                    ),
+                    "",
+                )
+                entry[_LIT_VALUES][value] = {
+                    _LIT_LABEL: _label_of(graph, value, RDFS),
+                    "image": image,
+                }
+    return out
+
+
+def _label_of(graph: rdflib.Graph, uri: str, rdfs: object) -> str:
+    label = graph.value(rdflib.URIRef(uri), rdfs.label)  # type: ignore[attr-defined]
+    return str(label) if label else _local(uri)
+
+
+def image_of(graph: rdflib.Graph, node: rdflib.term.Node) -> str:
+    """The first picture this entity offers, whatever vocabulary named it."""
+    from .store import IMAGE_PREDICATES  # noqa: PLC0415
+
+    return next(
+        (str(o) for p in IMAGE_PREDICATES for o in graph.objects(node, rdflib.URIRef(p))),
+        "",
+    )
+
+
+def badges_of(graph: rdflib.Graph, uri: str) -> list[dict[str, str]]:
+    """Entities that point at this place and carry a picture.
+
+    A polygon says where something is; it does not say who is in it. When an
+    ontology links other entities to a place — a business unit to the country it
+    trades in, an operator to a region — the map can show their marks on the
+    shape itself.
+
+    Discovered rather than configured: anything referencing the place qualifies,
+    whatever the property is called. Places are excluded because the drill-down
+    already draws them, and an entity with no image is excluded because there
+    would be nothing to draw.
+    """
+    from rdflib.namespace import RDFS  # noqa: PLC0415
+
+    node = rdflib.URIRef(uri)
+    found: dict[str, dict[str, str]] = {}
+    for subject in graph.subjects(None, node):
+        if not isinstance(subject, rdflib.URIRef):
+            continue  # a blank node has no identity to show
+        key = str(subject)
+        if key in found or key == uri:
+            continue
+        if place_parent(graph, subject) is not None or _has_children(graph, subject):
+            continue  # a place: the hierarchy already shows it
+        image = image_of(graph, subject)
+        if not image:
+            continue
+        label = graph.value(subject, RDFS.label)
+        found[key] = {
+            "uri": key,
+            _LIT_LABEL: str(label) if label else _local(key),
+            "image": image,
+        }
+    return [found[k] for k in sorted(found)]

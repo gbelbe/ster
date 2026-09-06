@@ -166,6 +166,13 @@ class SSEBroadcaster:
 #   Shapes are found by literal datatype rather than by predicate, as everywhere
 #   else in ster: a registry of predicate names would never be finished, and the
 #   previous default matched wgs:lat alone, so no polygon was ever on this map.
+#
+#   The limit is high on purpose. At 200 it was invisible on the 34-place demo
+#   and quietly ruinous on a real file: an ontology of 1,267 places kept whichever
+#   arbitrary 200 the graph yielded first, and the map read "France 2, Spain 164"
+#   when the truth was France 588, Spain 266. A map that is confidently wrong is
+#   worse than one that is slow, and the map draws a single level at a time
+#   anyway, so a large result costs little to hold.
 _DEFAULT_MAP_QUERY = """\
 PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -181,7 +188,7 @@ WHERE {
   { ?thing wgs:lat ?lat }
   OPTIONAL { ?thing rdfs:label ?name }
 }
-LIMIT 200
+LIMIT 5000
 """
 
 
@@ -497,7 +504,10 @@ def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, A
     """
     from .geo_results import label_of  # noqa: PLC0415
     from .geo_shapes import (  # noqa: PLC0415
+        badges_of,
+        facets_of,
         geometry_of,
+        image_of,
         numeric_literals,
         place_ancestors,
         place_level,
@@ -531,6 +541,16 @@ def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, A
         "result": is_result,
         # Numeric properties, so the panel can total a branch.
         "figures": numeric_literals(graph, node),
+        # What this place *is*, as opposed to where: the filter menu reads these,
+        # and which exist is a property of the ontology rather than of ster.
+        "facets": facets_of(graph, node),
+        # Who operates here: entities pointing at this place that carry a logo.
+        # Drawn on the shape, so only a place with geometry can use them.
+        "badges": badges_of(graph, uri) if geometry is not None else [],
+        # A picture of this place itself. When the ontology gives one, the map
+        # draws it instead of a dot — what a thing looks like is the ontology's
+        # to say, not ster's.
+        "icon": image_of(graph, node),
     }
 
 
@@ -549,17 +569,20 @@ def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         implementation of the geometry ladder and of WKT parsing. The map used to
         query for wgs:lat/long itself, which reported every polygon as unmappable.
         """
-        from .geo_shapes import map_layers  # noqa: PLC0415
+        from .geo_shapes import facet_catalogue, map_layers  # noqa: PLC0415
 
         graph = _graph_for_locate(_tax())
         records = (
             _place_record(graph, uri, is_result)
             for uri, is_result in _places_wanted(graph, body.uris)
         )
-        # Layers travel with the places so the layer menu needs no second request.
+        # Layers and the facet catalogue travel with the places, so neither the
+        # layer menu nor the filter menu needs a second request.
+        placed = [record for record in records if record is not None]
         return {
-            "places": [record for record in records if record is not None],
+            "places": placed,
             "layers": map_layers(graph),
+            "facets": facet_catalogue(graph, [p["uri"] for p in placed]),
         }
 
 

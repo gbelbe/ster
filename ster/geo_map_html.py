@@ -34,6 +34,25 @@ __FAVICON__
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
+#facets { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
+           padding:6px 12px; border-bottom:1px solid var(--line); background:var(--panel); }
+#facets:empty { display:none; border:0; padding:0; }
+.facet { display:flex; align-items:center; gap:6px; }
+.facet > .name { color:var(--muted); font-size:11px; text-transform:uppercase;
+                 letter-spacing:.04em; margin-right:2px; }
+.fval { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; cursor:pointer;
+        border:1px solid var(--line); border-radius:999px; background:transparent;
+        font:inherit; font-size:12px; color:var(--ink); }
+.fval:hover { border-color:var(--accent); }
+.fval.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+.fclear { border:0; background:none; color:var(--muted); cursor:pointer;
+          font:inherit; font-size:11px; text-decoration:underline; }
+/* Operator marks laid on a shape. Offsets are in screen pixels, not degrees,
+   so several on one country stay side by side at every zoom instead of piling
+   onto the same point as you zoom out. */
+.badge-row { display:flex; gap:3px; align-items:center; pointer-events:none; }
+.badge-row img { object-fit:contain; background:#fff; border:1px solid rgba(0,0,0,.25);
+                 border-radius:3px; padding:1px; box-shadow:0 1px 3px rgba(0,0,0,.3); }
 .legend { background: rgba(255,255,255,.92); border: 1px solid #ccc; border-radius: 4px;
           padding: 6px 8px; font: 11px system-ui, sans-serif; color: #111;
           max-height: 44vh; overflow-y: auto; }
@@ -170,16 +189,17 @@ __FAVICON__
   <span class="sub">Cluster by</span>
   <div class="seg" id="seg"></div>
   <div class="crumbs" id="crumbs"></div>
-  <button id="toggle">Hide query</button>
+  <button id="toggle">Show query</button>
   <div class="scale" id="scale"></div>
 </header>
-<section id="query-panel">
+<section id="query-panel" class="closed">
   <textarea id="q" spellcheck="false">__QUERY__</textarea>
   <div id="query-bar">
     <button class="primary" id="run">Run  (ctrl+⏎)</button>
     <span id="msg"></span>
   </div>
 </section>
+<div id="facets"></div>
 <nav id="nav"></nav>
 <main>
   <div id="map"></div>
@@ -260,12 +280,118 @@ function crumbTrail() {
     .reverse();
   return [...up, here];
 }
+/* Every place at the same level, under the same parent, as the one in focus —
+   the places you could step sideways to. Empty at the top, where there is no
+   focus and nothing to step beside. */
+function siblingsOfFocus() {
+  if (focus === null) return [];
+  const here = points.find(p => p.uri === focus);
+  if (!here) return [];
+  return points.filter(p => (p.level ?? 0) === (here.level ?? 0)
+                            && (p.parent ?? null) === (here.parent ?? null));
+}
+/* The filter strip. Rebuilt on every draw, because which facets discriminate
+   depends on where you are: drill into one country and the values that do not
+   trade there disappear, and a facet left with a single value disappears with
+   them. A logo is shown beside the name when the ontology offers one. */
+/* Whoever operates in a place, drawn on its shape. One marker holds the whole
+   row, so the browser lays the logos out side by side and they cannot overlap
+   however far out you zoom — the alternative, a marker each nudged by a few
+   degrees, collides the moment the scale changes. */
+let badgeLayer = null;
+let badgeVisible = [];
+
+/* Kept within a narrow band so a mark on Cyprus and a mark on Ukraine read as
+   the same kind of thing. Below the floor they are unrecognisable; above the
+   ceiling they start to cover the country they sit on. */
+const PIN = 18;          // a store icon, big enough to read at street zoom
+const BADGE_MIN = 11;
+const BADGE_MAX = 22;
+const BADGE_GAP = 3;
+
+function badgeSize(shape, count) {
+  /* Measure the shape as it is on screen, not in degrees: a country's pixel
+     width is what decides whether three logos fit inside it, and that changes
+     with every zoom. */
+  try {
+    const b = L.geoJSON(shape).getBounds();
+    if (!b.isValid()) return 0;
+    const nw = map.latLngToContainerPoint(b.getNorthWest());
+    const se = map.latLngToContainerPoint(b.getSouthEast());
+    const wide = Math.abs(se.x - nw.x), tall = Math.abs(se.y - nw.y);
+    const perLogo = (wide * 0.8 - BADGE_GAP * (count - 1)) / count;
+    const size = Math.floor(Math.min(perLogo, tall * 0.6));
+    return size < BADGE_MIN ? 0 : Math.min(size, BADGE_MAX);   // 0: no room at all
+  } catch { return 0; }
+}
+
+function addBadges(visible) {
+  badgeVisible = visible;
+  if (badgeLayer) { map.removeLayer(badgeLayer); badgeLayer = null; }
+  const rows = visible
+    .filter(p => p.shape && (p.badges || []).length && p.lat !== null)
+    .map(p => {
+      const imgs = p.badges
+        .map(b => ({ b, src: safeUrl(b.image || '') }))
+        .filter(x => x.src)
+        .slice(0, 8);                       // a shape is not a contact sheet
+      if (!imgs.length) return null;
+      const size = badgeSize(p.shape, imgs.length);
+      if (!size) return null;               // too small to sit inside its shape
+      const width = imgs.length * size + BADGE_GAP * (imgs.length - 1);
+      const html = `<div class="badge-row" style="gap:${BADGE_GAP}px">` + imgs.map(({ b, src }) =>
+        `<img src="${plain(src)}" alt="${plain(b.label)}" title="${plain(b.label)}"` +
+        ` style="width:${size}px;height:${size}px">`
+      ).join('') + `</div>`;
+      return L.marker([p.lat, p.long], {
+        interactive: false,
+        icon: L.divIcon({ html, className: '', iconSize: [width, size],
+                          iconAnchor: [width / 2, size / 2] }),
+      });
+    })
+    .filter(Boolean);
+  if (rows.length) badgeLayer = L.layerGroup(rows).addTo(map);
+}
+
+function drawFacets() {
+  const el = document.getElementById('facets');
+  if (!el) return;
+  const groups = facetsInView();
+  if (!groups.length) { el.innerHTML = ''; return; }
+  const anyChosen = [...chosen.values()].some(s => s.size);
+  el.innerHTML = groups.map(gr => {
+    const meta = facetCatalogue[gr.cls] || { values: {} };
+    const want = chosen.get(gr.cls) || new Set();
+    const buttons = gr.values
+      .map(v => ({ v, m: meta.values[v] || { label: short(v), image: '' } }))
+      .sort((a, b) => a.m.label.localeCompare(b.m.label))
+      .map(({ v, m }) =>
+        `<button class="fval${want.has(v) ? ' on' : ''}" data-cls="${plain(gr.cls)}"` +
+        ` data-val="${plain(v)}">${plain(m.label)}</button>`).join('');
+    return `<span class="facet"><span class="name">${plain(gr.label)}</span>${buttons}</span>`;
+  }).join('') + (anyChosen ? `<button class="fclear">clear filters</button>` : '');
+
+  for (const b of el.querySelectorAll('.fval')) {
+    b.addEventListener('click', () => {
+      const cls = b.dataset.cls, val = b.dataset.val;
+      const set = chosen.get(cls) || new Set();
+      if (set.has(val)) set.delete(val); else set.add(val);
+      if (set.size) chosen.set(cls, set); else chosen.delete(cls);
+      draw(false); drawNav(); drawFacets(); drawTree();
+    });
+  }
+  el.querySelector('.fclear')?.addEventListener('click', () => {
+    chosen.clear(); draw(false); drawNav(); drawFacets(); drawTree();
+  });
+}
+
 function drawNav() {
   const el = document.getElementById('nav');
   if (!points.length) { el.innerHTML = ''; return; }
   const trail = crumbTrail();
   const shown = atLevel();
-  const levelName = shown.length ? plain(shown[0].kind || '') : '';
+  const here = points.find(p => p.uri === focus);
+  const levelName = here ? plain(here.kind || '') : (shown.length ? plain(shown[0].kind || '') : '');
 
   const crumbs = [`<a data-up="">All</a>`];
   trail.forEach((p, i) => {
@@ -275,14 +401,20 @@ function drawNav() {
       : `<a data-up="${i}">${plain(p.label)}</a>`));
   });
 
-  /* The places you can open from here, as chips: the same navigation the map
-     offers, for anyone who would rather read a name than find a shape. */
-  const chips = shown
+  /* The places beside you, as chips — not the ones beneath you. The map already
+     draws the children and they are clickable there, so listing them again put
+     seventy shop buttons above a map of seventy shops. Moving *sideways* is the
+     one move the map cannot offer, so that is what the strip is for: every place
+     at your level, the one you are in pressed, click another to switch to it. */
+  const beside = siblingsOfFocus();
+  const chips = beside
     .slice()
     .sort((a, b) => valueOf(b) - valueOf(a) || a.label.localeCompare(b.label))
     .map((p, i) => {
       const leaf = !hasChildren(p);
-      return `<button class="chip${p.uri === selected ? ' current' : ''}${leaf ? ' leaf' : ''}"` +
+      const current = p.uri === focus ? ' current' : '';
+      return `<button class="chip${current}${leaf ? ' leaf' : ''}"` +
+             ` aria-pressed="${p.uri === focus}"` +
              ` data-chip="${i}">${plain(p.label)}<span class="n">${fmt.format(valueOf(p))}</span></button>`;
     }).join('');
 
@@ -302,15 +434,19 @@ function drawNav() {
       draw();
     });
   }
-  const ordered = shown.slice().sort((a, b) => valueOf(b) - valueOf(a) || a.label.localeCompare(b.label));
+  const ordered = beside.slice().sort((a, b) => valueOf(b) - valueOf(a) || a.label.localeCompare(b.label));
   for (const btn of el.querySelectorAll('.chip')) {
     const p = ordered[Number(btn.dataset.chip)];
+    /* A step sideways: same depth, different branch. Clicking the one you are
+       already in re-centres on it rather than doing nothing. A leaf still only
+       selects — moving focus onto something with nothing beneath it empties the
+       map, which is the bug #146 fixed and this must not undo. */
     btn.addEventListener('click', () => {
       const next = childLevel(p);
       selected = p.uri;
       if (next === null) { drawDetail(); drawNav(); return; }  // a leaf: select, do not descend
-      level = next;
       focus = p.uri;
+      level = next;
       draw(true);
     });
   }
@@ -640,7 +776,10 @@ const wantsShapes = () => {
    you zooming and moved the level again — clicking Europe could land on a city
    in Poland. Levels are chosen by clicking; zoom only decides whether an outline
    is legible enough to draw. */
-map.on('zoomend', () => { if (wantsShapes() !== shapeMode) draw(false); });
+map.on('zoomend', () => {
+  if (wantsShapes() !== shapeMode) { draw(false); return; }
+  addBadges(badgeVisible);   // same shapes, different pixel size
+});
 map.on('overlayadd', e => trackLegend(e.name, true));
 map.on('overlayremove', e => trackLegend(e.name, false));
 let measureCol = null;  // index of the result column to sum, when it has one
@@ -661,6 +800,62 @@ function findMeasure(cols, data) {
    no value in any result column. Reading rows[null] for one threw a TypeError
    out of draw(), and the whole map came back empty with nothing on screen to
    say why. Defined before its first use, and used for every row lookup. */
+/* A place passes the filter when it satisfies every *active* facet. Within one
+   facet the chosen values are alternatives; across facets they are conditions —
+   which is how faceted search has always behaved. */
+function passesFilters(p) {
+  for (const [cls, want] of chosen) {
+    if (!want.size) continue;
+    const has = (facetsBeneath.get(p.uri) || {})[cls] || [];
+    if (!has.some(v => want.has(v))) return false;
+  }
+  return true;
+}
+
+/* A continent holds no brand of its own; its stores do. So filtering by brand
+   has to keep the continent — otherwise choosing one at the top level emptied
+   the map completely, which is exactly what it did. Each place is therefore
+   judged on everything beneath it as well as itself.
+
+   Built once per result by walking each place's ancestors, which the server
+   already sends: O(places x depth) rather than comparing every pair. */
+const facetsBeneath = new Map();
+
+function indexFacets() {
+  facetsBeneath.clear();
+  const add = (uri, facets) => {
+    let into = facetsBeneath.get(uri);
+    if (!into) { into = {}; facetsBeneath.set(uri, into); }
+    for (const [cls, values] of Object.entries(facets || {})) {
+      const seen = into[cls] || (into[cls] = []);
+      for (const v of values) if (!seen.includes(v)) seen.push(v);
+    }
+  };
+  for (const p of points) {
+    add(p.uri, p.facets);
+    for (const ancestor of (p.ancestors || [])) add(ancestor, p.facets);
+  }
+}
+
+/* What the menu offers *here*. Recomputed from the places in view, so drilling
+   into a country drops the values that do not trade there — and drops the whole
+   facet when only one value is left, because a facet that cannot discriminate
+   is not a facet. */
+function facetsInView() {
+  const scope = atLevel();
+  const under = points.filter(p => scope.some(s => p === s || descendsFrom(p, s.uri)));
+  const out = [];
+  for (const [cls, meta] of Object.entries(facetCatalogue)) {
+    const seen = new Set();
+    for (const p of under)
+      for (const v of ((facetsBeneath.get(p.uri) || {})[cls] || [])) seen.add(v);
+    const active = chosen.get(cls);
+    if (active) for (const v of active) seen.add(v);   // keep a chosen value visible
+    if (seen.size > 1) out.push({ cls, label: meta.label, values: [...seen] });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
 const rowOf = p => (p.row === null || p.row === undefined) ? null : rows[p.row];
 
 /* A place's own contribution: nothing for one that is only there to group. */
@@ -671,7 +866,8 @@ const ownValue = p => rowOf(p) === null ? 0
    many it holds — and it is why a place with nothing beneath it and no row of
    its own never reaches the map at all. */
 const valueOf = p => points.reduce(
-  (total, q) => total + ((q === p || descendsFrom(q, p.uri)) ? ownValue(q) : 0), 0);
+  (total, q) => total + (((q === p || descendsFrom(q, p.uri)) && passesFilters(q))
+                          ? ownValue(q) : 0), 0);
 
 /* Re-running goes through the server's own read-only SPARQL tool, so the page
    never needs its own query engine and cannot mutate the ontology. */
@@ -698,6 +894,13 @@ const short = v => String(v).split(/[#/]/).filter(Boolean).pop();
    tag is machinery, not part of the name the reader wants to see. */
 const plain = v => String(v).replace(/@[a-zA-Z]{2,3}(-[a-zA-Z0-9]+)*$/, '');
 const MEASURE_NAME = () => measureCol === null ? 'rows' : columns[measureCol];
+/* With no measure column chosen the total is just how many rows landed here, so
+   a single shop read "rows 1" — a label for a number that counts nothing. Show
+   it when it was asked for, or when it actually aggregates something. */
+function measureLine(total) {
+  if (measureCol === null && total <= 1) return '';
+  return `<br>${MEASURE_NAME()} ${fmt.format(total)}`;
+}
 
 /* Coordinates come from bare lat/long columns, else by asking the graph about a
    URI in the row. Only WGS84 — nothing here knows what the data is about. */
@@ -736,6 +939,8 @@ async function locate(cols, data) {
       out.push({ row:i, lat:found.lat, long:found.long, uri:hit, shape:found.shape,
                  level:found.level ?? 0, parent:found.parent ?? null, kind:found.kind || '',
                  ancestors:found.ancestors || [], result:true, figures:found.figures || [],
+                 facets:found.facets || {}, badges:found.badges || [],
+                 icon:found.icon || '',
                  label: named ? plain(named) : (found.label || short(hit)) });
     }
   });
@@ -745,6 +950,8 @@ async function locate(cols, data) {
   for (const p of placed) {
     if (used.has(p.uri) || p.result) continue;
     out.push({ row:null, lat:p.lat, long:p.long, uri:p.uri, shape:p.shape,
+               facets:p.facets || {}, badges:p.badges || [],
+               icon:p.icon || '',
                level:p.level ?? 0, parent:p.parent ?? null, kind:p.kind || '',
                ancestors:p.ancestors || [], result:false, figures:p.figures || [],
                label:p.label || short(p.uri) });
@@ -753,6 +960,8 @@ async function locate(cols, data) {
 }
 
 let overlayLayers = [];      // declared by the file, offered in the layer menu
+let facetCatalogue = {};     // class → {label, values:{uri:{label,image}}}, from the server
+const chosen = new Map();    // class → Set of chosen value URIs
 async function locateOnServer(uris) {
   const response = await fetch('/api/locate', {
     method: 'POST',
@@ -762,6 +971,7 @@ async function locateOnServer(uris) {
   if (!response.ok) return [];
   const body = await response.json();
   overlayLayers = body.layers || [];
+  facetCatalogue = body.facets || {};
   return body.places || [];
 }
 
@@ -776,7 +986,8 @@ function draw(fit = true) {
      filter inside it: it answers "where are my rows", so it reads the whole
      result rather than the level currently drilled to. Intersecting the two
      emptied the map wherever the level held only context places. */
-  const source = groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel();
+  const source = (groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel())
+    .filter(passesFilters);
   /* Counting and plotting are different questions. A place with no coordinates
      is real and belongs in every total; drawing it would put NaN into Leaflet
      and take the whole layer down. So it is filtered out here, at the point of
@@ -804,7 +1015,7 @@ function draw(fit = true) {
     const mark = L.circleMarker([lat, long], {
       radius: 6 + Math.sqrt(total) * 4, color:'#fff', weight:2,
       fillColor: ramp(total, lo, hi), fillOpacity:0.92
-    }).bindTooltip(`<b>${name}</b><br>${MEASURE_NAME()} ${fmt.format(total)}` +
+    }).bindTooltip(`<b>${name}</b>` + measureLine(total) +
                    (grouped ? '<br><i>click to open</i>' : ''), { direction:'top' });
     if (grouped) mark.on('click', () => { scope = key; render(); });
     const only = members.length === 1 ? members[0] : null;
@@ -828,15 +1039,31 @@ function draw(fit = true) {
       const layer = L.geoJSON(only.shape, {
         style: { color:'#fff', weight:2, fillColor: ramp(total, lo, hi), fillOpacity:0.72 }
       }).bindTooltip(`<b>${name}</b>` + (only.kind ? ` <i>${plain(only.kind)}</i>` : '') +
-                     `<br>${MEASURE_NAME()} ${fmt.format(total)}` +
+                     measureLine(total) +
                      (hasChildren(only) ? '<br><i>click to open</i>' : ''),
                      { direction:'top', sticky:true });
       if (hasChildren(only)) layer.on('click', drill);
       return layer;
     }
+    /* A place that carries its own picture is drawn as that picture rather than
+       a dot. What a store looks like is the ontology's to say — ster only reads
+       whichever image predicate it used and honours it. */
+    if (!grouped && only && only.icon) {
+      const pin = L.marker([lat, long], {
+        icon: L.divIcon({
+          html: `<img src="${plain(only.icon)}" alt="${plain(name)}"` +
+                ` style="width:${PIN}px;height:${PIN}px;display:block">`,
+          className: '', iconSize: [PIN, PIN], iconAnchor: [PIN / 2, PIN / 2],
+        }),
+      }).bindTooltip(`<b>${name}</b>` + (only.kind ? ` <i>${plain(only.kind)}</i>` : '') +
+                     measureLine(total), { direction:'top' });
+      pin.on('click', drill);
+      return pin;
+    }
     return mark;
   });
   layer = L.featureGroup(marks).addTo(map);
+  addBadges(visible);
   /* Only on a real redraw: refitting from the zoom handler would move the map
      the reader just moved, and re-fire the handler. */
   if (fit) {
@@ -858,6 +1085,7 @@ function draw(fit = true) {
 
   drawNav();
   drawDetail();
+  drawFacets();
   drawTree(groups, grouped, lo, hi);
   document.getElementById('scale').innerHTML = grouped
     ? `<span>${lo}</span>` + RAMP.map(c => `<span class="sw" style="background:${c}"></span>`).join('') +
@@ -910,6 +1138,7 @@ async function run() {
     /* Open on the broadest level the result offers — one continent outline, not
        every country and city piled on top of it. */
     addOverlayControl();
+    indexFacets();
     level = levelsOf(points)[0] ?? 0;
     focus = null;
     selected = null;

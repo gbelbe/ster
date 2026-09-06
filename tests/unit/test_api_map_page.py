@@ -54,13 +54,18 @@ def test_map_page_posts_to_the_mcp_endpoint() -> None:
     assert "run_sparql" in text
 
 
-def test_map_page_shows_the_query_panel_by_default() -> None:
-    """The query is the point of this page — it opens visible, not folded away."""
+def test_map_page_starts_with_the_query_folded_away() -> None:
+    """The map is the point of this page; the SPARQL behind it is a detail.
+
+    It used to open with the query visible, which cost a third of the screen
+    before anything had been looked at. The panel is still one click away and
+    the toggle says so.
+    """
     text = _client().get("/map").text
-    assert 'id="query-panel"' in text
-    # The toggle starts as "Hide", which only makes sense if the panel is open.
-    assert "Hide query" in text
-    assert 'id="query-panel" class="closed"' not in text
+
+    assert 'id="query-panel" class="closed"' in text
+    # The toggle starts as "Show", which only makes sense if the panel is folded.
+    assert "Show query" in text
 
 
 def test_map_page_offers_clustering_and_a_scale() -> None:

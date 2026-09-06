@@ -18,6 +18,10 @@ from ._cache import (
 )
 from ._constants import (
     _RDFLIB_DEFAULT_PREFIXES,
+    ALT_IMAGE_PREDICATES,
+    ALT_URL_PREDICATES,
+    ALT_VIDEO_PREDICATES,
+    IMAGE_PREDICATES,
     NOTE_PROPERTY_URI,
     SCHEMA,
     VANN,
@@ -116,6 +120,10 @@ from ._to_graph import (
 )
 
 __all__ = [
+    "ALT_IMAGE_PREDICATES",
+    "ALT_URL_PREDICATES",
+    "ALT_VIDEO_PREDICATES",
+    "IMAGE_PREDICATES",
     "NOTE_PROPERTY_URI",
     "SCHEMA",
     "VANN",

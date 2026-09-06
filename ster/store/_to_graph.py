@@ -58,13 +58,29 @@ _OWL_PROP_TYPE: dict[str, URIRef] = {
 
 
 def _serialize_schema_media(g: Graph, ref: URIRef, entity: object) -> None:
-    """Emit schema.org image / video / url triples shared by classes, individuals, concepts."""
+    """Emit schema.org image / video / url triples shared by classes, individuals, concepts.
+
+    A picture read from an alternative vocabulary — schema:logo, foaf:depiction,
+    wdt:P18 — has already been written back under its own predicate, either from
+    the annotations bucket or from an individual's property assertions. Emitting
+    it again here would add a schema:image triple the author never wrote, so a
+    URL already present on this subject is left alone.
+    """
+    # Both sources, because serialisation order differs by entity kind: an
+    # individual's property assertions land before this runs, a class's
+    # annotations after. Checking only the graph made the class case emit a
+    # duplicate schema:image beside the schema:logo it had preserved.
+    already = {str(o) for _p, o in g.predicate_objects(ref)}
+    already |= {str(getattr(a, "value", "")) for a in getattr(entity, "annotations", [])}
     for u in entity.schema_images:  # type: ignore[attr-defined]
-        g.add((ref, SCHEMA.image, URIRef(u)))
+        if u not in already:
+            g.add((ref, SCHEMA.image, URIRef(u)))
     for u in entity.schema_videos:  # type: ignore[attr-defined]
-        g.add((ref, SCHEMA.video, URIRef(u)))
+        if u not in already:
+            g.add((ref, SCHEMA.video, URIRef(u)))
     for u in entity.schema_urls:  # type: ignore[attr-defined]
-        g.add((ref, SCHEMA.url, URIRef(u)))
+        if u not in already:
+            g.add((ref, SCHEMA.url, URIRef(u)))
 
 
 def _serialize_labels_comments(

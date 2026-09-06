@@ -78,6 +78,35 @@ def test_navigation_is_a_top_strip_with_a_trail_and_chips():
     assert 'class="chip' in page
 
 
+def test_the_chips_list_siblings_rather_than_the_children_on_the_map():
+    """The map already draws the children and they are clickable there.
+
+    Listing them again as buttons put 70 shop chips above a map of 70 shops.
+    The strip lists where you could go *sideways* instead, which is the one
+    move the map cannot offer.
+    """
+    page = _page()
+
+    assert "function siblingsOfFocus(" in page
+    assert "siblingsOfFocus()" in page
+
+
+def test_the_place_you_are_in_is_shown_as_pressed():
+    page = _page()
+
+    assert "aria-pressed" in page
+    assert "p.uri === focus ? ' current'" in page
+
+
+def test_a_bare_row_count_is_not_offered_as_a_measure():
+    """With no measure chosen the total is a row count, and "rows 1" on a shop
+    says nothing at all."""
+    page = _page()
+
+    assert "function measureLine(" in page
+    assert "measureCol === null && total <= 1" in page
+
+
 def test_stated_and_calculated_facts_are_separated():
     """A total the map computed must not read as something the file asserts."""
     page = _page()
