@@ -135,18 +135,25 @@ def test_app_js_routes_concepts_to_the_explore_endpoint():
     assert "topconcept:'/api/concept-relations'" in js
 
 
-def test_app_js_taps_select_rather_than_explore():
-    """A stray click must not swap the whole graph out; that stays on the overlay.
+def _tap_handler(js: str) -> str:
+    """The tap-on-node handler alone, so an assertion cannot match elsewhere."""
+    start = js.index("cy.on('tap','node'")
+    return js[start : js.index("\n});", start)]
 
-    The tap handler now also opens a class whose individuals are collapsed. That
-    is additive — it puts nodes on the graph you already have — so the invariant
-    this guards is unchanged: tapping never *replaces* the view. Asserted as
-    behaviour rather than as a literal handler, which is what it always meant.
+
+def test_app_js_taps_select_rather_than_explore():
+    """A stray click must not change the shape of the graph; that stays on the overlay.
+
+    Tapping used to open a collapsed class's individuals as well as selecting it.
+    That moved to the overlay's own button, so the handler now does one thing:
+    select. Asserted as behaviour rather than as a literal handler, which is what
+    it always meant.
     """
     js = _app_js().replace(" ", "")
 
     assert "cy.on('tap','node',e=>{" in js
-    assert "selectNode(n.id());" in js
+    assert "selectNode(" in js
+    assert "toggleClassIndividuals" not in _tap_handler(js)
     assert "function selectNode(" in js.replace("functionselectNode(", "function selectNode(")
     # the swap-the-graph paths must stay off the tap handler
     assert "cy.on('tap','node',e=>activateNode(" not in js

@@ -21,7 +21,7 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
    Cytoscape always measures a real (non-zero) container size even when its tab
    starts inactive — toggling `visibility` (not `display`) never resizes the box.
    #app-toolbar floats on top of both (like #view-tabs did before it), so #cy's
-   own rect and size are untouched — explore-btn/hide-btn are positioned by
+   own rect and size are untouched — explore-btn/individuals-btn are positioned by
    graph_app.js relative to #cy and must never have that rect change. */
 #view-stage{position:relative;flex:1;height:100vh}
 #cy,#treemap{position:absolute;inset:0;height:100%;background:#fff}
@@ -52,8 +52,8 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 #tip{position:fixed;pointer-events:none;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:11px;color:#e2e8f0;max-width:280px;word-break:break-all;display:none;z-index:99}
 #explore-btn{position:absolute;display:none;transform:translate(-50%,-100%);z-index:40;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
 #explore-btn:hover{background:#1d4ed8}
-#hide-btn{position:absolute;display:none;transform:translate(-50%,0);z-index:40;background:#64748b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
-#hide-btn:hover{background:#475569}
+#individuals-btn{position:absolute;display:none;transform:translate(-50%,0);z-index:40;background:#64748b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
+#individuals-btn:hover{background:#475569}
 .ftbtn{background:none;border:1px solid #cbd5e1;color:#94a3b8;border-radius:6px;cursor:pointer;font-size:10px;padding:1px 6px;text-decoration:line-through}
 .ftbtn.active{color:#475569;border-color:#94a3b8;text-decoration:none}
 .ftbtn:hover{background:#f1f5f9}
@@ -128,7 +128,7 @@ __OFFLINE_BANNER__
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>
 <div id="stats" class="view-relations"></div>
 <div id="hint" class="view-relations">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button>__SHOW_ALL_BTN__</div>
-<button id="explore-btn" class="view-relations">&#8857; explore relations</button><button id="hide-btn" class="view-relations">&#8854; hide node + parents</button>
+<button id="explore-btn" class="view-relations">&#8857; explore relations</button><button id="individuals-btn" class="view-relations">&#8853; show individuals</button>
 <div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
 <div id="tip" class="view-relations"></div>
 __CY_SCRIPT__

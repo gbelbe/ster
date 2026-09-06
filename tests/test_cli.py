@@ -840,7 +840,13 @@ def test_check_new_version_no_update_when_same(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module._app, "_VERSION_CACHE", cache)
     monkeypatch.setattr(cli_module._app, "_VERSION", "0.3.1")
 
-    result = cli_module._app._check_new_version()
+    # The fetch thread is launched even on a fresh cache, so it must be stubbed
+    # here too. Left real, it outlived this test and wrote the true PyPI version
+    # through the _VERSION_CACHE global — by then repointed at the *next* test's
+    # tmp file, which is how "assert '0.10.0' == '9.9.9'" happened on one worker.
+    with patch("threading.Thread") as mock_thread:
+        mock_thread.return_value = MagicMock()
+        result = cli_module._app._check_new_version()
     assert result is None
 
 

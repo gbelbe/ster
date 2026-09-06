@@ -315,11 +315,38 @@ function toggleEdgeType(t){
 
 // ── Highlight ─────────────────────────────────────────────────────────────────
 let highlighted=null;
+// A node is read in the context of the hierarchy it belongs to, so a click lights
+// three things: the node, everything one step away (its related classes and
+// individuals), and the whole subClassOf chain above it. An individual's chain
+// starts at the classes it instantiates, since it has no superclass of its own.
+function _highlightSeeds(node){
+  const seeds=[node.id()];
+  for(const e of cy.edges('[source="'+node.id()+'"][type="instanceOf"]'))seeds.push(e.data('target'));
+  return seeds;
+}
+function parentChain(seeds){
+  const chain=new Set();
+  const stack=[...seeds];
+  while(stack.length){
+    const current=stack.pop();
+    if(chain.has(current))continue;
+    chain.add(current);
+    for(const e of cy.edges('[source="'+current+'"][type="subClassOf"]'))stack.push(e.data('target'));
+  }
+  return chain;
+}
 function applyHighlight(){
   if(!highlighted){cy.elements().removeClass('dimmed');return;}
   const n=cy.$('#'+CSS.escape(highlighted));
   cy.elements().addClass('dimmed');
   n.neighborhood().add(n).removeClass('dimmed');
+  const chain=parentChain(_highlightSeeds(n));
+  for(const id of chain)cy.$('#'+CSS.escape(id)).removeClass('dimmed');
+  // Only the rungs joining two lit nodes: an edge to a node that stays dimmed
+  // would draw a line into the dark.
+  for(const e of cy.edges('[type="subClassOf"]')){
+    if(chain.has(e.data('source'))&&chain.has(e.data('target')))e.removeClass('dimmed');
+  }
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -428,13 +455,10 @@ function toggleClassIndividuals(node){
     })
     .catch(err=>{console.debug('Unable to expand class:',err);_expanded.delete(uri);});
 }
-// Clicking a class that holds collapsed individuals opens it as well as selecting
-// it. This adds nodes rather than replacing the view, so it does not lose your
-// place the way explore/extend deliberately can.
+// Clicking inspects, it does not reshape: opening a class's individuals is the
+// overlay button's job, so a click can never move the graph under you.
 cy.on('tap','node',e=>{
-  const n=e.target;
-  if(n.data('individualCount'))toggleClassIndividuals(n);
-  selectNode(n.id());
+  selectNode(e.target.id());
 });
 cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
 
@@ -631,75 +655,39 @@ function extendNode(uri){
   }).catch(err=>{console.debug('Unable to extend node:',err);});
 }
 
-// ── Hide a node together with its parent trail ────────────────────────────────
-// Individual → drop it, its rdf:type class(es) and their subClassOf superclasses.
-// Class → drop it and its subClassOf superclasses. A parent that another still
-// -visible node depends on (instanceOf or subClassOf) is kept, transitively.
-function collectParentTrail(seeds){
-  const parents=new Set();
-  const stack=[...seeds];
-  while(stack.length){
-    const current=stack.pop();
-    if(parents.has(current))continue;
-    parents.add(current);
-    for(const e of cy.edges('[source="'+current+'"][type="subClassOf"]'))stack.push(e.data('target'));
-  }
-  return parents;
-}
-function hasVisibleDependency(id,removing){
-  for(const e of cy.edges('[target="'+id+'"]')){
-    const type=e.data('type');
-    if((type==='instanceOf'||type==='subClassOf')&&!removing.has(e.data('source')))return true;
-  }
-  return false;
-}
-function releaseSharedParents(parents,removing){
-  let changed=true;
-  while(changed){
-    changed=false;
-    for(const id of parents){
-      if(!removing.has(id))continue;
-      if(hasVisibleDependency(id,removing)){removing.delete(id);changed=true;}
-    }
-  }
-}
-function hideNodeAndParents(uri){
-  const node=cy.$('#'+CSS.escape(uri));
-  if(!node.length)return;
-  const type=node.data('type');
-  const seeds=[];
-  if(type==='individual'){
-    for(const e of cy.edges('[source="'+uri+'"][type="instanceOf"]'))seeds.push(e.data('target'));
-  }else if(type==='class'){
-    for(const e of cy.edges('[source="'+uri+'"][type="subClassOf"]'))seeds.push(e.data('target'));
-  }
-  const parents=collectParentTrail(seeds);
-  // The focus node is always removed; parents start in the removal set then get
-  // released when some node outside the set still depends on them (fixpoint).
-  const removing=new Set([uri,...parents]);
-  releaseSharedParents(parents,removing);
-  for(const id of removing)cy.$('#'+CSS.escape(id)).remove();
-  refreshSuperclassesBtn();
-  applySuperclassVis();
-  highlighted=null;applyHighlight();showDefault();
-  _saveState();
-}
-
-// ── Hover overlay: explore/extend + hide buttons ──────────────────────────────
+// ── Hover overlay: explore/extend + individuals buttons ───────────────────────
 const exploreBtn=document.getElementById('explore-btn');
-const hideBtn=document.getElementById('hide-btn');
+const individualsBtn=document.getElementById('individuals-btn');
 let _exploreHoverUri=null,_exploreHideTimer=null;
 function _positionExploreBtn(node){
   const bb=node.renderedBoundingBox();
   const cx=(bb.x1+bb.x2)/2;
   // Buttons touch the node (no gap) so the cursor can slide straight onto them
   // without crossing empty canvas: explore/extend hugs the top edge (its bottom
-  // sits on the node top), hide hugs the bottom edge (its top sits on the node
-  // bottom). The differing transforms are set in CSS (#explore-btn vs #hide-btn).
+  // sits on the node top), individuals hugs the bottom edge (its top sits on the
+  // node bottom). The transforms are set in CSS (#explore-btn vs #individuals-btn).
   exploreBtn.style.left=cx+'px';exploreBtn.style.top=bb.y1+'px';
-  if(hideBtn){hideBtn.style.left=cx+'px';hideBtn.style.top=bb.y2+'px';}
+  if(individualsBtn){individualsBtn.style.left=cx+'px';individualsBtn.style.top=bb.y2+'px';}
 }
-function _hideOverlay(){exploreBtn.style.display='none';if(hideBtn)hideBtn.style.display='none';}
+function _hideOverlay(){exploreBtn.style.display='none';if(individualsBtn)individualsBtn.style.display='none';}
+// Which buttons a node earns. Both actions need the API — explore fetches
+// relations, and opening a class fetches the individuals the server withheld —
+// so an offline page offers neither rather than offering a dead button. A class
+// holding nothing withheld has nothing to show, so it gets no button either, and
+// one already open is offered the way back instead.
+function _showOverlay(node){
+  if(!API_TOKEN){_hideOverlay();return;}
+  // On the full graph the action is "explore" (replace); inside a subgraph it
+  // becomes "extend" (merge onto the current view).
+  exploreBtn.textContent=_savedGraph?'\u2295 extend relations':'\u2299 explore relations';
+  _positionExploreBtn(node);
+  exploreBtn.style.display='block';
+  if(!individualsBtn)return;
+  individualsBtn.textContent=_expanded.has(node.data('id'))
+    ?'\u2296 hide individuals'
+    :'\u2295 show individuals';
+  individualsBtn.style.display=node.data('individualCount')?'block':'none';
+}
 // The node and its two labels form one hover region: entering any of them keeps
 // the overlay up (cancels a pending hide); leaving any of them only *schedules*
 // a hide, so sliding label → node → label never flickers the buttons off. The
@@ -712,23 +700,17 @@ if(exploreBtn&&API_TOKEN){
     if(t!=='individual'&&t!=='class'){_hideOverlay();return;}
     _cancelHide();
     _exploreHoverUri=e.target.data('id');
-    // On the full graph the action is "explore" (replace); inside a subgraph it
-    // becomes "extend" (merge onto the current view).
-    exploreBtn.textContent='⊙ explore relations';
-    if(_savedGraph)exploreBtn.textContent='⊕ extend relations';
-    _positionExploreBtn(e.target);
-    exploreBtn.style.display='block';
-    if(hideBtn)hideBtn.style.display='block';
+    _showOverlay(e.target);
   });
   cy.on('mouseout','node',_scheduleHide);
   cy.on('viewport',_hideOverlay);
-  for(const b of [exploreBtn,hideBtn]){
+  for(const b of [exploreBtn,individualsBtn]){
     if(!b)return;
     b.addEventListener('mouseenter',_cancelHide);
     b.addEventListener('mouseleave',_scheduleHide);
   }
   exploreBtn.addEventListener('click',()=>{_hideOverlay();if(_exploreHoverUri)exploreOrExtend(_exploreHoverUri);});
-  if(hideBtn)hideBtn.addEventListener('click',()=>{_hideOverlay();if(_exploreHoverUri)hideNodeAndParents(_exploreHoverUri);});
+  if(individualsBtn)individualsBtn.addEventListener('click',()=>{_hideOverlay();if(_exploreHoverUri)toggleClassIndividuals(cy.$('#'+CSS.escape(_exploreHoverUri)));});
 }
 
 // ── Superclasses toggle (subClassOf trail; shown by default) ──────────────────
