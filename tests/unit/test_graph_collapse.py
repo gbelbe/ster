@@ -19,6 +19,7 @@ import rdflib
 from ster import store
 from ster.viz_vowl import (
     CLASS_EXPAND_LIMIT,
+    INDIVIDUAL_COLLAPSE_LIMIT,
     build_vowl_graph,
     class_individuals,
     collapse_individuals,
@@ -107,3 +108,54 @@ def test_asking_for_a_class_with_no_individuals_is_not_an_error(tmp_path) -> Non
     payload = class_individuals(_taxonomy(4, tmp_path), NS + "Nothing")
 
     assert payload == {"nodes": [], "edges": [], "total": 0, "shown": 0}
+
+
+# ── the served page, not just the JSON endpoint ───────────────────────────────
+#
+# Root cause of the regression below: #159 collapsed /api/graph, but the Graph
+# view never asks that endpoint for its first payload. api_server serves a page
+# built by render_vowl_html, which embeds the graph inline — uncollapsed. On a
+# 1,027-shop file that page was 1,265 KB carrying all 1,968 individuals, so the
+# freeze the collapse was written to prevent happened before the endpoint was
+# ever called.
+#
+# Collapsing is only safe where the page can get the individuals back, and it
+# gets them from /api/class-individuals. A live page carries an api_token; an
+# offline export has none and must keep drawing them, or they become
+# unreachable. That is the same signal _offline_banner already switches on.
+
+
+def _served_page(tmp_path, count: int, *, api_token: str) -> str:
+    from ster.viz_vowl import render_vowl_html
+
+    taxonomy = _taxonomy(count, tmp_path)
+    return render_vowl_html(taxonomy, tmp_path / "g.ttl", api_token=api_token)
+
+
+def _individuals_in(page: str) -> int:
+    return page.count('"type": "individual"') + page.count('"type":"individual"')
+
+
+def test_the_served_page_collapses_individuals_regression(tmp_path) -> None:
+    page = _served_page(tmp_path, INDIVIDUAL_COLLAPSE_LIMIT + 50, api_token="live-token")
+
+    assert _individuals_in(page) == 0
+
+
+def test_the_served_page_still_says_how_many_each_class_holds(tmp_path) -> None:
+    page = _served_page(tmp_path, INDIVIDUAL_COLLAPSE_LIMIT + 50, api_token="live-token")
+
+    assert "individualCount" in page
+
+
+def test_an_offline_export_keeps_its_individuals(tmp_path) -> None:
+    """No API to expand against, so collapsing would put them out of reach."""
+    page = _served_page(tmp_path, INDIVIDUAL_COLLAPSE_LIMIT + 50, api_token="")
+
+    assert _individuals_in(page) > 0
+
+
+def test_a_small_ontology_is_left_whole_on_the_page_too(tmp_path) -> None:
+    page = _served_page(tmp_path, 10, api_token="live-token")
+
+    assert _individuals_in(page) == 10

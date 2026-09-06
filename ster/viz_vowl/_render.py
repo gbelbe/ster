@@ -53,6 +53,15 @@ def render_vowl_html(
         graph = _graph_builders.build_focused_vowl_graph(taxonomy, root_uri)
     else:
         graph = _graph_builders.build_vowl_graph(taxonomy)
+        # The page embeds this payload; /api/graph is only asked on later refresh
+        # ticks, so collapsing there alone left the first render carrying every
+        # individual — the whole cost the collapse exists to avoid.
+        #
+        # Only when a server backs the page: a class hands its individuals over
+        # through /api/class-individuals, and an offline export has no endpoint
+        # to ask, so collapsing one would put them out of reach for good.
+        if api_token:
+            graph = _detail.collapse_individuals(graph)
     meta = _taxonomy_meta(taxonomy, file_path)
     treemap = build_taxonomy_treemap(taxonomy) if has_taxonomy(taxonomy) else None
     return (
