@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Final
+from typing import BinaryIO, Final
 
 from rich.prompt import Confirm, Prompt
 
@@ -12,6 +13,7 @@ from ..workspace import TaxonomyWorkspace
 
 _LIT_CYAN_OPEN: Final = "  [cyan]"
 _LIT_CYAN_CLOSE: Final = "[/cyan]  "
+_ABORT_KEY: Final = "abort"
 
 
 from . import _app, _constants, _file_picker
@@ -40,6 +42,133 @@ def parse_context_choice(answer: str, options: list[Path]) -> list[Path]:
     return chosen
 
 
+def _toggled(ticked: list[bool], sel: int) -> list[bool]:
+    """*ticked* with the row under the cursor flipped."""
+    out = list(ticked)
+    out[sel] = not out[sel]
+    return out
+
+
+# One key, one move over (ticks, cursor). A table rather than a chain of elifs:
+# every entry is the same shape, so adding a key is adding a row.
+_CHECKBOX_MOVES: dict[str, Callable[[list[bool], int], tuple[list[bool], int]]] = {
+    "space": lambda ticked, sel: (_toggled(ticked, sel), sel),
+    "all": lambda ticked, sel: ([True] * len(ticked), sel),
+    "none": lambda ticked, sel: ([False] * len(ticked), sel),
+    "up": lambda ticked, sel: (ticked, (sel - 1) % len(ticked)),
+    "down": lambda ticked, sel: (ticked, (sel + 1) % len(ticked)),
+}
+
+
+def _read_checkbox_key(stream: BinaryIO) -> str:
+    """One keypress as a name, with the escape dance decoded here.
+
+    The caller should not have to know that an arrow is three bytes, nor that a
+    lone Esc is the same intent as Ctrl+C. It asks for a key and gets a word.
+    """
+    ch = stream.read(1)
+    if not ch:
+        # stdin is closed — a pipe ended, or the terminal went away. There is no
+        # next key coming, so leave rather than spin redrawing forever.
+        return _ABORT_KEY
+    if ch in (b"\r", b"\n"):
+        return "enter"
+    if ch == b" ":
+        return "space"
+    if ch in (b"a", b"A"):
+        return "all"
+    if ch in (b"n", b"N"):
+        return "none"
+    if ch == b"\x03":  # Ctrl+C — leave with nothing rather than raising
+        return _ABORT_KEY
+    if ch != b"\x1b":
+        return ""
+    if stream.read(1) != b"[":
+        return _ABORT_KEY  # plain Esc: skip the step entirely
+    return {b"A": "up", b"B": "down"}.get(stream.read(1), "")
+
+
+def _render_checkboxes(
+    options: list[Path], ticked: list[bool], sel: int, first: bool = False
+) -> None:
+    """Redraw the list in place, cursor on *sel*, ticks from *ticked*."""
+    import sys
+
+    R, B, D, BCY, GR = (
+        _app._ANSI_RESET,
+        _app._ANSI_BOLD,
+        _app._ANSI_DIM,
+        _app._ANSI_BRIGHT_CYAN,
+        _app._ANSI_GREEN,
+    )
+    CLEAR, NL = _app._CLEAR_LINE, "\r\n"
+    if not first:
+        sys.stdout.write(f"\033[{len(options) + 1}A")
+    for i, path in enumerate(options):
+        box = f"{GR}[x]{R}" if ticked[i] else f"{D}[ ]{R}"
+        row = f"{box} {path.name}"
+        sys.stdout.write(
+            f"{CLEAR}  {BCY}❯{R} {B}{row}{R}{NL}" if i == sel else f"{CLEAR}    {row}{NL}"
+        )
+    sys.stdout.write(
+        f"{CLEAR}  {D}↑↓ move  space toggle  a all  n none  Enter confirm  Esc skip{R}{NL}"
+    )
+    sys.stdout.flush()
+
+
+def _context_checkbox_picker(options: list[Path]) -> list[Path]:
+    """Tick which files to load read-only, with arrows and space.
+
+    Checkboxes rather than a typed list: the answer is a *set*, and a set is
+    chosen by toggling it, not by remembering which numbers you already said.
+    Same raw-tty idiom as the file picker above, so both menus feel like one UI.
+    Enter confirms what is ticked; Esc leaves with nothing ticked.
+
+    Reading a key, drawing the list and deciding what a key means are three
+    separate jobs and live in three functions; this one only owns the loop and
+    the terminal mode.
+    """
+    import sys
+    import termios
+    import tty
+
+    ticked = [False] * len(options)
+    sel = 0
+
+    _render_checkboxes(options, ticked, sel, first=True)
+    fd = sys.stdin.fileno()
+    old_cfg = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            key = _read_checkbox_key(sys.stdin.buffer)
+            if key == "enter":
+                break
+            if key == _ABORT_KEY:
+                ticked = [False] * len(options)
+                break
+            move = _CHECKBOX_MOVES.get(key)
+            if move:
+                ticked, sel = move(ticked, sel)
+            _render_checkboxes(options, ticked, sel)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
+        sys.stdout.write("\r\n")
+    return [path for path, on in zip(options, ticked, strict=True) if on]
+
+
+def context_files_for(editable: Path, found: list[Path]) -> list[Path]:
+    """Which files to load read-only beside *editable*, asking only when useful.
+
+    One file in the folder means there is nothing to offer, so the question is
+    skipped rather than answered "none" — the single-file case, which is most of
+    them, keeps exactly the keystrokes it had.
+    """
+    if len([f for f in found if f != editable]) == 0:
+        return []
+    return prompt_for_context_files(editable, found)
+
+
 def prompt_for_context_files(editable: Path, found: list[Path]) -> list[Path]:
     """Ask which other files to load read-only alongside *editable*.
 
@@ -54,6 +183,17 @@ def prompt_for_context_files(editable: Path, found: list[Path]) -> list[Path]:
         f"  [bold]{editable.name}[/bold] is editable. "
         "Load others as [bold]read-only context[/bold] to see the connected graph?"
     )
+    import sys
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import termios  # noqa: F401 — availability probe for the raw-tty picker
+            import tty  # noqa: F401
+
+            return _context_checkbox_picker(options)
+        except ImportError:
+            pass  # no raw-tty UI here — fall through to the numbered prompt
+
     for i, f in enumerate(options, 1):
         console.print(f"    [cyan]{i}{_LIT_CYAN_CLOSE}{f.name}")
     console.print("  [dim]numbers (1,3) · all · none[/dim]")

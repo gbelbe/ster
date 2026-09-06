@@ -80,6 +80,7 @@ def test_launch_file_starts_the_progressive_app(monkeypatch):
         path=DEMO,
         open_query=True,
         progressive_startup=True,
+        context=None,  # no context files were named
     )
     app.run.assert_called_once()
 
@@ -530,6 +531,9 @@ def test_home_screen_change_file_reselects(tmp_path, monkeypatch):
             side_effect=[_CHANGE_FILE_SENTINEL, _QUIT_SENTINEL],
         ),
         patch("ster.cli._app._print_welcome"),
+        # Two files in the folder, so opening one now asks which others to load
+        # read-only. This test is about reselection; answering it is not its job.
+        patch("ster.cli._workspace_ui.context_files_for", return_value=[]),
     ):
         _home_screen()
     assert select.call_count == 2  # picked a file, chose 'Change file', picked again, quit

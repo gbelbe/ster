@@ -121,8 +121,12 @@ def _is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
-    """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit."""
+def _open_viewer(taxonomy_file: Path, lang: str = "en", context: list[Path] | None = None) -> None:
+    """Open the New-TUI for *taxonomy_file* (``ster show``) and handle git on exit.
+
+    *context* names files merged in read-only, so the connected graph is on
+    screen while only *taxonomy_file* can be edited.
+    """
     from ..git.manager import GitManager
     from ..tui import launch_file
 
@@ -142,7 +146,7 @@ def _open_viewer(taxonomy_file: Path, lang: str = "en") -> None:
     pre_hash = store.file_hash(taxonomy_file) if _state.converted_from else ""
     gm = GitManager(taxonomy_file)
     fetch_event = _start_git_fetch(gm)
-    taxonomy = launch_file(taxonomy_file, source=taxonomy_file.name, lang=lang)
+    taxonomy = launch_file(taxonomy_file, source=taxonomy_file.name, lang=lang, context=context)
     if taxonomy is None:
         return
 

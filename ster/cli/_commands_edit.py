@@ -45,6 +45,13 @@ def cmd_show(
         "-p",
         help="Print static tree and exit (no interactive viewer).",
     ),
+    context_files: list[Path] | None = typer.Option(
+        None,
+        "--context-files",
+        "-x",
+        help="Load these files read-only alongside FILE (repeatable). "
+        "Their entities are visible but locked, and saving never writes to them.",
+    ),
 ) -> None:
     """Open the interactive taxonomy browser (the Textual New-TUI) and commit on exit.
 
@@ -71,7 +78,9 @@ def cmd_show(
             console.print(render_tree(taxonomy, lang=lang))
         return
 
-    _viewer._open_viewer(taxonomy_file, lang=lang)
+    # No prompt on this path: `ster show file.ttl` names what it wants, so the
+    # context is whatever --context-files gave and nothing else.
+    _viewer._open_viewer(taxonomy_file, lang=lang, context=list(context_files or []))
 
 
 # ──────────────────────────── add ────────────────────────────────────────────

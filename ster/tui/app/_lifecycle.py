@@ -49,8 +49,14 @@ class _LifecycleMixin(_AppState):
         path: Path | None = None,
         open_query: bool = False,
         progressive_startup: bool = False,
+        context: list[Path] | None = None,
     ) -> None:
         super().__init__()
+        # Files merged in read-only: the tree locks their rows and save excludes
+        # them, so the whole graph is visible while one file stays editable.
+        # Not `_context`: Textual's DOMNode already owns that name, and shadowing
+        # it with a list breaks every reactive watcher on the app.
+        self._context_files = context
         self._open_query_on_start = open_query
         self._progressive_startup = progressive_startup or taxonomy is None
         self._loading = self._progressive_startup
@@ -214,6 +220,7 @@ class _LifecycleMixin(_AppState):
                 progress_callback=lambda percent, message: self.call_from_thread(
                     self._set_loading_progress, "Loading", percent, message
                 ),
+                context=self._context_files,
             )
         except Exception as exc:  # noqa: BLE001 — loading errors belong in the TUI
             self.call_from_thread(self._show_load_error, exc)

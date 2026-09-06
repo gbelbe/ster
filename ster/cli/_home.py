@@ -89,8 +89,11 @@ def _open_selected_in_viewer(
     primary = selected[0]
     _file_picker._save_session(primary)
     _state.session_file = primary
+    # Asked here rather than in the file list: the answer belongs to the file
+    # just chosen, and a folder holding only that file never sees the question.
+    context = _workspace_ui.context_files_for(primary, found)
     try:
-        _viewer._open_viewer(primary, lang=updated_project.lang)
+        _viewer._open_viewer(primary, lang=updated_project.lang, context=context)
     except Exception as exc:
         _app.err.print(f"[red]Viewer error: {exc}[/red]")
 

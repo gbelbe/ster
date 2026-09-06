@@ -43,8 +43,13 @@ def launch_file(
     source: str | None = None,
     lang: str = "en",
     open_query: bool = False,
+    context: list[Path] | None = None,
 ) -> Taxonomy | None:
-    """Open one Textual app that loads *path* and then becomes the browser."""
+    """Open one Textual app that loads *path* and then becomes the browser.
+
+    *context* names files merged in read-only, so the connected graph is visible
+    while only *path* stays editable.
+    """
     from .app import OntologyApp
 
     path = Path(path)
@@ -55,6 +60,7 @@ def launch_file(
         path=path,
         open_query=open_query,
         progressive_startup=True,
+        context=context,
     )
     app.run()
     return app.tax if app._loaded_successfully else None
