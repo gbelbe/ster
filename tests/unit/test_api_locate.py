@@ -76,10 +76,18 @@ def test_a_plain_point_carries_no_redundant_shape(client):
     assert (place["lat"], place["long"]) == (47.28, -2.21)
 
 
-def test_an_entity_with_no_geography_is_simply_absent(client):
-    body = _locate(client, [NS + "Nowhere"]).json()
+def test_an_entity_with_no_geography_comes_back_unmapped(client):
+    """It used to be dropped, which took it out of the totals as well as the map.
 
-    assert body["places"] == []
+    A country's store count that silently omits the stores it cannot draw is
+    wrong, not partial. The place travels with the result, flagged so the client
+    counts it and skips it when plotting.
+    """
+    place = _locate(client, [NS + "Nowhere"]).json()["places"][0]
+
+    assert place["mapped"] is False
+    assert place["lat"] is None and place["long"] is None
+    assert place["uri"] == NS + "Nowhere"
 
 
 def test_the_label_comes_back_too(client):
@@ -91,8 +99,11 @@ def test_the_label_comes_back_too(client):
 
 def test_a_mixed_request_resolves_each_kind(client):
     body = _locate(client, [NS + "Region", NS + "City", NS + "Nowhere"]).json()
+    by_uri = {p["uri"]: p for p in body["places"]}
 
-    assert [p["shape"] is None for p in body["places"]] == [False, True]
+    assert by_uri[NS + "Region"]["shape"] is not None  # a polygon
+    assert by_uri[NS + "City"]["shape"] is None  # a bare point
+    assert by_uri[NS + "Nowhere"]["mapped"] is False  # real, but not drawable
 
 
 def test_the_endpoint_needs_the_token(client):

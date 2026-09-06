@@ -731,7 +731,8 @@ async function locate(cols, data) {
       const named = r.find(c => !isUri(c));
       used.add(hit);
       /* Carry level/parent/kind through: the drill-down reads them, and dropping
-         them here left every level drawn at once with no error to show for it. */
+         them here left every level drawn at once with no error to show for it.
+         `mapped` rides along too: an unmapped place counts but is never drawn. */
       out.push({ row:i, lat:found.lat, long:found.long, uri:hit, shape:found.shape,
                  level:found.level ?? 0, parent:found.parent ?? null, kind:found.kind || '',
                  ancestors:found.ancestors || [], result:true, figures:found.figures || [],
@@ -776,7 +777,11 @@ function draw(fit = true) {
      result rather than the level currently drilled to. Intersecting the two
      emptied the map wherever the level held only context places. */
   const source = groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel();
-  const visible = source.filter(inScope);
+  /* Counting and plotting are different questions. A place with no coordinates
+     is real and belongs in every total; drawing it would put NaN into Leaflet
+     and take the whole layer down. So it is filtered out here, at the point of
+     drawing, and nowhere else. */
+  const visible = source.filter(inScope).filter(p => p.lat !== null && p.long !== null);
   /* Ungrouped, or drilled into one group: every row is its own marker. */
   const grouped = groupBy !== null && scope === null;
   const groups = new Map();

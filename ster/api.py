@@ -485,7 +485,16 @@ def _places_wanted(graph: rdflib.Graph, uris: list[str]) -> list[tuple[str, bool
 
 
 def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, Any] | None:
-    """One place as the map wants it, or None when it carries no geography."""
+    """One place as the map wants it, positioned or not.
+
+    A place with no geometry is kept rather than dropped. An ontology may hold
+    entities it deliberately will not plot — a store outside the mapped area, a
+    grouping tier with no shape of its own — and dropping them took them out of
+    the *totals* as well as the map, so a country's count silently excluded the
+    ones it could not draw. That makes the figure wrong rather than partial.
+
+    None is returned only for a URI that is not in the graph at all.
+    """
     from .geo_results import label_of  # noqa: PLC0415
     from .geo_shapes import (  # noqa: PLC0415
         geometry_of,
@@ -497,17 +506,20 @@ def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, A
     )
 
     node = rdflib.URIRef(uri)
-    geometry = geometry_of(graph, node)
-    if geometry is None:
+    if (node, None, None) not in graph:
         return None
-    latitude, longitude = geometry.centroid
+    geometry = geometry_of(graph, node)
+    latitude, longitude = geometry.centroid if geometry else (None, None)
     return {
         "uri": uri,
+        # False when the place is real but has nowhere to be drawn. The client
+        # counts it and skips it when plotting.
+        "mapped": geometry is not None,
         "label": label_of(graph, node),
         "lat": latitude,
         "long": longitude,
         # A bare point is already carried by lat/long.
-        "shape": None if geometry.kind == "Point" else geometry.geojson,
+        "shape": None if (geometry is None or geometry.kind == "Point") else geometry.geojson,
         # Depth in the class hierarchy, and the containing place: together these
         # let the map draw one level at a time and descend, without knowing what
         # the levels are called.
