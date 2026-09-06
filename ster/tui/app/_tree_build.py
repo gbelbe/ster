@@ -272,7 +272,7 @@ class _TreeBuildMixin(_AppState):
         (and puns, which hang on the SKOS spine). Its header node carries the taxonomy
         overview URI, so selecting it shows the overview in the detail pane."""
         tax, root = self.tax, tree.root
-        tax_sec = root.add("Unified tree (SKOS/OWL)", data=detail.TAXONOMY_URI)
+        tax_sec = root.add(data.pane_summary(tax, "tree"), data=detail.TAXONOMY_URI)
         self._index(detail.TAXONOMY_URI, tax_sec)  # focusable (e.g. after deleting a scheme)
         for s_uri in data.scheme_roots(tax, self.lang):
             # A whole scheme can come from a context file, so it carries the lock too.
@@ -294,7 +294,7 @@ class _TreeBuildMixin(_AppState):
         appears here as a class as well as in the spine) plus loose, unclassified
         individuals. Its header node carries the ontology overview URI."""
         tax, root = self.tax, tree.root
-        ont_sec = root.add("Ontology", data=detail.OVERVIEW_URI)
+        ont_sec = root.add(data.pane_summary(tax, "ont-tree"), data=detail.OVERVIEW_URI)
         self._index(detail.OVERVIEW_URI, ont_sec)  # focusable (e.g. after deleting a root class)
         for uri in data.class_roots(tax, self.lang):
             self._add_class(ont_sec, uri, skip_puns=False)  # full OWL view: puns are classes too
@@ -318,7 +318,7 @@ class _TreeBuildMixin(_AppState):
         tax = self.tax
         # A "Properties" header node is the pane's main entity — selecting it shows the
         # properties overview (all-properties stats + quality). The kind groups nest under it.
-        prop_sec = tree.root.add("Properties", data=detail.PROPERTIES_URI)
+        prop_sec = tree.root.add(data.pane_summary(tax, "prop-tree"), data=detail.PROPERTIES_URI)
         self._index(detail.PROPERTIES_URI, prop_sec)
         kind_by_title = {title: kind for kind, title in data.PROPERTY_CATEGORIES}
         for title, local, external in data.property_groups(tax, self.lang):

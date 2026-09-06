@@ -722,13 +722,16 @@ def test_panels_have_border_titles() -> None:
         app = _app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            # The two main panes are titled by their header row; Properties/Details by border.
-            assert (
-                app.query_one("#tree", Tree).root.children[0].label.plain
-                == "Unified tree (SKOS/OWL)"
-            )
-            assert app.query_one("#ont-tree", Tree).root.children[0].label.plain == "Ontology"
+            # Every pane is named by its border. The header row underneath used to
+            # repeat that name; it now summarises the pane's contents instead, so
+            # the two lines say different things.
+            assert app.query_one("#tree", Tree).border_title == "Mixed SKOS/OWL"
+            assert app.query_one("#ont-tree", Tree).border_title == "Ontology"
             assert app.query_one("#prop-tree", Tree).border_title == "Properties"
+            for pid in ("tree", "ont-tree", "prop-tree"):
+                tree = app.query_one(f"#{pid}", Tree)
+                head = tree.root.children[0].label.plain
+                assert head and str(tree.border_title).lower() not in head.lower()
             app._show(ZOO + "Cat")
             await pilot.pause()
             # The title notes the resource type and (class → context menu) the ⋯ hint.

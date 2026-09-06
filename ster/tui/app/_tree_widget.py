@@ -191,8 +191,12 @@ class OntologyTree(Tree):
         node = self.get_node_at_line(line) if line is not None and line >= 0 else None
         if event.button == 3:  # right-click → context menu
             self._open_context_menu_at(node, line, event)
-        elif event.button == 1 and self._is_main_node(node):  # header → accordion only
-            self._accordion_click(line, event)
+        # A click on the pane's own chrome — its border, its border title, or the
+        # empty space below the last row — lands on no node at all, so it used to
+        # do nothing. That made the titled bar at the top of the box the one part
+        # of it that looked clickable and was not. It accordions the pane too.
+        elif event.button == 1 and (node is None or self._is_main_node(node)):
+            self._accordion_click(line if node is not None else None, event)
 
     def _is_main_node(self, node: TreeNode | None) -> bool:
         """True when *node* is this pane's main-entity (header/overview) row."""

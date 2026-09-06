@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Final
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
@@ -36,6 +37,27 @@ from ._state import _AppState
 from ._tree_widget import OntologyTree
 
 _LIT_PREPARING: Final = "Preparing"
+
+
+class StaticHeader(Header):
+    """The app header, minus Textual's click-to-expand.
+
+    ``Header._on_click`` toggles a "tall" class that reveals the sub-title. ster
+    sets no sub-title, so a click only opened a blank strip and shoved the layout
+    down — an affordance that looks like it does something and does not. Taps did
+    the same, being delivered as clicks.
+
+    Overriding the handler is *not* enough on its own. Textual dispatches a
+    message to every matching handler down the MRO, not just the most derived
+    one, so ``Header._on_click`` still ran after this one and toggled the class
+    back. The walk stops only when a handler prevents the default, which is what
+    this does — and why the override takes the event that ``Header`` itself
+    declares without.
+    """
+
+    def _on_click(self, event: events.Click) -> None:  # type: ignore[override]
+        """Swallow the click: there is nothing to expand into."""
+        event.prevent_default()  # stops the MRO walk before Header's toggle
 
 
 class _LifecycleMixin(_AppState):
@@ -417,7 +439,7 @@ class _LifecycleMixin(_AppState):
             self._loading_spinner_timer = None
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield StaticHeader()
         with Horizontal(id="body"):
             if self._loading:
                 yield Static(

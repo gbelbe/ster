@@ -8,21 +8,30 @@ their output into ``Tree`` nodes, a detail panel, and the search palette.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Final
 
 from ster.model import Taxonomy
+
+_LIT_ANNOTATION_PROPERTY: Final = "AnnotationProperty"
+_LIT_CLASS: Final = "class"
+_LIT_CONCEPT: Final = "concept"
+_LIT_INDIVIDUAL: Final = "individual"
+_LIT_SCHEME: Final = "scheme"
+_LIT_UNTYPED: Final = "untyped"
 
 # Clean geometric glyphs per node kind (monospace-friendly; sharper than emoji).
 # Kinds are visually distinct so a merged SKOS+OWL tree stays legible: a filled
 # class ● vs a hollow concept ○ vs a punned ◉ (both) vs a diamond individual ◆.
 ICON = {
-    "class": "●",
-    "concept": "○",
+    _LIT_CLASS: "●",
+    _LIT_CONCEPT: "○",
     "promoted": "◉",  # a pun — skos:Concept *and* owl:Class
     "linked": "◎",  # a concept foaf:focus-linked to an existing OWL class
-    "individual": "◆",
+    _LIT_INDIVIDUAL: "◆",
     "property": "■",
-    "scheme": "⬢",
+    _LIT_SCHEME: "⬢",
     "section": "▸",
 }
 
@@ -71,15 +80,15 @@ def node_name(tax: Taxonomy, uri: str, lang: str, kind: str) -> str:
 
 def kind_of(tax: Taxonomy, uri: str) -> str:
     if uri in tax.owl_classes:
-        return "class"
+        return _LIT_CLASS
     if uri in tax.owl_individuals:
-        return "individual"
+        return _LIT_INDIVIDUAL
     if uri in tax.owl_properties:
         return "property"
     if uri in tax.schemes:
-        return "scheme"
+        return _LIT_SCHEME
     if uri in tax.concepts:
-        return "concept"
+        return _LIT_CONCEPT
     return "section"
 
 
@@ -141,11 +150,11 @@ def properties(tax: Taxonomy, lang: str = "en") -> list[str]:
     return _by_label(tax, list(tax.owl_properties), lang)
 
 
-# The three OWL property kinds, in display order; anything else is "untyped".
+# The three OWL property kinds, in display order; anything else is _LIT_UNTYPED.
 PROPERTY_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("ObjectProperty", "Object Properties"),
     ("DatatypeProperty", "Datatype Properties"),
-    ("AnnotationProperty", "Annotation Properties"),
+    (_LIT_ANNOTATION_PROPERTY, "Annotation Properties"),
 )
 UNTYPED_PROPERTIES_TITLE = "Untyped Properties"
 
@@ -174,7 +183,7 @@ def _external_property_buckets(tax: Taxonomy, lang: str) -> dict[str, list[str]]
             seen.add(a.predicate)
             used.append(a.predicate)
     buckets: dict[str, list[str]] = {}
-    annotation_title = dict(PROPERTY_CATEGORIES)["AnnotationProperty"]
+    annotation_title = dict(PROPERTY_CATEGORIES)[_LIT_ANNOTATION_PROPERTY]
     for uri in _by_label(tax, used, lang):
         title = annotation_title if is_annotation_property(tax, uri) else UNTYPED_PROPERTIES_TITLE
         buckets.setdefault(title, []).append(uri)
@@ -232,6 +241,79 @@ def concept_children(tax: Taxonomy, uri: str, lang: str = "en") -> list[str]:
 # The three left panes (Mixed SKOS/OWL, Ontology, Properties) form an accordion —
 # one expanded, the others folded to their title bar. On open, the pane with
 # content is expanded first (Mixed when there is any taxonomy, else Ontology).
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    """``3 concepts`` / ``1 concept``.
+
+    The plural is given explicitly where -s is wrong: "1 schemes" and "2 classs"
+    are both the kind of detail that makes a UI look unfinished.
+    """
+    return f"{count} {singular}" if count == 1 else f"{count} {plural or singular + 's'}"
+
+
+def _joined(parts: list[str]) -> str:
+    return " · ".join(p for p in parts if p)
+
+
+def _summary_tree(tax: Taxonomy) -> str:
+    schemes, concepts = len(tax.schemes), len(tax.concepts)
+    if not (schemes or concepts):
+        return "empty — no concept scheme yet"
+    return _joined([_plural(schemes, _LIT_SCHEME), _plural(concepts, _LIT_CONCEPT)])
+
+
+def _summary_ont(tax: Taxonomy) -> str:
+    classes, individuals = len(tax.owl_classes), len(tax.owl_individuals)
+    if not (classes or individuals):
+        return "empty — no class yet"
+    return _joined(
+        [
+            _plural(classes, _LIT_CLASS, "classes"),
+            _plural(individuals, _LIT_INDIVIDUAL) if individuals else "",
+        ]
+    )
+
+
+def _summary_prop(tax: Taxonomy) -> str:
+    # By kind rather than a total: "2 properties" would echo the border title,
+    # and which kinds exist is the useful part anyway.
+    counts: dict[str, int] = {}
+    for prop in tax.owl_properties.values():
+        kind = getattr(prop, "prop_type", "") or _LIT_UNTYPED
+        counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return "empty — no property yet"
+    short = {
+        "ObjectProperty": "object",
+        "DatatypeProperty": "datatype",
+        _LIT_ANNOTATION_PROPERTY: "annotation",
+    }
+    order = [*short, _LIT_UNTYPED]
+    return _joined([f"{counts[k]} {short.get(k, _LIT_UNTYPED)}" for k in order if counts.get(k)])
+
+
+_PANE_SUMMARIES: dict[str, Callable[[Taxonomy], str]] = {
+    "tree": _summary_tree,
+    "ont-tree": _summary_ont,
+    "prop-tree": _summary_prop,
+}
+
+
+def pane_summary(tax: Taxonomy, pane: str) -> str:
+    """What a pane's header row says, instead of repeating its border title.
+
+    The row cannot simply be deleted — it is the keyboard "panel layer" cursor
+    position, the parent node of everything in the pane, and where focus lands
+    after a delete — so it earns its line by counting what the titled border
+    above it cannot. An empty pane says so rather than listing zeroes: the
+    call-to-action row below is already the nudge.
+
+    No language argument: these are counts of entities, not of their labels, so
+    there is nothing here for a language to change.
+    """
+    summarise = _PANE_SUMMARIES.get(pane)
+    return summarise(tax) if summarise else ""
 
 
 def has_taxonomy_content(tax: Taxonomy) -> bool:
@@ -293,12 +375,12 @@ def effective_parent(tax: Taxonomy, uri: str) -> str:
     :data:`ONTOLOGY_ROOT` so nothing is dropped.
     """
     nt = tax.node_type(uri)
-    if nt in ("concept", "promoted"):
+    if nt in (_LIT_CONCEPT, "promoted"):
         return _concept_parent(tax, uri)
-    if nt == "class":
+    if nt == _LIT_CLASS:
         parents = [p for p in tax.owl_classes[uri].sub_class_of if p in tax.owl_classes]
         return parents[0] if parents else ONTOLOGY_ROOT
-    if nt == "individual":
+    if nt == _LIT_INDIVIDUAL:
         typed = [t for t in tax.owl_individuals[uri].types if t in tax.owl_classes]
         return typed[0] if typed else ONTOLOGY_ROOT
     return ONTOLOGY_ROOT
@@ -331,11 +413,11 @@ def search_rows(tax: Taxonomy, lang: str = "en") -> list[tuple[str, str, str]]:
     """``(label, uri, kind)`` for every browsable entity, sorted by label."""
     rows: list[tuple[str, str, str]] = []
     for uri in tax.owl_classes:
-        rows.append((label_of(tax, uri, lang), uri, "class"))
+        rows.append((label_of(tax, uri, lang), uri, _LIT_CLASS))
     for uri in tax.owl_individuals:
-        rows.append((label_of(tax, uri, lang), uri, "individual"))
+        rows.append((label_of(tax, uri, lang), uri, _LIT_INDIVIDUAL))
     for uri in tax.owl_properties:
         rows.append((label_of(tax, uri, lang), uri, "property"))
     for uri in tax.concepts:
-        rows.append((label_of(tax, uri, lang), uri, "concept"))
+        rows.append((label_of(tax, uri, lang), uri, _LIT_CONCEPT))
     return sorted(rows, key=lambda r: r[0].lower())
