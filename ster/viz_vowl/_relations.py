@@ -18,8 +18,51 @@ _LIT_EDGES: Final = "edges"
 _LIT_LABEL: Final = "label"
 _LIT_LAYOUT: Final = "layout"
 _LIT_NODES: Final = "nodes"
+_LIT_ROOT_CLASS: Final = "rootClass"
 _LIT_SOURCE: Final = "source"
 _LIT_TARGET: Final = "target"
+
+
+# Most individuals any one class hands back when expanded. A class holding a
+# thousand shops would otherwise reintroduce the freeze one click later.
+CLASS_EXPAND_LIMIT = 200
+
+
+def class_individuals(taxonomy: Taxonomy, class_uri: str, limit: int = CLASS_EXPAND_LIMIT) -> dict:
+    """The individuals of one class, capped, as nodes and instanceOf edges.
+
+    ``total`` is how many the class holds and ``shown`` how many came back, so
+    the page can say what it withheld rather than quietly truncating.
+    """
+    members = [
+        (uri, ind) for uri, ind in taxonomy.owl_individuals.items() if class_uri in ind.types
+    ]
+    members.sort(key=lambda pair: pair[1].label("en") or pair[0])
+    shown = members[:limit]
+    return {
+        _LIT_NODES: [
+            {
+                "id": uri,
+                _LIT_LABEL: ind.label("en"),
+                "type": "individual",
+                "readOnly": 0,
+                _LIT_ROOT_CLASS: 0,
+            }
+            for uri, ind in shown
+        ],
+        _LIT_EDGES: [
+            {
+                "id": f"x{i}",
+                _LIT_SOURCE: uri,
+                _LIT_TARGET: class_uri,
+                "type": "instanceOf",
+                _LIT_LABEL: "",
+            }
+            for i, (uri, _ind) in enumerate(shown)
+        ],
+        "total": len(members),
+        "shown": len(shown),
+    }
 
 
 def build_concept_relations_graph(taxonomy: Taxonomy, concept_uri: str) -> dict:
@@ -65,7 +108,7 @@ def _concept_node(taxonomy: Taxonomy, uri: str) -> dict:
         _LIT_LABEL: concept.pref_label("en"),
         "type": "topconcept" if concept.top_concept_of else "concept",
         "detail": _detail_concept(concept, taxonomy),
-        "rootClass": 0,
+        _LIT_ROOT_CLASS: 0,
     }
 
 
@@ -128,7 +171,7 @@ class _RelationsGraph:
                     "type": node_type,
                     "detail": detail or {},
                     "readOnly": 1 if uri in self.taxonomy.context_source else 0,
-                    "rootClass": 0,
+                    _LIT_ROOT_CLASS: 0,
                     "superclass": superclass,
                 }
             )

@@ -5,10 +5,12 @@ underscore-prefixed helpers tests import directly) is re-exported here
 unchanged, so `from ster.viz_vowl import X` keeps working."""
 
 from ._detail import (
+    INDIVIDUAL_COLLAPSE_LIMIT,
     _data_script,
     _offline_banner,
     _server_host_port,
     build_detail_map,
+    collapse_individuals,
     is_live_server,
     node_detail,
     strip_detail,
@@ -49,11 +51,13 @@ from ._query_result import (
     refresh_query_result_in_browser,
 )
 from ._relations import (
+    CLASS_EXPAND_LIMIT,
     _broader_chain,
     _concept_node,
     _direct_narrower,
     build_concept_relations_graph,
     build_individual_relations_graph,
+    class_individuals,
 )
 from ._render import (
     _data_path,
@@ -86,6 +90,10 @@ from ._server import (
 )
 
 __all__ = [
+    "CLASS_EXPAND_LIMIT",
+    "INDIVIDUAL_COLLAPSE_LIMIT",
+    "class_individuals",
+    "collapse_individuals",
     "build_vowl_graph",
     "build_focused_vowl_graph",
     "build_class_links_graph",

@@ -16,6 +16,51 @@ from ..viz import (
 from . import _graph_builders
 
 _LIT_DETAIL: Final = "detail"
+_LIT_EDGES: Final = "edges"
+_LIT_NODES: Final = "nodes"
+
+
+# Above this many individuals the graph opens with classes only. Force-directed
+# layout costs grow far faster than linearly in node count, so an ontology whose
+# individuals outnumber its classes eighty to one spends all its time laying out
+# the part nobody came to read. Below it nothing changes: a small ontology is
+# perfectly legible whole, and collapsing it would only hide things.
+INDIVIDUAL_COLLAPSE_LIMIT = 150
+
+
+def collapse_individuals(graph: dict, limit: int = INDIVIDUAL_COLLAPSE_LIMIT) -> dict:
+    """Drop individual nodes, recording on each class how many it holds.
+
+    Returned unchanged when there are few enough to draw. Otherwise every
+    individual node goes, along with any edge touching one, and each class gains
+    ``individualCount`` — so the graph still says where the individuals are, and
+    how many, without drawing them. The page fetches a class's own on click.
+
+    The graph is mutated in place: callers build it purely to serialise it.
+    """
+    nodes = graph.get(_LIT_NODES, [])
+    individuals = {n["id"] for n in nodes if n.get("type") == "individual"}
+    if len(individuals) <= limit:
+        return graph
+
+    counts: dict[str, int] = {}
+    for edge in graph.get(_LIT_EDGES, []):
+        if edge.get("type") == "instanceOf" and edge.get("source") in individuals:
+            target = edge.get("target")
+            counts[target] = counts.get(target, 0) + 1
+
+    graph[_LIT_NODES] = [n for n in nodes if n["id"] not in individuals]
+    graph[_LIT_EDGES] = [
+        e
+        for e in graph.get(_LIT_EDGES, [])
+        if e.get("source") not in individuals and e.get("target") not in individuals
+    ]
+    for node in graph[_LIT_NODES]:
+        held = counts.get(node["id"], 0)
+        if held:
+            node["individualCount"] = held
+    graph["collapsed"] = len(individuals)
+    return graph
 
 
 def strip_detail(graph: dict) -> dict:
@@ -28,7 +73,7 @@ def strip_detail(graph: dict) -> dict:
 
     The graph is mutated in place: callers build it purely to serialise it.
     """
-    for node in graph.get("nodes", []):
+    for node in graph.get(_LIT_NODES, []):
         node.pop(_LIT_DETAIL, None)
     return graph
 

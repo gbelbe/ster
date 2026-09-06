@@ -136,11 +136,21 @@ def test_app_js_routes_concepts_to_the_explore_endpoint():
 
 
 def test_app_js_taps_select_rather_than_explore():
-    """A stray click must not swap the whole graph out; that stays on the overlay."""
-    js = _app_js()
+    """A stray click must not swap the whole graph out; that stays on the overlay.
 
-    assert "cy.on('tap','node',e=>selectNode(e.target.id()));" in js
-    assert "function selectNode(" in js
+    The tap handler now also opens a class whose individuals are collapsed. That
+    is additive — it puts nodes on the graph you already have — so the invariant
+    this guards is unchanged: tapping never *replaces* the view. Asserted as
+    behaviour rather than as a literal handler, which is what it always meant.
+    """
+    js = _app_js().replace(" ", "")
+
+    assert "cy.on('tap','node',e=>{" in js
+    assert "selectNode(n.id());" in js
+    assert "function selectNode(" in js.replace("functionselectNode(", "function selectNode(")
+    # the swap-the-graph paths must stay off the tap handler
+    assert "cy.on('tap','node',e=>activateNode(" not in js
+    assert "cy.on('tap','node',e=>exploreOrExtend(" not in js
 
 
 def test_app_js_select_dims_all_but_the_neighbourhood():

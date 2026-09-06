@@ -16,8 +16,11 @@ def test_node_click_selects_without_expanding():
     # swaps the graph out. Replacing the whole view stays a deliberate action on
     # the hover overlay, so a stray click cannot lose the reader's place.
     # Empty-canvas taps still clear the selection.
+    # Opening a collapsed class is additive: it adds that class's individuals to
+    # the graph in front of you. Replacing the view stays on the overlay.
     js = _app_js().replace(" ", "")
-    assert "cy.on('tap','node',e=>selectNode(e.target.id()));" in js
+    assert "cy.on('tap','node',e=>{" in js
+    assert "selectNode(n.id());" in js
     assert "cy.on('tap',function(e){if(e.target===cy)" in js
 
 

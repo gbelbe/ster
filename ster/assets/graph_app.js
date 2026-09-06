@@ -48,9 +48,20 @@ function el(tag,props,children){
 function buildElements(data){
   return[
     // No `detail` here: it is fetched per node on click (see loadDetail).
-    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0}})),
+    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0,individualCount:n.individualCount||0,shownCount:0}})),
     ...data.edges.map(e=>({group:'edges',data:{id:e.id,source:e.source,target:e.target,type:e.type,label:e.label||'',cardinality:e.cardinality||''}})),
   ];
+}
+// What a class with collapsed individuals is called: its name, then how many it
+// holds — or, once expanded against the cap, how many of them are actually
+// drawn. Spelled out rather than nested in a ternary, because "200 of 1027" and
+// "(17)" are two different statements and read better as two.
+function classCountLabel(ele){
+  const held=ele.data('individualCount');
+  const shown=ele.data('shownCount');
+  const name=ele.data('label');
+  if(shown&&shown<held)return name+'\n'+shown+' of '+held;
+  return name+'\n('+held+')';
 }
 const CY_STYLE=[
   // Dark text with a white halo: a long label wraps past the node onto the white
@@ -58,6 +69,12 @@ const CY_STYLE=[
   // dark node too, so one colour works both on and off the shape.
   {selector:'node',style:{'label':'data(label)','text-halign':'center','text-valign':'center','color':'#0f172a','text-outline-color':'#ffffff','text-outline-width':2.5,'text-outline-opacity':1,'font-family':'system-ui,sans-serif','text-wrap':'wrap','text-max-width':'80px','font-size':12}},
   {selector:'node[type="class"]',style:{'shape':'ellipse','width':84,'height':84,'background-color':'#3c6ebf','border-color':'#5a87cc','border-width':2,'font-weight':600}},
+  // A class whose individuals are collapsed says how many it holds, and wears a
+  // dashed border to read as openable. Once expanded and capped it says what it
+  // withheld — "200 of 1027" — so the omission stays on screen rather than
+  // passing by in a toast nobody was looking at.
+  {selector:'node[individualCount > 0]',style:{
+    'border-style':'dashed','border-width':3,'label':classCountLabel}},
   {selector:'node[type="class"][rootClass=1]',style:{'width':104,'height':104,'border-color':'#6694d1','border-width':5,'font-size':13,'text-max-width':'92px'}},
   {selector:'node[type="individual"]',style:{'shape':'ellipse','width':68,'height':68,'background-color':'#7fb8e0','border-color':'#4a90c4','border-width':1.5,'color':'#0f172a'}},
   {selector:'node[type="scheme"]',style:{'shape':'ellipse','width':88,'height':88,'background-color':'#7c3aed','border-color':'#a78bfa','border-width':2,'font-weight':600}},
@@ -377,7 +394,48 @@ function activateNode(uri){
 // view is a deliberate action and stays on the hover overlay ("explore/extend
 // relations"), so a stray click cannot lose your place. Tapping empty canvas
 // clears the selection.
-cy.on('tap','node',e=>selectNode(e.target.id()));
+// ── Collapsed individuals ─────────────────────────────────────────────────────
+// A file of a thousand shops opened with 1,993 nodes, of which 1,968 were
+// individuals — 98.7% of the graph and 98.5% of the payload, on every refresh
+// tick, laid out by a force algorithm whose cost grows far faster than linearly
+// in that count. So the server sends classes only above a threshold, each
+// carrying how many individuals it holds, and they arrive a class at a time.
+//
+// Expansions accumulate: opening a second class keeps the first open, so two can
+// be compared. Clicking an open class puts it away again.
+const _expanded=new Set();
+function toggleClassIndividuals(node){
+  const uri=node.id();
+  if(_expanded.has(uri)){
+    cy.remove(cy.nodes().filter(n=>n.data('ofClass')===uri));
+    _expanded.delete(uri);node.data('shownCount',0);_saveState();return;
+  }
+  if(!API_TOKEN)return;
+  _expanded.add(uri);
+  fetch('/api/class-individuals?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{
+      if(!d){_expanded.delete(uri);return;}
+      const fp=node.position();
+      const fresh=d.nodes.filter(n=>!cy.$('#'+CSS.escape(n.id)).length);
+      const added=cy.add([
+        ...fresh.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:'individual',readOnly:n.readOnly||0,rootClass:0,superclass:0,individualCount:0,shownCount:0,ofClass:uri}})),
+        ...d.edges.filter(e=>!cy.$('#'+CSS.escape(e.id)).length)
+                  .map(e=>({group:'edges',data:{id:e.id+'@'+uri,source:e.source,target:e.target,type:e.type,label:'',cardinality:''}})),
+      ]);
+      node.data('shownCount',d.shown);
+      _seedAndSpread(added.nodes(),fp);
+    })
+    .catch(err=>{console.debug('Unable to expand class:',err);_expanded.delete(uri);});
+}
+// Clicking a class that holds collapsed individuals opens it as well as selecting
+// it. This adds nodes rather than replacing the view, so it does not lose your
+// place the way explore/extend deliberately can.
+cy.on('tap','node',e=>{
+  const n=e.target;
+  if(n.data('individualCount'))toggleClassIndividuals(n);
+  selectNode(n.id());
+});
 cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
 
 // ── Panel ─────────────────────────────────────────────────────────────────────

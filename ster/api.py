@@ -373,25 +373,32 @@ def _register_schema_routes(
         return _individual_out(new_uri, tax.owl_individuals[new_uri])
 
 
+_TAG_VIZ = "Visualisation"
+
+
 def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
     """VOWL graph payloads and relation lookups."""
 
     @app.get(
         "/api/graph",
         summary="Return the full VOWL graph payload",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def get_graph(_: None = Depends(_check_auth)) -> dict[str, Any]:
-        from .viz_vowl import build_vowl_graph, strip_detail
+        from .viz_vowl import build_vowl_graph, collapse_individuals, strip_detail
 
         # Detail is fetched per node from /api/node-detail; sending it here would
         # put the whole side-panel corpus on every live-refresh tick.
-        return strip_detail(build_vowl_graph(_tax()))  # type: ignore[return-value]
+        # Individuals are collapsed for the same reason detail is stripped: on a
+        # file of 1,027 shops they were 98.7% of the nodes and 98.5% of the
+        # bytes, on every tick. A class carries its count; the page asks for one
+        # class's individuals when it is opened.
+        return collapse_individuals(strip_detail(build_vowl_graph(_tax())))  # type: ignore[return-value]
 
     @app.get(
         "/api/node-detail",
         summary="Return the side-panel detail for a single node",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def get_node_detail(
         uri: str = Query(description="URI of the entity to describe"),
@@ -402,9 +409,22 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         return node_detail(_tax(), uri)  # type: ignore[return-value]
 
     @app.get(
+        "/api/class-individuals",
+        summary="Return the individuals of one class, for expanding it in the graph",
+        tags=[_TAG_VIZ],
+    )
+    def get_class_individuals(
+        uri: str = Query(description="URI of the class to expand"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import class_individuals
+
+        return class_individuals(_tax(), uri)  # type: ignore[return-value]
+
+    @app.get(
         "/api/individual-relations",
         summary="Return the object-property relations subgraph for an individual",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def get_individual_relations(
         uri: str = Query(description="URI of the individual to expand"),
@@ -417,7 +437,7 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
     @app.get(
         "/api/concept-relations",
         summary="Return the broader/narrower subgraph for a SKOS concept",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def get_concept_relations(
         uri: str = Query(description="URI of the concept to explore"),
@@ -430,7 +450,7 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
     @app.get(
         "/api/class-links",
         summary="Return the linked-classes subgraph for a class",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def get_class_links(
         uri: str = Query(description="URI of the class to explore"),
@@ -508,7 +528,7 @@ def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
     @app.post(
         "/api/locate",
         summary="Resolve entity URIs to points and geometries",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     def locate_uris(body: LocateIn, _: None = Depends(_check_auth)) -> dict[str, Any]:
         """Points and shapes for *uris*, skipping any that carry no geography.
@@ -537,7 +557,7 @@ def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> N
     @app.get(
         "/api/events",
         summary="SSE stream — fires 'updated' whenever the ontology changes",
-        tags=["Visualisation"],
+        tags=[_TAG_VIZ],
     )
     async def sse_events(
         token_param: str = Query(..., alias="token"),
