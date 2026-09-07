@@ -62,6 +62,16 @@ def list_tracked(repo: Path) -> list[str]:
     return [line for line in _git(repo, "ls-files").splitlines() if line]
 
 
+def resolve(repo: Path, rev: str) -> str | None:
+    """`rev` as a commit sha, or None when it does not exist (a root's parent).
+
+    Used to key a parse cache: `<sha>^` and the sha of the commit before it name
+    the same revision, and only the resolved form makes them share an entry.
+    """
+    result = _run(repo, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    return result.stdout.strip() or None
+
+
 def repo_root(path: Path) -> Path | None:
     """The repository `path` lives in, or None when it is not tracked anywhere."""
     result = _run(path.parent if path.is_file() else path, "rev-parse", "--show-toplevel")

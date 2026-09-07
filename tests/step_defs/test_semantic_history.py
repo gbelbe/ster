@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import io
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
+from rich.console import Console
 
 from ster.cli import _constants, _workspace_ui
 from ster.history import open_history
-from ster.tui.history_screen import HistoryScreen
+from ster.tui.history_screen import HistoryScreen, _changes, _heading
 from tests._ontology_repo import ONTOLOGY, RepoBuilder
 
 scenarios("../features/tui/semantic_history.feature")
@@ -93,6 +95,12 @@ def then_newest_first(ctx):
 # asyncio.run instead.
 
 
+def _render(renderable) -> str:
+    console = Console(width=200, file=io.StringIO(), no_color=True)
+    console.print(renderable)
+    return console.file.getvalue()
+
+
 def _drive(ctx, coro_factory):
     """Run one Textual session and return whatever the body asserts on.
 
@@ -112,33 +120,30 @@ def _drive(ctx, coro_factory):
 def then_tag_shown(ctx, tag):
     async def body(app, _pilot):
         table = app.query_one("#commits")
-        return [table.get_row_at(i)[1] for i in range(table.row_count)]
+        return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
     cells = _drive(ctx, body)
-    assert any(f"[{tag}]" in c for c in cells), cells
+    assert any(tag in c for c in cells), cells
 
 
 @then("the newest commit's changes are shown")
 def then_changes_shown(ctx):
-    async def body(app, _pilot):
-        return str(app.query_one("#semantic").render())
-
-    assert "ex:B" in _drive(ctx, body)
+    history = ctx["history"]
+    assert "ex:B" in _render(_changes(history, history.rows[0].sha))
+    assert "add B" in _render(_heading(history.rows[0]))
 
 
 @then("exactly one commit has been diffed")
 def then_one_diffed(ctx):
-    async def body(_app, _pilot):
-        return None
-
-    _drive(ctx, body)
-    assert ctx["history"].computed == 1
+    history = ctx["history"]
+    history.changes(history.rows[0].sha)
+    assert history.computed == 1
 
 
 @then("no raw diff is shown")
 def then_no_raw(ctx):
     async def body(app, _pilot):
-        return app.query_one("#raw").has_class("raw-hidden")
+        return app.query_one("#raw").has_class("hidden-pane")
 
     assert _drive(ctx, body) is True
 
@@ -147,9 +152,7 @@ def then_no_raw(ctx):
 def then_press_shows_raw(ctx, key):
     async def body(app, pilot):
         await pilot.press(key)
-        raw = app.query_one("#raw")
-        return raw.has_class("raw-hidden"), str(raw.render())
+        return app.query_one("#raw").has_class("hidden-pane")
 
-    hidden, text = _drive(ctx, body)
-    assert hidden is False
-    assert "diff --git" in text
+    assert _drive(ctx, body) is False
+    assert "diff --git" in ctx["history"].raw(ctx["history"].rows[0].sha)

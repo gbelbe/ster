@@ -8,7 +8,8 @@ file report as unchanged.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.compare import graph_diff, to_isomorphic
@@ -50,12 +51,44 @@ _LABEL_PREDICATES = (SKOS.prefLabel, RDFS.label)
 _DEPRECATED = Literal(True)
 
 
+@dataclass(frozen=True)
+class _Delta:
+    """The two delta graphs, plus their incoming edges indexed by object.
+
+    The index exists because the alternative is quadratic. Attributing
+    "+2 properties" to a class means counting the triples pointing *at* it, and
+    scanning the delta once per entity costs entities x delta: on a commit
+    touching 1 827 entities that was 15s of a 16s diff. Indexed once, it is a
+    single pass and a dict lookup each.
+    """
+
+    only_base: Graph
+    only_later: Graph
+    lost: dict[Node, Counter[Node]]
+    gained: dict[Node, Counter[Node]]
+
+
 def compare(base: Graph, later: Graph) -> ChangeSet:
     """The change operations taking `base` to `later`."""
     _, only_base, only_later = graph_diff(to_isomorphic(base), to_isomorphic(later))
+    delta = _Delta(
+        only_base=only_base,
+        only_later=only_later,
+        lost=_incoming_index(only_base),
+        gained=_incoming_index(only_later),
+    )
     touched = _touched(only_base) | _touched(only_later) | _changed_owners(base, later)
-    changes = (_describe(uri, base, later, only_base, only_later) for uri in sorted(touched))
+    changes = (_describe(uri, base, later, delta) for uri in sorted(touched))
     return detect_renames(ChangeSet(tuple(c for c in changes if c is not None)))
+
+
+def _incoming_index(delta: Graph) -> dict[Node, Counter[Node]]:
+    """`{object: {predicate: count}}` for the predicates that credit their object."""
+    index: dict[Node, Counter[Node]] = defaultdict(Counter)
+    for _, predicate, obj in delta:
+        if predicate in _OBJECT_ATTRIBUTION:
+            index[obj][predicate] += 1
+    return index
 
 
 def _touched(delta: Graph) -> set[URIRef]:
@@ -100,9 +133,7 @@ def _same_description(base: Graph, later: Graph, uri: URIRef) -> bool:
     return to_isomorphic(base.cbd(uri)) == to_isomorphic(later.cbd(uri))
 
 
-def _describe(
-    uri: URIRef, base: Graph, later: Graph, only_base: Graph, only_later: Graph
-) -> Change | None:
+def _describe(uri: URIRef, base: Graph, later: Graph, delta: _Delta) -> Change | None:
     """One change for `uri`, or None when it is only ever referenced, never defined."""
     in_base = (uri, None, None) in base
     in_later = (uri, None, None) in later
@@ -117,7 +148,7 @@ def _describe(
         curie=_curie(source, uri),
         label=label,
         label_lang=lang,
-        detail=_detail(uri, base, later, only_base, only_later),
+        detail=_detail(uri, base, later, delta),
         of_class=_of_class(source, uri),
     )
 
@@ -184,32 +215,25 @@ def _curie(graph: Graph, uri: Node) -> str:
     return f"{prefix}:{name}" if prefix else str(uri)
 
 
-def _detail(
-    uri: URIRef, base: Graph, later: Graph, only_base: Graph, only_later: Graph
-) -> tuple[str, ...]:
-    return (
-        *_transitions(uri, base, later, only_base, only_later),
-        *_attributions(uri, only_base, only_later),
-    )
+def _detail(uri: URIRef, base: Graph, later: Graph, delta: _Delta) -> tuple[str, ...]:
+    return (*_transitions(uri, base, later, delta), *_attributions(uri, delta))
 
 
-def _transitions(
-    uri: URIRef, base: Graph, later: Graph, only_base: Graph, only_later: Graph
-) -> tuple[str, ...]:
+def _transitions(uri: URIRef, base: Graph, later: Graph, delta: _Delta) -> tuple[str, ...]:
     """Single-valued predicates that moved, read as 'domain ex:Place → ex:Site'."""
     parts = []
     for predicate, name in _TRANSITIONS.items():
-        before = list(only_base.objects(uri, predicate))
-        after = list(only_later.objects(uri, predicate))
+        before = list(delta.only_base.objects(uri, predicate))
+        after = list(delta.only_later.objects(uri, predicate))
         if len(before) == 1 and len(after) == 1:
             parts.append(f"{name} {_curie(base, before[0])} → {_curie(later, after[0])}")
     return tuple(parts)
 
 
-def _attributions(uri: URIRef, only_base: Graph, only_later: Graph) -> tuple[str, ...]:
+def _attributions(uri: URIRef, delta: _Delta) -> tuple[str, ...]:
     """What the entity gained or lost through triples pointing at it."""
-    gained = _incoming(only_later, uri)
-    lost = _incoming(only_base, uri)
+    gained = delta.gained.get(uri, Counter())
+    lost = delta.lost.get(uri, Counter())
     parts = []
     for predicate, (singular, plural) in _OBJECT_ATTRIBUTION.items():
         for sign, counted in (("+", gained), ("-", lost)):
@@ -217,9 +241,3 @@ def _attributions(uri: URIRef, only_base: Graph, only_later: Graph) -> tuple[str
             if total:
                 parts.append(f"{sign}{total} {singular if total == 1 else plural}")
     return tuple(parts)
-
-
-def _incoming(delta: Graph, uri: URIRef) -> Counter[Node]:
-    return Counter(
-        predicate for _, predicate, obj in delta if obj == uri and predicate in _OBJECT_ATTRIBUTION
-    )

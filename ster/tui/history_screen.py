@@ -1,35 +1,57 @@
 """The semantic history of one ontology file, read as a drill-down.
 
-Commits on the left, newest first, with release tags beside the ones they mark.
-Selecting a commit shows what it did to the vocabulary; the raw git hunk sits
-under it, collapsed, because the whole point is that the text is the escape
-hatch rather than the first thing you read.
+Commits on the left, newest first, tagged releases marked. Choosing one shows
+three things in order, each visibly separate: what the commit says it did, who
+made it and when, and what it actually did to the vocabulary. The raw git hunk
+sits below that, put away until asked for, because the text is the escape hatch
+rather than the first thing to read.
 
-Diffing a revision costs about a second on a large ontology, so nothing is
-computed until a row is selected, and :mod:`ster.history` keeps each result.
+Diffing a revision takes about a second on a large ontology, so it happens on a
+worker thread: the list stays arrow-able while a commit is being read, and the
+panel says it is working rather than freezing.
 """
 
 from __future__ import annotations
 
+from rich.console import Group
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static
+from textual.worker import Worker, get_current_worker
 
-from ster.history import FileHistory
+from ster.history import ChangeKind, FileHistory
 
-_RAW_HIDDEN = "raw-hidden"
+_HIDDEN = "hidden-pane"
+
+# The separator between the metadata fields, named once so the ratchet counts it once.
+_DOT = ("  \u00b7  ", "dim")
+
+# What each kind of change is called, and the colour it is called it in. Words
+# rather than +/-/~ glyphs: a reader should not have to learn a key first.
+_KINDS: dict[ChangeKind, tuple[str, str]] = {
+    ChangeKind.ADDED: ("added", "green"),
+    ChangeKind.REMOVED: ("removed", "red"),
+    ChangeKind.MODIFIED: ("changed", "yellow"),
+    ChangeKind.RENAMED: ("renamed", "cyan"),
+    ChangeKind.DEPRECATED: ("deprecated", "magenta"),
+}
 
 
 class HistoryScreen(App[None]):
-    """Commit list beside the semantic view, with the raw diff under it."""
+    """Commit list beside the change list, with the raw diff under it."""
 
     CSS = """
-    #commits { width: 46; border-right: solid $primary; }
+    Screen { background: $surface; }
+    #commits { width: 44; border-right: solid $primary-darken-2; }
     #panes { width: 1fr; }
-    #semantic { height: 1fr; padding: 0 1; overflow-y: auto; }
-    #raw { height: 40%; border-top: solid $primary; padding: 0 1; overflow: auto; }
-    #raw.raw-hidden { display: none; }
+    #detail { padding: 1 2; }
+    #raw { height: 45%; border-top: solid $primary-darken-2; padding: 1 2; }
+    #raw.hidden-pane { display: none; }
     """
 
     BINDINGS = [
@@ -40,52 +62,165 @@ class HistoryScreen(App[None]):
     def __init__(self, history: FileHistory) -> None:
         super().__init__()
         self.history = history
-        self.title = f"Semantic history — {history.path}"
+        self.title = "Semantic history"
+        self.sub_title = history.path
+        self._sha = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield DataTable(id="commits", cursor_type="row")
+            yield DataTable(id="commits", cursor_type="row", zebra_stripes=True)
             with Vertical(id="panes"):
-                yield Static("", id="semantic")
-                yield Static("", id="raw", classes=_RAW_HIDDEN)
+                with VerticalScroll():
+                    yield Static("", id="detail")
+                with VerticalScroll(id="raw", classes=_HIDDEN):
+                    yield Static("", id="raw-text")
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#commits", DataTable)
-        table.add_columns("when", "commit")
+        table.add_columns("date", "commit")
         for row in self.history.rows:
-            table.add_row(row.day, _label(row), key=row.sha)
+            table.add_row(Text(row.day, style="dim"), _commit_cell(row), key=row.sha)
         table.focus()
         if self.history.rows:
-            self._show(self.history.rows[0].sha)
+            self._select(self.history.rows[0].sha)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value:
-            self._show(str(event.row_key.value))
+            self._select(str(event.row_key.value))
 
     def action_toggle_raw(self) -> None:
         """Show or put away the text under the summary."""
-        raw = self.query_one("#raw", Static)
-        raw.toggle_class(_RAW_HIDDEN)
-        if not raw.has_class(_RAW_HIDDEN):
-            self._fill_raw()
+        pane = self.query_one("#raw")
+        pane.toggle_class(_HIDDEN)
+        if not pane.has_class(_HIDDEN):
+            self._load_raw()
 
-    def _show(self, sha: str) -> None:
+    # ── selection ─────────────────────────────────────────────────────────────
+
+    def _select(self, sha: str) -> None:
         self._sha = sha
-        self.query_one("#semantic", Static).update(self.history.semantic(sha))
-        if not self.query_one("#raw", Static).has_class(_RAW_HIDDEN):
-            self._fill_raw()
+        row = next(r for r in self.history.rows if r.sha == sha)
+        if self.history.is_ready(sha):
+            self._render(row)
+            return
+        # Reading a revision is about a second: say so, and do it off the UI
+        # thread, so the list stays arrow-able instead of locking up.
+        self.query_one("#detail", Static).update(
+            Group(_heading(row), Text("\nreading this revision…", style="italic dim"))
+        )
+        self._read(sha)
 
-    def _fill_raw(self) -> None:
-        text = self.history.raw(self._sha)
-        self.query_one("#raw", Static).update(text or "(no textual change)")
+    def _read(self, sha: str) -> Worker:
+        return self.run_worker(lambda: self._read_in_background(sha), thread=True, exclusive=True)
+
+    def _read_in_background(self, sha: str) -> None:
+        self.history.changes(sha)
+        if get_current_worker().is_cancelled or self._sha != sha:
+            return
+        row = next(r for r in self.history.rows if r.sha == sha)
+        self.call_from_thread(self._render, row)
+
+    def _render(self, row) -> None:
+        # A read can outlive the screen — the app may close while a revision is
+        # still being diffed — so the panel is written only if it is still there.
+        try:
+            detail = self.query_one("#detail", Static)
+        except NoMatches:
+            return
+        detail.update(Group(_heading(row), _changes(self.history, row.sha)))
+        if not self.query_one("#raw").has_class(_HIDDEN):
+            self._load_raw()
+
+    def _load_raw(self) -> None:
+        text = self.history.raw(self._sha) or "(no textual change)"
+        self.query_one("#raw-text", Static).update(_diff_text(text))
 
 
-def _label(row) -> str:
-    """The commit's subject, with any release tags it carries in front of it."""
-    tags = " ".join(f"[{t}]" for t in row.tags)
-    return f"{tags} {row.subject}".strip()
+# ── rendering ─────────────────────────────────────────────────────────────────
+
+
+def _commit_cell(row) -> Text:
+    """The subject, with any release tags in front of it."""
+    cell = Text()
+    for tag in row.tags:
+        cell.append(f" {tag} ", style="bold black on yellow")
+        cell.append(" ")
+    cell.append(row.subject)
+    return cell
+
+
+def _heading(row) -> Group:
+    """What the commit says it did, then who did it — separated from each other."""
+    return Group(
+        Text(row.subject, style="bold"),
+        Text.assemble(
+            (row.author, "cyan"),
+            _DOT,
+            (row.day, "dim"),
+            _DOT,
+            (row.short_sha, "dim"),
+            *((_DOT, (" ".join(row.tags), "bold yellow")) if row.tags else ()),
+        ),
+        Rule(style="dim"),
+    )
+
+
+def _changes(history: FileHistory, sha: str) -> Table | Text:
+    """The vocabulary changes, one per line, each kind named and coloured."""
+    if history.is_unreadable(sha):
+        return Text("The ontology does not parse at this revision.", style="italic red")
+    rows = history.changes(sha)
+    if not rows:
+        return Text(
+            "No semantic change — the file was reformatted, not edited.",
+            style="italic green",
+        )
+    table = Table.grid(padding=(0, 2))
+    table.add_column(justify="right", width=11)
+    table.add_column(width=11)
+    table.add_column(ratio=1)
+    for row in rows:
+        word, colour = _KINDS[row.kind]
+        table.add_row(
+            Text(word, style=f"bold {colour}"),
+            Text(row.entity.value, style="dim"),
+            _change_name(row),
+        )
+    return table
+
+
+def _change_name(row) -> Text:
+    """The readable name, the identifier beside it, and what moved."""
+    if row.counted:
+        where = f"  in {row.of_class}" if row.of_class else ""
+        return Text.assemble((row.name, "bold"), (where, "dim"))
+    if row.kind is ChangeKind.RENAMED:
+        return Text.assemble((str(row.previous), "dim"), (" → ", "dim"), (row.name, "bold"))
+    name = Text(row.name, style="bold")
+    if row.curie and row.curie != row.name:
+        name.append(f"  {row.curie}", style="dim")
+    if row.detail:
+        name.append(f"\n{' · '.join(row.detail)}", style="italic")
+    return name
+
+
+def _diff_text(text: str) -> Text:
+    """The git hunk, with added and removed lines told apart by colour."""
+    out = Text()
+    for line in text.splitlines():
+        style = ""
+        if line.startswith("+") and not line.startswith("+++"):
+            style = "green"
+        elif line.startswith("-") and not line.startswith("---"):
+            style = "red"
+        elif line.startswith("@@"):
+            style = "cyan"
+        elif line.startswith(("diff ", "index ", "+++", "---")):
+            style = "dim"
+        out.append(line + "\n", style=style)
+    return out
 
 
 def run_history(history: FileHistory) -> None:  # pragma: no cover - interactive tty

@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rdflib import Graph
+
 from semanticdiff.git_log import (
     Commit,
     UnknownRevisionError,
@@ -23,7 +25,13 @@ from semanticdiff.git_log import (
     walk,
 )
 from semanticdiff.history import CommitChanges, read_history
+from semanticdiff.render.rows import Row, summarise
 from semanticdiff.render.text import render_commits
+from semanticdiff.vocabulary import ChangeKind, EntityKind
+
+# Re-exported so a front end can name a change kind without importing the engine:
+# the import contract allows semanticdiff in this module and nowhere else.
+__all__ = ["ChangeKind", "EntityKind", "FileHistory", "HistoryRow", "Row", "open_history"]
 
 
 @dataclass(frozen=True)
@@ -55,16 +63,39 @@ class FileHistory:
     path: str
     rows: list[HistoryRow]
     _entries: dict[str, CommitChanges] = field(default_factory=dict, repr=False)
+    # Parsed revisions, kept across selections: stepping from one commit to the
+    # next re-reads the revision they share, which is the larger half of the cost.
+    _graphs: dict[str, Graph] = field(default_factory=dict, repr=False)
     _semantic: dict[str, str] = field(default_factory=dict, repr=False)
+    _rows: dict[str, list[Row]] = field(default_factory=dict, repr=False)
     _raw: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def computed(self) -> int:
         """How many revisions have actually been diffed — asserted by the tests."""
-        return len(self._semantic)
+        return len(self._entries)
+
+    def changes(self, sha: str) -> list[Row]:
+        """The change rows for one commit, diffed on first ask and kept.
+
+        Rows rather than text: the screen colours each kind and shows the
+        readable name apart from the identifier, which formatted text cannot be
+        taken apart again to do.
+        """
+        if sha not in self._rows:
+            self._rows[sha] = summarise(self._entry(sha).changes)
+        return self._rows[sha]
+
+    def is_ready(self, sha: str) -> bool:
+        """Whether this commit has already been diffed, so selecting it is instant."""
+        return sha in self._rows
+
+    def is_unreadable(self, sha: str) -> bool:
+        """Whether the ontology fails to parse at this revision."""
+        return self._entry(sha).unreadable
 
     def semantic(self, sha: str) -> str:
-        """The change list for one commit, diffed on first ask and kept."""
+        """The change list as plain text — the same rows, rendered."""
         if sha not in self._semantic:
             self._semantic[sha] = render_commits([self._entry(sha)])
         return self._semantic[sha]
@@ -85,9 +116,9 @@ class FileHistory:
         resolve for it — and a range of `sha` alone is exactly that one commit,
         since nothing precedes it."""
         try:
-            return read_history(self.repo, f"{sha}~1..{sha}", self.path)[0]
+            return read_history(self.repo, f"{sha}~1..{sha}", self.path, graphs=self._graphs)[0]
         except UnknownRevisionError:
-            return read_history(self.repo, sha, self.path)[0]
+            return read_history(self.repo, sha, self.path, graphs=self._graphs)[0]
 
 
 def open_history(path: Path) -> FileHistory | None:

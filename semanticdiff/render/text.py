@@ -7,11 +7,12 @@ the whole point is that the text is the escape hatch, not the default.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections import Counter
+from collections.abc import Sequence
 
 from semanticdiff.history import CommitChanges
-from semanticdiff.vocabulary import Change, ChangeKind, EntityKind
+from semanticdiff.render.rows import Row, summarise
+from semanticdiff.vocabulary import Change, ChangeKind
 
 _MARKERS = {
     ChangeKind.ADDED: "+",
@@ -84,7 +85,7 @@ def _block(entry: CommitChanges, *, show_text: bool) -> str:
 
 
 def _entity_block(entry: CommitChanges, hits: tuple[Change, ...]) -> str:
-    return "\n".join([_header(entry), *(_change_line(hit) for hit in hits)])
+    return "\n".join([_header(entry), *(_row_line(r) for r in summarise(hits))])
 
 
 def _header(entry: CommitChanges) -> str:
@@ -101,52 +102,25 @@ def _change_lines(entry: CommitChanges) -> list[str]:
         # re-spelled, not edited. Say that outright — "no semantic change" alone
         # reads like the tool gave up, when it is in fact the answer.
         return [f"{_INDENT}(no semantic change \u2014 pure formatting)"]
-    named, tallied = _partition(entry.changes)
-    return [_change_line(change) for change in named] + _tally_lines(tallied)
+    return [_row_line(row) for row in summarise(entry.changes)]
 
 
-def _tally_key(change: Change) -> tuple[ChangeKind, str | None] | None:
-    """The bucket a change is counted in, or None when it must be named."""
-    if change.entity is not EntityKind.INDIVIDUAL or change.kind in _NEVER_TALLIED:
-        return None
-    return (change.kind, change.of_class)
+def _row_line(row: Row) -> str:
+    where = f"   ({row.of_class})" if row.counted and row.of_class else ""
+    if row.counted:
+        return f"{_INDENT}{_MARKERS[row.kind]}{row.name}{where}"
+    detail = f"   {' \u00b7 '.join(row.detail)}" if row.detail else ""
+    name = _row_name(row)
+    return f"{_INDENT}{_MARKERS[row.kind]} {row.entity.value:<10} {name}{detail}"
 
 
-def _partition(changes: Iterable[Change]) -> tuple[list[Change], dict]:
-    """Split into the changes to name and the buckets big enough to count."""
-    buckets: dict[tuple[ChangeKind, str | None], list[Change]] = defaultdict(list)
-    named: list[Change] = []
-    for change in changes:
-        key = _tally_key(change)
-        if key is None:
-            named.append(change)
-        else:
-            buckets[key].append(change)
-    counted = {key: group for key, group in buckets.items() if len(group) > _TALLY_ABOVE}
-    for key, group in buckets.items():
-        if key not in counted:
-            named.extend(group)
-    return named, counted
-
-
-def _tally_lines(counted: dict[tuple[ChangeKind, str | None], list[Change]]) -> list[str]:
-    lines = []
-    for (kind, of_class), group in sorted(counted.items(), key=lambda kv: str(kv[0])):
-        where = f"   ({of_class})" if of_class else ""
-        lines.append(f"{_INDENT}{_MARKERS[kind]}{len(group)} individuals{where}")
-    return lines
-
-
-def _change_line(change: Change) -> str:
-    detail = f"   {' · '.join(change.detail)}" if change.detail else ""
-    marker = _MARKERS[change.kind]
-    return f"{_INDENT}{marker} {change.entity.value:<10} {_name(change)}{detail}"
-
-
-def _name(change: Change) -> str:
-    if change.kind is ChangeKind.RENAMED:
-        return f"{change.previous_curie} → {change.curie}"
-    return f"{change.label} ({change.curie})" if change.label else change.curie
+def _row_name(row: Row) -> str:
+    """The readable name, with the identifier beside it when they differ."""
+    if row.kind is ChangeKind.RENAMED:
+        return f"{row.previous} \u2192 {row.curie}"
+    if row.curie and row.curie != row.name:
+        return f"{row.name} ({row.curie})"
+    return row.name
 
 
 def _plural(count: int, noun: str) -> str:

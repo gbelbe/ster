@@ -221,6 +221,8 @@ forbidden_modules = ["semanticdiff"]
 ignore_imports = [
     "ster.history -> semanticdiff.git_log",
     "ster.history -> semanticdiff.history",
+    "ster.history -> semanticdiff.render.rows",
+    "ster.history -> semanticdiff.vocabulary",
     "ster.history -> semanticdiff.render.text",
 ]
 
