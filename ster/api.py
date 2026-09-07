@@ -16,6 +16,7 @@ from typing import Any
 import rdflib
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -192,6 +193,11 @@ LIMIT 5000
 """
 
 
+# Responses smaller than this are sent as they are: below roughly a packet the
+# compressed form can be larger than the original, and the CPU buys nothing.
+MIN_COMPRESS_BYTES = 1024
+
+
 def create_app(
     taxonomy: Taxonomy,
     token: str,
@@ -233,6 +239,13 @@ def create_app(
         version="1.0.0",
         license_info={"name": "MIT"},
     )
+
+    # The map payload is one record per place and is overwhelmingly the same
+    # strings repeated — ancestors, facet classes, an icon data URI, once per
+    # store. On a file of a thousand shops that is 2.2 MB, and compressing it is
+    # worth 94%. Restructuring the payload instead was measured and rejected: an
+    # intern table saves a further 5 KB and costs a wire format on both sides.
+    app.add_middleware(GZipMiddleware, minimum_size=MIN_COMPRESS_BYTES)
 
     app.add_middleware(
         CORSMiddleware,
