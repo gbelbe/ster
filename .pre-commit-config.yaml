@@ -70,7 +70,7 @@ repos:
         # rule coverage, no warn_return_any equivalent, missing plugin support.
         # Worth a spike once ty reaches a stable 1.x release.
         name: mypy (type check)
-        entry: uv run mypy ster/
+        entry: uv run mypy ster/ semanticdiff/
         language: system
         types: [python]
         pass_filenames: false
@@ -89,6 +89,15 @@ repos:
         # so the rules the PR gate rejects fail here instead of after a push.
         name: complexity ratchet (cyclomatic · cognitive · invariant return)
         entry: uv run python scripts/check_complexity_ratchet.py
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: complexity-ratchet-semanticdiff
+        # Same gate over the second top-level package. The script scans one
+        # directory per run, so the second package gets its own invocation.
+        name: complexity ratchet (semanticdiff)
+        entry: uv run python scripts/check_complexity_ratchet.py --path semanticdiff
         language: system
         types: [python]
         pass_filenames: false

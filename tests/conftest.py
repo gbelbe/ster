@@ -240,3 +240,11 @@ def settle():
         return predicate()
 
     return _settle
+
+
+@pytest.fixture
+def ontology_repo(tmp_path):
+    """A throw-away git repository with a tracked ontology file (semanticdiff)."""
+    from tests._ontology_repo import RepoBuilder
+
+    return RepoBuilder(tmp_path / "repo")

@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.prompt import Confirm, Prompt
 
 from ..display import console
-from . import _app, _constants, _export, _publish
+from . import _app, _constants, _export, _history, _publish
 
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
@@ -33,6 +33,7 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _constants._EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _constants._PUBLISH_SENTINEL: _publish._run_publish_interactive,
         _constants._MCP_SENTINEL: _publish._run_mcp_connect_interactive,
+        _constants._HISTORY_SENTINEL: _history._run_history_interactive,
     }
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:

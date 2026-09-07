@@ -39,7 +39,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: prek — lint, format, types, security, imports, hygiene
-        run: SKIP=complexity-ratchet uvx prek run --all-files
+        run: SKIP=complexity-ratchet,complexity-ratchet-semanticdiff uvx prek run --all-files
 
   # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
   js:
@@ -82,6 +82,11 @@ jobs:
 
       - name: Complexity ratchet — no function may grow worse past 15
         run: uv run python scripts/check_complexity_ratchet.py --base "origin/${{ github.base_ref }}"
+
+      # The ratchet scans one directory per run, so the second shipped package
+      # needs its own invocation. tests/test_package_registration.py enforces it.
+      - name: Complexity ratchet (semanticdiff)
+        run: uv run python scripts/check_complexity_ratchet.py --path semanticdiff --base "origin/${{ github.base_ref }}"
 
   # ── 2. pip-audit (dependency CVEs) ──────────────────────────────────────────
   # Kept as its own job (not in the prek 'checks' job) so a CVE advisory failure
@@ -134,7 +139,7 @@ jobs:
         # backend — every version in the matrix has it.
         env:
           COVERAGE_CORE: sysmon
-        run: uv run pytest --tb=short -q -n auto --cov=ster --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+        run: uv run pytest --tb=short -q -n auto --cov=ster --cov=semanticdiff --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
 
       - name: 📤 Archive coverage reports
         if: matrix.python-version == '3.13'

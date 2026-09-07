@@ -58,7 +58,7 @@ ok "no ghost deletions"
 # repo root is their own business and must not block the gate. Only files that
 # would ship are checked.
 step "Pre-flight: untracked Python files"
-UNTRACKED_PY=$(git ls-files --others --exclude-standard -- 'ster/*.py' 'tests/*.py' 'scripts/*.py' 2>/dev/null || true)
+UNTRACKED_PY=$(git ls-files --others --exclude-standard -- 'ster/*.py' 'semanticdiff/*.py' 'tests/*.py' 'scripts/*.py' 2>/dev/null || true)
 if [[ -n "$UNTRACKED_PY" ]]; then
   echo -e "${FAIL} Untracked .py files in the source tree — prek cannot see them, so GitHub lints them first:"
   while IFS= read -r f; do echo "  ? $f"; done <<< "$UNTRACKED_PY"
@@ -121,7 +121,7 @@ if [[ $FAST -eq 1 ]]; then
   ok "pytest (fast, no coverage)"
 else
   uv run pytest tests/ -q --tb=short -n auto \
-    --cov=ster --cov-report=term-missing --cov-report=xml
+    --cov=ster --cov=semanticdiff --cov-report=term-missing --cov-report=xml
   ok "pytest"
 fi
 

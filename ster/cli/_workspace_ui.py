@@ -263,6 +263,7 @@ def _home_actions() -> list[tuple[object, str]]:
         (_constants._PUBLISH_SENTINEL, "📦 Linked Data Publish & Version"),
         (_constants._HTML_SENTINEL, "🌐 HTML Data Catalog"),
         (_constants._GRAPH_SENTINEL, "◈  Load Graph Viewer"),
+        (_constants._HISTORY_SENTINEL, "🕘 Semantic History"),
         (_constants._EXT_ONT_SENTINEL, "📥 Import External Ontology"),
         (_constants._MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_constants._QUIT_SENTINEL, "✕  Quit"),

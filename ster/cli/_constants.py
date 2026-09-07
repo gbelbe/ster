@@ -15,6 +15,7 @@ _EXT_ONT_SENTINEL: Path = Path(".__ster_ext_ont__")
 _PUBLISH_SENTINEL: Path = Path(".__ster_publish__")
 _DEMO_SENTINEL: Path = Path(".__ster_demo__")  # home menu → load the bundled sample
 _MCP_SENTINEL: Path = Path(".__ster_mcp__")  # home menu → start MCP + copy endpoint
+_HISTORY_SENTINEL: Path = Path(".__ster_history__")  # home menu → semantic history
 _QUIT_SENTINEL: Path = Path(".__ster_quit__")
 _PICKER_RETRY: Path = Path(
     ".__ster_picker_retry__"
@@ -33,6 +34,7 @@ _MENU_COLOURS: dict[object, str] = {
     _PUBLISH_SENTINEL: _app._ANSI_GREEN,
     _DEMO_SENTINEL: _app._ANSI_GREEN,
     _MCP_SENTINEL: _app._ANSI_MAGENTA,
+    _HISTORY_SENTINEL: _app._ANSI_YELLOW,
     _CHANGE_FILE_SENTINEL: _app._ANSI_CYAN,
     _QUIT_SENTINEL: _app._ANSI_RED,
 }
