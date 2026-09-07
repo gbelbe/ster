@@ -177,6 +177,21 @@ __FAVICON__
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:#f2f7fa; }
+  /* Building a map of a thousand places takes about a second, and a blank grey
+     panel for a second reads as broken. This says which of the two waits you
+     are in — the query, or placing what it returned — so the pause is legible
+     rather than merely absent. */
+  #loading { position:absolute; inset:0; z-index:700; display:none;
+             align-items:center; justify-content:center; flex-direction:column; gap:14px;
+             background:rgba(255,255,255,.82); color:#3c4a52; font-size:13.5px; }
+  #loading.on { display:flex; }
+  #loading .spin { width:26px; height:26px; border:2.5px solid #d8e0e4;
+                   border-top-color:#3c6ebf; border-radius:50%;
+                   animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    #loading .spin { animation:none; border-top-color:#3c6ebf; }
+  }
   .hint { position:absolute; left:50%; transform:translateX(-50%); bottom:22px; z-index:500;
           background:rgba(22,25,29,.86); color:#fff; padding:7px 14px; border-radius:20px;
           font-size:13px; pointer-events:none; transition:opacity .3s; }
@@ -202,7 +217,7 @@ __FAVICON__
 <div id="facets"></div>
 <nav id="nav"></nav>
 <main>
-  <div id="map"></div>
+  <div id="map"><div id="loading"><div class="spin"></div><span id="loading-text"></span></div></div>
   <aside><div id="detail"></div><table id="table"></table></aside>
 </main>
 <div class="hint" id="hint"></div>
@@ -1125,15 +1140,27 @@ function clusterControls() {
   if (seg.firstChild) seg.firstChild.classList.add('on');
 }
 
+/* Two waits, not one: the query runs, then every row it returned has to be
+   placed. Naming the phase you are in is the whole value — a spinner alone says
+   only "something". */
+function loading(text) {
+  const box = document.getElementById('loading');
+  if (!box) return;
+  box.classList.toggle('on', text !== null);
+  if (text !== null) document.getElementById('loading-text').textContent = text;
+}
+
 async function run() {
   const msg = document.getElementById('msg');
   msg.className = ''; msg.textContent = 'running…';
+  loading('running the query…');
   try {
     const result = await runQuery(document.getElementById('q').value);
     columns = result.columns || [];
     rows = result.rows || [];
     groupBy = null; scope = null;
     measureCol = findMeasure(columns, rows);
+    loading(`placing ${rows.length} row${rows.length === 1 ? '' : 's'}…`);
     points = await locate(columns, rows);
     /* Open on the broadest level the result offers — one continent outline, not
        every country and city piled on top of it. */
@@ -1149,6 +1176,10 @@ async function run() {
     msg.textContent = points.length ? '' : 'no row in this result carries WGS84 coordinates';
   } catch (err) {
     msg.className = 'bad'; msg.textContent = String(err.message || err);
+  } finally {
+    // finally, not the happy path: a query that throws must not leave the map
+    // behind a veil that never lifts.
+    loading(null);
   }
 }
 

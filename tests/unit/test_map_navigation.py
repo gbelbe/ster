@@ -107,6 +107,29 @@ def test_a_bare_row_count_is_not_offered_as_a_measure():
     assert "measureCol === null && total <= 1" in page
 
 
+def test_the_wait_is_visible_and_says_which_phase_it_is_in():
+    """A blank grey panel for a second reads as broken.
+
+    There are two waits — running the query, then placing what it returned — and
+    naming which one you are in is the whole value. A spinner alone says only
+    that something is happening.
+    """
+    page = _page()
+
+    assert 'id="loading"' in page
+    assert "running the query…" in page
+    assert "placing ${rows.length} row" in page
+
+
+def test_a_failed_query_does_not_leave_the_map_behind_a_veil():
+    """The loader is cleared in a finally, not on the happy path."""
+    page = _page()
+    tail = page[page.index("async function run()") :]
+
+    assert "} finally {" in tail
+    assert "loading(null);" in tail
+
+
 def test_stated_and_calculated_facts_are_separated():
     """A total the map computed must not read as something the file asserts."""
     page = _page()

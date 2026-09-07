@@ -490,8 +490,38 @@ def _class_is_located(graph: rdflib.Graph, cls: str) -> bool:
     return False
 
 
+def _node_cache(graph: rdflib.Graph, name: str) -> dict:
+    """A per-graph memo dict, created on first use.
+
+    A graph that refuses the attribute — a read-only or proxied store — gets a
+    throwaway dict, so the answer is still correct and only the saving is lost.
+    """
+    cache = getattr(graph, name, None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(graph, name, cache)
+        except AttributeError:
+            pass
+    return cache  # type: ignore[no-any-return]
+
+
 def place_parent(graph: rdflib.Graph, node: rdflib.URIRef) -> str | None:
-    """The place containing *node*, by containment or by attachment."""
+    """The place containing *node*, by containment or by attachment.
+
+    Memoised per graph. Building the map asked this 27,928 times for 1,951
+    places — fourteen times each — because the level walk, the ancestor chain
+    and the facet scan all need it about the same nodes. The predicates it
+    checks are already cached; the repetition was the cost.
+
+    Cached on the graph object, like the containment and attachment lookups
+    above: a reload builds a new graph, so the cache goes with the old one.
+    """
+    memo = _node_cache(graph, "_ster_parent")
+    key = str(node)
+    if key in memo:
+        return memo[key]  # type: ignore[no-any-return]
+    found = None
     for predicate in (
         *_declared_containment(graph),
         *attachment_predicates(graph),
@@ -499,8 +529,10 @@ def place_parent(graph: rdflib.Graph, node: rdflib.URIRef) -> str | None:
     ):
         parent = graph.value(node, rdflib.URIRef(predicate))
         if parent is not None:
-            return str(parent)
-    return None
+            found = str(parent)
+            break
+    memo[key] = found
+    return found
 
 
 def place_level(graph: rdflib.Graph, node: rdflib.URIRef) -> int:
@@ -934,11 +966,21 @@ def facets_of(
 
 
 def _has_children(graph: rdflib.Graph, node: rdflib.term.Node) -> bool:
-    """True when something names *node* as its container — so it is a place."""
-    for predicate in (*_declared_containment(graph), *_STANDARD_WITHIN):
-        if next(graph.subjects(rdflib.URIRef(predicate), node), None) is not None:
-            return True
-    return False
+    """True when something names *node* as its container — so it is a place.
+
+    Memoised for the same reason as :func:`place_parent`: the facet scan asks it
+    of every target it reaches, and reaches the same targets from every place.
+    """
+    memo = _node_cache(graph, "_ster_haschildren")
+    key = str(node)
+    if key in memo:
+        return memo[key]  # type: ignore[no-any-return]
+    found = any(
+        next(graph.subjects(rdflib.URIRef(predicate), node), None) is not None
+        for predicate in (*_declared_containment(graph), *_STANDARD_WITHIN)
+    )
+    memo[key] = found
+    return found
 
 
 def _superclasses(graph: rdflib.Graph, cls: rdflib.URIRef, rdfs: object) -> set[str]:
