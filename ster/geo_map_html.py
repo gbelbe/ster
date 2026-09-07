@@ -253,6 +253,22 @@ let focus = null;         // the URI drilled into, or null for "all of this leve
    siblings and leave one dot with no way back. */
 let selected = null;
 const levelsOf = ps => [...new Set(ps.map(p => p.level ?? 0))].sort((a, b) => a - b);
+/* Where the map starts being a map. Opening on the broadest level meant opening
+   on one continent: a single shape filling the screen, answering nothing you
+   could not have been told in a sentence. The first level holding two things is
+   where comparison begins, so that is where it opens.
+
+   Counted over drawable places only — a level of three cities none of which
+   carries coordinates draws nothing, and opening there would show a blank map.
+   Falls back to the broadest level when no level has two, since one shape still
+   beats none. */
+function openingLevel(pts) {
+  const drawable = pts.filter(p => p.lat !== null && p.long !== null);
+  for (const lvl of levelsOf(drawable)) {
+    if (drawable.filter(p => (p.level ?? 0) === lvl).length >= 2) return lvl;
+  }
+  return levelsOf(pts)[0] ?? 0;
+}
 /* fitBounds moves the map itself, and that fires zoomend a tick later. Without
    this the map's own framing reads as the reader zooming, and the level handler
    undoes the drill it was just asked to perform. */
@@ -440,7 +456,7 @@ function drawNav() {
   for (const a of el.querySelectorAll('#crumbs a')) {
     a.addEventListener('click', () => {
       const idx = a.dataset.up;
-      if (idx === '') { level = levelsOf(points)[0] ?? 0; focus = null; selected = null; draw(); return; }
+      if (idx === '') { level = openingLevel(points); focus = null; selected = null; draw(); return; }
       const target = trail[Number(idx)];
       const next = childLevel(target);
       level = next === null ? target.level : next;
@@ -1166,7 +1182,7 @@ async function run() {
        every country and city piled on top of it. */
     addOverlayControl();
     indexFacets();
-    level = levelsOf(points)[0] ?? 0;
+    level = openingLevel(points);
     focus = null;
     selected = null;
       document.getElementById('sub').textContent =

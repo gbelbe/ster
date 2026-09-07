@@ -107,6 +107,42 @@ def test_a_bare_row_count_is_not_offered_as_a_measure():
     assert "measureCol === null && total <= 1" in page
 
 
+def test_it_opens_where_there_is_something_to_compare():
+    """A single continent fills the screen and answers nothing.
+
+    Opening on the broadest level meant opening on one shape. The first level
+    holding two things is where a map starts being a map.
+    """
+    page = _page()
+
+    assert "function openingLevel(" in page
+    assert ">= 2) return lvl" in page
+
+
+def test_the_opening_level_counts_only_what_can_be_drawn():
+    """A level of three cities with no coordinates draws a blank map."""
+    page = _page()
+    body = page[page.index("function openingLevel(") :]
+
+    assert "p.lat !== null && p.long !== null" in body[: body.index("\n}")]
+
+
+def test_one_shape_still_beats_none():
+    """When no level holds two, it falls back rather than showing nothing."""
+    page = _page()
+    body = page[page.index("function openingLevel(") :]
+
+    assert "return levelsOf(pts)[0] ?? 0;" in body[: body.index("\n}") + 2]
+
+
+def test_both_entry_points_use_the_opening_level():
+    """The first draw and the All crumb must agree on where 'the top' is."""
+    page = _page()
+
+    assert "levelsOf(points)[0] ?? 0" not in page
+    assert page.count("openingLevel(points)") == 2
+
+
 def test_the_wait_is_visible_and_says_which_phase_it_is_in():
     """A blank grey panel for a second reads as broken.
 
