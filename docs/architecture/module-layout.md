@@ -266,10 +266,14 @@ package split behind this same shim contract:
 
   ```python
   class GitManager(
-      _ConfigMixin, _SetupMixin, _SyncMixin, _StagingMixin,
-      _CommitMixin, _PushMixin, _ReleaseMixin,
-  ):
-      ...
+      _ConfigMixin,
+      _SetupMixin,
+      _SyncMixin,
+      _StagingMixin,
+      _CommitMixin,
+      _PushMixin,
+      _ReleaseMixin,
+  ): ...
   ```
 
   - `_config.py` — instance construction and the config accessors

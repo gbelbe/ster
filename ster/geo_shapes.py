@@ -861,10 +861,10 @@ FACET_DEPTH = 3
 # which sitemap this came from" beside "filter by brand". Excluding the vocabulary
 # is general — PROV-O is a W3C standard, not one ontology's private choice.
 _METADATA_NAMESPACES = (
-    "http://www.w3.org/ns/prov#",
-    "http://purl.org/dc/terms/",
-    "http://purl.org/dc/elements/1.1/",
-    "http://www.w3.org/ns/dcat#",
+    "http://www.w3.org/ns/prov#",  # NOSONAR
+    "http://purl.org/dc/terms/",  # NOSONAR
+    "http://purl.org/dc/elements/1.1/",  # NOSONAR
+    "http://www.w3.org/ns/dcat#",  # NOSONAR
 )
 
 
