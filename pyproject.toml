@@ -17,6 +17,27 @@ description = "Terminal tool for building and exploring SKOS taxonomies and OWL 
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
+keywords = ["rdf", "skos", "owl", "ontology", "taxonomy", "semantic-web", "sparql", "tui"]
+
+# PyPI renders a page with no Python versions, no licence and no topic when this
+# list is absent, which reads as unmaintained before anyone has read a word.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Markup",
+    "Typing :: Typed",
+]
 
 # ── Core runtime dependencies ─────────────────────────────────────────────────
 #
@@ -32,7 +53,13 @@ dependencies = [
     "rich>=13.0",
     "textual[syntax]>=0.80",      # modern TUI (New-TUI tree browser); [syntax] = TextArea Markdown highlighting
     "idna>=3.15",
-    "fastapi[standard]>=0.110",   # includes uvicorn[standard]
+    # Not fastapi[standard]: that extra now pulls fastapi-cloud-cli, which brings
+    # sentry-sdk, rignore and fastar — 5.7 MB of commercial cloud tooling and a
+    # telemetry SDK that ster never imports. An offline terminal tool has no
+    # business shipping either. uvicorn[standard] is named directly instead,
+    # which is the part that was actually wanted.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.30",
     "watchfiles>=0.21",           # file-change watcher for live push
     "pylode>=3.0",                # HTML export
     "httpx>=0.27",                # HTTP client (FastAPI TestClient / server calls)
