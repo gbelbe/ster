@@ -47,8 +47,11 @@ class HistoryScreen(App[None]):
 
     CSS = """
     Screen { background: $surface; }
-    #commits { width: 44; border-right: solid $primary-darken-2; }
-    #panes { width: 1fr; }
+    /* The commit list carries three things now — when, who, and what the commit
+       says it did — and 44 columns truncated the subject to the point of
+       uselessness. Both sides run the full height of the screen. */
+    #commits { width: 52%; height: 1fr; border-right: solid $primary-darken-2; }
+    #panes { width: 1fr; height: 1fr; }
     #detail { padding: 1 2; }
     #raw { height: 45%; border-top: solid $primary-darken-2; padding: 1 2; }
     #raw.hidden-pane { display: none; }
@@ -79,9 +82,14 @@ class HistoryScreen(App[None]):
 
     def on_mount(self) -> None:
         table = self.query_one("#commits", DataTable)
-        table.add_columns("date", "commit")
+        table.add_columns("when", "who", "commit")
         for row in self.history.rows:
-            table.add_row(Text(row.day, style="dim"), _commit_cell(row), key=row.sha)
+            table.add_row(
+                Text(row.when, style="dim"),
+                Text(_short_author(row.author), style="cyan"),
+                _commit_cell(row),
+                key=row.sha,
+            )
         table.focus()
         if self.history.rows:
             self._select(self.history.rows[0].sha)
@@ -139,6 +147,16 @@ class HistoryScreen(App[None]):
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
+
+
+def _short_author(author: str) -> str:
+    """A committer as a column can show them: first name, or initials for a
+    long one. The full name is on the detail panel, where there is room."""
+    name = author.strip()
+    if len(name) <= 14:
+        return name
+    first, _, rest = name.partition(" ")
+    return f"{first} {rest[0]}." if rest else first[:14]
 
 
 def _commit_cell(row) -> Text:

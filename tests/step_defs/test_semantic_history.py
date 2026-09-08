@@ -120,7 +120,8 @@ def _drive(ctx, coro_factory):
 def then_tag_shown(ctx, tag):
     async def body(app, _pilot):
         table = app.query_one("#commits")
-        return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+        # index 2: the list is when · who · commit, and the tag rides the commit cell
+        return [str(table.get_row_at(i)[2]) for i in range(table.row_count)]
 
     cells = _drive(ctx, body)
     assert any(tag in c for c in cells), cells

@@ -51,8 +51,18 @@ class HistoryRow:
 
     @property
     def day(self) -> str:
-        """The date alone, which is all a narrow list column has room for."""
+        """The date alone, for places with room for nothing else."""
         return self.date[:10]
+
+    @property
+    def when(self) -> str:
+        """Date and time, minutes included.
+
+        A day is not enough to tell two commits apart when several land on one
+        afternoon, which is exactly when a reader is trying to work out what
+        happened in which order.
+        """
+        return self.date[:16].replace("T", " ")
 
 
 @dataclass

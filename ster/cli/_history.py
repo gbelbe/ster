@@ -20,7 +20,10 @@ def _run_history_interactive(files: list[Path]) -> None:  # pragma: no cover - i
     if not files:
         _app.err.print("[red]No taxonomy files found.[/red]")
         return
-    selected = _file_picker._pick_file(files)
+    # _resolve_file, not _pick_file: it honours the file already chosen for this
+    # session and only asks when there is nothing to reuse. Picking again after
+    # the home screen had already been answered was the same question twice.
+    selected = _file_picker._resolve_file(None)
     history = open_history(selected)
     if history is None:
         console.print(

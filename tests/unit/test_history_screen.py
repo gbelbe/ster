@@ -150,7 +150,8 @@ async def test_a_release_tag_is_shown_in_the_list(ontology_repo: RepoBuilder) ->
 
     async with app.run_test():
         table = app.query_one("#commits")
-        cells = [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+        # index 2: the list is when · who · commit, and the tag rides the commit cell
+        cells = [str(table.get_row_at(i)[2]) for i in range(table.row_count)]
 
     assert any("v0.1" in c for c in cells), cells
 
