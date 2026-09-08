@@ -133,7 +133,16 @@ async def _activate_menu(app, pilot, predicate, choice: str) -> None:  # noqa: A
     await pilot.pause()
     await pilot.press("enter")  # opens the Edit/Delete submenu
     await pilot.pause()
-    menu = app.query_one("#ctx-menu", ContextMenu)
+    # A field the file has not stated yet is editable but not deletable, so
+    # there is no choice to make and Enter opens the editor directly. The
+    # ctx-menu widget is in the DOM either way — visibility is what says whether
+    # a choice was offered, and pressing enter again here would submit the
+    # editor that is already open.
+    menus = [m for m in app.query("#ctx-menu") if m.display]
+    if not menus:
+        return
+    menu = menus[0]
+    assert isinstance(menu, ContextMenu)
     menu.highlighted = 0 if choice == "edit" else 1
     await pilot.press("enter")
     await pilot.pause()

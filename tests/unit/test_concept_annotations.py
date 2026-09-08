@@ -214,36 +214,16 @@ def test_an_annotation_added_in_the_model_is_written(tmp_path):
 
 
 # ── the boundary of this fix ──────────────────────────────────────────────────
-
-
-def test_a_bare_node_referenced_by_a_concept_is_still_lost(tmp_path):
-    """A known, remaining gap — recorded so it is not rediscovered by accident.
-
-    This fix gives a *concept* somewhere to keep its own predicates. It does not
-    make ster preserve subjects it does not model at all: GeoSPARQL's usual shape
-    is Feature -> geo:hasGeometry -> a bare Geometry node -> geo:asWKT, and that
-    middle node is not a concept, class, individual, property or scheme. The
-    hasGeometry link now survives; its target does not, so the link dangles.
-
-    Preserving arbitrary subjects is a larger change than this one. Until then,
-    geometry survives a round trip only when attached directly to the entity.
-
-    If this test starts failing, that gap has been closed — delete it.
-    """
-    path = tmp_path / "indirect.ttl"
-    path.write_text(
-        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
-        "@prefix geo:  <http://www.opengis.net/ont/geosparql#> .\n"
-        f"@prefix ex: <{NS}> .\n"
-        'ex:S a skos:ConceptScheme ; skos:prefLabel "S"@en .\n'
-        'ex:C a skos:Concept ; skos:prefLabel "C"@en ; skos:inScheme ex:S ;\n'
-        "    geo:hasGeometry ex:Shape .\n"
-        'ex:Shape a geo:Geometry ; geo:asWKT "POINT(1 2)"^^geo:wktLiteral .\n',
-        encoding="utf-8",
-    )
-    store.save(store.load(path), path)
-
-    assert GEO_WKT not in _predicates(path, "Shape"), "gap closed — remove this test"
+#
+# There used to be a test here recording that a bare node referenced by a
+# concept was still lost — GeoSPARQL's Feature -> hasGeometry -> Geometry -> WKT
+# shape, where the middle node is not a concept, class, individual, property or
+# scheme. Its docstring said: "If this test starts failing, that gap has been
+# closed — delete it."
+#
+# Taxonomy.residue closed it. Every triple the model cannot describe is now
+# carried verbatim, so the geometry node survives with the link that points at
+# it. tests/unit/test_round_trip_fidelity.py is where that is asserted now.
 
 
 def test_geometry_attached_directly_to_a_concept_survives(tmp_path):

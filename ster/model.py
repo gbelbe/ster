@@ -288,6 +288,28 @@ class Taxonomy:
     namespace_bindings: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # set by store.load() — the file this taxonomy was loaded from
     file_path: Path | None = field(default=None, compare=False, repr=False)
+    # Every triple the model does not describe, kept verbatim so saving gives the
+    # file back. The annotations bucket above covers an unknown *predicate* on a
+    # known entity; this covers what has no entity here at all — an OWL class
+    # expression hanging off a blank node, a prov:Entity, an rdf:List. Losing
+    # those silently is worse than not editing them, so they are carried through
+    # untouched. Excluded from equality: two taxonomies mean the same thing
+    # whether or not they remember the same residue.
+    residue: list[tuple] = field(default_factory=list, compare=False, repr=False)
+    # Top concepts ster worked out rather than read. A concept with no broader
+    # has to hang somewhere for the tree to show it, but that is a decision about
+    # display and must not be written back as though the author asserted it.
+    inferred_top_concepts: set[str] = field(default_factory=set, compare=False, repr=False)
+    # Classes ster only ever saw *mentioned* — as a subClassOf target, a domain,
+    # a restriction filler — and never declared. They belong in the model so the
+    # tree can show them, but writing `a owl:Class` for one asserts something
+    # the author did not: wine.rdf gained 163 declarations that way.
+    inferred_classes: set[str] = field(default_factory=set, compare=False, repr=False)
+    # Individuals the file typed only by their class. OWL 2 conventionally also
+    # writes `a owl:NamedIndividual`, and Protégé does, but a file that left it
+    # out did so on purpose or by habit — either way it is not ster's to add.
+    # wine.rdf gained 161 of them.
+    inferred_named_individuals: set[str] = field(default_factory=set, compare=False, repr=False)
 
     # Entities loaded from read-only *context* files, mapped to the file each came
     # from. Membership is the read-only flag; the value answers "where is this
@@ -324,7 +346,14 @@ class Taxonomy:
 
     @property
     def ontology_title(self) -> str | None:
-        return self._get_annotation(_DCT_TITLE)
+        """The stated title, or the label standing in for one.
+
+        A fallback, not a back-fill. Showing the label where no title exists is
+        a display decision; writing dcterms:title into the file because someone
+        opened it is a claim they never made. This used to be done by mutating
+        the model on load, and the assertion was then serialised.
+        """
+        return self._get_annotation(_DCT_TITLE) or self._get_annotation(_RDFS_LABEL)
 
     @ontology_title.setter
     def ontology_title(self, value: str | None) -> None:
@@ -332,7 +361,9 @@ class Taxonomy:
 
     @property
     def ontology_description(self) -> str | None:
-        return self._get_annotation(_DCT_DESCRIPTION)
+        """The stated description, or the label standing in for one — see
+        :attr:`ontology_title` for why this is a fallback and not a back-fill."""
+        return self._get_annotation(_DCT_DESCRIPTION) or self._get_annotation(_RDFS_LABEL)
 
     @ontology_description.setter
     def ontology_description(self, value: str | None) -> None:

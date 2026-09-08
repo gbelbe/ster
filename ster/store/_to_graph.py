@@ -118,7 +118,9 @@ def _serialize_concept(g: Graph, uri: str, concept: Concept, taxonomy: Taxonomy)
     ref = URIRef(uri)
     g.add((ref, RDF.type, SKOS.Concept))
     _serialize_concept_scheme(g, ref, taxonomy, uri)
-    if concept.top_concept_of:
+    # Skipped when ster worked the link out rather than read it — see
+    # Taxonomy.inferred_top_concepts.
+    if concept.top_concept_of and uri not in taxonomy.inferred_top_concepts:
         g.add((ref, SKOS.topConceptOf, URIRef(concept.top_concept_of)))
     _serialize_concept_literals(g, ref, concept)
     for attr, pred in _CONCEPT_LIST_PREDS:
@@ -132,9 +134,11 @@ def _serialize_concept(g: Graph, uri: str, concept: Concept, taxonomy: Taxonomy)
         g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
-def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass) -> None:
+def _serialize_class(g: Graph, uri: str, rdf_class: RDFClass, inferred: set[str]) -> None:
     ref = URIRef(uri)
-    g.add((ref, RDF.type, OWL.Class))
+    # A class the file only mentioned is not declared back into it.
+    if uri not in inferred:
+        g.add((ref, RDF.type, OWL.Class))
     _serialize_labels_comments(g, ref, rdf_class.labels, rdf_class.comments)
     for parent_uri in rdf_class.sub_class_of:
         g.add((ref, RDFS.subClassOf, URIRef(parent_uri)))
@@ -167,11 +171,11 @@ def _serialize_property(g: Graph, uri: str, prop: OWLProperty) -> None:
         g.add((ref, URIRef(a.predicate), _annotation_object(a)))
 
 
-def _serialize_scheme(g: Graph, uri: str, scheme: ConceptScheme) -> None:
+def _serialize_scheme(g: Graph, uri: str, scheme: ConceptScheme, inferred: set[str]) -> None:
     ref = URIRef(uri)
     g.add((ref, RDF.type, SKOS.ConceptScheme))
     _serialize_scheme_literals(g, ref, scheme)
-    _serialize_scheme_relations(g, ref, scheme)
+    _serialize_scheme_relations(g, ref, scheme, inferred)
     _serialize_annotations(g, ref, scheme.annotations)
 
 
@@ -190,9 +194,12 @@ def _serialize_scheme_literals(g: Graph, ref: URIRef, scheme: ConceptScheme) -> 
         g.add((ref, VOID.uriSpace, Literal(scheme.base_uri)))
 
 
-def _serialize_scheme_relations(g: Graph, ref: URIRef, scheme: ConceptScheme) -> None:
+def _serialize_scheme_relations(
+    g: Graph, ref: URIRef, scheme: ConceptScheme, inferred: set[str]
+) -> None:
     for tc_uri in scheme.top_concepts:
-        g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
+        if tc_uri not in inferred:
+            g.add((ref, SKOS.hasTopConcept, URIRef(tc_uri)))
 
 
 def _serialize_annotations(g: Graph, ref: URIRef, annotations: list[OntologyAnnotation]) -> None:
@@ -200,9 +207,15 @@ def _serialize_annotations(g: Graph, ref: URIRef, annotations: list[OntologyAnno
         g.add((ref, URIRef(annotation.predicate), _annotation_object(annotation)))
 
 
-def _serialize_individual(g: Graph, uri: str, individual: OWLIndividual) -> None:
+def _serialize_individual(
+    g: Graph, uri: str, individual: OWLIndividual, inferred_named: set[str]
+) -> None:
     ref = URIRef(uri)
-    g.add((ref, RDF.type, OWL.NamedIndividual))
+    # Only when the file said so. Typing an individual by its class alone is
+    # legal OWL 2; adding the NamedIndividual declaration is a convention, and
+    # conventions are not ster's to assert into someone else's file.
+    if uri not in inferred_named:
+        g.add((ref, RDF.type, OWL.NamedIndividual))
     for type_uri in individual.types:
         g.add((ref, RDF.type, URIRef(type_uri)))
     _serialize_labels_comments(g, ref, individual.labels, individual.comments)
@@ -235,6 +248,14 @@ def _serialize_ontology(g: Graph, taxonomy: Taxonomy) -> None:
 
 
 def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
+    g = _model_to_graph(taxonomy)
+    # What the model could not describe, put back exactly as it came in.
+    for triple in taxonomy.residue:
+        g.add(triple)
+    return g
+
+
+def _model_to_graph(taxonomy: Taxonomy) -> Graph:
     g = Graph()
     g.bind("skos", SKOS)
     g.bind("dcterms", DCTERMS)
@@ -261,7 +282,7 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
         return [(u, e) for u, e in registry.items() if u not in taxonomy.context_source]
 
     for uri, scheme in own(taxonomy.schemes):
-        _serialize_scheme(g, uri, scheme)
+        _serialize_scheme(g, uri, scheme, taxonomy.inferred_top_concepts)
 
     # ── Concepts ─────────────────────────────────────────────────────────────
     for uri, concept in own(taxonomy.concepts):
@@ -269,10 +290,10 @@ def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
 
     # ── OWL/RDFS Classes ─────────────────────────────────────────────────────
     for uri, rdf_class in own(taxonomy.owl_classes):
-        _serialize_class(g, uri, rdf_class)
+        _serialize_class(g, uri, rdf_class, taxonomy.inferred_classes)
 
     for uri, individual in own(taxonomy.owl_individuals):
-        _serialize_individual(g, uri, individual)
+        _serialize_individual(g, uri, individual, taxonomy.inferred_named_individuals)
 
     # ── OWL Properties ────────────────────────────────────────────────────────
     for uri, prop in own(taxonomy.owl_properties):

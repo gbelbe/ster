@@ -573,13 +573,11 @@ def test_prop_tree_groups_properties_by_kind() -> None:
             # local properties: flat leaves, no (ext) tag
             assert leaves(groups["Object Properties"]) == [(ZOO + "hasOwner", False)]
             assert leaves(groups["Datatype Properties"]) == [(ZOO + "hasAge", False)]
-            # demo's used-but-undeclared header predicates → Annotation, each (ext)-tagged
+            # demo's used-but-undeclared header predicates → Annotation, each (ext)-tagged.
+            # rdfs:label alone: the dcterms:title and dcterms:description that used to
+            # appear here were back-filled from it on load, not written by anyone.
             ann = leaves(groups["Annotation Properties"])
-            assert ann == [
-                ("http://purl.org/dc/terms/description", True),
-                ("http://www.w3.org/2000/01/rdf-schema#label", True),
-                ("http://purl.org/dc/terms/title", True),
-            ]
+            assert ann == [("http://www.w3.org/2000/01/rdf-schema#label", True)]
             # the untyped group is orange and holds relatedTo (local, no tag)
             untyped = root.children[-1]
             assert untyped.label.plain == "Untyped Properties"
@@ -1831,7 +1829,9 @@ def test_tree_populates_and_focuses() -> None:
             # 7 classes + 3 individuals + 2 local properties + 3 used-but-undeclared
             # ontology header predicates (rdfs:label, dcterms:title, dcterms:description).
             entity_nodes = [u for u in app._uri_nodes if "://" in u]
-            assert len(entity_nodes) == 15  # every class/individual/property node indexed
+            # 13, not 15: dcterms:title and dcterms:description are no longer
+            # back-filled from rdfs:label, so they are not used predicates here.
+            assert len(entity_nodes) == 13  # every class/individual/property node indexed
             # plus the focusable section nodes: Ontology, Taxonomy + 3 property sections.
             assert {"__ster:overview__", "__ster:taxonomy__"} <= set(app._uri_nodes)
             assert isinstance(app.focused, Tree)  # tree gets focus on mount

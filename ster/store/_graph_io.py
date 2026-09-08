@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rdflib import RDF, BNode, Dataset, Graph, Literal, Namespace, URIRef
-from rdflib.namespace import RDFS
+from rdflib.namespace import RDFS, XSD
 from rdflib.term import Node
 
 from ._format import _SNIFF_BYTES, _detect_format, _sniff_format
@@ -51,6 +51,12 @@ def _ox_term(term: object) -> Node:
     if lang := getattr(term, "language", None):
         return Literal(value, lang=lang)
     datatype = getattr(term, "datatype", None)
+    # xsd:string is dropped to match rdflib's own parser. RDF 1.1 defines a plain
+    # literal *as* an xsd:string, so pyoxigraph reports the datatype on every
+    # string while rdflib preserves only what the file wrote. Left alone, the
+    # same document round-trips differently depending on which parser read it.
+    if datatype is not None and datatype.value == str(XSD.string):
+        return Literal(value)
     return Literal(value, datatype=URIRef(datatype.value) if datatype else None)
 
 

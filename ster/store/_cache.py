@@ -19,23 +19,35 @@ def _bin_cache_dir() -> Path:
 
 @lru_cache(maxsize=1)
 def _model_schema_fingerprint() -> str:
-    """A short hash of every model dataclass and its field names.
+    """A short hash of this build: every model dataclass, its fields, and the version.
 
     Unpickling does not validate the class: a Taxonomy pickled before a field
     existed is restored *without* it, no exception raised, and the first access
     to the missing attribute fails somewhere unrelated — as a 500 from the graph
     server, say. Mixing this into the cache key means a build whose model has
     changed simply looks elsewhere instead of reading the older build's file.
+
+    The shape alone is not enough. It catches a field being added or removed, but
+    not a change to the logic that *fills* one — which is the more common kind of
+    change, and just as stale. A fix to how the residue is computed left every
+    field name untouched, so every run went on reading the pre-fix taxonomy; a
+    user upgrading ster would have kept the old behaviour until their file
+    changed.
+
+    So the version goes in too. It cannot be forgotten: a release has a distinct
+    version by construction, and a development build carries its commit hash.
     """
     from dataclasses import fields, is_dataclass  # noqa: PLC0415
 
     from .. import model as _model  # noqa: PLC0415
+    from .._version import __version__  # noqa: PLC0415
 
     shape = [
         f"{name}:{','.join(f.name for f in fields(obj))}"
         for name in sorted(dir(_model))
         if isinstance(obj := getattr(_model, name), type) and is_dataclass(obj)
     ]
+    shape.append(f"ster:{__version__}")
     return hashlib.md5("|".join(shape).encode(), usedforsecurity=False).hexdigest()[:8]
 
 

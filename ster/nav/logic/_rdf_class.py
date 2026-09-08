@@ -435,11 +435,95 @@ def _class_hierarchy_actions(rdf_class) -> list[_fields.DetailField]:
     return fields
 
 
+_OWL = "http://www.w3.org/2002/07/owl#"  # NOSONAR - RDF namespace IRI
+_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"  # NOSONAR - RDF predicate IRI
+# owl restriction predicate → how an OWL reader says it aloud (Manchester syntax).
+_RESTRICTION_WORDS = {
+    f"{_OWL}someValuesFrom": "some",
+    f"{_OWL}allValuesFrom": "only",
+    f"{_OWL}hasValue": "value",
+    f"{_OWL}minCardinality": "min",
+    f"{_OWL}maxCardinality": "max",
+    f"{_OWL}cardinality": "exactly",
+    f"{_OWL}minQualifiedCardinality": "min",
+    f"{_OWL}maxQualifiedCardinality": "max",
+    f"{_OWL}qualifiedCardinality": "exactly",
+}
+
+
+def _short(taxonomy: Taxonomy, term: object, lang: str) -> str:
+    """A term as a reader would want it: its label, else its local name."""
+    text = str(term)
+    entity = taxonomy.owl_classes.get(text) or taxonomy.owl_properties.get(text)
+    if entity is not None:
+        return entity.label(lang) or text.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+    for sep in ("#", "/"):
+        if sep in text:
+            return text.rsplit(sep, 1)[-1]
+    return text
+
+
+def _restriction_phrase(taxonomy: Taxonomy, parts: dict[str, object], lang: str) -> str:
+    """ "sells some Paint" — a restriction as an OWL reader would read it.
+
+    Manchester syntax rather than three raw triples, because the point of showing
+    an expression ster cannot edit is that someone can still *read* it.
+    """
+    prop = parts.get(f"{_OWL}onProperty")
+    for predicate, word in _RESTRICTION_WORDS.items():
+        if predicate in parts:
+            filler = _short(taxonomy, parts[predicate], lang)
+            return f"{_short(taxonomy, prop, lang)} {word} {filler}" if prop else f"{word} {filler}"
+    return _short(taxonomy, prop, lang) if prop else ""
+
+
+def _blank_subgraphs(taxonomy: Taxonomy) -> dict[object, dict[str, object]]:
+    """Every blank node in the residue, as predicate → object."""
+    from rdflib import BNode  # noqa: PLC0415
+
+    # isinstance against BNode, not against str: rdflib's BNode *is* a str
+    # subclass, so a str check collects everything or nothing.
+    parts: dict[object, dict[str, object]] = {}
+    for subject, predicate, obj in taxonomy.residue:
+        if isinstance(subject, BNode):
+            parts.setdefault(subject, {})[str(predicate)] = obj
+    return parts
+
+
+def _class_expression_fields(taxonomy: Taxonomy, uri: str, lang: str) -> list[_fields.DetailField]:
+    """Anonymous class expressions on this class — shown, not editable.
+
+    ster models a superclass as a named URI, so ``Shop subClassOf [ … ]`` has no
+    row of its own. The statement is kept verbatim in the residue and read back
+    unchanged; this puts it where its class is, so it is visible rather than
+    merely safe.
+    """
+    parts = _blank_subgraphs(taxonomy)
+    fields: list[_fields.DetailField] = []
+    for subject, predicate, obj in taxonomy.residue:
+        if str(subject) != uri or obj not in parts:
+            continue
+        phrase = _restriction_phrase(taxonomy, parts[obj], lang)
+        if not phrase:
+            continue
+        fields.append(
+            _fields.DetailField(
+                f"expr:{uri}:{obj}",
+                f"↑ {_short(taxonomy, predicate, lang)}",
+                phrase,
+                editable=False,
+                meta={"type": "class_expression", "read_only": True},
+            )
+        )
+    return fields
+
+
 def _class_hierarchy_fields(taxonomy: Taxonomy, rdf_class, lang: str) -> list[_fields.DetailField]:
     fields: list[_fields.DetailField] = [_fields._sep("Hierarchy")]
     fields.extend(_class_superclass_fields(taxonomy, rdf_class, lang))
     fields.extend(_class_equivalent_fields(taxonomy, rdf_class, lang))
     fields.extend(_class_disjoint_fields(taxonomy, rdf_class, lang))
+    fields.extend(_class_expression_fields(taxonomy, rdf_class.uri, lang))
     fields.extend(_class_hierarchy_actions(rdf_class))
     return fields
 

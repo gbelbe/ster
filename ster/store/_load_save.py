@@ -19,7 +19,7 @@ from ._cache import (
     _try_save_cache,
 )
 from ._format import _detect_format
-from ._from_graph import _taxonomy_from_index, graph_to_taxonomy
+from ._from_graph import _capture_residue, _taxonomy_from_index, graph_to_taxonomy
 from ._graph_io import _DATASET_FORMATS, _native_index, _parse_graph
 
 _ENTITY_REGISTRIES = ("schemes", "concepts", "owl_classes", "owl_individuals", "owl_properties")
@@ -41,7 +41,15 @@ def _parse_to_taxonomy(path: Path) -> Taxonomy:
         fmt = ""
     if fmt and fmt not in _DATASET_FORMATS and (native := _native_index(fmt, path)) is not None:
         parsed, ns_graph = native
-        return _taxonomy_from_index(parsed, ns_graph)
+        taxonomy = _taxonomy_from_index(parsed, ns_graph)
+        # The index the native parser builds is keyed by URIRef subject, so it
+        # cannot say what it dropped — a blank-node class expression never
+        # reaches it. Residue therefore has to be measured against the file
+        # itself, which costs one rdflib parse the fast path had avoided. That
+        # is the price of not losing data, and the binary cache means it is paid
+        # once per edit rather than once per open.
+        _capture_residue(taxonomy, _parse_graph(path))
+        return taxonomy
     return graph_to_taxonomy(_parse_graph(path))
 
 

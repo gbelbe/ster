@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Final
 
 from rdflib import RDF, Graph, Literal, URIRef
-from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS
+from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 from rdflib.term import Node
 
 from ..model import (
@@ -59,6 +59,8 @@ def _annotation_from(predicate: str, obj: object) -> OntologyAnnotation | None:
     if isinstance(obj, URIRef):
         return OntologyAnnotation(predicate=predicate, value=str(obj), is_iri=True)
     if isinstance(obj, Literal):
+        # Whatever the file wrote is kept: the parser disagreement is settled at
+        # the boundary in _graph_io._ox_term, not here.
         datatype = str(obj.datatype) if obj.datatype else ""
         return OntologyAnnotation(
             predicate=predicate, value=str(obj), lang=obj.language or "", datatype=datatype
@@ -75,10 +77,9 @@ def _load_ontology_node(taxonomy: Taxonomy, ont_uri: str, triples: list[tuple[No
         anno = _annotation_from(str(p), o)
         if anno is not None:
             taxonomy.ontology_annotations.append(anno)
-    if taxonomy.ontology_title is None and taxonomy.ontology_label:
-        taxonomy.ontology_title = taxonomy.ontology_label
-    if taxonomy.ontology_description is None and taxonomy.ontology_label:
-        taxonomy.ontology_description = taxonomy.ontology_label
+    # No back-fill here. ontology_title and ontology_description fall back to
+    # the label when they are read; writing that fallback into the model made
+    # every save add a dcterms:title and a dcterms:description nobody wrote.
 
 
 def _lang_label(o: object, label_type: LabelType = LabelType.PREF) -> Label:
@@ -309,7 +310,12 @@ def _load_classes(
         for uri in subjects_by_type.get(type_uri, [])
         if not is_builtin_uri(uri)
     }
+    declared = set(class_uris)
     class_uris.update(uri for uri in class_refs if not is_builtin_uri(uri))
+    # Declared means the file typed it as a class — not merely that it has other
+    # triples. A class with a label and no rdf:type is still undeclared, and
+    # writing one back would assert what the author left open.
+    taxonomy.inferred_classes = class_uris - declared
     for uri in class_uris:
         taxonomy.owl_classes[uri] = _parse_class(uri, index.get(uri, []))
 
@@ -344,9 +350,10 @@ def _load_individuals(
 
 
 def _individual_uris(taxonomy: Taxonomy, subjects_by_type: dict[str, list[str]]) -> set[str]:
-    individual_uris = {
+    declared_named = {
         uri for uri in subjects_by_type.get(str(OWL.NamedIndividual), []) if not is_builtin_uri(uri)
     }
+    individual_uris = set(declared_named)
     known_classes = set(taxonomy.owl_classes)
     for type_uri, uris in subjects_by_type.items():
         if type_uri not in known_classes:
@@ -359,6 +366,7 @@ def _individual_uris(taxonomy: Taxonomy, subjects_by_type: dict[str, list[str]])
             and uri not in taxonomy.concepts
             and uri not in taxonomy.schemes
         )
+    taxonomy.inferred_named_individuals = individual_uris - declared_named
     return individual_uris
 
 
@@ -394,4 +402,37 @@ def _taxonomy_from_index(parsed: _Index, ns_graph: Graph) -> Taxonomy:
 
 
 def graph_to_taxonomy(g: Graph) -> Taxonomy:
-    return _taxonomy_from_index(_graph_index(g), g)
+    taxonomy = _taxonomy_from_index(_graph_index(g), g)
+    _capture_residue(taxonomy, g)
+    return taxonomy
+
+
+def _capture_residue(taxonomy: Taxonomy, source: Graph) -> None:
+    """Keep every triple the model would not write back.
+
+    Computed by difference rather than by listing what to keep: whatever the
+    model fails to represent ends up here automatically, so a vocabulary nobody
+    anticipated survives without anyone teaching the model about it first.
+
+    Blank nodes come through as the same objects the parse produced, so a class
+    expression keeps its shape rather than being re-labelled into a new one.
+    """
+    from ._to_graph import _model_to_graph  # noqa: PLC0415 — cycle at module level
+
+    # The model-only graph, deliberately: taxonomy_to_graph would fold the
+    # residue back in and compare the file against itself.
+    written = _model_to_graph(taxonomy)
+
+    def _key(triple: tuple) -> tuple:
+        """A triple with xsd:string flattened to a plain literal.
+
+        Without this the residue re-adds the very literal the model just wrote
+        in the other form, and one statement becomes two.
+        """
+        s, p, o = triple
+        if isinstance(o, Literal) and o.datatype == XSD.string:
+            o = Literal(str(o))
+        return (s, p, o)
+
+    seen = {_key(t) for t in written}
+    taxonomy.residue = [t for t in source if _key(t) not in seen]

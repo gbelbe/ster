@@ -50,6 +50,7 @@ def _assign_orphan_top_concepts(taxonomy: Taxonomy) -> None:
         if not in_any_scheme and primary:
             primary.top_concepts.append(concept_uri)
             concept.top_concept_of = primary.uri
+            taxonomy.inferred_top_concepts.add(concept_uri)
 
 
 def _concept_scheme_uri(

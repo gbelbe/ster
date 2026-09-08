@@ -52,19 +52,20 @@ def test_property_groups_always_lists_the_three_owl_groups_with_local(tax):
 
 
 def test_property_groups_surface_used_but_undeclared_ontology_predicates(tax):
-    """Predicates used on the ontology header but never declared (here demo's
-    rdfs:label / dcterms:title / dcterms:description) appear under Annotation ›
-    External, label-sorted, and never under Local."""
+    """Predicates used on the ontology header but never declared appear under
+    Annotation › External, label-sorted, and never under Local.
+
+    The demo header carries rdfs:label alone. It used to list a dcterms:title
+    and dcterms:description too — not because the file had them, but because
+    load back-filled both from the label and the back-fill was indistinguishable
+    from something the author wrote. It now lists what the file actually uses.
+    """
     annotation = next(
         local_ext for t, *local_ext in data.property_groups(tax) if t == "Annotation Properties"
     )
     local, external = annotation
     assert local == []  # none declared locally
-    assert external == [  # used-but-undeclared, label-sorted (description, label, title)
-        "http://purl.org/dc/terms/description",
-        "http://www.w3.org/2000/01/rdf-schema#label",
-        "http://purl.org/dc/terms/title",
-    ]
+    assert external == ["http://www.w3.org/2000/01/rdf-schema#label"]
 
 
 def test_property_groups_external_excludes_declared_predicates(tax):

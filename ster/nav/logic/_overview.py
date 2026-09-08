@@ -16,6 +16,7 @@ from ...owl_analysis import (
 from . import _fields, _global_, _tree
 
 _LIT_ACTION: Final = "action"
+_LIT_PREDICATE: Final = "predicate"
 _LIT_TOTAL: Final = "total"
 
 
@@ -514,6 +515,40 @@ def annotation_catalog_options(
     return [(mp.predicate, mp.label) for mp in cat if mp.predicate not in present]
 
 
+# Metadata worth offering even when the file does not carry it. ster used to
+# manufacture a dcterms:title from rdfs:label on load, which put a row here and
+# a claim in the file nobody had made. Offering an empty row instead gives the
+# same reach without asserting anything until someone types.
+_OFFERED_METADATA = (
+    "http://purl.org/dc/terms/title",  # NOSONAR - RDF predicate/property IRI
+    "http://purl.org/dc/terms/description",  # NOSONAR - RDF predicate/property IRI
+)
+
+
+def _unset_metadata_rows(present: set[str]) -> list[_fields.DetailField]:
+    """An editable row for each well-known field the ontology has not stated."""
+    rows: list[_fields.DetailField] = []
+    for predicate in _OFFERED_METADATA:
+        if predicate in present:
+            continue
+        rows.append(
+            _fields.DetailField(
+                key=f"ann:{predicate}:",
+                display=_annotation_display(predicate),
+                value="",
+                editable=True,
+                meta={
+                    "type": "ont_annotation",
+                    _LIT_PREDICATE: predicate,
+                    "old_value": "",
+                    "is_iri": False,
+                    "lang": "",
+                },
+            )
+        )
+    return rows
+
+
 def _annotation_rows(annotation: OntologyAnnotation) -> list[_fields.DetailField]:
     """One editable value row + one remove-action row for a single annotation."""
     display = _annotation_display(annotation.predicate)
@@ -524,7 +559,7 @@ def _annotation_rows(annotation: OntologyAnnotation) -> list[_fields.DetailField
         editable=True,
         meta={
             "type": "ont_annotation",
-            "predicate": annotation.predicate,
+            _LIT_PREDICATE: annotation.predicate,
             "old_value": annotation.value,
             "is_iri": annotation.is_iri,
             "lang": annotation.lang,
@@ -538,7 +573,7 @@ def _annotation_rows(annotation: OntologyAnnotation) -> list[_fields.DetailField
         meta={
             "type": "action_del",
             _LIT_ACTION: "remove_ont_annotation",
-            "predicate": annotation.predicate,
+            _LIT_PREDICATE: annotation.predicate,
             "value": annotation.value,
         },
     )

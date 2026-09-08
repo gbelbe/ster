@@ -22,6 +22,7 @@ from ster.nav.logic import (
     _stat,
     _stats_metadata,
     _tui_identity_rows,
+    _unset_metadata_rows,
 )
 
 from .base import EntityPresenter
@@ -118,8 +119,10 @@ class OntologyOverviewPresenter(EntityPresenter):
     def metadata(self) -> list[DetailField]:
         """Editable ontology metadata annotations + add affordance."""
         fields = [_sep("Metadata")]
+        present = {a.predicate for a in self.tax.ontology_annotations}
         for annotation in self.tax.ontology_annotations:
             fields.extend(_annotation_rows(annotation))
+        fields.extend(_unset_metadata_rows(present))
         fields.append(
             _add_action_field("action:add_ont_annotation", "＋ Add metadata", "add_ont_annotation")
         )
