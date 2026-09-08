@@ -378,8 +378,16 @@ def _declared_containment(graph: rdflib.Graph) -> tuple[str, ...]:
     cached = getattr(graph, "_ster_containment", None)
     if cached is not None:
         return cached  # type: ignore[no-any-return]
+    # A symmetric property is never containment, whatever its domain and range
+    # say. Containment is antisymmetric by definition — if A contains B then B
+    # does not contain A — so a relation that holds both ways cannot be one.
+    # Without this, declaring competesWith made the drill-down follow rivalry and
+    # gave a business unit a "parent" that was simply its competitor.
+    symmetric = set(graph.subjects(RDF.type, OWL.SymmetricProperty))
     found = []
     for prop in graph.subjects(RDF.type, OWL.ObjectProperty):
+        if prop in symmetric:
+            continue
         domains = set(graph.objects(prop, RDFS.domain))
         ranges = set(graph.objects(prop, RDFS.range))
         if domains and domains == ranges:
@@ -900,6 +908,23 @@ _METADATA_NAMESPACES = (
 )
 
 
+def _symmetric_predicates(graph: rdflib.Graph) -> frozenset[str]:
+    """Properties declared owl:SymmetricProperty, cached per graph.
+
+    Through _node_cache rather than its own attribute dance: the fallback for a
+    graph that refuses attributes is already written there, and once was enough.
+    """
+    from rdflib.namespace import OWL, RDF  # noqa: PLC0415
+
+    cache = _node_cache(graph, "_ster_symmetric")
+    found = cache.get("declared")
+    if found is None:
+        found = cache["declared"] = frozenset(
+            str(p) for p in graph.subjects(RDF.type, OWL.SymmetricProperty)
+        )
+    return found  # type: ignore[no-any-return]
+
+
 def _facet_values_from(
     graph: rdflib.Graph,
     current: rdflib.term.Node,
@@ -914,8 +939,14 @@ def _facet_values_from(
     """
     from rdflib.namespace import RDF  # noqa: PLC0415
 
+    # Containment is the drill-down and is covered by it. A symmetric property is
+    # a peer link, and a facet says what this place *is*, not what its rivals
+    # are — following competesWith dragged the rival's owner, brand and format
+    # back onto every store, so a Leroy Merlin shop listed Kingfisher among its
+    # groups and filtering by owner selected everything.
+    skip = containment | _symmetric_predicates(graph)
     for predicate, target in graph.predicate_objects(current):
-        if str(predicate) in containment or not isinstance(target, rdflib.URIRef):
+        if str(predicate) in skip or not isinstance(target, rdflib.URIRef):
             continue
         if str(predicate).startswith(_METADATA_NAMESPACES):
             continue
