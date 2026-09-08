@@ -176,12 +176,18 @@ async def test_r_shows_the_raw_diff_and_r_again_puts_it_away(
 
 
 async def test_a_revision_is_read_off_the_ui_thread(ontology_repo: RepoBuilder) -> None:
-    """Selecting must not block: the diff lands from a worker, not inline."""
+    """Selecting must not block: the diff lands from a worker, not inline.
+
+    The worker's *existence* is the property under test. Asserting it had not
+    finished yet — ``history.computed == 0`` — asserted instead that the worker
+    was slow, which is scheduling luck rather than a design guarantee, and it
+    failed on a loaded runner roughly half the time. That the read really goes
+    through the worker is covered by the test below, which waits for it.
+    """
     history = _history(ontology_repo)
     app = HistoryScreen(history)
 
     async with app.run_test():
-        assert history.computed == 0  # nothing read on the UI thread
         assert app.workers
 
 
