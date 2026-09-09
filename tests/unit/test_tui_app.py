@@ -2226,8 +2226,13 @@ def test_renaming_a_property_keeps_the_highlight_on_it_regression(tmp_path) -> N
             await pilot.pause()
             app.screen.query_one("#uri-input", FragmentInput).value = ZOO + "hasKeeper"
             await pilot.press("enter")  # submit the rename
-            for _ in range(4):
-                await pilot.pause()
+            await _settle(
+                pilot,
+                lambda: (
+                    ZOO + "hasKeeper" in app.tax.owl_properties
+                    and ZOO + "hasKeeper" in app._uri_nodes
+                ),
+            )
             assert ZOO + "hasKeeper" in app.tax.owl_properties  # renamed
             assert app._detail_uri == ZOO + "hasKeeper"  # detail follows the property
             assert prop_tree.cursor_node is app._uri_nodes[ZOO + "hasKeeper"]  # highlight follows
@@ -2265,8 +2270,7 @@ def test_editing_a_class_property_renames_it_and_keeps_domain(tmp_path) -> None:
             app.screen._uri.value = ZOO + "hasKeeper"
             app.screen._label_inputs[app.lang].value = "has keeper"
             app.screen._submit()
-            for _ in range(4):
-                await pilot.pause()
+            await _settle(pilot, lambda: ZOO + "hasKeeper" in app.tax.owl_properties)
             assert ZOO + "hasKeeper" in app.tax.owl_properties  # renamed
             assert ZOO + "hasOwner" not in app.tax.owl_properties
             prop = app.tax.owl_properties[ZOO + "hasKeeper"]
@@ -2878,8 +2882,12 @@ def test_editing_keeps_tree_highlight_put_regression(tmp_path) -> None:
             await pilot.pause()
             app.screen.query_one("#edit-input", Input).value = "Canine"
             await pilot.press("enter")  # submit → command → rebuild
-            for _ in range(4):
-                await pilot.pause()
+            await _settle(
+                pilot,
+                lambda: any(
+                    lbl.value == "Canine" for lbl in app.tax.owl_classes[ZOO + "Dog"].labels
+                ),
+            )
             # The highlight stayed on Dog (did not jump to the top of the tree) …
             assert tree.cursor_node is app._uri_nodes[ZOO + "Dog"]
             # … and focus stayed in the detail pane, never stolen to the tree.
@@ -2920,8 +2928,10 @@ def test_renaming_a_class_follows_the_entity_regression(tmp_path) -> None:
             assert isinstance(app.screen, ClassModal)
             app.screen._uri.value = ZOO + "Canine"  # rename the URI fragment
             app.screen._submit()
-            for _ in range(4):
-                await pilot.pause()
+            await _settle(
+                pilot,
+                lambda: ZOO + "Canine" in app.tax.owl_classes and ZOO + "Canine" in app._uri_nodes,
+            )
             renamed = ZOO + "Canine"
             assert renamed in app.tax.owl_classes  # the rename happened
             # The highlight followed the entity to its new URI …
@@ -2954,8 +2964,10 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
             assert isinstance(app.screen, IndividualModal)
             app.screen._uri.value = ZOO + "Fido"
             app.screen._submit()
-            for _ in range(4):
-                await pilot.pause()
+            await _settle(
+                pilot,
+                lambda: ZOO + "Fido" in app.tax.owl_individuals and ZOO + "Fido" in app._uri_nodes,
+            )
             created = ZOO + "Fido"
             assert created in app.tax.owl_individuals  # created
             tree = app.query_one(
