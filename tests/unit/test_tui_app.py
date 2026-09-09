@@ -2964,15 +2964,22 @@ def test_creating_an_individual_reveals_without_stealing_focus_regression(tmp_pa
             assert isinstance(app.screen, IndividualModal)
             app.screen._uri.value = ZOO + "Fido"
             app.screen._submit()
-            await _settle(
-                pilot,
-                lambda: ZOO + "Fido" in app.tax.owl_individuals and ZOO + "Fido" in app._uri_nodes,
-            )
             created = ZOO + "Fido"
-            assert created in app.tax.owl_individuals  # created
             tree = app.query_one(
                 "#ont-tree", Tree
             )  # Fido (typed by Dog) lives in the ontology pane
+            # _uri_nodes gets its entry as soon as the tree rebuilds, but the cursor move
+            # itself is deferred to call_after_refresh (jump_to._reveal_in_tree) — settling
+            # on dict membership alone can return before that callback has actually fired.
+            await _settle(
+                pilot,
+                lambda: (
+                    created in app.tax.owl_individuals
+                    and app._uri_nodes.get(created) is not None
+                    and tree.cursor_node is app._uri_nodes[created]
+                ),
+            )
+            assert created in app.tax.owl_individuals  # created
             # The new individual is revealed (highlight moved to it) …
             assert tree.cursor_node is app._uri_nodes[created]
             # … but focus stayed in the detail pane, not stolen to the tree.

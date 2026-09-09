@@ -281,8 +281,12 @@ ex:Aviary a owl:Class ; rdfs:label "Aviary"@en ; rdfs:subClassOf ex:Enclosure .
 """
 
 
-def _tax_from(tmp_path, ttl: str) -> Taxonomy:
-    path = tmp_path / "vocab.ttl"
+def _tax_from(tmp_path, ttl: str, name: str = "vocab.ttl") -> Taxonomy:
+    """*name* must be distinct per call within a test: load_graph_cached keys its
+    cache on (path, mtime), and two writes to the same path close enough in time
+    can land on the same mtime — the second read would then silently see the
+    first write's stale cached graph instead of its own content."""
+    path = tmp_path / name
     path.write_text(ttl, encoding="utf-8")
     tax = Taxonomy()
     tax.file_path = path
@@ -318,8 +322,12 @@ def test_vocabulary_identifies_the_dominant_label_predicate(tmp_path):
 
 
 def test_vocabulary_lists_hierarchy_predicates_actually_present(tmp_path):
-    assert mc.vocabulary(_tax_from(tmp_path, SKOS_TTL))["hierarchy_predicates"] == ["skos:broader"]
-    assert mc.vocabulary(_tax_from(tmp_path, OWL_TTL))["hierarchy_predicates"] == [
+    # Two different files: load_graph_cached's (path, mtime) key can't tell two
+    # writes to the same path apart when they land in the same mtime tick.
+    assert mc.vocabulary(_tax_from(tmp_path, SKOS_TTL, "skos.ttl"))["hierarchy_predicates"] == [
+        "skos:broader"
+    ]
+    assert mc.vocabulary(_tax_from(tmp_path, OWL_TTL, "owl.ttl"))["hierarchy_predicates"] == [
         "rdfs:subClassOf"
     ]
 
