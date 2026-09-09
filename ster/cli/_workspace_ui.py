@@ -17,6 +17,7 @@ _ABORT_KEY: Final = "abort"
 
 
 from . import _app, _constants, _file_picker
+from ._tty_input import _read_after_escape
 
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
 
@@ -50,11 +51,12 @@ def _toggled(ticked: list[bool], sel: int) -> list[bool]:
 
 
 # One key, one move over (ticks, cursor). A table rather than a chain of elifs:
-# every entry is the same shape, so adding a key is adding a row.
+# every entry is the same shape, so adding a key is adding a row. "none" is not
+# here: unlike a move, it confirms on its own — see the loop in
+# _context_checkbox_picker.
 _CHECKBOX_MOVES: dict[str, Callable[[list[bool], int], tuple[list[bool], int]]] = {
     "space": lambda ticked, sel: (_toggled(ticked, sel), sel),
     "all": lambda ticked, sel: ([True] * len(ticked), sel),
-    "none": lambda ticked, sel: ([False] * len(ticked), sel),
     "up": lambda ticked, sel: (ticked, (sel - 1) % len(ticked)),
     "down": lambda ticked, sel: (ticked, (sel + 1) % len(ticked)),
 }
@@ -83,9 +85,9 @@ def _read_checkbox_key(stream: BinaryIO) -> str:
         return _ABORT_KEY
     if ch != b"\x1b":
         return ""
-    if stream.read(1) != b"[":
-        return _ABORT_KEY  # plain Esc: skip the step entirely
-    return {b"A": "up", b"B": "down"}.get(stream.read(1), "")
+    if _read_after_escape(stream) != b"[":
+        return _ABORT_KEY  # plain Esc (nothing followed): skip the step entirely
+    return {b"A": "up", b"B": "down"}.get(_read_after_escape(stream), "")
 
 
 def _render_checkboxes(
@@ -127,6 +129,14 @@ def _context_checkbox_picker(options: list[Path]) -> list[Path]:
     Reading a key, drawing the list and deciding what a key means are three
     separate jobs and live in three functions; this one only owns the loop and
     the terminal mode.
+
+    'n' confirms with nothing ticked immediately, the same outcome as Esc —
+    it does not wait for a following Enter the way 'a'/space do. Esc *should*
+    reach the same result in one key too, but detecting a bare Esc on a real
+    terminal means telling it apart from the start of an arrow-key sequence,
+    which needs a short timing window and isn't airtight on every terminal.
+    'n' is a plain byte with no such ambiguity — a guaranteed one-key way out
+    that does not depend on that detection working.
     """
     import sys
     import termios
@@ -140,11 +150,15 @@ def _context_checkbox_picker(options: list[Path]) -> list[Path]:
     old_cfg = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
+        # Discard bytes left in the OS buffer from a previous raw-tty screen (a
+        # stray Esc would otherwise be read as this screen's first keypress) —
+        # same guard _run_arrow_menu uses.
+        termios.tcflush(fd, termios.TCIFLUSH)
         while True:
             key = _read_checkbox_key(sys.stdin.buffer)
             if key == "enter":
                 break
-            if key == _ABORT_KEY:
+            if key in (_ABORT_KEY, "none"):
                 ticked = [False] * len(options)
                 break
             move = _CHECKBOX_MOVES.get(key)
@@ -349,10 +363,10 @@ def _run_arrow_menu(selected: Path, actions: list[tuple[object, str]]) -> int | 
             if ch in (b"q", b"Q", b"\x03"):
                 break  # → None (quit)
             if ch == b"\x1b":
-                nxt = sys.stdin.buffer.read(1)
+                nxt = _read_after_escape(sys.stdin.buffer)
                 if nxt != b"[":
-                    break  # bare Esc → quit
-                code = sys.stdin.buffer.read(1)
+                    break  # bare Esc (nothing followed) → quit
+                code = _read_after_escape(sys.stdin.buffer)
                 if code == b"B":
                     cursor += 1
                 elif code == b"A":

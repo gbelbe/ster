@@ -17,6 +17,7 @@ _LIT_CYAN: Final = "  [cyan]"
 
 
 from . import _app, _constants, _rdfxml, _state
+from ._tty_input import _read_after_escape
 
 # ──────────────────────────── session / file resolution ──────────────────────
 
@@ -328,7 +329,7 @@ def _handle_enter_key(typed: str, sel: int, n: int) -> tuple[str, int, bool]:
 
 
 def _handle_arrow_escape(stdin_buffer, typed: str, sel: int, n: int) -> tuple[str, int, bool]:
-    code = stdin_buffer.read(1)
+    code = _read_after_escape(stdin_buffer)
     if code == b"A":  # up
         return "", (sel - 1) % n, False
     if code == b"B":  # down
@@ -337,7 +338,11 @@ def _handle_arrow_escape(stdin_buffer, typed: str, sel: int, n: int) -> tuple[st
 
 
 def _handle_escape_key(stdin_buffer, typed: str, sel: int, n: int) -> tuple[str, int, bool]:
-    nxt = stdin_buffer.read(1)
+    # A real arrow key arrives as ESC [ X in one burst; a lone Esc keypress
+    # sends only the ESC byte. _read_after_escape tells the two apart without
+    # blocking on a byte that, for a bare Esc, is never coming — see its
+    # docstring for what went wrong when this used to be a plain read(1).
+    nxt = _read_after_escape(stdin_buffer)
     if nxt == b"[":
         return _handle_arrow_escape(stdin_buffer, typed, sel, n)
     # plain Esc: clear typed number if any, otherwise keep sel

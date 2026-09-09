@@ -30,6 +30,7 @@ def _run(options: list[Path], keys: bytes) -> list[Path]:
         patch("tty.setraw", return_value=None),
         patch("termios.tcgetattr", return_value=[]),
         patch("termios.tcsetattr", return_value=None),
+        patch("termios.tcflush", return_value=None),
     ):
         return _context_checkbox_picker(options)
 
@@ -70,7 +71,20 @@ def test_a_ticks_everything(three) -> None:
 
 
 def test_n_clears_everything(three) -> None:
+    """Trailing Enter is never reached — 'n' confirms on its own, see below."""
     assert _run(three, b"a" + b"n" + ENTER) == []
+
+
+def test_n_confirms_immediately_without_waiting_for_enter(three) -> None:
+    """The whole point of 'n': one guaranteed, unambiguous key to leave with
+    nothing loaded — unlike Esc, which has to tell a bare keypress apart from
+    the start of an arrow-key sequence and isn't airtight on every terminal.
+    """
+    assert _run(three, SPACE + b"n") == []
+
+
+def test_n_overrides_ticks_from_earlier_in_the_session(three) -> None:
+    assert _run(three, SPACE + DOWN + SPACE + b"n") == []
 
 
 def test_the_cursor_wraps_at_the_top(three) -> None:
@@ -144,6 +158,7 @@ def test_the_picker_leaves_when_stdin_ends_instead_of_spinning(three) -> None:
         patch("tty.setraw", return_value=None),
         patch("termios.tcgetattr", return_value=[]),
         patch("termios.tcsetattr", return_value=None),
+        patch("termios.tcflush", return_value=None),
     ):
         assert _context_checkbox_picker(three) == []
 
