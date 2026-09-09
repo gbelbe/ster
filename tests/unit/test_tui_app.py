@@ -2226,11 +2226,15 @@ def test_renaming_a_property_keeps_the_highlight_on_it_regression(tmp_path) -> N
             await pilot.pause()
             app.screen.query_one("#uri-input", FragmentInput).value = ZOO + "hasKeeper"
             await pilot.press("enter")  # submit the rename
+            # Same shape as the individual-creation test fixed in #181: _uri_nodes
+            # gets its entry when the tree rebuilds, but the cursor move is deferred
+            # to call_after_refresh (jump_to._reveal_in_tree), so settling on dict
+            # membership alone can return before that callback has fired.
             await _settle(
                 pilot,
                 lambda: (
-                    ZOO + "hasKeeper" in app.tax.owl_properties
-                    and ZOO + "hasKeeper" in app._uri_nodes
+                    ZOO + "hasKeeper" in app._uri_nodes
+                    and prop_tree.cursor_node is app._uri_nodes[ZOO + "hasKeeper"]
                 ),
             )
             assert ZOO + "hasKeeper" in app.tax.owl_properties  # renamed
@@ -2930,7 +2934,10 @@ def test_renaming_a_class_follows_the_entity_regression(tmp_path) -> None:
             app.screen._submit()
             await _settle(
                 pilot,
-                lambda: ZOO + "Canine" in app.tax.owl_classes and ZOO + "Canine" in app._uri_nodes,
+                lambda: (
+                    ZOO + "Canine" in app._uri_nodes
+                    and tree.cursor_node is app._uri_nodes[ZOO + "Canine"]
+                ),
             )
             renamed = ZOO + "Canine"
             assert renamed in app.tax.owl_classes  # the rename happened
