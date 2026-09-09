@@ -26,8 +26,19 @@ from . import _app, _file_picker, _taxonomy_io
 # ──────────────────────────── export ─────────────────────────────────────────
 
 
+def _browser_url(path: Path) -> str:
+    """A file:// URL for *path*, which must be absolute to have one.
+
+    Path.as_uri() raises on a relative path, and the export builds this only to
+    open a browser — so `ster export -f x.ttl` wrote every file and then died
+    on the last line with a traceback. Resolving first is the whole fix.
+    """
+    return path.resolve().as_uri()
+
+
 @_app.app.command("export")
 def cmd_export(
+    path: Path | None = typer.Argument(None, help="Taxonomy file (.ttl)."),
     file: Path | None = typer.Option(None, "--file", "-f", help="Taxonomy file (.ttl)."),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Output directory (default: same folder as taxonomy)."
@@ -50,7 +61,7 @@ def cmd_export(
     """
     from ..html_export import detect_profile, generate_html
 
-    taxonomy_file = _file_picker._resolve_file(file)
+    taxonomy_file = _file_picker._resolve_file(_file_picker._one_file(path, file))
     output_dir = output or taxonomy_file.parent / "html"
     languages = [lg.strip() for lg in lang.split(",")] if lang else None
 
@@ -90,7 +101,7 @@ def cmd_export(
             f"\n[bold]Generated {len(created)} file(s)[/bold] in [cyan]{output_dir}[/cyan]"
         )
         entry = next((p for p in created if "_en" in p.name), created[0])
-        webbrowser.open(entry.as_uri())
+        webbrowser.open(_browser_url(entry))
         console.print(f"  [dim]Opened in browser:[/dim] {entry}")
 
 
@@ -427,5 +438,5 @@ def _run_html_export_interactive(files: list[Path]) -> None:
             f"\n[bold]Done.[/bold]  {len(all_created)} file(s) in [cyan]{output_dir}[/cyan]"
         )
         entry = next((p for p in all_created if "_en" in p.name), all_created[0])
-        webbrowser.open(entry.as_uri())
+        webbrowser.open(_browser_url(entry))
         console.print(f"  [dim]Opened in browser:[/dim] {entry}")

@@ -327,11 +327,12 @@ def cmd_rename(
 
 @_app.app.command("handles")
 def cmd_handles(
+    path: Path | None = typer.Argument(None, help=_app._TAXONOMY_FILE_HELP),
     lang: str = typer.Option("en", _LIT_LANG, "-l"),
     file: Path | None = typer.Option(None, _LIT_FILE, "-f", help=_app._TAXONOMY_FILE_HELP),
 ) -> None:
     """Print the full handle → label → URI index."""
-    taxonomy_file = _file_picker._resolve_file(file)
+    taxonomy_file = _file_picker._resolve_file(_file_picker._one_file(path, file))
     taxonomy = _taxonomy_io._load(taxonomy_file)
     console.print(render_handle_list(taxonomy, lang))
 
@@ -341,11 +342,12 @@ def cmd_handles(
 
 @_app.app.command("validate")
 def cmd_validate(
+    path: Path | None = typer.Argument(None, help=_app._TAXONOMY_FILE_HELP),
     lang: str = typer.Option("en", _LIT_LANG, "-l"),
     file: Path | None = typer.Option(None, _LIT_FILE, "-f", help=_app._TAXONOMY_FILE_HELP),
 ) -> None:
     """Check SKOS integrity: missing labels, orphans, duplicate prefLabels."""
-    taxonomy_file = _file_picker._resolve_file(file)
+    taxonomy_file = _file_picker._resolve_file(_file_picker._one_file(path, file))
     taxonomy = _taxonomy_io._load(taxonomy_file)
     issues: list[str] = _validate_concept_issues(taxonomy) + _validate_orphan_issues(taxonomy)
 

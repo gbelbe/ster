@@ -415,3 +415,24 @@ def _arrow_file_picker(
         sys.stdout.flush()
 
     return item_values[sel]
+
+
+def _console():
+    from rich.console import Console  # noqa: PLC0415
+
+    return Console()
+
+
+def _one_file(positional: Path | None, flagged: Path | None) -> Path | None:
+    """The file the user named, however they named it.
+
+    Most commands take it positionally — `ster serve x.ttl`, `ster export x.ttl`
+    — and these two only accepted -f, so the obvious invocation answered "Got
+    unexpected extra argument(s)", which reads as "that made no sense" rather
+    than "use the flag". Both spellings work now; -f stays because scripts use
+    it. Naming two different files is refused rather than silently resolved.
+    """
+    if positional is not None and flagged is not None and positional != flagged:
+        _console().print("[red]Name the file once:[/red] either positionally or with -f, not both.")
+        raise typer.Exit(2)
+    return positional or flagged
