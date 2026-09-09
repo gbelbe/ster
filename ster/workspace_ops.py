@@ -1,8 +1,8 @@
-"""Cross-scheme SKOS mapping vocabulary — property names and their inverses.
-
-The mapping *actions* now live in the command layer (``Skos{Add,Remove}MappingLink``
-applied through ``TaxonomyService``); this module just holds the shared vocabulary
-the viewer and commands use to pair a mapping property with its inverse:
+"""Cross-scheme SKOS mapping vocabulary — property names, their Python attributes,
+and their inverses. The single source of this correspondence: ``ster/store``
+(RDF <-> Taxonomy), ``ster/domain/skos.py`` (mutating a mapping link) and
+``ster/taxonomy_analysis.py`` (broken-mapping detection) all read it from here
+instead of each repeating their own copy of the same five rows.
 
   broadMatch   ↔  narrowMatch
   narrowMatch  ↔  broadMatch
@@ -17,8 +17,8 @@ from typing import Literal
 
 MappingType = Literal["broadMatch", "narrowMatch", "relatedMatch", "exactMatch", "closeMatch"]
 
-# Python attribute names for each SKOS mapping property
-_ATTR: dict[str, str] = {
+# Python attribute name for each SKOS mapping property.
+ATTR: dict[str, str] = {
     "broadMatch": "broad_match",
     "narrowMatch": "narrow_match",
     "relatedMatch": "related_match",
@@ -26,8 +26,8 @@ _ATTR: dict[str, str] = {
     "closeMatch": "close_match",
 }
 
-# Inverse of each mapping property
-_INVERSE: dict[str, str] = {
+# Inverse SKOS property for each SKOS mapping property.
+INVERSE: dict[str, str] = {
     "broadMatch": "narrowMatch",
     "narrowMatch": "broadMatch",
     "relatedMatch": "relatedMatch",

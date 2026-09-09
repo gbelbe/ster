@@ -6,6 +6,7 @@ Part of the domain layer (docs/architecture/module-layout.md): reached through
 
 from __future__ import annotations
 
+from .. import workspace_ops
 from ..exceptions import (
     CircularHierarchyError,
     ConceptAlreadyExistsError,
@@ -443,7 +444,7 @@ _SCHEME_FIELD_SETTERS = {
 
 
 # Concept attributes holding cross-scheme SKOS mapping links.
-_MAPPING_ATTRS = {"broad_match", "narrow_match", "related_match", "exact_match", "close_match"}
+_MAPPING_ATTRS = set(workspace_ops.ATTR.values())
 
 
 def add_concept_mapping_link(

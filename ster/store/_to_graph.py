@@ -6,6 +6,7 @@ from __future__ import annotations
 from rdflib import RDF, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 
+from .. import workspace_ops
 from ..model import (
     Concept,
     ConceptScheme,
@@ -40,11 +41,7 @@ _CONCEPT_LIST_PREDS: tuple[tuple[str, URIRef], ...] = (
     ("narrower", SKOS.narrower),
     ("broader", SKOS.broader),
     ("related", SKOS.related),
-    ("broad_match", SKOS.broadMatch),
-    ("narrow_match", SKOS.narrowMatch),
-    ("related_match", SKOS.relatedMatch),
-    ("exact_match", SKOS.exactMatch),
-    ("close_match", SKOS.closeMatch),
+    *((attr, getattr(SKOS, prop)) for prop, attr in workspace_ops.ATTR.items()),
     ("schema_images", SCHEMA.image),
     ("schema_videos", SCHEMA.video),
     ("schema_urls", SCHEMA.url),

@@ -22,6 +22,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from . import workspace_ops
 from .model import Concept, LabelType, Taxonomy
 
 # ── Severity constants ────────────────────────────────────────────────────────
@@ -529,11 +530,7 @@ def _detect_missing_in_scheme(
 
 
 _MAPPING_ATTRS: list[tuple[str, str, str]] = [
-    ("exact_match", "exactMatch", "broken_exact_match"),
-    ("broad_match", "broadMatch", "broken_broad_match"),
-    ("narrow_match", "narrowMatch", "broken_narrow_match"),
-    ("related_match", "relatedMatch", "broken_related_match"),
-    ("close_match", "closeMatch", "broken_close_match"),
+    (attr, prop, f"broken_{attr}") for prop, attr in workspace_ops.ATTR.items()
 ]
 
 

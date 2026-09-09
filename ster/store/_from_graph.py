@@ -10,6 +10,7 @@ from rdflib import RDF, Graph, Literal, URIRef
 from rdflib.namespace import DCTERMS, FOAF, OWL, RDFS, SKOS, XSD
 from rdflib.term import Node
 
+from .. import workspace_ops
 from ..model import (
     Concept,
     ConceptScheme,
@@ -211,13 +212,21 @@ def _parse_concept(uri: str, triples: list[tuple[Node, Node]]) -> Concept:
         str(SKOS.broader): lambda o: c.broader.append(str(o)),
         str(SKOS.related): lambda o: c.related.append(str(o)),
         str(SKOS.topConceptOf): lambda o: setattr(c, "top_concept_of", str(o)),
-        str(SKOS.broadMatch): lambda o: c.broad_match.append(str(o)),
-        str(SKOS.narrowMatch): lambda o: c.narrow_match.append(str(o)),
-        str(SKOS.relatedMatch): lambda o: c.related_match.append(str(o)),
-        str(SKOS.exactMatch): lambda o: c.exact_match.append(str(o)),
-        str(SKOS.closeMatch): lambda o: c.close_match.append(str(o)),
         str(FOAF.focus): lambda o: setattr(c, "focus", str(o)),
     }
+
+    def _mapping_handler(attr: str) -> Callable[[object], None]:
+        def handler(o: object) -> None:
+            getattr(c, attr).append(str(o))
+
+        return handler
+
+    handlers.update(
+        {
+            str(getattr(SKOS, prop)): _mapping_handler(attr)
+            for prop, attr in workspace_ops.ATTR.items()
+        }
+    )
     handlers.update(_media_handlers(c.schema_images, c.schema_videos, c.schema_urls, c.annotations))
     _dispatch_predicates(
         triples, handlers, annotations=c.annotations, skip=_CONCEPT_ANNOTATION_SKIP
