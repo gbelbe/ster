@@ -250,6 +250,70 @@ def test_get_graph_has_nodes_and_edges(client):
     assert "edges" in data
 
 
+def test_get_graph_full_true_is_accepted(client):
+    """?full=true opts back into the unscoped graph (see build_default_vowl_graph)."""
+    r = client.get("/api/graph", params={"full": "true"}, headers=AUTH)
+    assert r.status_code == 200
+    assert "nodes" in r.json()
+
+
+# ── Search: GET /api/search ────────────────────────────────────────────────────
+
+
+def test_get_search_returns_200(client):
+    assert client.get("/api/search", params={"q": "Dog"}, headers=AUTH).status_code == 200
+
+
+def test_get_search_matches_by_label(client):
+    data = client.get("/api/search", params={"q": "dog"}, headers=AUTH).json()
+    ids = [r["id"] for r in data["results"]]
+    assert uri("Dog") in ids
+    assert uri("Cat") not in ids
+
+
+def test_get_search_is_case_insensitive_and_matches_substrings(client):
+    data = client.get("/api/search", params={"q": "AMM"}, headers=AUTH).json()
+    ids = [r["id"] for r in data["results"]]
+    assert uri("Hammer") in ids
+
+
+def test_get_search_empty_query_returns_no_results(client):
+    data = client.get("/api/search", params={"q": ""}, headers=AUTH).json()
+    assert data["results"] == []
+
+
+def test_get_search_no_query_param_returns_no_results(client):
+    data = client.get("/api/search", headers=AUTH).json()
+    assert data["results"] == []
+
+
+def test_get_search_requires_auth(client):
+    assert client.get("/api/search", params={"q": "Dog"}).status_code in (401, 403)
+
+
+def test_get_search_finds_entities_regardless_of_the_rendered_graph(client):
+    """The whole point: /api/search scans the taxonomy directly, not whatever
+    happens to be on the current /api/graph payload (see test_graph_default_view.py
+    for the scoped-vs-unscoped default-graph distinction this is independent of)."""
+    search = client.get("/api/search", params={"q": "Hammer"}, headers=AUTH).json()
+    search_ids = {r["id"] for r in search["results"]}
+    assert uri("Hammer") in search_ids
+
+
+def test_get_search_types_filter_restricts_results(client):
+    data = client.get("/api/search", params={"q": "a", "types": "class"}, headers=AUTH).json()
+    assert data["results"]
+    assert all(r["type"] == "class" for r in data["results"])
+
+
+def test_get_search_types_filter_can_combine_multiple_types(client):
+    data = client.get(
+        "/api/search", params={"q": "og", "types": "class,property"}, headers=AUTH
+    ).json()
+    types_found = {r["type"] for r in data["results"]}
+    assert types_found <= {"class", "property"}
+
+
 # ── SSE: GET /api/events ──────────────────────────────────────────────────────
 
 
@@ -350,7 +414,7 @@ def test_root_with_root_param_calls_html_fn_with_uri():
     html_fn = MagicMock(return_value="<html/>")
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=html_fn)
     TestClient(app).get("/", params={"root": uri("Dog")})
-    html_fn.assert_called_once_with(uri("Dog"))
+    html_fn.assert_called_once_with(uri("Dog"), False)
 
 
 def test_root_without_root_param_calls_html_fn_with_none():
@@ -359,7 +423,7 @@ def test_root_without_root_param_calls_html_fn_with_none():
     html_fn = MagicMock(return_value="<html/>")
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=html_fn)
     TestClient(app).get("/")
-    html_fn.assert_called_once_with(None)
+    html_fn.assert_called_once_with(None, False)
 
 
 # ── graph page caching ─────────────────────────────────────────────────────────
@@ -369,7 +433,9 @@ def test_root_graph_page_is_not_cached():
     """The live server's graph page must send no-store so reloads pick up new JS."""
     tax = make_taxonomy()
     bc = SSEBroadcaster()
-    app = create_app(tax, TOKEN, bc, lambda t: None, html_fn=lambda root=None: "<html>g</html>")
+    app = create_app(
+        tax, TOKEN, bc, lambda t: None, html_fn=lambda root=None, full=False: "<html>g</html>"
+    )
     client = TestClient(app)
     r = client.get("/")
     assert r.status_code == 200

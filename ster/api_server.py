@@ -21,7 +21,7 @@ from typing import Any
 # A renderer for the server's HTML landing pages: (taxonomy, root_uri, token) -> html.
 # Injected by the caller so this module stays free of any front-end feature
 # (the VOWL graph passes ``render_vowl_html``; the MCP server passes nothing).
-HtmlRenderer = Callable[[Any, str | None, str], str]
+HtmlRenderer = Callable[[Any, str | None, str, bool], str]
 
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
@@ -188,8 +188,8 @@ def _make_html_fn(app: Any, renderer: HtmlRenderer, token: str) -> Callable[...,
     ``push_taxonomy`` updates rather than freezing the one it started with.
     """
 
-    def html_fn(root_uri: str | None = None) -> str:
-        return renderer(app.state._ster["taxonomy"], root_uri, token)
+    def html_fn(root_uri: str | None = None, full: bool = False) -> str:
+        return renderer(app.state._ster["taxonomy"], root_uri, token, full)
 
     return html_fn
 
@@ -279,6 +279,7 @@ def start_background(
         token,
         broadcaster,
         save_fn,
+        file_path=file_path,
         publish_dir=_publish_dir_for(file_path),
     )
     app.state._ster["broadcaster"] = broadcaster
@@ -324,12 +325,13 @@ def serve(
     def save_fn(tax: Any) -> None:
         save(tax, file_path)
 
-    def html_fn(root_uri: str | None = None) -> str:
+    def html_fn(root_uri: str | None = None, full: bool = False) -> str:
         return render_vowl_html(
             app.state._ster["taxonomy"],  # type: ignore[attr-defined]
             file_path,
             api_token=token,
             root_uri=root_uri,
+            full=full,
         )
 
     app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn, file_path=file_path)

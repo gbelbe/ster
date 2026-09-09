@@ -104,10 +104,19 @@ const CY_STYLE=[
   {selector:'edge.dimmed',style:{'opacity':.04,'events':'no'}},
   {selector:'edge.hidden',style:{'display':'none'}},
 ];
+// fcose (cytoscape-fcose, layered on layout-base + cose-base) replaces the
+// plain cose force layout used here through Phase 0: cose's per-iteration cost
+// grows faster than linearly in node count, which made the layout pass itself
+// the dominant cost once a taxonomy's default view stopped being scoped down
+// (see docs/architecture/graph-editor.md). fcose keeps cose's node/edge
+// vocabulary (nodeRepulsion, idealEdgeLength, edgeElasticity, gravity, numIter)
+// so this is a like-for-like tuning carry-over, not a re-tune; quality:'default'
+// runs its full spring-embedder + incremental refinement passes (as opposed to
+// 'draft', which skips refinement for raw speed at the cost of layout quality).
 function makeLayout(){
-  return {name:'cose',animate:false,fit:true,padding:40,randomize:false,
-    nodeRepulsion:4500,nodeOverlap:10,idealEdgeLength:100,edgeElasticity:100,
-    gravity:60,numIter:1000,initialTemp:200,coolingFactor:.95,minTemp:1};
+  return {name:'fcose',animate:false,fit:true,padding:40,randomize:true,
+    quality:'default',nodeRepulsion:4500,idealEdgeLength:100,edgeElasticity:100,
+    gravity:60,numIter:1000,packComponents:true};
 }
 // Create cy without running any layout — positions applied below
 // textureOnViewport / hideEdgesOnViewport keep pan+zoom smooth on big graphs by
@@ -350,6 +359,14 @@ function applyHighlight(){
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
+// Whole-ontology matches from /api/search for the term currently in the box —
+// the client-side filter below only ever sees cy.nodes(), i.e. whatever is
+// already on the canvas, and once the default view is scoped (Phase 0) most
+// of a large ontology isn't there. Kept alongside the local filter rather
+// than replacing it: the local filter is instant and needs no round trip for
+// the common case (the thing you're looking for is already on screen).
+let _serverMatches=[];
+let _searchReqId=0;
 function searchNodes(term){
   const t=term.trim().toLowerCase();
   const countEl=document.getElementById('search-count');
@@ -373,6 +390,35 @@ function searchNodes(term){
     const anyVisible=matched.toArray().some(n=>{const p=n.position();return p.x>=ext.x1&&p.x<=ext.x2&&p.y>=ext.y1&&p.y<=ext.y2;});
     if(!anyVisible){cy.animate({center:{eles:matched.first()}},{duration:350});}
   }
+  _searchServerWhole(t,matched.length);
+}
+// Debounced (typing settles before it fires) and request-ordered (reqId): a
+// fast typist's earlier, slower response must never overwrite a later one's
+// count. Folds an "elsewhere" note into the same count text rather than
+// adding a second results list, so there is still exactly one search UI.
+function _searchServerWhole(term,localCount){
+  if(!API_TOKEN){_serverMatches=[];return;}
+  const reqId=++_searchReqId;
+  clearTimeout(_searchServerWhole._t);
+  _searchServerWhole._t=setTimeout(()=>_fetchServerMatches(term,localCount,reqId),250);
+}
+// Split out of _searchServerWhole purely to keep nesting shallow (Sonar
+// S2004): a request-scoped helper per pipeline stage instead of one
+// four-deep chain of inline closures. Behaviour is unchanged.
+function _fetchServerMatches(term,localCount,reqId){
+  fetch('/api/search?q='+encodeURIComponent(term),{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>_applyServerMatches(d,localCount,reqId))
+    .catch(err=>{console.debug('Unable to search server-side:',err);});
+}
+function _applyServerMatches(d,localCount,reqId){
+  if(reqId!==_searchReqId)return; // a newer keystroke has already superseded this
+  _serverMatches=d?.results||[];
+  const onCanvas=new Set(cy.nodes().map(n=>n.id()));
+  const extra=_serverMatches.filter(r=>!onCanvas.has(r.id)).length;
+  const countEl=document.getElementById('search-count');
+  if(!countEl||!extra)return;
+  if(countEl.textContent.startsWith(String(localCount)+' '))countEl.textContent+=' (+'+extra+' elsewhere)';
 }
 function clearSearch(){
   const box=document.getElementById('search-box');
@@ -383,17 +429,25 @@ function clearSearch(){
   if(clearBtn)clearBtn.style.display='none';
   cy.nodes().removeClass('dimmed searched');
   cy.edges().removeClass('dimmed');
+  _serverMatches=[];
+  _searchReqId++; // invalidate any in-flight server search
 }
 document.getElementById('search-box').addEventListener('input',e=>searchNodes(e.target.value));
 document.getElementById('search-clear').addEventListener('click',clearSearch);
 globalThis.addEventListener('load',()=>document.getElementById('search-box').focus());
 // Enter on the search box acts on the first match exactly like clicking it.
+// When nothing on the canvas matches, fall back to the whole-ontology result
+// (if the debounced /api/search already came back) and bring it onto the
+// canvas the same way exploring a node does.
 document.getElementById('search-box').addEventListener('keydown',e=>{
   if(e.key!=='Enter')return;
   const t=e.target.value.trim().toLowerCase();
   if(!t)return;
   const matched=cy.nodes().filter(n=>n.data('label').toLowerCase().includes(t)||n.data('id').toLowerCase().includes(t));
-  if(matched.length){e.preventDefault();activateNode(matched.first().data('id'));}
+  if(matched.length){e.preventDefault();activateNode(matched.first().data('id'));return;}
+  const onCanvas=new Set(cy.nodes().map(n=>n.id()));
+  const hit=_serverMatches.find(r=>!onCanvas.has(r.id));
+  if(hit){e.preventDefault();clearSearch();exploreNode(hit.id,hit.type);}
 });
 
 // ── Click / activate ──────────────────────────────────────────────────────────
@@ -530,13 +584,17 @@ let _rootType=null;
 // rather than dumping a whole subtree.
 const _EXPLORE_ENDPOINT={individual:'/api/individual-relations',class:'/api/class-links',
   concept:'/api/concept-relations',topconcept:'/api/concept-relations'};
-function exploreNode(uri){
+// typeOverride lets a caller that has a node type but no cy node yet (a
+// whole-ontology search hit not currently on the canvas) explore it anyway;
+// every on-canvas caller omits it and the type is read off the cy node as
+// before.
+function exploreNode(uri,typeOverride){
   if(!API_TOKEN)return;
   const node=cy.$('#'+CSS.escape(uri));
-  if(!node.length)return;
-  const endpoint=_EXPLORE_ENDPOINT[node.data('type')];
+  const type=typeOverride||node.data('type');
+  const endpoint=_EXPLORE_ENDPOINT[type];
   if(!endpoint)return;
-  _rootType=node.data('type');
+  _rootType=type;
   fetch(endpoint+'?uri='+encodeURIComponent(uri),{headers:{'Authorization':'Bearer '+API_TOKEN}})
     .then(r=>r.ok?r.json():null)
     .then(d=>{
@@ -596,9 +654,12 @@ function _seedAndSpread(addedNodes,fp){
   }
   const existing=cy.nodes().difference(addedNodes);
   existing.lock();
-  const l=cy.layout({name:'cose',animate:false,fit:false,randomize:false,
-    nodeRepulsion:5000,nodeOverlap:20,idealEdgeLength:110,edgeElasticity:100,
-    gravity:50,numIter:600,coolingFactor:.95,minTemp:1});
+  // fcose (see makeLayout() above) — randomize:false plus the locked existing
+  // nodes is exactly its documented incremental-layout use: only the newcomers
+  // added by explore/merge get force-placed, the rest of the graph stays put.
+  const l=cy.layout({name:'fcose',animate:false,fit:false,randomize:false,
+    quality:'default',nodeRepulsion:5000,idealEdgeLength:110,edgeElasticity:100,
+    gravity:50,numIter:600});
   l.one('layoutstop',()=>{existing.unlock();_saveState();});
   l.run();
 }
@@ -937,12 +998,106 @@ function detailUrlsNodes(urls){
   for(const u of urls)nodes.push(el('div',{class:'dp-lbl'},extLinkNode(u,u)));
   return nodes;
 }
-function detailRelationsNodes(relations){
-  if(!relations.length)return [];
+// ── Phase 4: relation add/remove ────────────────────────────────────────────
+// Canvas drag-to-create (cytoscape-edgehandles/-edge-editing) was investigated
+// and dropped for this pass — both need a browser dependency the plain
+// <script> vendoring here can't supply without pulling in more libraries (see
+// the matching comment in ster/api.py's _register_mutation_routes). This is
+// the panel-based equivalent instead: a small search-backed picker plus
+// explicit Add/Remove, built on the same /api/search endpoint Phase 2 added.
+function _searchPicker(placeholder,types){
+  const wrap=el('div',{class:'dp-picker'});
+  const input=el('input',{class:'dp-picker-input',type:'text',placeholder:placeholder,autocomplete:'off'});
+  const list=el('div',{class:'dp-picker-list'});
+  list.hidden=true;
+  wrap.append(input,list);
+  const state={selected:null,reqId:0};
+  wrap.getSelected=()=>state.selected;
+  function clearList(){list.replaceChildren();list.hidden=true;}
+  input.addEventListener('input',()=>{
+    state.selected=null;
+    const q=input.value.trim();
+    if(!q){clearList();return;}
+    const id=++state.reqId;
+    fetch('/api/search?q='+encodeURIComponent(q)+'&types='+encodeURIComponent(types),{headers:{'Authorization':'Bearer '+API_TOKEN}})
+      .then(r=>r.ok?r.json():null)
+      .then(d=>_applyPickerResults(d,id,state,input,list,clearList))
+      .catch(err=>{console.debug('Unable to search picker candidates:',err);});
+  });
+  // A short delay lets the option's own click register before the list is torn
+  // down — losing focus on the input would otherwise close it first.
+  input.addEventListener('blur',()=>setTimeout(clearList,150));
+  return wrap;
+}
+// Split out of _searchPicker purely to keep nesting shallow (Sonar S2004):
+// applying results and building each option row are their own functions
+// instead of one five-deep chain of inline closures. Behaviour is unchanged.
+function _applyPickerResults(d,id,state,input,list,clearList){
+  if(id!==state.reqId)return; // a newer keystroke already superseded this
+  const results=(d?.results||[]).slice(0,10);
+  if(!results.length){clearList();return;}
+  list.replaceChildren(...results.map(r=>_pickerOptionRow(r,state,input,clearList)));
+  list.hidden=false;
+}
+function _pickerOptionRow(r,state,input,clearList){
+  const row=el('button',{class:'dp-picker-opt',type:'button'},[
+    el('span',{class:'dp-pref',text:r.label}),
+    el('span',{class:'dp-uri',style:'margin-left:6px',text:r.id}),
+  ]);
+  row.addEventListener('click',()=>{state.selected=r;input.value=r.label;clearList();});
+  return row;
+}
+// errEl is required, not optional: a refused removal used to go to console.debug
+// only, so the × re-enabled itself and the relation stayed put with no message —
+// indistinguishable from a broken button. The add forms already surface
+// err.message, and _postJson has unwrapped the server's `detail` all along.
+function _relationRemoveBtn(onRemove,errEl){
+  const btn=el('button',{class:'dp-rel-remove',title:'Remove',text:'×'});
+  btn.addEventListener('click',()=>{
+    btn.disabled=true;errEl.textContent='';
+    onRemove().catch(err=>{errEl.textContent=err.message||'Remove failed.';btn.disabled=false;});
+  });
+  return btn;
+}
+function _individualRelationAddForm(d){
+  const propPicker=_searchPicker('Property…','property');
+  const targetPicker=_searchPicker('Target individual…','individual');
+  const addBtn=el('button',{class:'dp-edit-save',text:'Add relation'});
+  const errEl=el('div',{class:'dp-edit-err'});
+  addBtn.addEventListener('click',()=>{
+    const prop=propPicker.getSelected(),target=targetPicker.getSelected();
+    if(!prop||!target){errEl.textContent='Pick a property and a target first.';return;}
+    addBtn.disabled=true;errEl.textContent='';
+    _postJson('/api/relation',{ind_uri:d.id,prop_uri:prop.id,target_uri:target.id}).then(()=>{
+      _detailCache.delete(d.id);
+      if(highlighted===d.id)showDetail(d);
+    }).catch(err=>{errEl.textContent=err.message||'Add failed.';addBtn.disabled=false;});
+  });
+  return el('div',{class:'dp-rel-add'},[propPicker,targetPicker,addBtn,errEl]);
+}
+function _classParentAddForm(d){
+  const targetPicker=_searchPicker('Superclass…','class');
+  const addBtn=el('button',{class:'dp-edit-save',text:'Add superclass'});
+  const errEl=el('div',{class:'dp-edit-err'});
+  addBtn.addEventListener('click',()=>{
+    const target=targetPicker.getSelected();
+    if(!target){errEl.textContent='Pick a class first.';return;}
+    addBtn.disabled=true;errEl.textContent='';
+    _postJson('/api/class-parent',{child_uri:d.id,parent_uri:target.id}).then(()=>{
+      _detailCache.delete(d.id);
+      if(highlighted===d.id)showDetail(d);
+    }).catch(err=>{errEl.textContent=err.message||'Add failed.';addBtn.disabled=false;});
+  });
+  return el('div',{class:'dp-rel-add'},[targetPicker,addBtn,errEl]);
+}
+function detailRelationsNodes(d,relations){
+  const canEdit=_canEdit(d);
+  if(!relations.length&&!canEdit)return [];
   const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Relations'})];
   for(const r of relations){
     const lbl=r.label||r.uri,inG=cy.$('#'+CSS.escape(r.uri)).length>0;
     const row=el('div',{class:'dp-rel'},el('span',{class:'dp-rel-tag',text:r.rel}));
+    const relErr=el('div',{class:'dp-edit-err'});
     if(inG){
       const btn=el('button',{class:'dp-link',text:lbl});
       btn.addEventListener('click',()=>navigateTo(r.uri));
@@ -950,8 +1105,25 @@ function detailRelationsNodes(relations){
     }else{
       row.append(el('span',{text:lbl}));
     }
-    nodes.push(row);
+    // Only the two Phase 4 command-backed relation kinds are removable here:
+    // an individual's object-property value (carries propUri) and a class's
+    // subClassOf link. Everything else (rdf:type, broader, equivalentClass, …)
+    // has no matching command in this slice, so it stays display-only.
+    if(canEdit&&r.propUri){
+      row.append(_relationRemoveBtn(()=>_postJson('/api/relation/remove',{ind_uri:d.id,prop_uri:r.propUri,target_uri:r.uri}).then(()=>{
+        _detailCache.delete(d.id);
+        if(highlighted===d.id)showDetail(d);
+      }),relErr));
+    }else if(canEdit&&r.rel==='subClassOf'){
+      row.append(_relationRemoveBtn(()=>_postJson('/api/class-parent/remove',{child_uri:d.id,parent_uri:r.uri}).then(()=>{
+        _detailCache.delete(d.id);
+        if(highlighted===d.id)showDetail(d);
+      }),relErr));
+    }
+    nodes.push(row,relErr);
   }
+  if(canEdit&&d.type==='individual')nodes.push(_individualRelationAddForm(d));
+  else if(canEdit&&d.type==='class')nodes.push(_classParentAddForm(d));
   return nodes;
 }
 // ── Lazy node detail ────────────────────────────────────────────────────────
@@ -998,21 +1170,124 @@ function renderDetail(d,det){
   back.addEventListener('click',()=>{highlighted=null;applyHighlight();showDefault();});
   panel.append(back);
   panel.append(el('span',{class:'dp-badge dp-'+d.type,text:KM[d.type]||d.type}));
-  panel.append(el('div',{class:'dp-h3',text:d.label}));
+  panel.append(_editableLabelNode(d));
   panel.append(el('div',{class:'dp-uri',text:d.id}));
   const lbls=det.labels||[],showLbls=[...lbls.filter(l=>l.kind==='pref').slice(1),...lbls.filter(l=>l.kind==='alt'),...lbls.filter(l=>l.kind==='label')];
   panel.append(...detailLabelsNodes(showLbls));
   panel.append(...detailCommentsNodes(det.comments||[]));
-  if(det.description){
-    panel.append(el('hr',{class:'dp-hr'}));
-    panel.append(el('div',{class:'dp-desc'},linkifyNodes(det.description)));
-  }
+  panel.append(...detailDescriptionOrEditNodes(d,det.description));
   panel.append(...detailScopeNodes(det.scopeNote));
-  panel.append(...detailRelationsNodes(det.relations||[]));
+  panel.append(...detailRelationsNodes(d,det.relations||[]));
   panel.append(...detailMediaNodes(det.images,det.videos));
   panel.append(...detailUrlsNodes(det.urls));
   panelEl.replaceChildren(panel);
   wireMedia();
+}
+// ── Editable side panel (Phase 3) ───────────────────────────────────────────
+// Only the primary label/description are editable inline, and only in the
+// project's default display language (see docs/architecture/graph-editor.md,
+// Phase 3 — a language picker for editing is a bigger UI, deliberately left
+// out of this slice). A read-only node (from a context file — see the
+// `readOnly` node flag) never gets the edit affordance: TaxonomyService has
+// nowhere on disk to persist a change to it.
+const _EDIT_LANG='en';
+function _canEdit(d){
+  return !!API_TOKEN&&!d.readOnly;
+}
+// The version this page last saw the server on, sent with every edit so the
+// server can refuse one built on a stale read. null until /api/version answers —
+// and it stays null on a read-only session, where omitting it means "no check",
+// exactly the previous behaviour.
+let _docVersion=null;
+function _initDocVersion(){
+  if(!API_TOKEN)return;
+  fetch('/api/version',{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{if(typeof d?.version==='number')_docVersion=d.version;})
+    .catch(err=>{console.debug('Unable to read document version:',err);});
+}
+function _postJson(endpoint,body){
+  return fetch(endpoint,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_TOKEN},
+    body:JSON.stringify(_docVersion===null?body:{...body,base_version:_docVersion}),
+  }).then(async r=>{
+    if(!r.ok){
+      let detail='Save failed.';
+      try{const parsed=await r.json();if(parsed?.detail)detail=parsed.detail;}catch{/* ignore */}
+      // 409 is the stale-read rejection. The version is left stale on purpose so
+      // a blind retry is refused too: the edit that arrived in between is not on
+      // this page yet, and overwriting it unseen is what the check exists to stop.
+      if(r.status===409)detail='Someone else changed this file since you loaded it. Reload the page to see their edit, then try again.';
+      throw new Error(detail);
+    }
+    const out=await r.json();
+    if(typeof out?.version==='number')_docVersion=out.version;
+    return out;
+  });
+}
+function _postField(endpoint,uri,value){
+  return _postJson(endpoint,{uri:uri,lang:_EDIT_LANG,value:value});
+}
+// Wraps *displayNode* (the read view) with a ✎ button that swaps in an
+// editable control. Only the explicit Save/Cancel buttons act — losing focus
+// or pressing Enter never submits, so a stray click can't fire an edit.
+function _editableRow(value,displayNode,{multiline,onSave}){
+  const wrap=el('div',{class:'dp-editable'});
+  const editBtn=el('button',{class:'dp-edit-btn',title:'Edit',text:'✎'});
+  const readRow=el('div',{class:'dp-editable-view'},[displayNode,editBtn]);
+  wrap.append(readRow);
+  editBtn.addEventListener('click',()=>_openEditableRow(wrap,readRow,value,multiline,onSave));
+  return wrap;
+}
+// Split out of _editableRow purely to keep nesting shallow (Sonar S2004):
+// each stage (open the editor, submit it) is its own function instead of one
+// deeply nested chain of inline closures. Behaviour is unchanged — only the
+// explicit Save/Cancel buttons act, never blur or Enter.
+function _openEditableRow(wrap,readRow,value,multiline,onSave){
+  const input=multiline
+    ?el('textarea',{class:'dp-edit-input',rows:'4'})
+    :el('input',{class:'dp-edit-input',type:'text'});
+  input.value=value;
+  const saveBtn=el('button',{class:'dp-edit-save',text:'Save'});
+  const cancelBtn=el('button',{class:'dp-edit-cancel',text:'Cancel'});
+  const errEl=el('div',{class:'dp-edit-err'});
+  const editRow=el('div',{class:'dp-editable-edit'},[input,el('div',{class:'dp-edit-actions'},[saveBtn,cancelBtn]),errEl]);
+  wrap.replaceChildren(editRow);
+  input.focus();
+  cancelBtn.addEventListener('click',()=>wrap.replaceChildren(readRow));
+  saveBtn.addEventListener('click',()=>_submitEditableRow(wrap,readRow,input,saveBtn,cancelBtn,errEl,onSave));
+}
+function _submitEditableRow(wrap,readRow,input,saveBtn,cancelBtn,errEl,onSave){
+  saveBtn.disabled=true;cancelBtn.disabled=true;errEl.textContent='';
+  onSave(input.value).then(()=>wrap.replaceChildren(readRow)).catch(err=>{
+    errEl.textContent=err.message||'Save failed.';
+    saveBtn.disabled=false;cancelBtn.disabled=false;
+  });
+}
+function _editableLabelNode(d){
+  const display=el('div',{class:'dp-h3',text:d.label});
+  if(!_canEdit(d))return display;
+  return _editableRow(d.label,display,{multiline:false,onSave:value=>
+    _postField('/api/entity-label',d.id,value).then(()=>{
+      const n=cy.$('#'+CSS.escape(d.id));
+      if(n.length)n.data('label',value);
+      d.label=value;
+      _detailCache.delete(d.id);
+      if(highlighted===d.id)showDetail(d);
+    })});
+}
+function detailDescriptionOrEditNodes(d,description){
+  if(!_canEdit(d)){
+    if(!description)return [];
+    return [el('hr',{class:'dp-hr'}),el('div',{class:'dp-desc'},linkifyNodes(description))];
+  }
+  const display=el('div',{class:'dp-desc'+(description?'':' dp-hint')},description?linkifyNodes(description):document.createTextNode('No description yet.'));
+  return [el('hr',{class:'dp-hr'}),_editableRow(description||'',display,{multiline:true,onSave:value=>
+    _postField('/api/entity-description',d.id,value).then(()=>{
+      _detailCache.delete(d.id);
+      if(highlighted===d.id)showDetail(d);
+    })})];
 }
 function navigateTo(uri){
   const n=cy.$('#'+CSS.escape(uri));if(!n.length)return;
@@ -1022,6 +1297,7 @@ function navigateTo(uri){
 
 // ── Live refresh ──────────────────────────────────────────────────────────────
 function initLiveRefresh(){
+  _initDocVersion();
   if(API_TOKEN){
     const src=new EventSource('/api/events?token='+encodeURIComponent(API_TOKEN));
     src.onmessage=async function(){

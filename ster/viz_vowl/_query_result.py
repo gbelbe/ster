@@ -206,6 +206,10 @@ def _build_query_result_html(
     html = (
         _html_template._HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _js_assets._cytoscape_script_tag())
+        .replace("__LAYOUT_BASE_SCRIPT__", _js_assets._layout_base_script_tag())
+        .replace("__COSE_BASE_SCRIPT__", _js_assets._cose_base_script_tag())
+        .replace("__FCOSE_SCRIPT__", _js_assets._fcose_script_tag())
+        .replace("__EXPAND_COLLAPSE_SCRIPT__", _js_assets._expand_collapse_script_tag())
         .replace("__D3_SCRIPT__", _js_assets._d3_hierarchy_script_tag())
         .replace("__D3_PATH_SCRIPT__", _js_assets._d3_path_script_tag())
         .replace("__D3_SHAPE_SCRIPT__", _js_assets._d3_shape_script_tag())

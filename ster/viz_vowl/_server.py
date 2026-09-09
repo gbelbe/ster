@@ -130,9 +130,11 @@ _http_server: http.server.HTTPServer | None = None
 _http_port: int | None = None
 
 
-def _vowl_html(taxonomy: Taxonomy, root_uri: str | None, token: str) -> str:
+def _vowl_html(taxonomy: Taxonomy, root_uri: str | None, token: str, full: bool = False) -> str:
     """Render the VOWL landing page for the background server."""
-    return _render.render_vowl_html(taxonomy, _api_file_path, api_token=token, root_uri=root_uri)
+    return _render.render_vowl_html(
+        taxonomy, _api_file_path, api_token=token, root_uri=root_uri, full=full
+    )
 
 
 _api_file_path: Path | None = None

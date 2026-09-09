@@ -33,24 +33,52 @@ def _graph_path(file_path: Path | None) -> Path:
     return cache / f"{stem}_vowl.html"
 
 
+_SHOW_ALL_BTN_HTML = (
+    '<span style="color:#cbd5e1"> │ </span>'
+    '<button class="ftbtn active" '
+    "onclick=\"location.href=location.pathname+'?full=1'\">"
+    "Show all nodes</button>"
+)
+
+
 def render_vowl_html(
     taxonomy: Taxonomy,
     file_path: Path | None,
     api_token: str = "",
     root_uri: str | None = None,
+    full: bool = False,
 ) -> str:
     """Return the rendered VOWL HTML string.
 
     When *api_token* is non-empty the page connects to the SSE stream so the
     Graph view refreshes automatically whenever the ontology file changes.
-    When *root_uri* is given a focused subgraph centred on that class is rendered.
+    When *root_uri* is given a focused subgraph centred on that class is
+    rendered. Otherwise the default is root-level only (schemes, root
+    classes, top concepts) when a server backs the page — *full* opts back
+    into the unscoped graph, and a "Show all nodes" button offers the same.
     """
     title = _ontology_title(taxonomy, file_path)
+    show_all_btn = ""
     if root_uri:
         root_cls = taxonomy.owl_classes.get(root_uri)
         root_label = root_cls.label("en") if root_cls else _local(root_uri)
         title = f"{title} — {root_label}"
         graph = _graph_builders.build_focused_vowl_graph(taxonomy, root_uri)
+    elif api_token and not full:
+        # Root-level overview: a large ontology rendered whole is a wall of
+        # dots, not a graph (see docs/architecture/graph-editor.md). Only
+        # done when a server backs the page — the offline/static export has
+        # no click-to-expand endpoint, so it always gets the full graph
+        # below, same as it always has. build_default_vowl_graph is itself
+        # a no-op below CLASS_COLLAPSE_LIMIT (small ontology, nothing to
+        # scope) — the button mirrors that, and individuals still get
+        # collapsed below their own separate threshold either way.
+        graph = _detail.collapse_individuals(_graph_builders.build_default_vowl_graph(taxonomy))
+        scoped = (
+            len(taxonomy.owl_classes) + len(taxonomy.concepts)
+            > _graph_builders.CLASS_COLLAPSE_LIMIT
+        )
+        show_all_btn = _SHOW_ALL_BTN_HTML if scoped else ""
     else:
         graph = _graph_builders.build_vowl_graph(taxonomy)
         # The page embeds this payload; /api/graph is only asked on later refresh
@@ -67,13 +95,17 @@ def render_vowl_html(
     return (
         _html_template._HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))
         .replace("__CY_SCRIPT__", _js_assets._cytoscape_script_tag())
+        .replace("__LAYOUT_BASE_SCRIPT__", _js_assets._layout_base_script_tag())
+        .replace("__COSE_BASE_SCRIPT__", _js_assets._cose_base_script_tag())
+        .replace("__FCOSE_SCRIPT__", _js_assets._fcose_script_tag())
+        .replace("__EXPAND_COLLAPSE_SCRIPT__", _js_assets._expand_collapse_script_tag())
         .replace("__D3_SCRIPT__", _js_assets._d3_hierarchy_script_tag())
         .replace("__D3_PATH_SCRIPT__", _js_assets._d3_path_script_tag())
         .replace("__D3_SHAPE_SCRIPT__", _js_assets._d3_shape_script_tag())
         .replace("__STER_DATA_SCRIPT__", _detail._data_script(graph, meta, api_token, treemap))
         .replace("__STER_APP_JS__", _js_assets._app_js())
         .replace("__STER_TREEMAP_JS__", _js_assets._treemap_js())
-        .replace("__SHOW_ALL_BTN__", "")
+        .replace("__SHOW_ALL_BTN__", show_all_btn)
         .replace("__OFFLINE_BANNER__", _detail._offline_banner(api_token))
     )
 

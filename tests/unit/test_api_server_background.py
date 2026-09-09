@@ -238,6 +238,22 @@ def test_start_background_returns_false_when_deps_missing(monkeypatch):
     assert srv.start_background(_taxonomy(), None) is False
 
 
+def test_start_background_forwards_file_path_to_create_app(monkeypatch, tmp_path):
+    """Regression: create_app's file_path was silently dropped here, so a graph
+    opened via open_in_browser (the normal ster → Graph view path) never had a
+    file path to build the Phase 3 mutation backend from — editing there would
+    always 503 even with a real file loaded. See docs/architecture/graph-editor.md."""
+    path = tmp_path / "onto.ttl"
+    captured: dict = {}
+    ready = threading.Event()
+    cfg, server = _fake_uvicorn(captured, ready)
+    with patch("uvicorn.Config", cfg), patch("uvicorn.Server", server):
+        ok = srv.start_background(_taxonomy(), path)
+    ready.wait(timeout=5)
+    assert ok is True
+    assert captured["app"].state._ster["file_path"] == path
+
+
 def test_start_background_sets_no_html_fn_without_a_renderer(monkeypatch):
     """The MCP server wants a server, not a landing page."""
     _start(monkeypatch)
@@ -248,8 +264,8 @@ def test_start_background_wires_injected_renderer_with_live_taxonomy_and_token(m
     """The renderer is called with the *live* taxonomy, so it tracks later pushes."""
     got: dict = {}
 
-    def renderer(taxonomy, root_uri, token):
-        got.update(taxonomy=taxonomy, root_uri=root_uri, token=token)
+    def renderer(taxonomy, root_uri, token, full=False):
+        got.update(taxonomy=taxonomy, root_uri=root_uri, token=token, full=full)
         return "<html>graph</html>"
 
     _start(monkeypatch, html_renderer=renderer)
@@ -265,7 +281,10 @@ def test_pushed_taxonomy_reaches_the_landing_page(monkeypatch):
     """The page must render the current taxonomy, not the one it started with."""
     # Identify taxonomies by a value, not by id(): CPython reuses ids once an
     # object is collected, which made an id-based assertion flaky under xdist.
-    _start(monkeypatch, html_renderer=lambda tax, _root, _token: f"<html>{tax.ontology_uri}</html>")
+    _start(
+        monkeypatch,
+        html_renderer=lambda tax, _root, _token, _full=False: f"<html>{tax.ontology_uri}</html>",
+    )
     app = srv.current_app()
 
     replacement = _taxonomy()

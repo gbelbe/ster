@@ -135,8 +135,16 @@ def _detail_individual(ind: OWLIndividual, taxonomy: Taxonomy) -> dict:
     for prop_uri, val_uri in ind.property_values:
         prop = taxonomy.owl_properties.get(prop_uri)
         prop_label = prop.label("en") if prop else _local(prop_uri)
+        # propUri lets the editable panel (Phase 4) know this relation can be
+        # edited/removed via /api/relation — "rel" carries the display label,
+        # not an identifier, so the actual property URI travels separately.
         relations.append(
-            {"rel": prop_label, "uri": val_uri, "label": _label_for(val_uri, taxonomy)}
+            {
+                "rel": prop_label,
+                "uri": val_uri,
+                "label": _label_for(val_uri, taxonomy),
+                "propUri": prop_uri,
+            }
         )
     return {
         "labels": labels,

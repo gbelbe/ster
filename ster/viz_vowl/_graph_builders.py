@@ -279,6 +279,84 @@ def build_vowl_graph(taxonomy: Taxonomy) -> dict:
     return {_LIT_NODES: nodes, _LIT_EDGES: edges, _LIT_LAYOUT: "cose"}
 
 
+def _root_class_uris(taxonomy: Taxonomy) -> set[str]:
+    """Class URIs never named as a (non-builtin) subclass's parent."""
+    non_root = {
+        cls_uri
+        for cls_uri, cls in taxonomy.owl_classes.items()
+        for p in cls.sub_class_of
+        if not is_builtin_uri(p) and p in taxonomy.owl_classes
+    }
+    return set(taxonomy.owl_classes) - non_root
+
+
+# Above this many classes + concepts, the default view shows roots only.
+# Mirrors INDIVIDUAL_COLLAPSE_LIMIT's reasoning exactly, one level up the
+# tree: below the threshold a taxonomy is legible whole, and scoping it
+# would only hide things (see test_a_small_ontology_is_left_whole_on_the_page_too).
+CLASS_COLLAPSE_LIMIT = 150
+
+
+def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
+    """Root-level overview: schemes, root classes and top concepts only.
+
+    ``build_vowl_graph`` renders every class, property, and concept at once —
+    legible for a small ontology, a wall of dots for a large one (the graph
+    view's reported "unusable on large ontologies" problem — see
+    docs/architecture/graph-editor.md). Above ``CLASS_COLLAPSE_LIMIT`` this
+    renders roots only, each explorable via the same click-to-expand
+    endpoints already used elsewhere (``/api/class-links``,
+    ``/api/concept-relations``) to reveal their children on demand. Below it,
+    unchanged: the full graph, same as ``build_vowl_graph``.
+
+    Root/top-concept detection is done on bare URIs before any node is built,
+    so — unlike filtering ``build_vowl_graph``'s output after the fact — the
+    (potentially expensive) per-node detail lookup only ever runs for the
+    roots actually kept, not for every class/concept in the file.
+    """
+    if len(taxonomy.owl_classes) + len(taxonomy.concepts) <= CLASS_COLLAPSE_LIMIT:
+        return build_vowl_graph(taxonomy)
+
+    nodes: list[dict] = []
+    seen_nodes: set[str] = set()
+
+    _add_skos_scheme_nodes(taxonomy, nodes, seen_nodes)
+
+    for uri in _root_class_uris(taxonomy):
+        cls = taxonomy.owl_classes[uri]
+        _add_node(
+            nodes,
+            seen_nodes,
+            taxonomy,
+            uri,
+            cls.label("en"),
+            _LIT_CLASS,
+            _detail_class(cls, taxonomy),
+        )
+    for n in nodes:
+        if n["type"] == _LIT_CLASS:
+            n[_LIT_ROOTCLASS] = 1
+
+    top_concept_uris = {u for u, c in taxonomy.concepts.items() if c.top_concept_of}
+    for uri in top_concept_uris:
+        concept = taxonomy.concepts[uri]
+        _add_node(
+            nodes,
+            seen_nodes,
+            taxonomy,
+            uri,
+            concept.pref_label("en"),
+            "topconcept",
+            _detail_concept(concept, taxonomy),
+        )
+
+    edges: list[dict] = []
+    eid_counter = itertools.count()
+    _add_skos_broader_edges(taxonomy, edges, seen_nodes, eid_counter)
+
+    return {_LIT_NODES: nodes, _LIT_EDGES: edges, _LIT_LAYOUT: "cose"}
+
+
 def _included_class_closure(taxonomy: Taxonomy, root_uri: str) -> set[str]:
     """BFS-collect *root_uri* plus every transitive subclass."""
     children_of: dict[str, list[str]] = {u: [] for u in taxonomy.owl_classes}

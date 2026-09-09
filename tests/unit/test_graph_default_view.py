@@ -1,0 +1,149 @@
+"""The graph view's default payload: roots only above a threshold.
+
+Same shape as the individual-collapse story in test_graph_collapse.py, one
+level up the tree: a large ontology's *classes* (and SKOS *concepts*)
+rendered all at once is the "unusable on large ontologies" complaint the
+graph editor initiative exists to fix (see
+docs/architecture/graph-editor.md). Below CLASS_COLLAPSE_LIMIT nothing
+changes — a small ontology is legible whole.
+"""
+
+from __future__ import annotations
+
+import rdflib
+
+from ster import store
+from ster.viz_vowl import (
+    CLASS_COLLAPSE_LIMIT,
+    build_default_vowl_graph,
+    build_vowl_graph,
+    render_vowl_html,
+)
+
+NS = "https://example.org/dg#"
+
+
+def _owl_taxonomy(root_count: int, children_per_root: int, tmp_path):
+    """*root_count* root classes, each with *children_per_root* subclasses."""
+    ttl = [
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+        f"@prefix ex: <{NS}> .",
+    ]
+    for r in range(root_count):
+        ttl.append(f'ex:Root{r} a owl:Class ; rdfs:label "Root{r}"@en .')
+        for c in range(children_per_root):
+            ttl.append(
+                f"ex:Root{r}Child{c} a owl:Class ; "
+                f'rdfs:label "Root{r}Child{c}"@en ; rdfs:subClassOf ex:Root{r} .'
+            )
+    path = tmp_path / "g.ttl"
+    path.write_text("\n".join(ttl))
+    rdflib.Graph().parse(str(path))  # fail loudly here rather than inside ster
+    return store.load(str(path))
+
+
+def _skos_taxonomy(top_count: int, narrower_per_top: int, tmp_path):
+    """*top_count* top concepts, each with *narrower_per_top* narrower concepts."""
+    ttl = [
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .",
+        f"@prefix ex: <{NS}> .",
+        "ex:Scheme a skos:ConceptScheme .",
+    ]
+    for t in range(top_count):
+        ttl.append(
+            f"ex:Top{t} a skos:Concept ; skos:inScheme ex:Scheme ; "
+            f'skos:topConceptOf ex:Scheme ; skos:prefLabel "Top{t}"@en .'
+        )
+        for n in range(narrower_per_top):
+            ttl.append(
+                f"ex:Top{t}Narrower{n} a skos:Concept ; skos:inScheme ex:Scheme ; "
+                f'skos:broader ex:Top{t} ; skos:prefLabel "Top{t}Narrower{n}"@en .'
+            )
+    path = tmp_path / "g.ttl"
+    path.write_text("\n".join(ttl))
+    rdflib.Graph().parse(str(path))  # fail loudly here rather than inside ster
+    return store.load(str(path))
+
+
+def test_a_small_ontology_is_returned_whole(tmp_path) -> None:
+    """Below the threshold, build_default_vowl_graph is build_vowl_graph."""
+    taxonomy = _owl_taxonomy(3, 4, tmp_path)  # 15 classes, well under the limit
+
+    default_graph = build_default_vowl_graph(taxonomy)
+    full_graph = build_vowl_graph(taxonomy)
+
+    assert len(default_graph["nodes"]) == len(full_graph["nodes"])
+    assert {n["id"] for n in default_graph["nodes"]} == {n["id"] for n in full_graph["nodes"]}
+
+
+def test_a_large_ontology_is_scoped_to_root_classes(tmp_path) -> None:
+    root_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _owl_taxonomy(root_count, 3, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    class_nodes = [n for n in graph["nodes"] if n["type"] == "class"]
+    assert len(class_nodes) == root_count
+    assert all(n["rootClass"] == 1 for n in class_nodes)
+
+
+def test_a_large_taxonomy_is_scoped_to_top_concepts(tmp_path) -> None:
+    top_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _skos_taxonomy(top_count, 3, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    concept_nodes = [n for n in graph["nodes"] if n["type"] in ("concept", "topconcept")]
+    assert len(concept_nodes) == top_count
+    assert all(n["type"] == "topconcept" for n in concept_nodes)
+    scheme_nodes = [n for n in graph["nodes"] if n["type"] == "scheme"]
+    assert len(scheme_nodes) == 1
+
+
+def test_scoping_only_computes_detail_for_kept_roots(tmp_path) -> None:
+    """The point of scoping before adding nodes: never pay for what's dropped."""
+    root_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _owl_taxonomy(root_count, 3, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    # root_count roots, none of their 3*root_count children.
+    assert len(graph["nodes"]) == root_count
+
+
+def test_scoped_page_offers_a_show_all_button(tmp_path) -> None:
+    taxonomy = _owl_taxonomy(CLASS_COLLAPSE_LIMIT + 10, 3, tmp_path)
+
+    page = render_vowl_html(taxonomy, tmp_path / "g.ttl", api_token="live-token")
+
+    assert "Show all nodes" in page
+
+
+def test_small_page_does_not_offer_a_show_all_button(tmp_path) -> None:
+    taxonomy = _owl_taxonomy(3, 4, tmp_path)
+
+    page = render_vowl_html(taxonomy, tmp_path / "g.ttl", api_token="live-token")
+
+    assert "Show all nodes" not in page
+
+
+def test_full_true_opts_back_into_the_unscoped_graph(tmp_path) -> None:
+    root_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _owl_taxonomy(root_count, 3, tmp_path)
+
+    page = render_vowl_html(taxonomy, tmp_path / "g.ttl", api_token="live-token", full=True)
+
+    assert "Show all nodes" not in page
+    assert page.count('"type": "class"') + page.count('"type":"class"') == root_count * 4
+
+
+def test_offline_export_is_never_scoped(tmp_path) -> None:
+    """No click-to-expand endpoint without a server, so it always gets everything."""
+    root_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _owl_taxonomy(root_count, 3, tmp_path)
+
+    page = render_vowl_html(taxonomy, tmp_path / "g.ttl", api_token="")
+
+    assert "Show all nodes" not in page
+    assert page.count('"type": "class"') + page.count('"type":"class"') == root_count * 4

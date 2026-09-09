@@ -16,6 +16,10 @@ from ster.viz_vowl import _js_assets
         ("_d3_hierarchy_script_tag", "_D3_HIERARCHY_CDN"),
         ("_d3_path_script_tag", "_D3_PATH_CDN"),
         ("_d3_shape_script_tag", "_D3_SHAPE_CDN"),
+        ("_layout_base_script_tag", "_LAYOUT_BASE_CDN"),
+        ("_cose_base_script_tag", "_COSE_BASE_CDN"),
+        ("_fcose_script_tag", "_FCOSE_CDN"),
+        ("_expand_collapse_script_tag", "_EXPAND_COLLAPSE_CDN"),
     ],
 )
 def test_script_tag_fetches_and_caches_on_first_call(tmp_path, func_name, cdn_attr):

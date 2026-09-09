@@ -66,10 +66,14 @@ def test_extend_dedupes_edges_by_signature():
 
 
 def test_explore_records_session_root_type():
+    """type may come from the cy node's own data, or (for a whole-ontology
+    search hit not yet on the canvas) from an explicit typeOverride — either
+    way _rootType must be set from the resolved type, not re-read from the node."""
     js = _app_js()
     assert "_rootType" in js
-    body = _fn_body(js, "exploreNode")
-    assert "_rootType=node.data('type')" in body.replace(" ", "")
+    body = _fn_body(js, "exploreNode").replace(" ", "")
+    assert "consttype=typeOverride||node.data('type')" in body
+    assert "_rootType=type" in body
 
 
 def test_class_fetch_is_subclass_only_when_rooted_on_individual():

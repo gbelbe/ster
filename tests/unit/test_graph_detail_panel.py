@@ -105,11 +105,15 @@ def test_external_links_cannot_reach_back_through_window_opener():
 
 
 def test_free_text_urls_are_linkified_not_left_bare():
-    """A definition mentioning a URL should be clickable, still escaped."""
+    """A definition mentioning a URL should be clickable, still escaped.
+
+    Phase 3 made the description editable (detailDescriptionOrEditNodes), so
+    the call site now passes the already-unwrapped `description` parameter
+    rather than `det.description` directly — same guarantee, one call deeper."""
     js = _app_js()
 
     assert "function linkifyNodes" in js
-    assert "linkifyNodes(det.description)" in js.replace(" ", "")
+    assert "linkifyNodes(description)" in js.replace(" ", "")
 
 
 def test_a_broken_image_does_not_leave_a_torn_layout():

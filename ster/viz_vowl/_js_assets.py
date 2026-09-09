@@ -126,6 +126,114 @@ def _d3_shape_script_tag() -> str:
     return f"{_LIT_SCRIPT_OPEN}{d3_path.read_text()}{_LIT_SCRIPT_CLOSE}"
 
 
+_LAYOUT_BASE_VERSION = "2.0.1"
+
+_LAYOUT_BASE_CDN = f"https://cdn.jsdelivr.net/npm/layout-base@{_LAYOUT_BASE_VERSION}/layout-base.js"
+
+_LAYOUT_BASE_CACHE_FILE = "layout-base.js"  # stored under ~/.cache/ster/
+
+
+def _layout_base_script_tag() -> str:
+    """Return an inline <script> tag with layout-base, downloading once to ~/.cache/ster.
+
+    A dependency of cose-base/fcose (see :func:`_fcose_script_tag`) — nothing in
+    ster's own code calls into it directly. Mirrors :func:`_cytoscape_script_tag`.
+    """
+    cache_dir = _query_result._ster_cache_dir()
+    lb_path = cache_dir / _LAYOUT_BASE_CACHE_FILE
+    if not lb_path.exists():
+        try:
+            with urllib.request.urlopen(_LAYOUT_BASE_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                lb_path.write_bytes(resp.read())
+        except Exception:
+            return f"{_LIT_SCRIPT_SRC}{_LAYOUT_BASE_CDN}{_LIT_SRC_CLOSE}"
+    return f"{_LIT_SCRIPT_OPEN}{lb_path.read_text()}{_LIT_SCRIPT_CLOSE}"
+
+
+_COSE_BASE_VERSION = "2.2.0"
+
+_COSE_BASE_CDN = f"https://cdn.jsdelivr.net/npm/cose-base@{_COSE_BASE_VERSION}/cose-base.js"
+
+_COSE_BASE_CACHE_FILE = "cose-base.js"  # stored under ~/.cache/ster/
+
+
+def _cose_base_script_tag() -> str:
+    """Return an inline <script> tag with cose-base, downloading once to ~/.cache/ster.
+
+    A dependency of fcose (see :func:`_fcose_script_tag`), which itself depends
+    on :func:`_layout_base_script_tag` — load order matters, see
+    :func:`_cytoscape_script_tag` for the vendored-library rationale.
+    """
+    cache_dir = _query_result._ster_cache_dir()
+    cb_path = cache_dir / _COSE_BASE_CACHE_FILE
+    if not cb_path.exists():
+        try:
+            with urllib.request.urlopen(_COSE_BASE_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                cb_path.write_bytes(resp.read())
+        except Exception:
+            return f"{_LIT_SCRIPT_SRC}{_COSE_BASE_CDN}{_LIT_SRC_CLOSE}"
+    return f"{_LIT_SCRIPT_OPEN}{cb_path.read_text()}{_LIT_SCRIPT_CLOSE}"
+
+
+_FCOSE_VERSION = "2.2.0"
+
+_FCOSE_CDN = f"https://cdn.jsdelivr.net/npm/cytoscape-fcose@{_FCOSE_VERSION}/cytoscape-fcose.js"
+
+_FCOSE_CACHE_FILE = "cytoscape-fcose.js"  # stored under ~/.cache/ster/
+
+
+def _fcose_script_tag() -> str:
+    """Return an inline <script> tag with cytoscape-fcose (fast Compound Spring
+    Embedder), downloading once to ~/.cache/ster.
+
+    The graph view's default `cose` layout costs grow far faster than linearly
+    in node count (see docs/architecture/graph-editor.md) — fcose is the
+    same lab's (iVis-at-Bilkent) purpose-built replacement for large/compound
+    graphs. Must load after :func:`_layout_base_script_tag` and
+    :func:`_cose_base_script_tag`, its own dependencies; registers itself on
+    `cytoscape` automatically in a plain-script context (no `cytoscape.use()`
+    call needed).
+    """
+    cache_dir = _query_result._ster_cache_dir()
+    fc_path = cache_dir / _FCOSE_CACHE_FILE
+    if not fc_path.exists():
+        try:
+            with urllib.request.urlopen(_FCOSE_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                fc_path.write_bytes(resp.read())
+        except Exception:
+            return f"{_LIT_SCRIPT_SRC}{_FCOSE_CDN}{_LIT_SRC_CLOSE}"
+    return f"{_LIT_SCRIPT_OPEN}{fc_path.read_text()}{_LIT_SCRIPT_CLOSE}"
+
+
+_EXPAND_COLLAPSE_VERSION = "4.1.1"
+
+_EXPAND_COLLAPSE_CDN = (
+    "https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@"
+    f"{_EXPAND_COLLAPSE_VERSION}/cytoscape-expand-collapse.js"
+)
+
+_EXPAND_COLLAPSE_CACHE_FILE = "cytoscape-expand-collapse.js"  # stored under ~/.cache/ster/
+
+
+def _expand_collapse_script_tag() -> str:
+    """Return an inline <script> tag with cytoscape-expand-collapse, downloading
+    once to ~/.cache/ster.
+
+    Lets a compound node (a class, standing in for its subtree) fold/unfold on
+    the canvas — the class-hierarchy equivalent of the individual-collapsing
+    the graph view already does (see docs/architecture/graph-editor.md).
+    """
+    cache_dir = _query_result._ster_cache_dir()
+    ec_path = cache_dir / _EXPAND_COLLAPSE_CACHE_FILE
+    if not ec_path.exists():
+        try:
+            with urllib.request.urlopen(_EXPAND_COLLAPSE_CDN, timeout=15) as resp:  # type: ignore[attr-defined]
+                ec_path.write_bytes(resp.read())
+        except Exception:
+            return f"{_LIT_SCRIPT_SRC}{_EXPAND_COLLAPSE_CDN}{_LIT_SRC_CLOSE}"
+    return f"{_LIT_SCRIPT_OPEN}{ec_path.read_text()}{_LIT_SCRIPT_CLOSE}"
+
+
 @functools.lru_cache(maxsize=1)
 def _app_js() -> str:
     """Return ster's graph *application* layer (interaction, styling, filtering,

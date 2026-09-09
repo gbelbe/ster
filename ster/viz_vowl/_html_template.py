@@ -83,6 +83,8 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 .dp-indiv-btn{background:none;border:1px solid #cbd5e1;color:#475569;border-radius:6px;cursor:pointer;font-size:10px;padding:2px 8px;margin:5px 0 2px;display:block}
 .dp-indiv-btn:hover{background:#f1f5f9}
 .dp-hint{font-size:10px;color:#94a3b8;margin:4px 0 0;line-height:1.4}
+.dp-editable{margin:2px 0}.dp-editable-view{display:flex;align-items:baseline;gap:6px}.dp-edit-btn{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:11px;padding:0;line-height:1;flex-shrink:0}.dp-edit-btn:hover{color:#475569}.dp-editable-edit{margin:4px 0}.dp-edit-input{width:100%;font:inherit;color:#1e293b;border:1px solid #cbd5e1;border-radius:4px;padding:4px 6px;background:#fff;resize:vertical}.dp-edit-actions{display:flex;gap:6px;margin-top:5px}.dp-edit-save{background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:3px 10px}.dp-edit-save:hover{background:#1d4ed8}.dp-edit-save:disabled{opacity:.6;cursor:default}.dp-edit-cancel{background:none;border:1px solid #cbd5e1;color:#475569;border-radius:4px;cursor:pointer;font-size:11px;padding:3px 10px}.dp-edit-cancel:hover{background:#f1f5f9}.dp-edit-err{color:#dc2626;font-size:10px;margin-top:4px}
+.dp-rel-remove{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:13px;line-height:1;padding:0 0 0 6px;flex-shrink:0}.dp-rel-remove:hover{color:#dc2626}.dp-rel-remove:disabled{opacity:.5;cursor:default}.dp-rel-add{margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0}.dp-picker{position:relative;margin:4px 0}.dp-picker-input{width:100%;font:inherit;font-size:11px;color:#1e293b;border:1px solid #cbd5e1;border-radius:4px;padding:4px 6px;background:#fff}.dp-picker-list{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12);max-height:160px;overflow-y:auto;margin-top:2px}.dp-picker-opt{display:block;width:100%;text-align:left;background:none;border:none;cursor:pointer;font-size:11px;padding:5px 8px;color:#1e293b}.dp-picker-opt:hover{background:#f1f5f9}.dp-picker-opt .dp-uri{font-size:9px;color:#94a3b8}
 .dp-a{color:#3b82f6;text-decoration:none;word-break:break-all}
 .dp-a:hover{text-decoration:underline}
 .dp-fig{margin:8px 0}
@@ -132,6 +134,10 @@ __OFFLINE_BANNER__
 <div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
 <div id="tip" class="view-relations"></div>
 __CY_SCRIPT__
+__LAYOUT_BASE_SCRIPT__
+__COSE_BASE_SCRIPT__
+__FCOSE_SCRIPT__
+__EXPAND_COLLAPSE_SCRIPT__
 __D3_SCRIPT__
 __D3_PATH_SCRIPT__
 __D3_SHAPE_SCRIPT__

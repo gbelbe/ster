@@ -11,7 +11,7 @@ import re
 import unicodedata
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import rdflib
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -50,6 +50,67 @@ class IndividualIn(BaseModel):
     property_values: list[PropertyAssertionIn] = []
     schema_urls: list[str] = []
     schema_images: list[str] = []
+
+
+class _VersionedIn(BaseModel):
+    """Optimistic concurrency, for any front-end that talks to this API.
+
+    ``TaxonomyService.execute`` has always accepted a *base_version* and
+    returned ``rejected`` when it did not match; nothing sent one, so the check
+    never ran and the last writer silently won. That was survivable for the TUI
+    — one user, one process — but this API is multi-client by construction: two
+    browser tabs, or a browser alongside a TUI, are the ordinary case.
+
+    Optional on purpose. Omitted means "no check", which is exactly the previous
+    behaviour, so existing callers keep working. A client that sends the version
+    it last saw gets a 409 instead of overwriting an edit it never saw. Read the
+    starting value from ``GET /api/version``; every mutation response carries the
+    new one, so a client only fetches it once.
+    """
+
+    base_version: int | None = None
+
+
+class EntityFieldIn(_VersionedIn):
+    """Body for the label/description editing endpoints — one localized field
+    on one entity (see docs/architecture/graph-editor.md, Phase 3)."""
+
+    uri: str
+    lang: str
+    value: str
+
+
+class IndividualRelationIn(_VersionedIn):
+    """Body for creating/replacing one object-property relation between two
+    individuals (see docs/architecture/graph-editor.md, Phase 4).
+
+    *old_target_uri*, when set, replaces that existing value instead of
+    adding a second one for the same property — editing a relation rather
+    than creating an extra one."""
+
+    ind_uri: str
+    prop_uri: str
+    target_uri: str
+    old_target_uri: str = ""
+
+
+class IndividualRelationRemoveIn(_VersionedIn):
+    ind_uri: str
+    prop_uri: str
+    target_uri: str
+
+
+class ClassParentIn(_VersionedIn):
+    """Add *parent_uri* as a superclass of *child_uri* (rdfs:subClassOf) — a
+    polyhierarchy add, not a reparent: existing superclasses are kept."""
+
+    child_uri: str
+    parent_uri: str
+
+
+class ClassParentRemoveIn(_VersionedIn):
+    child_uri: str
+    parent_uri: str
 
 
 class PropertyAssertionOut(BaseModel):
@@ -219,11 +280,15 @@ def create_app(
     # attached to an already-running server: the TUI starts the server for MCP
     # (no landing page), and opening the graph viewer later supplies the VOWL
     # renderer to that same server.
-    _st: dict[str, Any] = {"taxonomy": taxonomy, "file_path": file_path, "html_fn": html_fn}
+    _st: dict[str, Any] = {
+        _LIT_TAXONOMY: taxonomy,
+        _LIT_FILE_PATH: file_path,
+        "html_fn": html_fn,
+    }
     _bearer = HTTPBearer(auto_error=False)
 
     def _tax() -> Taxonomy:
-        return _st["taxonomy"]  # type: ignore[return-value]
+        return _st[_LIT_TAXONOMY]  # type: ignore[return-value]
 
     def _check_auth(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -275,6 +340,7 @@ def create_app(
     _register_pages(app, _st, token)
     _register_schema_routes(app, _st, _tax, _check_auth, save_fn, broadcaster)
     _register_graph_routes(app, _tax, _check_auth)
+    _register_mutation_routes(app, _st, _check_auth, broadcaster)
     _register_locate(app, _tax, _check_auth)
     _register_events(app, token, broadcaster)
     _register_mcp(app, _st, _tax, _check_auth)
@@ -293,28 +359,30 @@ def create_app(
 def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     """HTML landing pages and the raw-ontology endpoint (no auth: read-only views)."""
 
-    def _graph_html_response(root_uri: str | None) -> HTMLResponse:
+    def _graph_html_response(root_uri: str | None, full: bool = False) -> HTMLResponse:
         # no-store: the page inlines its JS, so caching it served stale builds
         # until a manual hard-reload.
         render = _st.get("html_fn")
         if render is None:
             raise HTTPException(status_code=501, detail="No HTML renderer configured")
         return HTMLResponse(
-            render(root_uri),
+            render(root_uri, full),
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def root(
         root_uri: str | None = Query(default=None, alias="root"),
+        full: bool = False,
     ) -> HTMLResponse:
-        return _graph_html_response(root_uri)
+        return _graph_html_response(root_uri, full)
 
     @app.get("/viz", response_class=HTMLResponse, include_in_schema=False)
     def viz(
         root_uri: str | None = Query(default=None, alias="root"),
+        full: bool = False,
     ) -> HTMLResponse:
-        return _graph_html_response(root_uri)
+        return _graph_html_response(root_uri, full)
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
     def map_page(sparql: str = Query(default="", alias="q")) -> HTMLResponse:
@@ -332,8 +400,8 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     def serve_ontology(request: Request) -> Response:
         accept = request.headers.get("accept", "")
         if "text/html" in accept:
-            return _serve_pylode(_st["file_path"])
-        return _serve_turtle(_st["taxonomy"])
+            return _serve_pylode(_st[_LIT_FILE_PATH])
+        return _serve_turtle(_st[_LIT_TAXONOMY])
 
 
 def _register_schema_routes(
@@ -401,11 +469,16 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
 
     @app.get(
         "/api/graph",
-        summary="Return the full VOWL graph payload",
+        summary="Return the default (root-level) VOWL graph payload",
         tags=[_TAG_VIZ],
     )
-    def get_graph(_: None = Depends(_check_auth)) -> dict[str, Any]:
-        from .viz_vowl import build_vowl_graph, collapse_individuals, strip_detail
+    def get_graph(full: bool = False, _: None = Depends(_check_auth)) -> dict[str, Any]:
+        from .viz_vowl import (
+            build_default_vowl_graph,
+            build_vowl_graph,
+            collapse_individuals,
+            strip_detail,
+        )
 
         # Detail is fetched per node from /api/node-detail; sending it here would
         # put the whole side-panel corpus on every live-refresh tick.
@@ -413,7 +486,15 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         # file of 1,027 shops they were 98.7% of the nodes and 98.5% of the
         # bytes, on every tick. A class carries its count; the page asks for one
         # class's individuals when it is opened.
-        return collapse_individuals(strip_detail(build_vowl_graph(_tax())))  # type: ignore[return-value]
+        #
+        # Default is root-level only (schemes, root classes, top concepts) —
+        # the same reasoning generalised from individuals to classes/concepts:
+        # a large ontology rendered whole is a wall of dots, not a graph. The
+        # rest is revealed on click through /api/class-links and
+        # /api/concept-relations, already used for that. ?full=true opts back
+        # into the unscoped graph.
+        builder = build_vowl_graph if full else build_default_vowl_graph
+        return collapse_individuals(strip_detail(builder(_tax())))  # type: ignore[return-value]
 
     @app.get(
         "/api/node-detail",
@@ -482,6 +563,299 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         from .viz_vowl import build_class_links_graph
 
         return build_class_links_graph(_tax(), uri, subclass_only=subclass_only)  # type: ignore[return-value]
+
+    @app.get(
+        "/api/search",
+        summary="Search the whole ontology, not just what is currently rendered",
+        tags=[_TAG_VIZ],
+    )
+    def search_ontology(
+        q: str = Query("", description="Search term (matched against label and URI)"),
+        types: str = Query("", description="Comma-separated node types to restrict the search to"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .viz_vowl import build_search_results
+
+        type_set = {t for t in types.split(",") if t} or None
+        return build_search_results(_tax(), q, types=type_set)  # type: ignore[return-value]
+
+
+_LIT_TAXONOMY: Final = "taxonomy"
+_LIT_VERSION: Final = "version"
+_LIT_FILE_PATH: Final = "file_path"
+_TAG_MUTATE = "Editing"
+
+
+def _mutation_backend(_st: dict[str, Any]) -> tuple[Any, Any, Path] | None:
+    """Lazily build (service, workspace, path) for the mutation endpoints below,
+    cached on *_st* for the life of the app. ``None`` when there is no file
+    backing this session (nothing a command could persist to — mirrors the TUI's
+    own read-only fallback when it has no path, see ``_make_service``).
+
+    Built from ``_st["taxonomy"]`` the first time a mutation is attempted, not
+    eagerly at app start: most sessions (read-only graph viewing, MCP queries)
+    never call this, so there is nothing to build for them.
+    """
+    path = _st.get(_LIT_FILE_PATH)
+    if path is None:
+        return None
+    cached = _st.get("_mutation_backend")
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    from .core.adapters import StorePersistence
+    from .core.service import TaxonomyService
+    from .core.validation import SkosValidatorAdapter
+    from .workspace import TaxonomyWorkspace
+
+    workspace = TaxonomyWorkspace.from_taxonomy(_st[_LIT_TAXONOMY], path)
+    service = TaxonomyService(workspace, StorePersistence(), SkosValidatorAdapter())
+    backend = (service, workspace, path)
+    _st["_mutation_backend"] = backend
+    return backend
+
+
+def _is_owl_entity(tax: Taxonomy, uri: str) -> bool:
+    return uri in tax.owl_classes or uri in tax.owl_individuals or uri in tax.owl_properties
+
+
+def _field_command(
+    tax: Taxonomy, path: Path, body: EntityFieldIn, owl_cls: Any, skos_cls: Any, **skos_kwargs: Any
+) -> Any:
+    """Build the right command for *body.uri*'s entity kind — a concept goes
+    through the SKOS command, an OWL class/individual/property through the OWL
+    one; anything else is a 422 (the same shape ``OwlSetLabel``'s own silent
+    no-op on an unknown URI would hide otherwise)."""
+    if body.uri in tax.concepts:
+        return skos_cls(path, body.uri, body.lang, body.value, **skos_kwargs)
+    if _is_owl_entity(tax, body.uri):
+        return owl_cls(path, body.uri, body.lang, body.value)
+    raise HTTPException(status_code=422, detail=f"Unknown entity URI: {body.uri}")
+
+
+def _require_mutation_backend(_st: dict[str, Any]) -> tuple[Any, Any, Path]:
+    backend = _mutation_backend(_st)
+    if backend is None:
+        raise HTTPException(
+            status_code=503, detail="No ontology file path configured — editing is unavailable"
+        )
+    return backend
+
+
+def _execute_mutation(
+    _st: dict[str, Any],
+    broadcaster: SSEBroadcaster,
+    workspace: Any,
+    path: Path,
+    result: Any,
+) -> dict[str, Any]:
+    """Translate an already-executed ``CommandResult`` into an HTTP response (or
+    the matching ``HTTPException``), and — on success — sync the live taxonomy
+    reference and broadcast the change (same fan-out ``/api/individuals`` uses).
+
+    A 409 here is a real stale-version rejection, not a lock timeout: the client
+    sent a *base_version* that is no longer current, so someone else edited in
+    between. Re-read the entity and retry — the response carries the version the
+    client should now be on.
+
+    Note the deliberate divergence from the TUI on persistence. The TUI executes
+    with ``persist=False`` and writes on a background worker, because it keeps
+    the file open and the user in the app. This API executes with the default
+    ``persist=True``: an HTTP client that receives 200 is entitled to assume the
+    change reached disk, and deferring the write would make that a lie the
+    server could not honour if it died. Slower on a large file, and correct.
+    """
+    if result.status == "rejected":
+        raise HTTPException(status_code=409, detail=result.error)
+    if result.status == "failed":
+        raise HTTPException(status_code=422, detail=result.error)
+    _st[_LIT_TAXONOMY] = workspace.taxonomies[path]
+    broadcaster._broadcast()
+    return {
+        "status": "ok",
+        _LIT_VERSION: result.version,
+        "affected_uris": list(result.affected_uris),
+    }
+
+
+def _run_field_edit(
+    _st: dict[str, Any],
+    broadcaster: SSEBroadcaster,
+    body: EntityFieldIn,
+    owl_cls: Any,
+    skos_cls: Any,
+    **skos_kwargs: Any,
+) -> dict[str, Any]:
+    """Shared body of every Phase 3 field-edit endpoint: resolve the mutation
+    backend, dispatch to the right command, execute it, and translate the
+    ``CommandResult`` into an HTTP response (or the matching HTTPException)."""
+    service, workspace, path = _require_mutation_backend(_st)
+    command = _field_command(
+        workspace.taxonomies[path], path, body, owl_cls, skos_cls, **skos_kwargs
+    )
+    return _execute_mutation(
+        _st, broadcaster, workspace, path, service.execute(command, base_version=body.base_version)
+    )
+
+
+def _register_mutation_routes(
+    app: FastAPI,
+    _st: dict[str, Any],
+    _check_auth: Any,
+    broadcaster: SSEBroadcaster,
+) -> None:
+    """Editable side panel (Phase 3): label/description edits routed through
+    ``TaxonomyService`` rather than the ad hoc mutate-then-save_fn pattern the
+    schema routes above still use for individual creation — every command here
+    gets the same OCC version check, validation gate, and atomic swap the TUI
+    already relies on (see docs/architecture/graph-editor.md, Phase 3)."""
+
+    @app.get(
+        "/api/version",
+        summary="The current version of the loaded ontology, for optimistic concurrency",
+        tags=[_TAG_MUTATE],
+    )
+    def get_version(_: None = Depends(_check_auth)) -> dict[str, Any]:
+        """What a client sends back as *base_version* on its first edit.
+
+        Zero when nothing has been edited in this session, and zero when there is
+        no file backing it — a read-only session cannot go stale, so the caller
+        needs no special case for it.
+        """
+        backend = _mutation_backend(_st)
+        if backend is None:
+            return {_LIT_VERSION: 0, "editable": False}
+        service, _workspace, path = backend
+        return {_LIT_VERSION: service.version(path), "editable": True}
+
+    @app.post(
+        "/api/entity-label",
+        summary="Set an entity's label (rdfs:label for OWL, skos:prefLabel for SKOS)",
+        tags=[_TAG_MUTATE],
+    )
+    def set_entity_label(
+        body: EntityFieldIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlSetLabel
+        from .core.commands.skos import SkosSetLabel
+
+        return _run_field_edit(_st, broadcaster, body, OwlSetLabel, SkosSetLabel, kind="pref")
+
+    @app.post(
+        "/api/entity-description",
+        summary=("Set an entity's description (rdfs:comment for OWL, skos:definition for SKOS)"),
+        tags=[_TAG_MUTATE],
+    )
+    def set_entity_description(
+        body: EntityFieldIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlSetComment
+        from .core.commands.skos import SkosSetDefinition
+
+        return _run_field_edit(_st, broadcaster, body, OwlSetComment, SkosSetDefinition)
+
+    # ── Phase 4: relations between existing nodes ───────────────────────────
+    # Scoped to the two concrete cases already named in the plan (see
+    # docs/architecture/graph-editor.md, Phase 4): an object-property value
+    # between two individuals, and a subClassOf link between two classes.
+    # Canvas drag-to-create (cytoscape-edgehandles / cytoscape-edge-editing) was
+    # investigated and found to need an undeclared browser dependency each
+    # (edgehandles expects a global `_` with lodash's memoize/throttle;
+    # edge-editing expects konva.js) — shipping either unvendored would throw
+    # on page load for no benefit, so relation editing here is panel-based
+    # instead (reusing the Phase 3 editable-row pattern client-side), not
+    # canvas-drag. See the doc's Phase 4 section for the full reasoning.
+
+    @app.post(
+        "/api/relation",
+        summary="Create or replace an object-property relation between two individuals",
+        tags=[_TAG_MUTATE],
+    )
+    def set_relation(
+        body: IndividualRelationIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlSetIndividualValue
+
+        service, workspace, path = _require_mutation_backend(_st)
+        command = OwlSetIndividualValue(
+            path, body.ind_uri, body.prop_uri, body.target_uri, body.old_target_uri
+        )
+        return _execute_mutation(
+            _st,
+            broadcaster,
+            workspace,
+            path,
+            service.execute(command, base_version=body.base_version),
+        )
+
+    @app.post(
+        "/api/relation/remove",
+        summary="Remove an object-property relation between two individuals",
+        tags=[_TAG_MUTATE],
+    )
+    def remove_relation(
+        body: IndividualRelationRemoveIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlRemoveIndividualValue
+
+        service, workspace, path = _require_mutation_backend(_st)
+        command = OwlRemoveIndividualValue(path, body.ind_uri, body.prop_uri, body.target_uri)
+        return _execute_mutation(
+            _st,
+            broadcaster,
+            workspace,
+            path,
+            service.execute(command, base_version=body.base_version),
+        )
+
+    @app.post(
+        "/api/class-parent",
+        summary="Add a superclass link (rdfs:subClassOf) between two classes",
+        tags=[_TAG_MUTATE],
+    )
+    def add_class_parent(
+        body: ClassParentIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlMoveClass
+
+        service, workspace, path = _require_mutation_backend(_st)
+        # replace=False: add a superclass alongside any existing ones
+        # (polyhierarchy) — a link the user drew, not a reparent that would
+        # silently drop the class's other superclasses.
+        command = OwlMoveClass(path, body.child_uri, body.parent_uri, replace=False)
+        return _execute_mutation(
+            _st,
+            broadcaster,
+            workspace,
+            path,
+            service.execute(command, base_version=body.base_version),
+        )
+
+    @app.post(
+        "/api/class-parent/remove",
+        summary="Remove a superclass link (rdfs:subClassOf) between two classes",
+        tags=[_TAG_MUTATE],
+    )
+    def remove_class_parent(
+        body: ClassParentRemoveIn,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .core.commands.owl import OwlRemoveSuperclass
+
+        service, workspace, path = _require_mutation_backend(_st)
+        command = OwlRemoveSuperclass(path, body.child_uri, body.parent_uri)
+        return _execute_mutation(
+            _st,
+            broadcaster,
+            workspace,
+            path,
+            service.execute(command, base_version=body.base_version),
+        )
 
 
 def _places_wanted(graph: rdflib.Graph, uris: list[str]) -> list[tuple[str, bool]]:

@@ -16,7 +16,9 @@ from ._detail import (
     strip_detail,
 )
 from ._graph_builders import (
+    CLASS_COLLAPSE_LIMIT,
     build_class_links_graph,
+    build_default_vowl_graph,
     build_focused_vowl_graph,
     build_vowl_graph,
 )
@@ -24,6 +26,9 @@ from ._html_template import (
     _HTML_TEMPLATE,
 )
 from ._js_assets import (
+    _COSE_BASE_CACHE_FILE,
+    _COSE_BASE_CDN,
+    _COSE_BASE_VERSION,
     _CY_CACHE_FILE,
     _CY_CDN,
     _CY_VERSION,
@@ -36,11 +41,24 @@ from ._js_assets import (
     _D3_SHAPE_CACHE_FILE,
     _D3_SHAPE_CDN,
     _D3_SHAPE_VERSION,
+    _EXPAND_COLLAPSE_CACHE_FILE,
+    _EXPAND_COLLAPSE_CDN,
+    _EXPAND_COLLAPSE_VERSION,
+    _FCOSE_CACHE_FILE,
+    _FCOSE_CDN,
+    _FCOSE_VERSION,
+    _LAYOUT_BASE_CACHE_FILE,
+    _LAYOUT_BASE_CDN,
+    _LAYOUT_BASE_VERSION,
     _app_js,
+    _cose_base_script_tag,
     _cytoscape_script_tag,
     _d3_hierarchy_script_tag,
     _d3_path_script_tag,
     _d3_shape_script_tag,
+    _expand_collapse_script_tag,
+    _fcose_script_tag,
+    _layout_base_script_tag,
     _treemap_js,
 )
 from ._query_result import (
@@ -71,6 +89,9 @@ from ._render import (
     push_update,
     render_vowl_html,
 )
+from ._search import (
+    build_search_results,
+)
 from ._server import (
     API_PORT,
     _api_file_path,
@@ -95,6 +116,8 @@ __all__ = [
     "class_individuals",
     "collapse_individuals",
     "build_vowl_graph",
+    "build_default_vowl_graph",
+    "CLASS_COLLAPSE_LIMIT",
     "build_focused_vowl_graph",
     "build_class_links_graph",
     "build_concept_relations_graph",
@@ -123,6 +146,22 @@ __all__ = [
     "_D3_SHAPE_CDN",
     "_D3_SHAPE_CACHE_FILE",
     "_d3_shape_script_tag",
+    "_LAYOUT_BASE_VERSION",
+    "_LAYOUT_BASE_CDN",
+    "_LAYOUT_BASE_CACHE_FILE",
+    "_layout_base_script_tag",
+    "_COSE_BASE_VERSION",
+    "_COSE_BASE_CDN",
+    "_COSE_BASE_CACHE_FILE",
+    "_cose_base_script_tag",
+    "_FCOSE_VERSION",
+    "_FCOSE_CDN",
+    "_FCOSE_CACHE_FILE",
+    "_fcose_script_tag",
+    "_EXPAND_COLLAPSE_VERSION",
+    "_EXPAND_COLLAPSE_CDN",
+    "_EXPAND_COLLAPSE_CACHE_FILE",
+    "_expand_collapse_script_tag",
     "_app_js",
     "_treemap_js",
     "strip_detail",
@@ -157,6 +196,7 @@ __all__ = [
     "open_in_browser",
     "push_update",
     "open_focused_in_browser",
+    "build_search_results",
     "_HTML_TEMPLATE",
     "_HTML_TEMPLATE",
 ]
