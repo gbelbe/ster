@@ -39,11 +39,24 @@ def cmd_serve(
     file: Path = typer.Argument(..., help="Ontology file (.ttl / .rdf / .jsonld)."),
     host: str | None = typer.Option(None, "--host", help="Bind host."),
     port: int | None = typer.Option(None, "--port", "-p", help="Bind port."),
+    context_files: list[Path] | None = typer.Option(
+        None,
+        "--context-files",
+        "-x",
+        help="Load these files read-only alongside FILE (repeatable). "
+        "Their entities are visible but locked, and saving never writes to them.",
+    ),
 ) -> None:
     """Start the live graph viewer and ontology REST API.
 
     The browser view auto-refreshes when the file is edited via the ster CLI.
     API docs are available at http://<host>:<port>/docs.
+
+    ``--context-files`` is the same flag, spelled the same way and meaning the
+    same thing, as ``ster edit``: one file is writable and the rest are there to
+    be seen. An ontology split across files — a vocabulary beside the data that
+    uses it, third-party reference data beside your own — is one graph, and the
+    map and relation views are only correct when they can see all of it.
     """
     try:
         from ..api_server import serve
@@ -52,7 +65,12 @@ def cmd_serve(
             "[red]The graph server (fastapi/uvicorn) failed to import — reinstall ster.[/red]"
         )
         raise typer.Exit(1)
-    serve(file.resolve(), host=host, port=port)
+    serve(
+        file.resolve(),
+        host=host,
+        port=port,
+        context=[c.resolve() for c in (context_files or [])],
+    )
 
 
 def _open_dev_artifacts_in_browser(

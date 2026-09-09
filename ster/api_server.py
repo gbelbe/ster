@@ -73,8 +73,14 @@ def _start_file_watcher(
     file_path: Path,
     app: Any,  # FastAPI app — typed as Any to avoid hard import
     loop: asyncio.AbstractEventLoop,
+    context: list[Path] | None = None,
 ) -> None:
-    """Reload taxonomy and broadcast SSE whenever the source file changes."""
+    """Reload taxonomy and broadcast SSE whenever the source file changes.
+
+    The reload carries *context* too. Without it the first edit would drop every
+    context entity from the live view — the file on disk is only the editable
+    half, so re-reading it alone is not the same graph.
+    """
     import watchfiles  # deferred — only available when ster[api] is installed
 
     from .api import SSEBroadcaster
@@ -85,7 +91,7 @@ def _start_file_watcher(
     def _watch() -> None:
         for _ in watchfiles.watch(file_path):
             try:
-                reloaded = load(file_path)
+                reloaded = load(file_path, context=context or [])
                 app.state._ster["taxonomy"] = reloaded  # type: ignore[attr-defined]
                 broadcaster.notify(loop)
             except Exception:  # noqa: BLE001
@@ -303,8 +309,14 @@ def serve(
     file_path: Path,
     host: str | None = None,
     port: int | None = None,
+    context: list[Path] | None = None,
 ) -> None:
     """Start the ster API server and graph viewer.
+
+    *context* names files merged in read-only, exactly as ``ster edit`` does it
+    — same ``store.load`` call, same ``Taxonomy.context_source``, so a context
+    entity is locked here for the same reason and by the same mechanism it is
+    locked in the TUI. Only *file_path* is ever written.
 
     Blocks until the server is stopped (Ctrl-C).
     """
@@ -319,7 +331,8 @@ def serve(
     _port = port if port is not None else cfg_port
 
     token = _load_or_create_token()
-    taxonomy = load(file_path)
+    context = [Path(c) for c in (context or [])]
+    taxonomy = load(file_path, context=context)
     broadcaster = SSEBroadcaster()
 
     def save_fn(tax: Any) -> None:
@@ -334,12 +347,20 @@ def serve(
             full=full,
         )
 
-    app = create_app(taxonomy, token, broadcaster, save_fn, html_fn=html_fn, file_path=file_path)
+    app = create_app(
+        taxonomy,
+        token,
+        broadcaster,
+        save_fn,
+        html_fn=html_fn,
+        file_path=file_path,
+        context=context,
+    )
     # Also store broadcaster in shared state so the watcher can reach it
     app.state._ster["broadcaster"] = broadcaster  # type: ignore[attr-defined]
 
     def _on_startup() -> None:
-        _start_file_watcher(file_path, app, asyncio.get_running_loop())
+        _start_file_watcher(file_path, app, asyncio.get_running_loop(), context)
 
     app.router.on_startup.append(_on_startup)  # type: ignore[attr-defined]
 

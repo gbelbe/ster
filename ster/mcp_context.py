@@ -329,8 +329,9 @@ def vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
     from rdflib.namespace import RDF  # noqa: PLC0415
 
     from .sparql_query import load_graph_cached  # noqa: PLC0415
+    from .store import source_files  # noqa: PLC0415
 
-    graph = load_graph_cached([taxonomy.file_path])
+    graph = load_graph_cached(source_files(taxonomy))
     normalize = graph.namespace_manager.normalizeUri
 
     predicates = Counter(graph.predicates())
@@ -374,8 +375,9 @@ def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
 
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
     from .sparql_query import run_query  # noqa: PLC0415
+    from .store import source_files  # noqa: PLC0415
 
-    result = run_query([taxonomy.file_path], query)
+    result = run_query(source_files(taxonomy), query)
     if result.error:
         return {"error": "query_error", "message": result.error}
     return {

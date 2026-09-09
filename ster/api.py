@@ -268,6 +268,7 @@ def create_app(
     html_fn: Any = None,  # Callable[[], str] — returns rendered HTML for GET /
     file_path: Path | None = None,
     publish_dir: Path | None = None,
+    context: list[Path] | None = None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -283,6 +284,7 @@ def create_app(
     _st: dict[str, Any] = {
         _LIT_TAXONOMY: taxonomy,
         _LIT_FILE_PATH: file_path,
+        _LIT_CONTEXT: list(context or []),
         "html_fn": html_fn,
     }
     _bearer = HTTPBearer(auto_error=False)
@@ -583,6 +585,7 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
 _LIT_TAXONOMY: Final = "taxonomy"
 _LIT_VERSION: Final = "version"
 _LIT_FILE_PATH: Final = "file_path"
+_LIT_CONTEXT: Final = "context"
 _TAG_MUTATE = "Editing"
 
 
@@ -631,6 +634,30 @@ def _field_command(
     if _is_owl_entity(tax, body.uri):
         return owl_cls(path, body.uri, body.lang, body.value)
     raise HTTPException(status_code=422, detail=f"Unknown entity URI: {body.uri}")
+
+
+def _require_editable(tax: Taxonomy, uri: str) -> None:
+    """Refuse a write aimed at an entity that came from a read-only context file.
+
+    ``store.is_editable`` is the single definition of what "editable" means, and
+    this is the same call the rest of ster makes: an entity merged from a context
+    file is visible so the graph reads correctly, and locked because the file it
+    lives in is not the one this session writes.
+
+    Enforced on the server, not merely in the page. The graph viewer already dims
+    a ``readOnly`` node and hides its edit affordances, but a client is free not
+    to — the guarantee has to hold for curl and for any other front-end, or it is
+    a convention rather than a rule.
+    """
+    from .store import is_editable  # noqa: PLC0415
+
+    if not is_editable(tax, uri):
+        source = tax.context_source.get(uri)
+        where = f" (it belongs to {Path(source).name})" if source else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"{uri} is read-only context{where} — only the file this session opened is writable.",
+        )
 
 
 def _require_mutation_backend(_st: dict[str, Any]) -> tuple[Any, Any, Path]:
@@ -690,6 +717,7 @@ def _run_field_edit(
     backend, dispatch to the right command, execute it, and translate the
     ``CommandResult`` into an HTTP response (or the matching HTTPException)."""
     service, workspace, path = _require_mutation_backend(_st)
+    _require_editable(_st[_LIT_TAXONOMY], body.uri)
     command = _field_command(
         workspace.taxonomies[path], path, body, owl_cls, skos_cls, **skos_kwargs
     )
@@ -780,6 +808,7 @@ def _register_mutation_routes(
         from .core.commands.owl import OwlSetIndividualValue
 
         service, workspace, path = _require_mutation_backend(_st)
+        _require_editable(_st[_LIT_TAXONOMY], body.ind_uri)
         command = OwlSetIndividualValue(
             path, body.ind_uri, body.prop_uri, body.target_uri, body.old_target_uri
         )
@@ -803,6 +832,7 @@ def _register_mutation_routes(
         from .core.commands.owl import OwlRemoveIndividualValue
 
         service, workspace, path = _require_mutation_backend(_st)
+        _require_editable(_st[_LIT_TAXONOMY], body.ind_uri)
         command = OwlRemoveIndividualValue(path, body.ind_uri, body.prop_uri, body.target_uri)
         return _execute_mutation(
             _st,
@@ -824,6 +854,7 @@ def _register_mutation_routes(
         from .core.commands.owl import OwlMoveClass
 
         service, workspace, path = _require_mutation_backend(_st)
+        _require_editable(_st[_LIT_TAXONOMY], body.child_uri)
         # replace=False: add a superclass alongside any existing ones
         # (polyhierarchy) — a link the user drew, not a reparent that would
         # silently drop the class's other superclasses.
@@ -848,6 +879,7 @@ def _register_mutation_routes(
         from .core.commands.owl import OwlRemoveSuperclass
 
         service, workspace, path = _require_mutation_backend(_st)
+        _require_editable(_st[_LIT_TAXONOMY], body.child_uri)
         command = OwlRemoveSuperclass(path, body.child_uri, body.parent_uri)
         return _execute_mutation(
             _st,
@@ -1173,11 +1205,11 @@ def _graph_for_locate(taxonomy: Taxonomy) -> Any:
     SPARQL path already reads the file for the same reason.
     """
     from .sparql_query import load_graph  # noqa: PLC0415
-    from .store import taxonomy_to_graph  # noqa: PLC0415
+    from .store import source_files, taxonomy_to_graph  # noqa: PLC0415
 
     if taxonomy.file_path is not None:
         try:
-            return load_graph([taxonomy.file_path])
+            return load_graph(source_files(taxonomy))
         except OSError:
             pass  # unreadable file — fall back rather than fail the request
     return taxonomy_to_graph(taxonomy)

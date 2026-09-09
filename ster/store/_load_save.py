@@ -132,6 +132,29 @@ def _merge_context(taxonomy: Taxonomy, path: Path) -> None:
         taxonomy.namespace_bindings.setdefault(prefix, namespace)
 
 
+def source_files(taxonomy: Taxonomy) -> list[Path]:
+    """Every file this taxonomy was read from — the writable one first.
+
+    Anything that re-reads the source rather than the model needs this, not
+    ``file_path``: the map's geometry lookup and the SPARQL endpoint both parse
+    the file again (a Concept models no ``wgs:lat``, so a rebuilt model has no
+    coordinates to place). Reading only ``file_path`` there silently halves the
+    graph — the context entities are in the model, visible in the tree, and then
+    absent from the map.
+
+    Derived from ``context_source`` rather than passed alongside, so a taxonomy
+    stays sufficient on its own and every front-end gets the same answer without
+    plumbing the list through separately.
+    """
+    files = [taxonomy.file_path] if taxonomy.file_path is not None else []
+    seen = set(files)
+    for path in taxonomy.context_source.values():
+        if path not in seen:
+            seen.add(path)
+            files.append(path)
+    return files
+
+
 def is_editable(taxonomy: Taxonomy, uri: str) -> bool:
     """False only for entities that came from a read-only context file.
 

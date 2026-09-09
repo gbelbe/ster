@@ -88,6 +88,7 @@ from ._load_save import (
     is_editable,
     load,
     save,
+    source_files,
 )
 from ._normalize import (
     _assign_orphan_top_concepts,
@@ -213,6 +214,7 @@ __all__ = [
     "format_parse_error",
     "graph_to_taxonomy",
     "is_editable",
+    "source_files",
     "is_rdfxml_path",
     "load",
     "save",
