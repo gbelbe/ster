@@ -202,70 +202,37 @@ jobs:
       - name: "📡 Code Quality: Sonar push"
         uses: adeo/sonarqube--scan-action@84f845bcd23f3fff451d91b91a910af2c941d60c # v2.5.0
 
-  # ── 5. Publish to PyPI ───────────────────────────────────────────────────────
-  # Runs only on pushes to master (not PRs) after all checks pass.
-  # Skips automatically if the version in pyproject.toml is already on PyPI.
-  # Uses PyPI trusted publishing (OIDC) — no token stored in GitHub secrets.
-  #
-  # One-time setup required on PyPI:
-  #   pypi.org → ster project → Publishing → Add a new publisher
-  #     Publisher:      GitHub Actions
-  #     Owner:          gbelbe
-  #     Repository:     ster
-  #     Workflow name:  ci.yml
-  #     Environment:    (leave blank)
-  publish:
-    name: Publish to PyPI
+  # ── 5. Create the GitHub Release for a fresh tag ────────────────────────────
+  # release-tag.yml already tagged this commit if it earned a release. Creating
+  # the GitHub Release from that tag is what triggers publish.yml — the sole
+  # path to PyPI since "ci: let the commit log decide the version" (#156): a
+  # routine merge tags but does not publish; publishing needs this Release (or
+  # a manual dispatch of publish.yml).
+  release:
+    name: Create GitHub release
     needs: [checks, js, security, test]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
-      id-token: write   # required for OIDC trusted publishing
-      contents: write   # required to create GitHub releases and tags
+      contents: write   # required to create GitHub releases
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0   # full history needed for --generate-notes
+          fetch-depth: 0   # full history needed for --generate-notes and for the tag
 
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
-
-      - name: Check whether this version is already published
-        id: check
-        run: |
-          LOCAL=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          REMOTE=$(curl -sf https://pypi.org/pypi/ster/json \
-            | python -c "import sys,json; print(json.load(sys.stdin)['info']['version'])" \
-            || echo "0.0.0")
-          echo "local=$LOCAL"
-          echo "remote=$REMOTE"
-          if [ "$LOCAL" != "$REMOTE" ]; then
-            echo "publish=true"  >> "$GITHUB_OUTPUT"
-            echo "version=$LOCAL" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build package
-        if: steps.check.outputs.publish == 'true'
-        run: uv build
-
-      - name: Publish to PyPI
-        if: steps.check.outputs.publish == 'true'
-        # Keep in step with publish.yml: twine before v1.14 rejects the
-        # Metadata-Version 2.5 that the current build backend emits.
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          # This job and the tag-triggered publish.yml can race on the same
-          # version; whichever loses should no-op instead of failing the run.
-          skip-existing: true
-
-      - name: Create GitHub release
-        if: steps.check.outputs.publish == 'true'
+      - name: Create the release if this commit is freshly tagged
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --generate-notes
+          TAG="$(git describe --tags --exact-match --match 'v*' 2>/dev/null)" || {
+            echo "HEAD is not on a release tag — nothing to release this run." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Release skipped::HEAD is not on a release tag."
+            exit 0
+          }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice title=Release skipped::$TAG already has a GitHub release."
+            exit 0
+          fi
+          gh release create "$TAG" --title "$TAG" --generate-notes
+          echo "::notice title=Release created::$TAG (triggers publish.yml)."
