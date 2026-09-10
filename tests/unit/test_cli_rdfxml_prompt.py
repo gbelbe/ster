@@ -497,7 +497,9 @@ def test_load_warns_on_format_mismatch(tmp_path, monkeypatch):
             },
         )(),
     )
-    taxonomy = _load(f)
+    # diagnose=False: this fixture models no entity, so the unreadable-file guard
+    # would (correctly) exit before the mismatch warning could be asserted.
+    taxonomy = _load(f, diagnose=False)
     assert taxonomy is not None
     assert any(
         "xml" in line.lower() or "rdf" in line.lower() or "mismatch" in line.lower() or "⚠" in line

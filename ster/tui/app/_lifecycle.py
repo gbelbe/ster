@@ -494,7 +494,37 @@ class _LifecycleMixin(_AppState):
         self._show(detail.OVERVIEW_URI)
         if self._lint_icons_on:
             self._rebuild_tree()
-        self.call_after_refresh(self._maybe_scan_on_open)
+        self.call_after_refresh(self._after_first_paint)
+
+    def _after_first_paint(self) -> None:
+        """A file ster modelled nothing from owns the screen: no lint scan behind it."""
+        if not self._maybe_block_unreadable():
+            self._maybe_scan_on_open()
+
+    def _reload_from_disk(self) -> None:
+        """Re-parse the file and rebuild the browser around the new model.
+
+        Declaring a missing type changes what the *parser* recognises, not just
+        the model, so the entities it unlocks only exist after a second read —
+        no other edit needs this. Deliberately synchronous: it runs once, on a
+        button press, over a file whose browser is still empty.
+        """
+        from ster import store
+
+        if self._path is None:
+            return
+        self._flush_save()
+        taxonomy = store.load(self._path, context=self._context_files)
+        self.tax = taxonomy
+        self._service = self._make_service(taxonomy, self._path)
+        self._individuals_by_class, self._untyped_individuals = data.individual_index(
+            taxonomy, self.lang
+        )
+        self._navigation_index_built = True
+        self._refresh_search_rows()
+        self._invalidate_lint()
+        self._rebuild_tree()
+        self._show(detail.OVERVIEW_URI)
 
     def on_unmount(self) -> None:
         """Flush a pending background save when the app closes."""

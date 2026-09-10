@@ -65,7 +65,9 @@ def cmd_show(
     Pass --plain to print the tree non-interactively and exit.
     """
     taxonomy_file = _file_picker._resolve_file(file)
-    taxonomy = _taxonomy_io._load(taxonomy_file)
+    # The interactive viewer diagnoses an unreadable file itself, in a modal that
+    # can also apply the fix; only the printing paths need the text report.
+    taxonomy = _taxonomy_io._load(taxonomy_file, diagnose=handles or plain)
 
     if handles:
         console.print(render_handle_list(taxonomy, lang))

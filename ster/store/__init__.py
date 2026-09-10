@@ -28,6 +28,15 @@ from ._constants import (
     VOID,
 )
 from ._convert import convert, convert_to_ttl
+from ._diagnosis import (
+    NO_RECOGNISED_TYPES,
+    NO_TRIPLES,
+    Unreadable,
+    declaration_turtle,
+    describe_unreadable,
+    diagnose,
+    type_lines,
+)
 from ._format import (
     _EXCERPT_PREFIX,
     _FORMAT_MAP,
@@ -125,8 +134,11 @@ __all__ = [
     "ALT_URL_PREDICATES",
     "ALT_VIDEO_PREDICATES",
     "IMAGE_PREDICATES",
+    "NO_RECOGNISED_TYPES",
+    "NO_TRIPLES",
     "NOTE_PROPERTY_URI",
     "SCHEMA",
+    "Unreadable",
     "VANN",
     "VOID",
     "_CONCEPT_ANNOTATION_SKIP",
@@ -209,7 +221,10 @@ __all__ = [
     "_xmlns_prefixes",
     "convert",
     "convert_to_ttl",
+    "declaration_turtle",
+    "describe_unreadable",
     "detect_format_mismatch",
+    "diagnose",
     "file_hash",
     "format_parse_error",
     "graph_to_taxonomy",
@@ -219,4 +234,5 @@ __all__ = [
     "load",
     "save",
     "taxonomy_to_graph",
+    "type_lines",
 ]

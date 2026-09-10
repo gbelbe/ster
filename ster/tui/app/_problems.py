@@ -19,6 +19,46 @@ class _ProblemsMixin(_AppState):
         result = self._ontology_lint()
         return fixes.blocking_errors(result[1]) if result else []
 
+    def _maybe_block_unreadable(self) -> bool:
+        """Stand between a model with nothing in it and the empty tree it would paint.
+
+        True when the modal took the screen — the caller must then leave the
+        browser alone. See :mod:`ster.store._diagnosis` for what counts as
+        unreadable and why one condition covers every cause.
+        """
+        from ster.store import diagnose
+        from ster.tui.unreadable_modal import UnreadableModal
+
+        unreadable = diagnose(self.tax)
+        if unreadable is None:
+            return False
+        self.push_screen(UnreadableModal(unreadable, self.source), self._after_unreadable)
+        return True
+
+    def _after_unreadable(self, choice: str | None) -> None:
+        """Apply the declaration, open the empty browser anyway, or quit (cancel)."""
+        from ster.tui.unreadable_modal import UnreadableModal
+
+        if choice == UnreadableModal.DECLARE:
+            self._declare_missing_types()
+        elif choice != UnreadableModal.OPEN:
+            self.exit()
+
+    def _declare_missing_types(self) -> None:
+        """Declare every undeclared type as an owl:Class, then re-read the file."""
+        from ster.core.commands.owl import OwlCreateClass
+        from ster.store import diagnose
+
+        unreadable = diagnose(self.tax)
+        if unreadable is None or self._path is None:
+            return
+        commands = [OwlCreateClass(self._path, uri) for uri, _count in unreadable.undeclared_types]
+        error = self._apply_fix_commands(commands)
+        if error:
+            self.notify(error, severity="error")
+            return
+        self._reload_from_disk()
+
     def _maybe_scan_on_open(self) -> None:
         """First-paint hook: surface blocking errors in the Problems modal, but only when
         the plugin's 'check on open' feature is on. Silent when the file is clean."""
