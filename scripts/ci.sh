@@ -88,17 +88,33 @@ else
 fi
 
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
+# eslint needs node_modules, and node_modules needs the Node the project asks
+# for. A machine on an older Node cannot install it — npm refuses with EBADENGINE
+# — and the gate used to die there with an npx error, which reads like a lint
+# failure and is not one. Missing tooling is a warning; a lint *finding* is still
+# fatal. node --check needs no packages, so it runs either way and keeps the
+# syntax guarantee on every shipped .js.
 step "JS lint (eslint + node --check)"
+if command -v node >/dev/null 2>&1; then
+  for f in ster/assets/*.js kai-extension/*.js; do node --check "$f"; done
+  ok "node --check ($(node --version))"
+else
+  warn "node not found — skipping JS syntax check (CI runs it)"
+fi
+
 if command -v npm >/dev/null 2>&1; then
   if [[ ! -d node_modules ]]; then
-    npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1
+    npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1 || true
   fi
-  npx --no-install eslint .
-  ok "eslint"
-  for f in ster/assets/*.js kai-extension/*.js; do node --check "$f"; done
-  ok "node --check"
+  if [[ -d node_modules ]]; then
+    npx --no-install eslint .
+    ok "eslint"
+  else
+    warn "node_modules unavailable (Node $(node --version 2>/dev/null || echo '?') — package.json wants $(node -p "require('./package.json').engines?.node || 'a newer Node'" 2>/dev/null))"
+    warn "  skipping eslint locally; the GitHub 'Lint JS' job still runs it"
+  fi
 else
-  warn "npm not found — skipping JS lint (CI installs Node)"
+  warn "npm not found — skipping eslint (CI installs Node)"
 fi
 
 # ── 3. Security — pip-audit (dependency CVEs) ────────────────────────────────

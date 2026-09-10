@@ -8,6 +8,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from rdflib import URIRef
+
 from ..handles import assign_handles
 from ..model import Taxonomy
 from . import _to_graph
@@ -114,20 +116,155 @@ def load(
     return taxonomy
 
 
+def _merge_statements_onto(existing: object, incoming: object) -> None:
+    """Add *incoming*'s list-valued statements to *existing*, skipping duplicates.
+
+    A context file routinely says things about an entity the editable file
+    defines — a competitor set records ``LeroyMerlin ownedBy group-adeo`` and
+    ``bu-leroy-merlin-fr competesWith bu-castorama-fr``, statements about our own
+    entities that belong with the rival data rather than with ours. Skipping the
+    whole entity because its URI was already known dropped every one of them: on
+    the retail ontology, 55 triples across 21 subjects, so "which brands does
+    Adeo own" answered from half the graph and every reciprocal competesWith
+    edge was missing.
+
+    Only list fields are merged, and only by adding. A scalar the editable file
+    set (``note``, ``prop_type``, ``is_functional``) is left alone: the file the
+    user can act on owns its own values, and a context file must not overwrite
+    them. Ordering is preserved so a round-trip stays stable.
+    """
+    from dataclasses import fields as dataclass_fields  # noqa: PLC0415
+
+    for field in dataclass_fields(existing):  # type: ignore[arg-type]
+        current = getattr(existing, field.name, None)
+        addition = getattr(incoming, field.name, None)
+        if not isinstance(current, list) or not isinstance(addition, list):
+            continue
+        seen = {_hashable(v) for v in current}
+        for value in addition:
+            key = _hashable(value)
+            if key not in seen:
+                seen.add(key)
+                current.append(value)
+
+
+def _hashable(value: object) -> object:
+    """A comparable key for a statement value — dataclasses are not hashable."""
+    from dataclasses import asdict, is_dataclass  # noqa: PLC0415
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return repr(sorted(asdict(value).items()))
+    return value
+
+
+_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"  # NOSONAR - RDF predicate IRI
+_RDFS_COMMENT = "http://www.w3.org/2000/01/rdf-schema#comment"  # NOSONAR - RDF predicate IRI
+
+
+def _entity_holding(taxonomy: Taxonomy, uri: str, attribute: str) -> object | None:
+    """The first entity registered under *uri* that can hold *attribute*.
+
+    Registry order matters only for a punned URI — a brand that is both a class
+    and an individual. Taking the first match keeps the statement in one place
+    rather than emitting it twice, and the order is fixed so a round-trip is
+    stable.
+    """
+    for registry in _ENTITY_REGISTRIES:
+        entity = getattr(taxonomy, registry).get(uri)
+        if entity is not None and isinstance(getattr(entity, attribute, None), list):
+            return entity
+    return None
+
+
+def _promoted_value(predicate: str, obj: object) -> tuple[str, object]:
+    """Where a residue statement belongs on an entity, and in what shape.
+
+    One table rather than a branch per case: the four kinds differ only in which
+    list they land in and how the value is spelled. Label and Definition are
+    dataclasses, so ``in`` deduplicates without a comparison written by hand.
+    """
+    from ..model import Definition, Label  # noqa: PLC0415
+
+    if isinstance(obj, URIRef):
+        return "property_values", (predicate, str(obj))
+    lang = getattr(obj, "language", None) or ""
+    if predicate == _RDFS_LABEL:
+        return "labels", Label(lang=lang, value=str(obj))
+    if predicate == _RDFS_COMMENT:
+        return "comments", Definition(lang=lang, value=str(obj))
+    return "literal_values", (predicate, str(obj), lang)
+
+
+def _promote_one(taxonomy: Taxonomy, triple: tuple) -> bool:
+    """Attach one residue triple to the entity it describes; False if it cannot be."""
+    attribute, value = _promoted_value(str(triple[1]), triple[2])
+    entity = _entity_holding(taxonomy, str(triple[0]), attribute)
+    if entity is None:
+        return False
+    bucket = getattr(entity, attribute)
+    if value not in bucket:
+        bucket.append(value)
+    return True
+
+
+def _promote_residue(taxonomy: Taxonomy, residue: list, path: Path) -> list:
+    """Attach a context file's residue to entities it talks about; return the rest.
+
+    Loaded on its own, a file that only *references* an entity gives ster nothing
+    to model: ``bu-leroy-merlin-fr competesWith bu-castorama-fr`` carries no
+    rdf:type for its subject, so no individual is built and the triple falls to
+    residue. Merged next to the file that *does* define that subject, it stops
+    being unmodellable — the entity is right there — and leaving it as residue
+    would keep it out of every query for no reason.
+
+    Literals count, not only object properties. A vocabulary file split out from
+    the data it describes is made almost entirely of ``rdfs:label`` and
+    ``rdfs:comment``; promoting only URI objects would leave that whole way of
+    splitting a project invisible.
+
+    Anything with no entity to attach to, or no field able to hold it, stays
+    residue and round-trips untouched. Each promotion is recorded against *path*
+    so the writer knows the statement belongs to that file and not to the one
+    that happens to define its subject.
+    """
+    rest = []
+    for triple in residue:
+        if _promote_one(taxonomy, triple):
+            # Verbatim, not stringified: the writer removes this exact term from
+            # the emitted graph, and a literal's language tag and datatype are
+            # part of its identity.
+            taxonomy.context_statements.setdefault(path, []).append(tuple(triple[:3]))
+        else:
+            rest.append(triple)
+    return rest
+
+
 def _merge_context(taxonomy: Taxonomy, path: Path) -> None:
     """Merge *path* into *taxonomy* read-only, recording where each entity came from.
 
-    A URI already present is kept as-is: the editable definition is the one the
-    user can act on, so it must be the one they see.
+    An entity the editable file does not define is taken whole and marked as
+    coming from *path*. An entity it *does* define keeps its own identity — the
+    definition the user can act on is the one they must see — but the context
+    file's statements about it are added, because a file that says something new
+    about a known entity is the ordinary case, not an error.
+
+    The context file's residue is carried too, keyed by file. Nothing reads it
+    yet; it is captured here because the alternative is discovering later that a
+    file's unmodelled triples were dropped at merge and never existed to write
+    back — the retail competitor set alone carries 66 of them.
     """
     other = load(path)
     for registry in _ENTITY_REGISTRIES:
         target = getattr(taxonomy, registry)
         for uri, entity in getattr(other, registry).items():
             if uri in target:
+                _merge_statements_onto(target[uri], entity)
                 continue
             target[uri] = entity
             taxonomy.context_source[uri] = path
+    kept = _promote_residue(taxonomy, other.residue, path)
+    if kept:
+        taxonomy.context_residue.setdefault(path, []).extend(kept)
     for prefix, namespace in other.namespace_bindings.items():
         taxonomy.namespace_bindings.setdefault(prefix, namespace)
 
@@ -163,6 +300,26 @@ def is_editable(taxonomy: Taxonomy, uri: str) -> bool:
     return uri not in taxonomy.context_source
 
 
+def _drop_other_files_statements(graph: object, taxonomy: Taxonomy, path: Path) -> None:
+    """Remove statements that belong to a *different* file than the one being written.
+
+    Merging makes a context file's statements visible on the entity they talk
+    about, which is what makes them queryable — but the entity is defined in the
+    editable file, so a plain serialisation of the model writes them there too.
+    On the retail ontology that silently moved 51 triples out of the competitor
+    file and into the main one: no data lost, and the separation the two files
+    exist for quietly dissolved.
+
+    Removed from the emitted graph rather than from the model, so the taxonomy
+    the application is still using is untouched.
+    """
+    for other, statements in taxonomy.context_statements.items():
+        if other == path:
+            continue
+        for triple in statements:
+            graph.remove(triple)  # type: ignore[attr-defined]
+
+
 def save(taxonomy: Taxonomy, path: str | Path) -> None:
     """Serialize a Taxonomy back to an RDF file (format detected from extension).
 
@@ -174,6 +331,7 @@ def save(taxonomy: Taxonomy, path: str | Path) -> None:
     path = Path(path)
     fmt = _detect_format(path)
     g = _to_graph.taxonomy_to_graph(taxonomy)
+    _drop_other_files_statements(g, taxonomy, path)
     data = g.serialize(format=fmt)
     _atomic_write_text(path, data)
 

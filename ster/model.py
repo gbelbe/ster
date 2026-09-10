@@ -317,6 +317,20 @@ class Taxonomy:
     # Everything here is excluded when the taxonomy is serialised, so saving can
     # never absorb a context file into the editable one.
     context_source: dict[str, Path] = field(default_factory=dict, compare=False, repr=False)
+    # Residue from each read-only context file, kept per file rather than pooled:
+    # a triple the model cannot describe still belongs to exactly one file, and
+    # writing it back to the wrong one is the same loss as dropping it.
+    # Statements promoted out of a context file's residue onto an entity the
+    # editable file defines — "LeroyMerlin ownedBy group-adeo" said by the rival
+    # file about our brand. Recorded per file so the writer can put them back
+    # where they came from: they are visible on the entity, but they are not the
+    # editable file's to keep.
+    context_statements: dict[Path, list[tuple]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+    context_residue: dict[Path, list[tuple]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
 
     # ── typed accessors over the generic annotation store ─────────────────────
     # These keep the historical ``taxonomy.ontology_title`` etc. API working
