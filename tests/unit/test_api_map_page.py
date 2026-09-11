@@ -48,10 +48,15 @@ def test_map_page_embeds_the_token_for_its_own_calls() -> None:
     assert TOKEN in _client().get("/map").text
 
 
-def test_map_page_posts_to_the_mcp_endpoint() -> None:
+def test_map_page_posts_to_the_query_endpoint() -> None:
+    """Not /mcp. MCP is how an agent reaches this server; a page the server
+    itself rendered should use the API, and the JSON-RPC envelope cost ~48ms a
+    call to wrap an answer that then had to be parsed back out of a string."""
     text = _client().get("/map").text
-    assert "/mcp" in text
-    assert "run_sparql" in text
+    # The fetch target, not the word: the comment above it names /mcp to say
+    # why the page no longer calls it.
+    assert "fetch('/api/sparql_query'" in text
+    assert "fetch('/mcp'" not in text
 
 
 def test_map_page_starts_with_the_query_folded_away() -> None:

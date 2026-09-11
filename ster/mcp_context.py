@@ -321,7 +321,27 @@ def vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
 
     Reads the parsed graph rather than the in-memory taxonomy: a query runs
     against the file, so the predicates on disk are the ones that matter.
+
+    Memoised on the taxonomy. The graph underneath was already cached, but
+    counting every predicate and type across it costs ~100ms on a 22k-triple
+    ontology and both tool descriptions tell an agent to call this *before*
+    each query — so the guidance made it a hot path and nothing was holding the
+    answer. Same lifetime as the other per-model caches: a reload or a mutation
+    builds a new Taxonomy and the count goes with the old one.
     """
+    cached = getattr(taxonomy, "_ster_vocabulary", None)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    computed = _compute_vocabulary(taxonomy)
+    try:
+        taxonomy._ster_vocabulary = computed  # type: ignore[attr-defined]
+    except AttributeError:  # a model that refuses attributes — recompute instead
+        pass
+    return computed
+
+
+def _compute_vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
+    """The uncached walk; see :func:`vocabulary`."""
     if taxonomy.file_path is None:
         return {"error": "no_source_file", "message": "The taxonomy has no file to query."}
 
@@ -366,22 +386,31 @@ def is_read_only_sparql(query: str) -> bool:
     """
     stripped = re.sub(r"#[^\n]*", " ", query)  # drop comments
     stripped = re.sub(r"[\"'][^\"']*[\"']", " ", stripped)  # drop string literals
-    stripped = re.sub(r"<[^>]*>", " ", stripped)  # drop URIs
+    # `[^<>]`, not `[^>]`: with only `>` excluded, an unterminated run of `<`
+    # makes every start position rescan to the end of the string before failing,
+    # which is quadratic — 40k of them took 1.4s, and this reads a request body.
+    # Excluding `<` too lets each attempt fail at the next one, and it is the
+    # more accurate rule anyway: a SPARQL IRI cannot contain either bracket.
+    stripped = re.sub(r"<[^<>]*>", " ", stripped)  # drop URIs
     return not any(re.search(rf"\b{kw}\b", stripped, flags=re.IGNORECASE) for kw in _WRITE_KEYWORDS)
 
 
-def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
-    """Run a read-only SPARQL query against the taxonomy's source file."""
+def sparql_payload(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
+    """Run a read-only SPARQL query and shape the answer for the wire.
+
+    The single implementation behind both transports: ``POST /api/sparql_query`` and
+    the MCP ``run_sparql`` tool call this, so a protocol is a way in and not a
+    place where behaviour lives. Anything that should hold for one — the
+    read-only guard, and whatever access control is layered on later — holds for
+    the other by construction rather than by being remembered twice.
+    """
     if not is_read_only_sparql(query):
         return {"error": "read_only", "message": "This server accepts SELECT/ASK queries only."}
-    if taxonomy.file_path is None:
-        return {"error": "no_source_file", "message": "The taxonomy has no file to query."}
 
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
-    from .sparql_query import run_query_on_graph  # noqa: PLC0415
-    from .store import full_graph  # noqa: PLC0415
+    from .sparql_query import run_query_on_taxonomy  # noqa: PLC0415
 
-    result = run_query_on_graph(full_graph(taxonomy), query)
+    result = run_query_on_taxonomy(taxonomy, query)
     if result.error:
         return {"error": "query_error", "message": result.error}
     return {
@@ -390,3 +419,8 @@ def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
         "row_count": len(result.rows),
         "query_type": result.query_type,
     }
+
+
+def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
+    """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable."""
+    return sparql_payload(taxonomy, query)

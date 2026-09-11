@@ -66,13 +66,48 @@ def _plugin_env(tmp_path, monkeypatch):
     return tmp_path
 
 
+SKO003_ISSUE = {
+    "severity": "error",
+    "check_id": "SKO003",
+    "message": "Literal 'Dog' appears as both skos:prefLabel and skos:altLabel",
+    "subject": "http://ex.org/Dog",
+}
+
+
+@pytest.fixture
+def _scan_finds_one_error(monkeypatch):
+    """Stand in for the SHACL pass, which is not what these tests are about.
+
+    Everything below asks the same question — does the app react correctly to a
+    scan *result*: open the modal, honour the feature toggle, reopen on demand.
+    None of it asks whether pySHACL can spot a duplicate label; one test at the
+    bottom does that, against the real engine.
+
+    Running the real scan in all of them made them slow and, under `-n auto`,
+    flaky: each one paid for a SHACL pass while competing with every other
+    worker, and the 15-second settle deadline is a race nobody should have to
+    win to get a true answer. The value returned here is a verbatim capture of
+    what the real scan produces for SKO003_TTL, so the stand-in cannot drift
+    into testing a shape the engine never emits — the integration test below
+    asserts that it still matches.
+    """
+    monkeypatch.setattr(OntologyApp, "_blocking_errors", lambda self: [dict(SKO003_ISSUE)])
+
+
+@pytest.fixture
+def _scan_finds_nothing(monkeypatch):
+    monkeypatch.setattr(OntologyApp, "_blocking_errors", lambda self: [])
+
+
 def _open(tmp_path, ttl: str) -> OntologyApp:
     src = tmp_path / "onto.ttl"
     src.write_text(ttl, encoding="utf-8")
     return OntologyApp(store.load(src), source="onto.ttl", path=src)
 
 
-def test_scan_on_open_shows_the_problems_modal_for_an_error(_plugin_env, settle):
+def test_scan_on_open_shows_the_problems_modal_for_an_error(
+    _plugin_env, settle, _scan_finds_one_error
+):
     app = _open(_plugin_env, SKO003_TTL)
 
     async def scenario():
@@ -84,7 +119,7 @@ def test_scan_on_open_shows_the_problems_modal_for_an_error(_plugin_env, settle)
     asyncio.run(scenario())
 
 
-def test_clean_file_opens_silently(_plugin_env):
+def test_clean_file_opens_silently(_plugin_env, _scan_finds_nothing):
     app = _open(_plugin_env, CLEAN_TTL)
 
     async def scenario():
@@ -119,7 +154,7 @@ def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env, settle):
     asyncio.run(scenario())
 
 
-def test_scan_skipped_when_check_on_open_is_off(_plugin_env):
+def test_scan_skipped_when_check_on_open_is_off(_plugin_env, _scan_finds_one_error):
     config.set_feature("check_on_open", False)
     app = _open(_plugin_env, SKO003_TTL)
 
@@ -132,7 +167,7 @@ def test_scan_skipped_when_check_on_open_is_off(_plugin_env):
     asyncio.run(scenario())
 
 
-def test_problems_action_reopens_after_dismissal(_plugin_env, settle):
+def test_problems_action_reopens_after_dismissal(_plugin_env, settle, _scan_finds_one_error):
     config.set_feature("check_on_open", False)  # no auto-open; test the '!' action
     app = _open(_plugin_env, SKO003_TTL)
 
@@ -146,3 +181,19 @@ def test_problems_action_reopens_after_dismissal(_plugin_env, settle):
             assert shown
 
     asyncio.run(scenario())
+
+
+# ── the real scanner, once ──────────────────────────────────────────────────
+
+
+def test_the_real_scan_reports_the_duplicate_label(_plugin_env):
+    """The engine itself, with no stand-in — and the contract the fixture above
+    depends on. If pySHACL ever reports this differently, this fails and the
+    stand-in above is shown to be stale, rather than quietly testing fiction."""
+    app = _open(_plugin_env, SKO003_TTL)
+
+    errors = app._blocking_errors()
+
+    assert [e["check_id"] for e in errors] == ["SKO003"]
+    assert errors[0]["severity"] == SKO003_ISSUE["severity"]
+    assert errors[0]["subject"] == SKO003_ISSUE["subject"]

@@ -1,6 +1,6 @@
 """The whole session as one graph — what the map reads.
 
-``full_graph`` differs from ``taxonomy_to_graph`` in exactly two ways, and both
+``full_graph_rdflib`` differs from ``taxonomy_to_graph`` in exactly two ways, and both
 matter to a caller that is reading rather than writing: it includes entities
 merged from context files, and it re-emits those files' residue. The write path
 must do neither, which is why the flag defaults to off.
@@ -17,7 +17,7 @@ import rdflib
 
 from ster import store
 from ster.model import Taxonomy
-from ster.store import full_graph, taxonomy_to_graph
+from ster.store import full_graph_rdflib, taxonomy_to_graph
 
 E = "https://example.org/#"
 
@@ -56,7 +56,7 @@ def loaded(tmp_path):
 
 
 def test_a_context_entity_is_in_the_read_graph(loaded):
-    assert (rdflib.URIRef(E + "Paint"), None, None) in full_graph(loaded)
+    assert (rdflib.URIRef(E + "Paint"), None, None) in full_graph_rdflib(loaded)
 
 
 def test_a_context_entity_is_not_in_the_write_graph(loaded):
@@ -67,7 +67,7 @@ def test_a_context_entity_is_not_in_the_write_graph(loaded):
 def test_context_residue_is_re_emitted_for_reading(loaded):
     """A triple the model could not describe is still part of the graph a query
     runs against; dropping it would make the map answer from half the data."""
-    assert GHOST in full_graph(loaded)
+    assert GHOST in full_graph_rdflib(loaded)
 
 
 def test_context_residue_is_not_written_back_into_the_editable_file(loaded):
@@ -77,7 +77,7 @@ def test_context_residue_is_not_written_back_into_the_editable_file(loaded):
 def test_the_graph_is_built_once_per_model(loaded):
     """The map asks on every pan; rebuilding each time is the difference between
     usable and not."""
-    assert full_graph(loaded) is full_graph(loaded)
+    assert full_graph_rdflib(loaded) is full_graph_rdflib(loaded)
 
 
 def test_a_model_that_refuses_attributes_still_answers(tmp_path):
@@ -102,7 +102,7 @@ def test_a_model_that_refuses_attributes_still_answers(tmp_path):
         {k: v for k, v in loaded.__dict__.items() if not k.startswith("_ster_")}
     )
 
-    first, second = full_graph(stubborn), full_graph(stubborn)
+    first, second = full_graph_rdflib(stubborn), full_graph_rdflib(stubborn)
 
     assert len(first) == len(second) > 0
     assert first is not second, "no attribute was set, so nothing can have been cached"

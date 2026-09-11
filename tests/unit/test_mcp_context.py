@@ -228,8 +228,14 @@ def test_run_sparql_refuses_a_write_query(zoo):
     assert out["error"] == "read_only"
 
 
-def test_run_sparql_without_a_source_file_reports_it(zoo):
-    assert mc.run_sparql(zoo, "SELECT ?s WHERE { ?s ?p ?o }")["error"] == "no_source_file"
+def test_run_sparql_answers_a_taxonomy_that_has_no_file(zoo):
+    """It used to report no_source_file, because the query read the file. It
+    reads the model now, so an in-memory taxonomy answers like any other — a
+    capability gained, not a contract quietly dropped."""
+    out = mc.run_sparql(zoo, "SELECT ?s WHERE { ?s ?p ?o }")
+
+    assert "error" not in out
+    assert out["row_count"] > 0
 
 
 def test_run_sparql_select_returns_columns_and_rows(tmp_path):

@@ -126,7 +126,8 @@ from ._to_graph import (
     _serialize_scheme,
     _serialize_scheme_literals,
     _serialize_scheme_relations,
-    full_graph,
+    full_graph_oxigraph,
+    full_graph_rdflib,
     taxonomy_to_graph,
 )
 
@@ -234,7 +235,8 @@ __all__ = [
     "is_rdfxml_path",
     "load",
     "save",
-    "full_graph",
+    "full_graph_oxigraph",
+    "full_graph_rdflib",
     "taxonomy_to_graph",
     "type_lines",
 ]

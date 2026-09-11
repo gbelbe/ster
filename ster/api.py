@@ -52,6 +52,12 @@ class IndividualIn(BaseModel):
     schema_images: list[str] = []
 
 
+class QueryIn(BaseModel):
+    """A read-only SPARQL query. SELECT and ASK only; see is_read_only_sparql."""
+
+    query: str
+
+
 class _VersionedIn(BaseModel):
     """Optimistic concurrency, for any front-end that talks to this API.
 
@@ -738,6 +744,92 @@ def _register_mutation_routes(
     gets the same OCC version check, validation gate, and atomic swap the TUI
     already relies on (see docs/architecture/graph-editor.md, Phase 3)."""
 
+    # ── the semantic read views ──────────────────────────────────────────
+    # Every MCP tool binds an endpoint, so a protocol is a way in and never the
+    # only way to reach an answer. These three had none: their logic lived in
+    # mcp_context and nothing but MCP could call it.
+    #
+    # They are not duplicates of /api/node-detail and /api/search. Those return
+    # what a *panel* needs — images, scope notes, relations to draw. These
+    # return what a *reader* needs — kind, parents, children, counts, the
+    # vocabulary actually in use. Two projections of one model, for two
+    # audiences, which is why both stay.
+
+    @app.get(
+        "/api/overview",
+        summary="What this ontology is and how much of each thing it holds",
+        tags=[_TAG_VIZ],
+    )
+    def get_overview_endpoint(
+        lang: str = Query(default="en", description="Language for labels."),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        from .mcp_context import overview  # noqa: PLC0415
+
+        return overview(_st[_LIT_TAXONOMY], lang)
+
+    @app.get(
+        "/api/vocabulary",
+        summary="The predicates, types and prefixes this ontology actually uses",
+        tags=[_TAG_VIZ],
+    )
+    def get_vocabulary_endpoint(_: None = Depends(_check_auth)) -> dict[str, Any]:
+        """What to read before composing a query — the terms really present,
+        with counts, rather than the ones a vocabulary says ought to be."""
+        from .mcp_context import vocabulary  # noqa: PLC0415
+
+        return vocabulary(_st[_LIT_TAXONOMY])
+
+    @app.get(
+        "/api/session",
+        summary="What the attached editor is looking at right now",
+        tags=[_TAG_VIZ],
+    )
+    def get_session_endpoint(
+        lang: str = Query(default="en", description="Language for labels."),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        """The one view that is not a function of the ontology.
+
+        The focused entity comes from the live TUI's selection, not from the
+        graph, so no query can recover it — which is exactly why it needs an
+        endpoint of its own rather than being derivable from /api/sparql_query. With
+        nothing attached it degrades to the overview instead of erroring.
+        """
+        from .mcp_context import current_context  # noqa: PLC0415
+
+        return current_context(_st[_LIT_TAXONOMY], _st.get("selection"), lang)
+
+    @app.post(
+        "/api/sparql_query",
+        summary="Run a read-only SPARQL query against the loaded ontology",
+        tags=[_TAG_VIZ],
+    )
+    def run_query_endpoint(
+        body: QueryIn,
+        request: Request,
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
+        """The map's query path, and the place to put access control.
+
+        Exists because /mcp was the only route that accepted SPARQL, so a page
+        in the browser had to speak an agent protocol to its own backend to ask
+        a question. MCP is a transport; the logic belongs here, and the tool now
+        calls the same function this does.
+
+        The Origin check is carried over from /mcp deliberately and is not
+        boilerplate: this is the one endpoint that runs an arbitrary query
+        against a server on the user's own machine, so a page they merely visit
+        must not be able to script it (DNS rebinding). No other /api route needs
+        it because no other one takes a query.
+        """
+        from .mcp_context import sparql_payload  # noqa: PLC0415
+        from .mcp_server import origin_allowed  # noqa: PLC0415
+
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(status_code=403, detail="Origin not allowed")
+        return sparql_payload(_st[_LIT_TAXONOMY], body.query)
+
     @app.get(
         "/api/version",
         summary="The current version of the loaded ontology, for optimistic concurrency",
@@ -1202,7 +1294,7 @@ def _graph_for_locate(taxonomy: Taxonomy) -> Any:
     This used to re-parse the source files, because a rebuilt model dropped
     wgs:lat/long and every GeoSPARQL triple and a map fed from it found nothing
     to place. Residue and literal_values fixed that: the model now carries the
-    arbitrary predicates it once lost, and ``full_graph`` reproduces 22,543 of
+    arbitrary predicates it once lost, and ``full_graph_rdflib`` reproduces 22,543 of
     the retail ontology's 22,546 triples — the three it does not are a second
     file's ``owl:Ontology`` header, which no map draws.
 
@@ -1211,9 +1303,9 @@ def _graph_for_locate(taxonomy: Taxonomy) -> Any:
     file makes about entities the editable file defines. Those are merged into
     the model and are not recoverable by parsing either file alone.
     """
-    from .store import full_graph  # noqa: PLC0415
+    from .store import full_graph_rdflib  # noqa: PLC0415
 
-    return full_graph(taxonomy)
+    return full_graph_rdflib(taxonomy)
 
 
 def _serve_turtle(taxonomy: Taxonomy) -> Response:

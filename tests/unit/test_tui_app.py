@@ -2876,6 +2876,10 @@ def test_editing_keeps_tree_highlight_put_regression(tmp_path) -> None:
             tree.move_cursor(app._uri_nodes[ZOO + "Dog"])
             app._show(ZOO + "Dog")  # detail pane on Dog
             await pilot.pause()
+            # The node object *before* the edit. A rebuild replaces it, so its
+            # identity is how this test knows the rebuild has happened — the one
+            # event that could disturb a highlight it expects to stay put.
+            node_before = app._uri_nodes[ZOO + "Dog"]
             label_row = next(
                 r
                 for r in app.query(DetailRow)
@@ -2886,10 +2890,19 @@ def test_editing_keeps_tree_highlight_put_regression(tmp_path) -> None:
             await pilot.pause()
             app.screen.query_one("#edit-input", Input).value = "Canine"
             await pilot.press("enter")  # submit → command → rebuild
+            # Wait for the *rebuild*, not for the label. The label lands first and
+            # the tree is rebuilt after it, so settling on the label alone let the
+            # assertions below race the very thing that could move the cursor.
+            #
+            # Waiting on the cursor itself would be vacuous here — this test
+            # asserts the highlight *stayed*, so a predicate naming where it
+            # already is holds immediately and waits for nothing. Node identity
+            # is the honest signal: it changes exactly when the rebuild runs.
             await _settle(
                 pilot,
-                lambda: any(
-                    lbl.value == "Canine" for lbl in app.tax.owl_classes[ZOO + "Dog"].labels
+                lambda: (
+                    any(lbl.value == "Canine" for lbl in app.tax.owl_classes[ZOO + "Dog"].labels)
+                    and app._uri_nodes[ZOO + "Dog"] is not node_before
                 ),
             )
             # The highlight stayed on Dog (did not jump to the top of the tree) …

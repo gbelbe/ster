@@ -335,6 +335,31 @@ class Taxonomy:
     # ── typed accessors over the generic annotation store ─────────────────────
     # These keep the historical ``taxonomy.ontology_title`` etc. API working
     # while the single source of truth is ``ontology_annotations``.
+
+    # ── derived caches ───────────────────────────────────────────────────────
+    # Anything named _ster_* is *built from* this model, not part of it: the
+    # rdflib graph, the oxigraph store, the vocabulary count. They are set as
+    # plain attributes so their lifetime is the model's own, which is the whole
+    # point — a reload or an edit produces a new Taxonomy and the derived state
+    # should not survive the transition.
+    #
+    # deepcopy would defeat that. TaxonomyService copies the model before
+    # applying a command, and a default deepcopy clones __dict__ wholesale, so
+    # the new authority inherited a graph built from the *old* one: an edit
+    # landed on disk and /api/sparql_query kept answering from before it. Dropping
+    # them here fixes it for every copier rather than for the one that was
+    # noticed.
+    def __deepcopy__(self, memo: dict) -> Taxonomy:
+        import copy as _copy  # noqa: PLC0415
+
+        clone = self.__class__.__new__(self.__class__)
+        memo[id(self)] = clone
+        for key, value in self.__dict__.items():
+            if key.startswith("_ster_"):
+                continue
+            setattr(clone, key, _copy.deepcopy(value, memo))
+        return clone
+
     def _get_annotation(self, predicate: str) -> str | None:
         for a in self.ontology_annotations:
             if a.predicate == predicate:

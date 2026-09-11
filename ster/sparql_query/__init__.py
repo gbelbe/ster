@@ -59,6 +59,7 @@ from ._execute import (
     find_uri_column,
     run_query,
     run_query_on_graph,
+    run_query_on_taxonomy,
 )
 from ._presets import _PREFIXES, PRESET_QUERIES, SPARQL_KEYWORDS
 from ._types import PresetQuery, QueryResult, UriIndex
@@ -133,5 +134,6 @@ __all__ = [
     "qname_level_candidates",
     "run_query",
     "run_query_on_graph",
+    "run_query_on_taxonomy",
     "warm_graph_caches",
 ]

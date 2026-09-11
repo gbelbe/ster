@@ -900,23 +900,25 @@ const valueOf = p => points.reduce(
   (total, q) => total + (((q === p || descendsFrom(q, p.uri)) && passesFilters(q))
                           ? ownValue(q) : 0), 0);
 
-/* Re-running goes through the server's own read-only SPARQL tool, so the page
-   never needs its own query engine and cannot mutate the ontology. */
+/* Re-running goes through the server's own read-only query endpoint, so the
+   page never needs its own query engine and cannot mutate the ontology.
+
+   /api/sparql_query, not /mcp: MCP is how an agent talks to this server, and a page
+   this same server rendered has no business speaking an agent protocol back to
+   it. The JSON-RPC envelope also cost about 48ms a call to wrap an answer that
+   then had to be parsed back out of a tool-result string. */
 async function runQuery(sparql) {
-  const response = await fetch('/mcp', {
+  const response = await fetch('/api/sparql_query', {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + TOKEN },
-    body: JSON.stringify({
-      jsonrpc:'2.0', id:1, method:'tools/call',
-      params:{ name:'run_sparql', arguments:{ query: sparql } }
-    })
+    body: JSON.stringify({ query: sparql })
   });
-  const payload = await response.json();
-  if (payload.error) throw new Error(payload.error.message || 'query failed');
-  const parsed = JSON.parse(payload.result.content[0].text);
-  if (parsed.error) throw new Error(parsed.error);
+  const parsed = await response.json();
+  if (parsed.error) throw new Error(parsed.message || parsed.error);
+  if (!response.ok) throw new Error('query failed');
   return parsed;
 }
+
 
 const isUri = v => typeof v === 'string' && /^(https?:|urn:)/.test(v);
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : null; };

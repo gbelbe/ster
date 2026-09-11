@@ -267,7 +267,40 @@ def taxonomy_to_graph(taxonomy: Taxonomy, *, include_context: bool = False) -> G
     return g
 
 
-def full_graph(taxonomy: Taxonomy) -> Graph:
+def full_graph_oxigraph(taxonomy: Taxonomy) -> object | None:
+    """The session as a pyoxigraph Store, or None when the native engine is absent.
+
+    Oxigraph answers the map's own query in 8ms against rdflib's 88 — a Rust
+    index versus a Python one — and it is already a core dependency, so it is
+    the default rather than an optimisation to opt into. None is a real answer,
+    not a failure: a build without the native wheel falls back to rdflib and
+    returns the same rows more slowly.
+
+    Built through Turtle because the model's serialiser emits an rdflib Graph;
+    that costs ~275ms of the ~320ms build and is the obvious thing to remove
+    later by emitting quads into the Store directly. Memoised on the taxonomy
+    for the same reason full_graph_rdflib is, and with the same lifetime.
+    """
+    cached = getattr(taxonomy, "_ster_graph_oxigraph", None)
+    if cached is not None:
+        return cached
+    try:
+        import io  # noqa: PLC0415
+
+        import pyoxigraph as ox  # noqa: PLC0415
+    except ImportError:  # native engine not installed — the caller uses rdflib
+        return None
+    data = full_graph_rdflib(taxonomy).serialize(format="turtle")
+    store = ox.Store()
+    store.bulk_load(io.BytesIO(data.encode("utf-8")), format=ox.RdfFormat.TURTLE)
+    try:
+        taxonomy._ster_graph_oxigraph = store  # type: ignore[attr-defined]
+    except AttributeError:  # a model that refuses attributes — recompute instead
+        pass
+    return store
+
+
+def full_graph_rdflib(taxonomy: Taxonomy) -> Graph:
     """Everything the session holds, context included — for reading, never writing.
 
     Memoised on the taxonomy object, which is exactly the right lifetime: a
@@ -276,12 +309,12 @@ def full_graph(taxonomy: Taxonomy) -> Graph:
     on an 18k-triple ontology and the map asks for it on every pan, so the cache
     is not an optimisation but the difference between usable and not.
     """
-    cached = getattr(taxonomy, "_ster_full_graph", None)
+    cached = getattr(taxonomy, "_ster_graph_rdflib", None)
     if cached is not None:
         return cached  # type: ignore[return-value]
     g = taxonomy_to_graph(taxonomy, include_context=True)
     try:
-        taxonomy._ster_full_graph = g  # type: ignore[attr-defined]
+        taxonomy._ster_graph_rdflib = g  # type: ignore[attr-defined]
     except AttributeError:  # a model that refuses attributes — recompute instead
         pass
     return g

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
+from typing import Any, Final
 
 import rdflib
 
@@ -74,7 +75,71 @@ def run_query_on_graph(g: rdflib.Graph, sparql_text: str) -> QueryResult:
     for row in result:
         rows.append([_fmt_value(row[i]) for i in range(len(cols))])  # type: ignore[index]
     _trace(f"run_query_on_graph iteration done in {time.time() - t_iter:.3f}s ({len(rows)} rows)")
-    return QueryResult(columns=cols, rows=rows, query_type="SELECT")
+    return QueryResult(columns=cols, rows=rows, query_type=_LIT_SELECT)
+
+
+_LIT_SELECT: Final = "SELECT"
+
+
+def _oxigraph_result(raw: Any, qtype: str) -> QueryResult:
+    """Normalise a pyoxigraph answer into the shape every caller already reads.
+
+    *raw* is Any rather than object because pyoxigraph returns a different type
+    per query form — a bool for ASK, an iterable of triples for CONSTRUCT, a
+    QuerySolutions carrying .variables for SELECT — and the branch below is
+    precisely the code that knows which. Typing it as object bought three
+    type: ignore comments that said the same thing less clearly, and named the
+    wrong error code while doing so.
+    """
+    if qtype == "ASK":
+        return QueryResult(
+            columns=["result"], rows=[["true" if bool(raw) else "false"]], query_type="ASK"
+        )
+    if qtype in ("CONSTRUCT", "DESCRIBE"):
+        return QueryResult(columns=["triple"], rows=[[str(t)] for t in raw], query_type=qtype)
+    cols = [str(v).lstrip("?") for v in raw.variables]
+    rows = [[_fmt_oxigraph_term(row[i]) for i in range(len(cols))] for row in raw]
+    return QueryResult(columns=cols, rows=rows, query_type=_LIT_SELECT)
+
+
+def _fmt_oxigraph_term(term: object) -> str:
+    """A cell as a plain string, matching what the rdflib path produces."""
+    if term is None:
+        return ""
+    return getattr(term, "value", None) or str(term)
+
+
+def run_query_on_taxonomy(taxonomy: object, sparql_text: str) -> QueryResult:
+    """Execute *sparql_text* against the session's model.
+
+    The one entry point both transports use — ``POST /api/sparql_query`` and the MCP
+    ``run_sparql`` tool — so neither holds query logic and neither can drift
+    from the other.
+
+    Oxigraph by default because it is ~10x faster on the map's own query and is
+    already a core dependency; rdflib when the native engine is missing, which
+    returns the same rows from the same graph, only slower. The choice is made
+    here and nowhere else, so a caller never has to know which engine answered.
+    """
+    if not sparql_text.strip():
+        return QueryResult(columns=[], rows=[], error="Empty query.")
+
+    from ..store import full_graph_oxigraph, full_graph_rdflib  # noqa: PLC0415
+
+    store = full_graph_oxigraph(taxonomy)  # type: ignore[arg-type]
+    if store is None:
+        return run_query_on_graph(full_graph_rdflib(taxonomy), sparql_text)  # type: ignore[arg-type]
+    try:
+        t0 = time.time()
+        raw = store.query(sparql_text)  # type: ignore[attr-defined]
+        qtype = _detect_query_type(sparql_text)
+        result = _oxigraph_result(raw, qtype)
+        _trace(f"run_query_on_taxonomy oxigraph done in {time.time() - t0:.3f}s")
+    # A malformed query is the caller's, not a server fault, so it comes back as
+    # a QueryResult carrying the message rather than a 500.
+    except Exception as exc:  # noqa: BLE001
+        return QueryResult(columns=[], rows=[], error=f"Query error: {exc}")
+    return result
 
 
 def find_uri_column(result: QueryResult) -> int | None:
