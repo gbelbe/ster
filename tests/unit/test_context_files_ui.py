@@ -109,20 +109,28 @@ def test_graph_flags_nothing_without_context():
     assert all(n["readOnly"] == 0 for n in build_vowl_graph(tax)["nodes"])
 
 
-def test_app_js_styles_read_only_nodes():
+def test_app_js_draws_context_entities_like_any_other():
+    """The view is the merged graph, so which file a triple was read from is
+    not something the picture encodes.
+
+    Context nodes used to be drawn with a dashed border at 55% opacity, which
+    made one graph look like two: a solid half you own and a faded half you
+    don't. Provenance is a property of the files, not of the graph.
+    """
     js = _app_js().replace(" ", "")
 
-    assert "selector:'node[readOnly=1]'" in js
-    assert "'border-style':'dashed'" in js
+    assert "selector:'node[readOnly=1]'" not in js, "no style rule keys off the file"
+    assert "'opacity':.55" not in js, "nothing in the graph is faded for being context"
+
+
+def test_app_js_legend_names_no_read_only_class():
+    """No dashed style left to explain, and no second class of node to name."""
+    assert "read-only (context file)" not in _app_js()
 
 
 def test_app_js_carries_the_flag_into_cytoscape():
+    """The flag still travels — `_canEdit` reads it. It just no longer paints."""
     assert "readOnly:n.readOnly||0" in _app_js().replace(" ", "")
-
-
-def test_app_js_legend_explains_the_style():
-    """A dashed border means nothing without a legend row naming it."""
-    assert "read-only (context file)" in _app_js()
 
 
 # ── the tree and the edit guard ───────────────────────────────────────────────

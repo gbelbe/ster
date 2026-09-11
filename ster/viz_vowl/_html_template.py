@@ -120,7 +120,7 @@ __OFFLINE_BANNER__
      that happens to carry a scheme. The data-view keys keep their original
      spelling — "relations" is wired through graph_app.js and the
      .view-relations CSS, so renaming it is a refactor, not a relabel. -->
-<div id="view-tabs"><button class="vt-btn" data-view="relations">Ontology</button><button class="vt-btn" data-view="taxonomy">Taxonomy</button></div>
+<div id="view-tabs"><button class="vt-btn" data-view="relations">Ontology View</button><button class="vt-btn" data-view="taxonomy">Taxonomy View</button></div>
 <div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search…" autocomplete="off" spellcheck="false" autofocus><span id="search-count" class="view-relations"></span><span id="tm-search-count" class="view-taxonomy"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>
 </div>
 <div id="tm-subbar">

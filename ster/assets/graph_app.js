@@ -81,9 +81,6 @@ const CY_STYLE=[
   {selector:'node[type="topconcept"]',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#0e7490','border-color':'#22d3ee','border-width':2}},
   {selector:'node[type="concept"]',style:{'shape':'ellipse','width':56,'height':56,'background-color':'#166534','border-color':'#4ade80','border-width':1.5}},
   {selector:'node[type="datatype"]',style:{'shape':'round-rectangle','background-color':'#fef3c7','border-color':'#f59e0b','border-width':1.5,'color':'#92400e','font-size':10,'padding':'4px 8px','width':'label','height':22}},
-  // Read-only: defined in a context file, not this one. Desaturated with a
-  // dashed border — visibly present in the graph, visibly not yours to edit.
-  {selector:'node[readOnly=1]',style:{'border-style':'dashed','border-width':2,'opacity':.55}},
   {selector:'node.searched',style:{'overlay-color':'#fbbf24','overlay-opacity':.45,'overlay-padding':7}},
   // Dimming recedes a node; it must not take it out of play. Nodes once carried
   // events:'no' here, so a click on a dimmed one fell through to the canvas and
@@ -856,13 +853,11 @@ function iconEl(svgMarkup){
 function legendNodes(hasRoot,hasSub,ntypes,etypes){
   const nodes=[el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Legend'})];
   const nodeLegend=[['class-root','Root Class',hasRoot],['class-sub','Class',hasSub],['individual','Individual',ntypes.has('individual')],['topconcept','Top Concept',ntypes.has('topconcept')],['concept','Concept',ntypes.has('concept')],['scheme','Scheme',ntypes.has('scheme')]];
-  const hasReadOnly=cy.nodes('[readOnly=1]').length>0;
   for(const [type,label,show] of nodeLegend){
     if(!show)continue;
     nodes.push(el('div',{class:'lr'},[iconEl(nodeSvg(type)),document.createTextNode(label)]));
     if(type==='individual')nodes.push(...individualToggleNodes());
   }
-  if(hasReadOnly)nodes.push(el('div',{class:'lr',style:'opacity:.55'},[iconEl(nodeSvg('concept')),document.createTextNode('read-only (context file)')]));
   nodes.push(el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Relations'}));
   const edgeLegend=[['subClassOf','subClassOf'],['objectProperty','objectProperty'],['datatypeProperty','datatypeProperty'],['instanceOf','rdf:type'],['broader','broader'],['inScheme','inScheme']];
   for(const [type,label] of edgeLegend){
@@ -1187,9 +1182,11 @@ function renderDetail(d,det){
 // Only the primary label/description are editable inline, and only in the
 // project's default display language (see docs/architecture/graph-editor.md,
 // Phase 3 — a language picker for editing is a bigger UI, deliberately left
-// out of this slice). A read-only node (from a context file — see the
-// `readOnly` node flag) never gets the edit affordance: TaxonomyService has
-// nowhere on disk to persist a change to it.
+// out of this slice). `readOnly` marks an entity whose only home is a context
+// file; it no longer changes how the node is *drawn* — the picture is the
+// merged graph, and where a triple was read from is not a property of the
+// graph — but it still gates the edit affordance, because TaxonomyService has
+// nowhere on disk to persist a change to such an entity.
 const _EDIT_LANG='en';
 function _canEdit(d){
   return !!API_TOKEN&&!d.readOnly;

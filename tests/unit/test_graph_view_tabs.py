@@ -42,10 +42,10 @@ def test_the_taxonomy_tab_comes_second():
     assert _tab_order(_page())[1] == "taxonomy"
 
 
-def test_the_tabs_read_ontology_then_taxonomy():
+def test_the_tabs_read_ontology_view_then_taxonomy_view():
     """ "Relations" described the edges, not the thing. And "Taxonomie" was the
     one French word in an English interface."""
-    assert _tab_labels(_page()) == ["Ontology", "Taxonomy"]
+    assert _tab_labels(_page()) == ["Ontology View", "Taxonomy View"]
 
 
 def test_a_file_with_both_opens_on_the_ontology():

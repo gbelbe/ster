@@ -9,7 +9,8 @@ relation view are only correct when they can see all of it, and before this
 The mechanism is not new and is deliberately not a second implementation:
 ``store.load(path, context=[...])`` already merged context read-only, recorded
 each entity in ``Taxonomy.context_source`` and excluded it from saving, and the
-graph viewer already dimmed a ``readOnly`` node. What was missing was a way to
+graph viewer already withheld the edit affordance from a ``readOnly`` node.
+What was missing was a way to
 give ``serve`` those files, and — more importantly — an actual refusal on the
 server when a write aims at one. The viewer hiding a button is a convention;
 ``store.is_editable`` consulted on every mutation is the rule, and it holds for
