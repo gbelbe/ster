@@ -169,6 +169,28 @@ function runLayout(){
 cy.on('viewport',_debouncedSave);
 cy.on('dragfree','node',_debouncedSave);
 
+// A class you have opened owns the individuals on screen beneath it, so dragging
+// the class carries them along rather than leaving the cluster behind to be
+// dragged one node at a time. Only expanded classes do this: an individual that
+// arrived some other way is nobody's passenger, and dragging an individual on
+// its own never moves anything else.
+//
+// The delta is measured between drag ticks rather than against the grab point,
+// so the followers track the class continuously instead of jumping at the end.
+let _dragAnchor=null;
+cy.on('grab','node',e=>{const p=e.target.position();_dragAnchor={x:p.x,y:p.y};});
+cy.on('drag','node',e=>{
+  const node=e.target,uri=node.data('id');
+  if(!_dragAnchor||!_expanded.has(uri))return;
+  const p=node.position(),dx=p.x-_dragAnchor.x,dy=p.y-_dragAnchor.y;
+  if(!dx&&!dy)return;
+  _dragAnchor={x:p.x,y:p.y};
+  const followers=cy.nodes().filter(n=>n.data('ofClass')===uri&&n!==node);
+  if(followers.empty())return;
+  followers.positions(n=>{const q=n.position();return{x:q.x+dx,y:q.y+dy};});
+});
+cy.on('free','node',()=>{_dragAnchor=null;});
+
 // ── Smart graph update (live refresh — preserves positions and viewport) ──────
 function applyGraphUpdate(d){
   const z=cy.zoom(),p=cy.pan();
