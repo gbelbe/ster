@@ -480,7 +480,11 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         summary="Return the default (root-level) VOWL graph payload",
         tags=[_TAG_VIZ],
     )
-    def get_graph(full: bool = False, _: None = Depends(_check_auth)) -> dict[str, Any]:
+    def get_graph(
+        full: bool = False,
+        q: str = Query(default="", description="SPARQL CONSTRUCT to draw instead of the model"),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, Any]:
         from .viz_vowl import (
             build_default_vowl_graph,
             build_vowl_graph,
@@ -501,6 +505,15 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         # rest is revealed on click through /api/class-links and
         # /api/concept-relations, already used for that. ?full=true opts back
         # into the unscoped graph.
+        # A query, when given, replaces the model walk entirely. The walk shows
+        # what ster *understands*; a query shows what the graph *contains* —
+        # including statements a context file makes, anything a reasoner added,
+        # and relations no dataclass has a field for. Same payload either way,
+        # so the page renders both without knowing which produced it.
+        if q.strip():
+            from .viz_vowl import graph_from_query  # noqa: PLC0415
+
+            return graph_from_query(_tax(), q)  # type: ignore[return-value]
         builder = build_vowl_graph if full else build_default_vowl_graph
         return collapse_individuals(strip_detail(builder(_tax())))  # type: ignore[return-value]
 

@@ -15,6 +15,7 @@ from ._detail import (
     node_detail,
     strip_detail,
 )
+from ._from_query import graph_from_query
 from ._graph_builders import (
     CLASS_COLLAPSE_LIMIT,
     build_class_links_graph,
@@ -116,6 +117,7 @@ __all__ = [
     "class_individuals",
     "collapse_individuals",
     "build_vowl_graph",
+    "graph_from_query",
     "build_default_vowl_graph",
     "CLASS_COLLAPSE_LIMIT",
     "build_focused_vowl_graph",
