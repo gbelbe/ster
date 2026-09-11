@@ -331,6 +331,10 @@ def vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
     from .sparql_query import load_graph_cached  # noqa: PLC0415
     from .store import source_files  # noqa: PLC0415
 
+    # Deliberately the files, not the model: vocabulary answers "what is in this
+    # document" — which prefixes it binds, which predicates it actually uses —
+    # and that is a question about the text on disk. The map's own reads go
+    # through the model instead; see _graph_for_locate.
     graph = load_graph_cached(source_files(taxonomy))
     normalize = graph.namespace_manager.normalizeUri
 
@@ -374,10 +378,10 @@ def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
         return {"error": "no_source_file", "message": "The taxonomy has no file to query."}
 
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
-    from .sparql_query import run_query  # noqa: PLC0415
-    from .store import source_files  # noqa: PLC0415
+    from .sparql_query import run_query_on_graph  # noqa: PLC0415
+    from .store import full_graph  # noqa: PLC0415
 
-    result = run_query(source_files(taxonomy), query)
+    result = run_query_on_graph(full_graph(taxonomy), query)
     if result.error:
         return {"error": "query_error", "message": result.error}
     return {

@@ -244,15 +244,50 @@ def _serialize_ontology(g: Graph, taxonomy: Taxonomy) -> None:
         g.add((ref, URIRef(annotation.predicate), _annotation_object(annotation)))
 
 
-def taxonomy_to_graph(taxonomy: Taxonomy) -> Graph:
-    g = _model_to_graph(taxonomy)
+def taxonomy_to_graph(taxonomy: Taxonomy, *, include_context: bool = False) -> Graph:
+    """The taxonomy as RDF. Context files are excluded unless asked for.
+
+    Two callers want two different graphs and the difference is not cosmetic.
+    *Writing* one file must never emit another file's entities — that is the
+    backstop described in ``_model_to_graph``. *Reading* the whole session — the
+    map, a SPARQL query — wants everything the user can see, or half the graph
+    goes missing and no amount of correct geometry puts it on screen.
+
+    Defaulting to False keeps the dangerous direction the one you have to ask
+    for by name.
+    """
+    g = _model_to_graph(taxonomy, include_context=include_context)
     # What the model could not describe, put back exactly as it came in.
     for triple in taxonomy.residue:
         g.add(triple)
+    if include_context:
+        for triples in taxonomy.context_residue.values():
+            for triple in triples:
+                g.add(triple)
     return g
 
 
-def _model_to_graph(taxonomy: Taxonomy) -> Graph:
+def full_graph(taxonomy: Taxonomy) -> Graph:
+    """Everything the session holds, context included — for reading, never writing.
+
+    Memoised on the taxonomy object, which is exactly the right lifetime: a
+    mutation swaps in a new Taxonomy and a file-watch reload builds another, so
+    a stale graph cannot outlive the model it came from. Rebuilding costs ~180ms
+    on an 18k-triple ontology and the map asks for it on every pan, so the cache
+    is not an optimisation but the difference between usable and not.
+    """
+    cached = getattr(taxonomy, "_ster_full_graph", None)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    g = taxonomy_to_graph(taxonomy, include_context=True)
+    try:
+        taxonomy._ster_full_graph = g  # type: ignore[attr-defined]
+    except AttributeError:  # a model that refuses attributes — recompute instead
+        pass
+    return g
+
+
+def _model_to_graph(taxonomy: Taxonomy, *, include_context: bool = False) -> Graph:
     g = Graph()
     g.bind("skos", SKOS)
     g.bind("dcterms", DCTERMS)
@@ -276,6 +311,8 @@ def _model_to_graph(taxonomy: Taxonomy) -> Graph:
     # guard is merely not persisted, whereas serialising a context entity here
     # would silently absorb another file into this one.
     def own(registry: dict) -> list:
+        if include_context:
+            return list(registry.items())
         return [(u, e) for u, e in registry.items() if u not in taxonomy.context_source]
 
     for uri, scheme in own(taxonomy.schemes):

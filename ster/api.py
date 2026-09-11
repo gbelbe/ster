@@ -1197,22 +1197,23 @@ def _derive_slug(file_path: Path | None) -> str:
 
 
 def _graph_for_locate(taxonomy: Taxonomy) -> Any:
-    """The source file parsed, for geometry lookups — not the model rebuilt.
+    """The whole session as one graph, for geometry lookups.
 
-    ``taxonomy_to_graph`` returns only what ster's model represents, and a
-    Concept models no arbitrary predicates: rebuilding drops wgs:lat/long and
-    every GeoSPARQL triple, so a map fed from it finds nothing to place. The
-    SPARQL path already reads the file for the same reason.
+    This used to re-parse the source files, because a rebuilt model dropped
+    wgs:lat/long and every GeoSPARQL triple and a map fed from it found nothing
+    to place. Residue and literal_values fixed that: the model now carries the
+    arbitrary predicates it once lost, and ``full_graph`` reproduces 22,543 of
+    the retail ontology's 22,546 triples — the three it does not are a second
+    file's ``owl:Ontology`` header, which no map draws.
+
+    Reading the model rather than the disk means the map shows the session the
+    user is in, not the last thing written, and it sees the statements a context
+    file makes about entities the editable file defines. Those are merged into
+    the model and are not recoverable by parsing either file alone.
     """
-    from .sparql_query import load_graph  # noqa: PLC0415
-    from .store import source_files, taxonomy_to_graph  # noqa: PLC0415
+    from .store import full_graph  # noqa: PLC0415
 
-    if taxonomy.file_path is not None:
-        try:
-            return load_graph(source_files(taxonomy))
-        except OSError:
-            pass  # unreadable file — fall back rather than fail the request
-    return taxonomy_to_graph(taxonomy)
+    return full_graph(taxonomy)
 
 
 def _serve_turtle(taxonomy: Taxonomy) -> Response:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from ster import mcp_context as mc
+from ster import store
 from ster.model import (
     Concept,
     ConceptScheme,
@@ -239,8 +240,10 @@ def test_run_sparql_select_returns_columns_and_rows(tmp_path):
         '<https://example.org/zoo#Dog> a owl:Class ; rdfs:label "Dog"@en .\n',
         encoding="utf-8",
     )
-    tax = Taxonomy()
-    tax.file_path = ttl
+    # Loaded, not just pointed at: run_sparql answers from the session's model
+    # so the map sees context files and unsaved edits, and a Taxonomy carrying
+    # only a path is a shape no caller actually holds.
+    tax = store.load(ttl)
 
     out = mc.run_sparql(tax, "SELECT ?s WHERE { ?s a <http://www.w3.org/2002/07/owl#Class> }")
     assert out["row_count"] == 1
