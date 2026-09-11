@@ -159,8 +159,27 @@ markers = [
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
 [tool.coverage.run]
-source   = ["ster", "semanticdiff"]
-omit     = ["ster/__pycache__/*", "semanticdiff/__pycache__/*"]
+# One root, not one per package. With source = ["ster", "semanticdiff"] coverage
+# writes each file relative to whichever root contains it, so the 41 modules
+# directly under ster/ came out as bare names — "history.py", not
+# "ster/history.py". SonarQube resolves those against both roots, cannot tell
+# ster/history.py from semanticdiff/history.py (both exist), records no coverage
+# for them, and counts every new line as uncovered: a PR whose new code sits
+# only in a top-level module reads 0% while being fully tested.
+#
+# source_pkgs still names every package, so the registration guard in
+# tests/test_package_registration.py keeps its teeth — a new package must be
+# added here or that test fails.
+source_pkgs = ["ster", "semanticdiff"]
+source = ["."]
+relative_files = true
+omit = [
+    "*/__pycache__/*",
+    "tests/*",
+    "scripts/*",
+    ".venv/*",
+    "*/site-packages/*",
+]
 
 [tool.coverage.report]
 exclude_lines = [

@@ -132,13 +132,26 @@ class FileHistory:
 
 
 def open_history(path: Path) -> FileHistory | None:
-    """The history of `path`, or None when it is not inside a git repository."""
+    """The history of `path`, or None when it is not inside a git repository.
+
+    A file that git has never seen gets an empty history rather than an error.
+    ``walk`` raises for an untracked path, which is right for a library — asking
+    for the log of something git does not know about is a mistake worth naming.
+    It is not a mistake here: a newly written ontology sitting beside tracked
+    ones is the ordinary case, and "no history yet" is the honest answer. The
+    caller already says exactly that for a file whose history is empty, so both
+    ways of having no history now reach the same sentence instead of one of them
+    reaching a traceback.
+    """
     repo = repo_root(path)
     if repo is None:
         return None
     relative = str(path.resolve().relative_to(repo.resolve()))
     tags = tags_by_commit(repo)
-    commits = walk(repo, "HEAD", relative)
+    try:
+        commits = walk(repo, "HEAD", relative)
+    except FileNotFoundError:
+        commits = []
     return FileHistory(
         repo=repo,
         path=relative,

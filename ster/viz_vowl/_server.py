@@ -192,7 +192,15 @@ def _ensure_server(directory: Path) -> int:
         return _http_port  # type: ignore[return-value]
     from ..api_server import load_server_config  # noqa: PLC0415
 
-    _cfg_url, preferred = load_server_config()
+    # preferred + 1, never preferred: that port belongs to ster's own API server,
+    # which serves /map, /viz, /onto and /mcp. This static file server used to
+    # try it first and win whenever it started first — one `ster show` left
+    # running took the port, every later TUI session then failed to bind, and
+    # the map opened against *this* handler, which has no /map and answers 404.
+    # A day-old `ster show` did exactly that. Starting one above keeps the two
+    # from ever competing while leaving the origin stable for localStorage.
+    _cfg_url, api_port = load_server_config()
+    preferred = api_port + 1
     handler = functools.partial(_QuietHandler, directory=str(directory))
     for port in [preferred + i for i in range(20)]:
         try:

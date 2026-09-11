@@ -79,7 +79,15 @@ def test_every_package_is_type_checked(packages, prek) -> None:
 
 
 def test_every_package_is_measured_for_coverage(packages, ci) -> None:
-    """Without --cov the patch-coverage gate passes over unmeasured code."""
+    """Without --cov the patch-coverage gate passes over unmeasured code.
+
+    ``--cov=.`` satisfies this for every package at once, and is what ci.yml
+    uses: measuring from the repo root is what makes coverage paths carry their
+    package, which SonarQube needs to resolve them. A per-package flag list is
+    still accepted, so a project that prefers it is not forced to change.
+    """
+    if "--cov=." in ci:
+        return  # the whole tree is measured; no package can be left out
     missing = [p for p in packages if f"--cov={p}" not in ci]
 
     assert not missing, f"no --cov flag in ci.yml for: {missing}"
@@ -87,8 +95,11 @@ def test_every_package_is_measured_for_coverage(packages, ci) -> None:
 
 def test_every_package_is_a_coverage_source(packages) -> None:
     pyproject = _read("pyproject.toml")
-    source = re.search(r"^source\s*=\s*\[([^\]]*)\]", pyproject, re.M)
-    assert source, "no [tool.coverage.run] source list found"
+    # source_pkgs, not source: source is the repo root so coverage paths carry
+    # their package for SonarQube (see the comment in pyproject). The packages
+    # themselves are named in source_pkgs, and that is what must stay complete.
+    source = re.search(r"^source_pkgs\s*=\s*\[([^\]]*)\]", pyproject, re.M)
+    assert source, "no [tool.coverage.run] source_pkgs list found"
     missing = [p for p in packages if f'"{p}"' not in source.group(1)]
 
     assert not missing, f"not in coverage source: {missing}"

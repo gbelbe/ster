@@ -67,6 +67,27 @@ if [[ -n "$UNTRACKED_PY" ]]; then
 fi
 ok "no untracked Python files"
 
+# ── 0c. Pre-flight: stale prek stash patches ─────────────────────────────────
+# prek stashes unstaged changes to ~/.cache/prek/patches/<id>.patch, restores
+# them after the hooks, and does not always delete the patch afterwards. A
+# leftover is replayed on the *next* run, in whatever repository runs next —
+# the cache is global, so a patch abandoned by an unrelated project lands here.
+# What you see is a commit that fails with "files were modified by this hook"
+# and an index carrying changes you never made, which is a genuinely baffling
+# half hour if you do not know to look here.
+step "Pre-flight: stale prek stash patches"
+PREK_PATCHES="${HOME}/.cache/prek/patches"
+STALE=$(ls -1 "$PREK_PATCHES"/*.patch 2>/dev/null || true)
+if [[ -n "$STALE" ]]; then
+  echo -e "${FAIL} Leftover prek stash patches — these will be replayed into your working tree:"
+  while IFS= read -r f; do echo "  $(basename "$f")  ($(wc -l < "$f" | tr -d ' ') lines)"; done <<< "$STALE"
+  echo -e "  Inspect them first — they may hold work from an interrupted run:"
+  echo -e "    cat $PREK_PATCHES/*.patch"
+  echo -e "  Then clear them:  rm $PREK_PATCHES/*.patch"
+  exit 1
+fi
+ok "no stale prek patches"
+
 # ── 1. Ensure main dev deps are installed ─────────────────────────────────────
 step "Install deps (main env)"
 uv sync --extra dev --quiet
@@ -84,7 +105,22 @@ if [[ $FIX -eq 1 ]]; then
   ok "prek (autofix applied — re-run without --fix to verify)"
 else
   $PREK run --all-files
-  ok "prek checks (ruff · format · mypy · import-linter · ratchet)"
+  ok "prek checks (ruff · format · mypy · import-linter)"
+fi
+
+# ── 2a. Complexity ratchet — run directly, exactly as CI does ────────────────
+# Not through prek: the ratchet is diff-aware and needs a base to compare
+# against, and prek has no way to pass one. CI skips it in its prek step for the
+# same reason and invokes the script with the PR's base ref. Running it through
+# prek locally compared against the wrong thing, so a change could pass here and
+# still fail the PR.
+step "Complexity ratchet (vs origin/main)"
+if git rev-parse --verify --quiet origin/main >/dev/null; then
+  uv run python scripts/check_complexity_ratchet.py --base origin/main
+  uv run python scripts/check_complexity_ratchet.py --path semanticdiff --base origin/main
+  ok "complexity ratchet"
+else
+  warn "origin/main not found — skipping ratchet (run: git fetch origin main)"
 fi
 
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────

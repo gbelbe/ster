@@ -92,6 +92,13 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+        # manual: the ratchet is diff-aware and needs --base, which prek has no
+        # way to supply. CI already skips it here and runs the script directly
+        # with the PR's base ref; scripts/ci.sh does the same against
+        # origin/main. Left on the commit hook it compared against the wrong
+        # thing *and* tripped prek's "files were modified" detection on the
+        # commit path while passing every other way.
+        stages: [manual]
 
       - id: complexity-ratchet-semanticdiff
         # Same gate over the second top-level package. The script scans one
@@ -101,6 +108,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+        stages: [manual]  # see complexity-ratchet above
 
       # ── push gate (pre-push only) ────────────────────────────────────────────
       # Don't re-run tests here: block the push unless the full local gate

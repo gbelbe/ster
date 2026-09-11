@@ -153,7 +153,7 @@ class QueryScreen(Screen[None]):
             self.notify("No geographic data in these results", severity="warning")
             return
         if not self._server_ok():
-            self.notify("Couldn't open the map: the ster server isn't running.", severity="warning")
+            self.notify(query.server_unavailable_reason(), severity="warning")
             return
         url = query.map_url(self._editor.text)
         if not self._open(url):

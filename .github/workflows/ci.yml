@@ -139,7 +139,7 @@ jobs:
         # backend — every version in the matrix has it.
         env:
           COVERAGE_CORE: sysmon
-        run: uv run pytest --tb=short -q -n auto --cov=ster --cov=semanticdiff --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+        run: uv run pytest --tb=short -q -n auto --cov=. --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
 
       - name: 📤 Archive coverage reports
         if: matrix.python-version == '3.13'

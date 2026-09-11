@@ -215,6 +215,35 @@ def server_is_running() -> bool:
     return is_running()
 
 
+def server_unavailable_reason() -> str:
+    """Why the map cannot open, in terms the reader can act on.
+
+    "The server isn't running" leaves someone staring at a working TUI with no
+    idea what to do. The usual cause is that the configured port is already
+    held — most often by a `ster show` left running from an earlier session,
+    whose static file server answers 404 to everything the map needs. ster can
+    already name that process (viz_vowl.port_holder exists to offer closing it
+    for the graph view), so the message names it here too rather than leaving
+    the reader to go looking.
+    """
+    from ster.api_server import load_server_config  # noqa: PLC0415
+
+    _url, port = load_server_config()
+    try:
+        from ster.viz_vowl import port_holder  # noqa: PLC0415
+
+        holder = port_holder(port=port)
+    except Exception:  # noqa: BLE001 — a diagnostic must never be the thing that fails
+        holder = None
+    if holder is not None:
+        pid, command = holder
+        return (
+            f"Couldn't open the map: port {port} is held by {command} (pid {pid}), "
+            "so ster's server could not start. Close that process and reopen the file."
+        )
+    return "Couldn't open the map: the ster server isn't running."
+
+
 def open_browser(url: str) -> bool:
     """Open *url* in the user's browser, reporting whether anything opened.
 

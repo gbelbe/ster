@@ -22,6 +22,44 @@ def test_a_file_outside_a_repository_has_no_history(tmp_path: Path) -> None:
     assert open_history(loose) is None
 
 
+def test_an_untracked_file_in_a_repository_has_an_empty_history(
+    ontology_repo: RepoBuilder,
+) -> None:
+    """Inside git, but git has never seen it — the third case, and it crashed.
+
+    open_history documented two outcomes, a history or None for "not in a
+    repository", and the CLI handled exactly those. A file sitting beside
+    tracked ones but never committed is neither: ``walk`` raised
+    FileNotFoundError and it escaped all the way out as a traceback. Writing a
+    new ontology next to existing ones is the ordinary case, not an error.
+    """
+    fresh = ontology_repo.path / "leboncoin-2026-08-20.ttl"
+    fresh.write_text(CLASS_A, encoding="utf-8")
+
+    history = open_history(fresh)
+
+    assert history is not None
+    assert history.rows == []
+
+
+def test_an_untracked_file_reports_the_path_it_was_asked_about(
+    ontology_repo: RepoBuilder,
+) -> None:
+    """An empty history still has to say which file it is empty for — the CLI
+    prints that name back to the user."""
+    fresh = ontology_repo.path / "never-committed.ttl"
+    fresh.write_text(CLASS_A, encoding="utf-8")
+
+    assert open_history(fresh).path == "never-committed.ttl"
+
+
+def test_a_tracked_file_is_unaffected(ontology_repo: RepoBuilder) -> None:
+    """The guard must not swallow a real history — the obvious way to break this."""
+    ontology_repo.commit(ttl=CLASS_A, message="only")
+
+    assert len(open_history(ontology_repo.path / ONTOLOGY).rows) == 1
+
+
 def test_rows_are_newest_first(ontology_repo: RepoBuilder) -> None:
     """A history list reads downwards from what just happened."""
     ontology_repo.commit(ttl=CLASS_A, message="older")

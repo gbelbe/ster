@@ -68,7 +68,7 @@ class _ActionsMixin(_AppState):
         from .. import query as _query
 
         if not _query.server_is_running():
-            self.notify("Couldn't open the map: the ster server isn't running.", severity="warning")
+            self.notify(_query.server_unavailable_reason(), severity="warning")
             return
         url = _query.map_url("")  # empty query → the server's "anything located" default
         if not _query.open_browser(url):
