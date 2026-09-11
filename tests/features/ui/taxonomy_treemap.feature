@@ -1,6 +1,6 @@
 Feature: Taxonomy treemap tab in the graph view
 
-  Scenario: Opening a SKOS-only taxonomy shows the Taxonomie tab by default
+  Scenario: Opening a SKOS-only taxonomy shows the Taxonomy tab by default
     Given a SKOS-only taxonomy
     When the graph view HTML is rendered
     Then the rendered HTML carries a taxonomy payload

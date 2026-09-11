@@ -116,7 +116,11 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 __OFFLINE_BANNER__
 <div id="view-stage">
 <div id="app-toolbar">
-<div id="view-tabs"><button class="vt-btn" data-view="taxonomy">Taxonomie</button><button class="vt-btn" data-view="relations">Relations</button></div>
+<!-- Ontology first: it is the fuller view, and a file with both is an ontology
+     that happens to carry a scheme. The data-view keys keep their original
+     spelling — "relations" is wired through graph_app.js and the
+     .view-relations CSS, so renaming it is a refactor, not a relabel. -->
+<div id="view-tabs"><button class="vt-btn" data-view="relations">Ontology</button><button class="vt-btn" data-view="taxonomy">Taxonomy</button></div>
 <div id="search-wrap"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;opacity:.5"><circle cx="5.5" cy="5.5" r="4" stroke="#475569" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="13" y2="13" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search-box" type="search" placeholder="Search…" autocomplete="off" spellcheck="false" autofocus><span id="search-count" class="view-relations"></span><span id="tm-search-count" class="view-taxonomy"></span><button id="search-clear" title="Clear (Esc)">\xd7</button></div>
 </div>
 <div id="tm-subbar">
@@ -162,7 +166,10 @@ __STER_TREEMAP_JS__
     // search box worked before the Taxonomie tab existed.
     tabs.style.display='none';
   }
-  var initial=hasTax?'taxonomy':'relations';
+  // Ontology unless there is nothing but a scheme. It used to open on
+  // the taxonomy whenever one existed, so an ontology carrying a single
+  // SKOS scheme opened on the smaller half of itself.
+  var initial=hasRel?'relations':'taxonomy';
   body.dataset.activeView=initial;
   // The Relations tab's Cytoscape graph (and its force layout) is expensive
   // to build on a large ontology, so it is only built the first time the tab
