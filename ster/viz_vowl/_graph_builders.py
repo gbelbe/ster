@@ -304,7 +304,7 @@ def _root_class_uris(taxonomy: Taxonomy) -> set[str]:
 CLASS_COLLAPSE_LIMIT = 150
 
 
-def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
+def build_default_vowl_graph(taxonomy: Taxonomy, limit: int = CLASS_COLLAPSE_LIMIT) -> dict:
     """Root-level overview: schemes, root classes and top concepts only.
 
     ``build_vowl_graph`` renders every class, property, and concept at once —
@@ -324,8 +324,8 @@ def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
     Each half is judged on its own size: a large scheme no longer scopes away a
     small ontology it merely sits beside.
     """
-    classes_fit = len(taxonomy.owl_classes) <= CLASS_COLLAPSE_LIMIT
-    concepts_fit = len(taxonomy.concepts) <= CLASS_COLLAPSE_LIMIT
+    classes_fit = len(taxonomy.owl_classes) <= limit
+    concepts_fit = len(taxonomy.concepts) <= limit
     if classes_fit and concepts_fit:
         return build_vowl_graph(taxonomy)
 

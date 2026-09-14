@@ -514,8 +514,17 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
             from .viz_vowl import graph_from_query  # noqa: PLC0415
 
             return graph_from_query(_tax(), q)  # type: ignore[return-value]
-        builder = build_vowl_graph if full else build_default_vowl_graph
-        return collapse_individuals(strip_detail(builder(_tax())))  # type: ignore[return-value]
+        from .api_server import load_graph_viz_config  # noqa: PLC0415
+
+        limits = load_graph_viz_config()
+        graph = (
+            build_vowl_graph(_tax())
+            if full
+            else build_default_vowl_graph(_tax(), limits["classCollapse"])
+        )
+        return collapse_individuals(  # type: ignore[return-value]
+            strip_detail(graph), limits["individualCollapse"]
+        )
 
     @app.get(
         "/api/node-detail",
@@ -539,9 +548,12 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         uri: str = Query(description="URI of the class to expand"),
         _: None = Depends(_check_auth),
     ) -> dict[str, Any]:
+        from .api_server import load_graph_viz_config  # noqa: PLC0415
         from .viz_vowl import class_individuals
 
-        return class_individuals(_tax(), uri)  # type: ignore[return-value]
+        return class_individuals(  # type: ignore[return-value]
+            _tax(), uri, load_graph_viz_config()["classExpand"]
+        )
 
     @app.get(
         "/api/individual-relations",

@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 # A renderer for the server's HTML landing pages: (taxonomy, root_uri, token) -> html.
 # Injected by the caller so this module stays free of any front-end feature
@@ -30,23 +30,89 @@ _DEFAULT_SERVER_URL = "http://127.0.0.1"  # NOSONAR - local-only address, not a 
 _DEFAULT_SERVER_PORT = 8765
 
 
+# How much of a graph the viewer draws before it starts holding things back.
+# Every one is a count of nodes, and every one is editable in `ster setup` →
+# Graph Viz, because the right number depends on the ontology and on the machine
+# looking at it — a 200-class vocabulary on a laptop is not a 20,000-individual
+# dataset on a workstation.
+GRAPH_VIZ_DEFAULTS: Final[dict[str, int]] = {
+    # Above this many classes (or concepts), the first view shows roots only.
+    "classCollapse": 150,
+    # Above this many individuals, they are replaced by a count on their class.
+    "individualCollapse": 150,
+    # Most individuals one class hands back when expanded.
+    "classExpand": 200,
+    # Above this many nodes, edge labels and arrowheads stop being drawn.
+    "lodEdges": 300,
+    # Above this many nodes, node labels stop being drawn and nodes shrink.
+    "lodNodes": 800,
+}
+
+
+def _read_config() -> dict:
+    """The whole config file, or an empty dict when absent or unreadable."""
+    if not _SERVER_CONFIG_FILE.exists():
+        return {}
+    try:
+        data = json.loads(_SERVER_CONFIG_FILE.read_text())
+    except Exception:  # noqa: BLE001 - an unreadable config falls back to defaults
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _merge_config(**changes: object) -> None:
+    """Write *changes* into the config file, leaving every other key alone.
+
+    The file holds more than one section now, so a section that writes it whole
+    silently erases the others — which is exactly what the previous
+    ``save_server_config`` did.
+    """
+    data = _read_config()
+    data.update(changes)
+    _SERVER_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SERVER_CONFIG_FILE.write_text(json.dumps(data, indent=2))
+
+
 def load_server_config() -> tuple[str, int]:
     """Return (url, port) from persisted config, or defaults if not set."""
-    if _SERVER_CONFIG_FILE.exists():
-        try:
-            data = json.loads(_SERVER_CONFIG_FILE.read_text())
-            url = str(data.get("url", _DEFAULT_SERVER_URL))
-            port = int(data.get("port", _DEFAULT_SERVER_PORT))
-            return url, port
-        except Exception:  # noqa: BLE001
-            pass
-    return _DEFAULT_SERVER_URL, _DEFAULT_SERVER_PORT
+    data = _read_config()
+    try:
+        return str(data.get("url", _DEFAULT_SERVER_URL)), int(
+            data.get("port", _DEFAULT_SERVER_PORT)
+        )
+    except (TypeError, ValueError):  # a hand-edited port that is not a number
+        return _DEFAULT_SERVER_URL, _DEFAULT_SERVER_PORT
 
 
 def save_server_config(url: str, port: int) -> None:
-    """Persist server url and port to config file."""
-    _SERVER_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SERVER_CONFIG_FILE.write_text(json.dumps({"url": url, "port": port}))
+    """Persist server url and port, leaving the other config sections intact."""
+    _merge_config(url=url, port=port)
+
+
+def load_graph_viz_config() -> dict[str, int]:
+    """The graph-viewer thresholds, each falling back to its own default.
+
+    Per key rather than all-or-nothing: a config written by an older ster, or
+    hand-edited to set one value, still gets defaults for everything it omits.
+    A value that is not a positive integer is ignored in favour of the default —
+    a threshold of 0 or -1 would mean "always collapse", which no one wants and
+    which reads as a typo.
+    """
+    stored = _read_config().get("graphViz")
+    stored = stored if isinstance(stored, dict) else {}
+    out: dict[str, int] = {}
+    for key, fallback in GRAPH_VIZ_DEFAULTS.items():
+        try:
+            value = int(stored[key])
+        except (KeyError, TypeError, ValueError):
+            value = fallback
+        out[key] = value if value > 0 else fallback
+    return out
+
+
+def save_graph_viz_config(values: dict[str, int]) -> None:
+    """Persist the graph-viewer thresholds, leaving url/port intact."""
+    _merge_config(graphViz={k: int(values[k]) for k in GRAPH_VIZ_DEFAULTS if k in values})
 
 
 def _load_or_create_token() -> str:

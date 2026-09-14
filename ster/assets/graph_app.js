@@ -100,6 +100,29 @@ const CY_STYLE=[
   {selector:'edge[type="inScheme"]',style:{'line-color':'#a78bfa','target-arrow-color':'#a78bfa','line-style':'dotted','opacity':.6,'width':1}},
   {selector:'edge.dimmed',style:{'opacity':.04,'events':'no'}},
   {selector:'edge.hidden',style:{'display':'none'}},
+  // ── Level of detail ────────────────────────────────────────────────────────
+  // Last in the sheet on purpose: Cytoscape resolves equal specificity by order,
+  // so these win over the per-type rules above without having to restate any of
+  // them. Text is what costs — every label is a shaped, measured, background-
+  // boxed draw — so it goes first, and the shapes stay navigable.
+  {selector:'edge.lod-quiet',style:{'label':'','target-arrow-shape':'none'}},
+  {selector:'node.lod-quiet',style:{'label':'','width':20,'height':20,'border-width':1}},
+  // Whatever you point at is still worth reading. The label is hoisted above the
+  // shrunken node rather than centred in it, because at 20px nothing fits inside.
+  {selector:'node.lod-reveal',style:{'label':'data(label)','text-valign':'top',
+    'text-margin-y':-4,'font-size':11,'color':'#0f172a','text-background-color':'#fff',
+    'text-background-opacity':.92,'text-background-padding':'2px','z-index':30}},
+  {selector:'edge.lod-reveal',style:{'label':'data(label)','target-arrow-shape':'triangle',
+    'font-size':10,'text-background-color':'#fff','text-background-opacity':.92,
+    'text-background-padding':'3px','z-index':30}},
+  // ── Kin: every other use of the same relation ──────────────────────────────
+  // Last, so it outranks both the per-type colours and the dimming — the point
+  // of picking one edge is to see the others, which means they have to show
+  // through whatever else is currently receding them.
+  {selector:'edge.kin',style:{'line-color':'#d97706','target-arrow-color':'#d97706',
+    'width':3,'opacity':1,'z-index':40,'events':'yes'}},
+  {selector:'node.kin-end',style:{'border-color':'#d97706','border-width':3,
+    'opacity':1,'z-index':35}},
 ];
 // fcose (cytoscape-fcose, layered on layout-base + cose-base) replaces the
 // plain cose force layout used here through Phase 0: cose's per-iteration cost
@@ -535,6 +558,12 @@ function toggleClassIndividuals(node){
                   .map(e=>({group:'edges',data:{id:e.id+'@'+uri,source:e.source,target:e.target,type:e.type,label:'',cardinality:''}})),
       ]);
       node.data('shownCount',d.shown);
+      // Past a handful, the instanceOf spokes stop telling you anything you
+      // cannot already see — every member of the disc belongs to the class at
+      // its centre — and they cost a line each across the densest part of the
+      // picture. The nodes keep their `ofClass`, so dragging the class still
+      // carries them and collapsing still finds them.
+      if(added.nodes().length>_RING_EDGES_UP_TO)added.edges().addClass('hidden');
       _ringAround(node,added.nodes());
       _settleRing(node,added.nodes());
     })
@@ -542,10 +571,101 @@ function toggleClassIndividuals(node){
 }
 // Clicking inspects, it does not reshape: opening a class's individuals is the
 // overlay button's job, so a click can never move the graph under you.
+// ── Level of detail ──────────────────────────────────────────────────────────
+// A graph too big to read is still worth navigating, so detail is shed in the
+// order it costs: edge labels and arrowheads first (every label is a shaped,
+// measured, background-boxed draw, and arrowheads are per-edge geometry), then
+// node labels, with the nodes themselves shrunk to dots.
+//
+// This is how the large-graph viewers stay usable — Cytoscape Desktop and Gephi
+// both drop labels before anything else — and it is worth being clear about the
+// trade: past the second threshold the picture shows structure, not names. The
+// names come back for whatever you point at, and the detail panel always has
+// them in full.
+//
+// Thresholds are node counts, not edge counts: edges follow from nodes here,
+// and one number the reader can reason about beats two that interact.
+// Defaults match ster/api_server.py GRAPH_VIZ_DEFAULTS; the injected values are
+// what ster setup → Graph Viz last saved. The fallback matters for the offline
+// export, which carries no config.
+const _lodCfg=globalThis.__STER_GRAPH__.lod||{};
+const LOD_QUIET_EDGES_ABOVE=_lodCfg.lodEdges||300;
+const LOD_QUIET_NODES_ABOVE=_lodCfg.lodNodes||800;
+// Three states per layer, not two. 'auto' follows the thresholds; 'on' and
+// 'off' are what the buttons set, and once set they stick — a graph that keeps
+// overruling you the moment it grows is worse than one that never helped.
+let _edgeLabelMode='auto',_nodeLabelMode='auto';
+function _quiet(mode,count,threshold){
+  if(mode==='on')return false;
+  if(mode==='off')return true;
+  return count>threshold;
+}
+function applyLevelOfDetail(){
+  const n=cy.nodes().length;
+  cy.batch(()=>{
+    cy.edges()[_quiet(_edgeLabelMode,n,LOD_QUIET_EDGES_ABOVE)?'addClass':'removeClass']('lod-quiet');
+    cy.nodes()[_quiet(_nodeLabelMode,n,LOD_QUIET_NODES_ABOVE)?'addClass':'removeClass']('lod-quiet');
+  });
+  _refreshLodButtons();
+}
+// The button reads as struck-through when the labels are off, exactly like the
+// edge-type filters beside it, so the bar means one thing throughout.
+function _refreshLodButtons(){
+  const n=cy.nodes().length;
+  const pairs=[['ft-edge-labels',_edgeLabelMode,LOD_QUIET_EDGES_ABOVE],
+               ['ft-node-labels',_nodeLabelMode,LOD_QUIET_NODES_ABOVE]];
+  for(const [id,mode,threshold] of pairs){
+    const btn=document.getElementById(id);
+    if(!btn)continue;
+    const shown=!_quiet(mode,n,threshold);
+    btn.classList[shown?'add':'remove']('active');
+    btn.title=mode==='auto'
+      ?'Automatic — hidden above '+threshold+' nodes (ster setup → Graph Viz). Click to force.'
+      :'Forced '+(mode==='on'?'on':'off')+'. Click to cycle.';
+  }
+}
+// auto → off → on → auto. Starting with 'off' because the reason to touch this
+// button on a big graph is almost always to quieten it further, and on a small
+// one 'off' is the only state that differs from what you already see.
+function _cycleLod(which){
+  const next={auto:'off',off:'on',on:'auto'};
+  if(which==='edge')_edgeLabelMode=next[_edgeLabelMode];
+  else _nodeLabelMode=next[_nodeLabelMode];
+  applyLevelOfDetail();
+}
+// Recomputed whenever the graph changes size — expansion, explore, live refresh
+// — rather than only at first draw, since that is exactly when a graph crosses
+// a threshold. Class changes do not fire add/remove, so this cannot re-enter.
+cy.on('add remove',()=>{clearTimeout(_lodTimer);_lodTimer=setTimeout(applyLevelOfDetail,60);});
+let _lodTimer=null;
+
+// Whatever is selected reads normally, along with the edges touching it: a node
+// with no visible label and no visible connections is not something you can
+// explore from.
+function revealAround(ele){
+  cy.batch(()=>{
+    cy.elements('.lod-reveal').removeClass('lod-reveal');
+    cy.edges('.kin').removeClass('kin');
+    cy.nodes('.kin-end').removeClass('kin-end');
+    if(!ele)return;
+    ele.addClass('lod-reveal');
+    if(ele.isNode())ele.connectedEdges().addClass('lod-reveal').connectedNodes().addClass('lod-reveal');
+    else ele.connectedNodes().addClass('lod-reveal');
+  });
+}
+
 cy.on('tap','node',e=>{
+  revealAround(e.target);
   selectNode(e.target.id());
 });
-cy.on('tap',function(e){if(e.target===cy){highlighted=null;applyHighlight();showDefault();}});
+// Edges were not clickable before. Under level of detail an unlabelled arrow is
+// unreadable unless you can ask it what it is, so a tap reveals it and names it
+// in the panel.
+cy.on('tap','edge',e=>{
+  revealAround(e.target);
+  selectEdge(e.target);
+});
+cy.on('tap',function(e){if(e.target===cy){highlighted=null;revealAround(null);applyHighlight();showDefault();}});
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
 function togglePanel(show){
@@ -590,6 +710,11 @@ wireEdgeTypeFilters();
 const _scBtn=document.getElementById('ft-superclasses');
 if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);
 refreshSuperclassesBtn();
+const _elBtn=document.getElementById('ft-edge-labels');
+if(_elBtn)_elBtn.addEventListener('click',()=>_cycleLod('edge'));
+const _nlBtn=document.getElementById('ft-node-labels');
+if(_nlBtn)_nlBtn.addEventListener('click',()=>_cycleLod('node'));
+applyLevelOfDetail();
 // Every panel button is now wired with addEventListener at creation (see
 // renderDetail/individualToggleNodes/detailRelationsNodes) rather than an
 // inline onclick attribute, so navigateTo no longer needs a global wrapper
@@ -681,6 +806,17 @@ function _fetchRel(type,uri){
 // never has to overlap itself, and fcose still runs afterwards to resolve
 // collisions with the rest of the graph — but starting from a configuration
 // that already reads as "these belong to that".
+// Concentric rings, each packed as tightly as its own circumference allows,
+// rather than one ring holding everything. A single ring has to grow its radius
+// linearly with the count — 200 individuals at 68px put the ring 2,900px out,
+// a circle so wide the class at its centre and the members on its rim are never
+// on screen together. Ring k sits one node-width beyond ring k-1 and seats as
+// many as fit, so the same 200 land inside ~550px.
+//
+// Alternate rings are rotated half a slot so members sit in the gaps of the ring
+// inside them, which is what makes the cluster read as a disc rather than as
+// spokes.
+const _RING_EDGES_UP_TO=10;
 function _ringAround(centre,nodes){
   const n=nodes.length;
   if(!n)return;
@@ -688,12 +824,20 @@ function _ringAround(centre,nodes){
   const centreRadius=Math.max(centre.width(),centre.height())/2;
   let widest=0;
   for(const m of nodes)widest=Math.max(widest,Math.max(m.width(),m.height()));
-  const spacing=widest*1.35;
-  const radius=Math.max(centreRadius+widest,(n*spacing)/(2*Math.PI));
-  nodes.forEach((m,i)=>{
-    const angle=(2*Math.PI*i)/n-Math.PI/2;
-    m.position({x:cp.x+radius*Math.cos(angle),y:cp.y+radius*Math.sin(angle)});
-  });
+  const step=widest*1.05;                       // touching, with a hair of air
+  let placed=0,ring=0;
+  while(placed<n){
+    const radius=centreRadius+widest/2+ring*step;
+    const capacity=Math.max(1,Math.floor((2*Math.PI*radius)/step));
+    const count=Math.min(capacity,n-placed);
+    const offset=(ring%2)?Math.PI/count:0;
+    for(let i=0;i<count;i++){
+      const angle=(2*Math.PI*i)/count+offset-Math.PI/2;
+      nodes[placed+i].position({x:cp.x+radius*Math.cos(angle),y:cp.y+radius*Math.sin(angle)});
+    }
+    placed+=count;
+    ring++;
+  }
 }
 // The ring is the whole point, so it is kept: running a force pass over it
 // pulled members back onto the class (fcose aims for its ideal edge length from
@@ -1264,6 +1408,88 @@ async function loadDetail(uri){
   }
   _detailCache.set(uri,det);
   return det;
+}
+// An edge has no URI of its own and no /api/node-detail entry, so its panel is
+// built from what the edge already carries plus the labels of the two nodes it
+// joins — which is the whole of what an edge *is*. Clicking either end from here
+// hands over to the normal node panel.
+// Two edges are "the same relation" when they carry the same predicate. The
+// payload gives an edge a type and a label and nothing else — no property URI —
+// but for an object or datatype property the label *is* the property name, and
+// for subClassOf / instanceOf / broader the label is empty and the type is the
+// whole of the predicate. So the pair identifies it either way.
+function _edgeKey(edge){
+  return edge.data('type')+'\u0000'+(edge.data('label')||'');
+}
+function _edgeKin(edge){
+  const key=_edgeKey(edge);
+  return cy.edges().filter(e=>_edgeKey(e)===key);
+}
+function selectEdge(edge){
+  clearSearch();
+  highlighted=null;
+  applyHighlight();
+  togglePanel(true);
+  // Picking one use of a relation shows every use of it: which individuals share
+  // a property is a question about the predicate, not about the pair you clicked.
+  const kin=_edgeKin(edge);
+  cy.batch(()=>{
+    kin.addClass('kin').addClass('lod-reveal');
+    kin.connectedNodes().addClass('kin-end').addClass('lod-reveal');
+  });
+  const src=edge.source(),tgt=edge.target();
+  const panel=el('div',{class:'dp'});
+  const back=el('button',{class:'dp-back',text:'← Overview'});
+  back.addEventListener('click',()=>{revealAround(null);showDefault();});
+  panel.append(back);
+  const type=edge.data('type')||'edge';
+  panel.append(el('span',{class:'dp-badge dp-'+type,text:KM[type]||type}));
+  panel.append(el('div',{class:'dp-lbl',text:edge.data('label')||KM[type]||type}));
+  panel.append(el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'From'}));
+  panel.append(_edgeEndNode(src));
+  panel.append(el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'To'}));
+  panel.append(_edgeEndNode(tgt));
+  panel.append(...detailKinNodes(edge,kin));
+  const card=edge.data('cardinality');
+  if(card){
+    panel.append(el('hr',{class:'dp-hr'}),el('div',{class:'dp-sub',text:'Cardinality'}));
+    panel.append(el('div',{class:'dp-rel',text:card}));
+  }
+  panelEl.replaceChildren(panel);
+}
+// Every other use of this relation in the view, listed so the shared structure
+// is readable and not only visible: "which individuals share this property" is
+// usually the question behind clicking one. Capped, because a common predicate
+// can have thousands and a panel that long is not a list, it is a scroll.
+const _KIN_LIST_LIMIT=25;
+function detailKinNodes(edge,kin){
+  const others=kin.filter(e=>e.id()!==edge.id());
+  const nodes=[el('hr',{class:'dp-hr'}),
+    el('div',{class:'dp-sub',text:'Also used here ('+others.length+')'})];
+  if(!others.length){
+    nodes.push(el('div',{class:'dp-rel',text:'Nowhere else in this view.'}));
+    return nodes;
+  }
+  for(const e of others.slice(0,_KIN_LIST_LIMIT)){
+    const row=el('div',{class:'dp-rel'});
+    const btn=el('button',{class:'dp-link',
+      text:(e.source().data('label')||e.source().id())+' → '+(e.target().data('label')||e.target().id())});
+    btn.addEventListener('click',()=>selectEdge(e));
+    row.append(btn);
+    nodes.push(row);
+  }
+  if(others.length>_KIN_LIST_LIMIT){
+    nodes.push(el('div',{class:'dp-rel',
+      text:'…and '+(others.length-_KIN_LIST_LIMIT)+' more, all highlighted in the graph.'}));
+  }
+  return nodes;
+}
+function _edgeEndNode(node){
+  const row=el('div',{class:'dp-rel'});
+  const btn=el('button',{class:'dp-link',text:node.data('label')||node.data('id')});
+  btn.addEventListener('click',()=>{revealAround(node);selectNode(node.data('id'));});
+  row.append(btn);
+  return row;
 }
 function showDetail(d){
   if(!_detailCache.has(d.id)){

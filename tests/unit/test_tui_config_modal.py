@@ -477,6 +477,9 @@ def test_opens_on_tab_bar_and_space_switches_tabs(tmp_path) -> None:
             await pilot.press("space")  # space cycles to the next tab
             await pilot.pause()
             assert modal.query_one(TabbedContent).active == "cfg-tab-props"
+            await pilot.press("space")  # → Graph Viz tab
+            await pilot.pause()
+            assert modal.query_one(TabbedContent).active == "cfg-tab-graphviz"
             await pilot.press("space")  # → Plugins tab
             await pilot.pause()
             assert modal.query_one(TabbedContent).active == "cfg-tab-plugins"

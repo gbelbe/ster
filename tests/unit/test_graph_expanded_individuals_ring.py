@@ -35,14 +35,45 @@ def test_expansion_places_individuals_on_a_ring():
     assert "function_ringAround(centre,nodes){" in js
 
 
-def test_the_radius_grows_with_the_count():
-    """A fixed radius would make a large class overlap itself: the ring has to
-    be big enough to seat every member side by side."""
-    assert "constradius=Math.max(centreRadius+widest,(n*spacing)/(2*Math.PI));" in _js()
+def test_the_cluster_grows_in_rings_rather_than_in_radius():
+    """One ring has to grow its radius linearly with the count: 200 members at
+    68px put it 2,922px out, a circle whose centre and rim are never on screen
+    together. Ring k sits one node-width beyond ring k-1, so the same 200 land
+    inside 576px — eight rings instead of one enormous one."""
+    js = _js()
+
+    assert "constradius=centreRadius+widest/2+ring*step;" in js
+    assert "constcapacity=Math.max(1,Math.floor((2*Math.PI*radius)/step));" in js
 
 
-def test_members_are_evenly_spaced():
-    assert "constangle=(2*Math.PI*i)/n-Math.PI/2;" in _js()
+def test_each_ring_is_packed_to_its_own_circumference():
+    """`count` is what fits on *this* ring, not a share of the total."""
+    assert "constcount=Math.min(capacity,n-placed);" in _js()
+
+
+def test_alternate_rings_are_staggered():
+    """Members sitting in the gaps of the ring inside them is what makes the
+    cluster read as a disc rather than as spokes."""
+    assert "constoffset=(ring%2)?Math.PI/count:0;" in _js()
+
+
+def test_members_are_evenly_spaced_within_a_ring():
+    assert "constangle=(2*Math.PI*i)/count+offset-Math.PI/2;" in _js()
+
+
+def test_the_spokes_are_dropped_once_the_disc_speaks_for_itself():
+    """Past a handful the instanceOf edges say nothing the disc does not, and
+    cost a line each across the densest part of the picture."""
+    js = _js()
+
+    assert "const_RING_EDGES_UP_TO=10;" in js
+    assert "if(added.nodes().length>_RING_EDGES_UP_TO)added.edges().addClass('hidden');" in js
+
+
+def test_hiding_the_spokes_keeps_the_members_attached():
+    """`ofClass` is what dragging the class and collapsing it both read, and it
+    is set on the node, not on the edge."""
+    assert "n.data('ofClass')===uri" in _js()
 
 
 def test_the_ring_is_settled_outward_not_force_laid_out():

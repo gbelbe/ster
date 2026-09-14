@@ -114,7 +114,17 @@ def _data_script(graph: dict, meta: dict, api_token: str, taxonomy: dict | None 
     is omitted entirely when there is no SKOS content, so the boot script can
     tell "no taxonomy" apart from "empty taxonomy" with a single key check.
     """
-    payload: dict[str, Any] = {"data": strip_detail(graph), "meta": meta, "token": api_token}
+    from ..api_server import load_graph_viz_config  # noqa: PLC0415 - avoids an import cycle
+
+    payload: dict[str, Any] = {
+        "data": strip_detail(graph),
+        "meta": meta,
+        "token": api_token,
+        # Level-of-detail thresholds travel with the data rather than being baked
+        # into the asset: the asset is cached and shared, the thresholds are the
+        # viewer's own setting (ster setup → Graph Viz).
+        "lod": load_graph_viz_config(),
+    }
     if taxonomy is not None:
         payload["taxonomy"] = taxonomy
     return "<script>window.__STER_GRAPH__=" + json.dumps(payload, ensure_ascii=False) + ";</script>"

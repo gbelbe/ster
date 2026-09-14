@@ -57,6 +57,12 @@ def render_vowl_html(
     classes, top concepts) when a server backs the page — *full* opts back
     into the unscoped graph, and a "Show all nodes" button offers the same.
     """
+    from ..api_server import load_graph_viz_config  # noqa: PLC0415 - avoids an import cycle
+
+    # Read once per render, not per builder call: the thresholds are a user
+    # setting (ster setup → Graph Viz), and one page should be laid out by one
+    # consistent set of them even if the file changes underneath.
+    _viz_limits = load_graph_viz_config()
     title = _ontology_title(taxonomy, file_path)
     show_all_btn = ""
     if root_uri:
@@ -73,11 +79,11 @@ def render_vowl_html(
         # a no-op below CLASS_COLLAPSE_LIMIT (small ontology, nothing to
         # scope) — the button mirrors that, and individuals still get
         # collapsed below their own separate threshold either way.
-        graph = _detail.collapse_individuals(_graph_builders.build_default_vowl_graph(taxonomy))
-        scoped = (
-            len(taxonomy.owl_classes) + len(taxonomy.concepts)
-            > _graph_builders.CLASS_COLLAPSE_LIMIT
+        graph = _detail.collapse_individuals(
+            _graph_builders.build_default_vowl_graph(taxonomy, _viz_limits["classCollapse"]),
+            _viz_limits["individualCollapse"],
         )
+        scoped = len(taxonomy.owl_classes) + len(taxonomy.concepts) > _viz_limits["classCollapse"]
         show_all_btn = _SHOW_ALL_BTN_HTML if scoped else ""
     else:
         graph = _graph_builders.build_vowl_graph(taxonomy)
@@ -89,7 +95,7 @@ def render_vowl_html(
         # through /api/class-individuals, and an offline export has no endpoint
         # to ask, so collapsing one would put them out of reach for good.
         if api_token:
-            graph = _detail.collapse_individuals(graph)
+            graph = _detail.collapse_individuals(graph, _viz_limits["individualCollapse"])
     meta = _taxonomy_meta(taxonomy, file_path)
     treemap = build_taxonomy_treemap(taxonomy) if has_taxonomy(taxonomy) else None
     return (

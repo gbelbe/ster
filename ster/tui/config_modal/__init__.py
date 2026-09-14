@@ -37,6 +37,7 @@ from ._general_mixin import _GeneralMixin
 from ._general_widgets import _LangGroup as _LangGroup
 from ._general_widgets import _SecretInput as _SecretInput
 from ._general_widgets import _ServerGroup as _ServerGroup
+from ._graphviz_mixin import _GraphVizMixin
 from ._labels import suggest_label as suggest_label
 from ._messages import DeclareAnnotationProperty as DeclareAnnotationProperty
 from ._messages import EnforceShaclRequested as EnforceShaclRequested
@@ -72,6 +73,7 @@ __all__ = [
 class ConfigModal(  # type: ignore[misc]
     _GeneralMixin,
     _PropsMixin,
+    _GraphVizMixin,
     _PluginsMixin,
     _SemanticLintMixin,
     _NavigationMixin,
@@ -239,6 +241,8 @@ class ConfigModal(  # type: ignore[misc]
                 yield from self._general_tab()
             with TabPane("Annotation properties", id="cfg-tab-props"):
                 yield from self._props_tab()
+            with TabPane("Graph Viz", id="cfg-tab-graphviz"):
+                yield from self._graphviz_tab()
             with TabPane("Plugins", id="cfg-tab-plugins"):
                 yield from self._plugins_tab()
             from ster import plugins
