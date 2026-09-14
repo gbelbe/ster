@@ -226,12 +226,26 @@ def settle():
     A deadline holds regardless of how loaded the machine is; a passing test
     still returns as soon as the predicate is true, so this costs nothing when
     things are fast.
+    The deadline scales under coverage. ``scripts/ci.sh`` runs the suite with
+    ``--cov``, and instrumentation costs roughly a factor of three on every
+    bytecode — so a real SHACL pass that settles in seconds uncovered can miss a
+    fixed 15s deadline while ``-n auto`` workers compete for the same cores.
+    That is exactly how this bit: on one commit the uninstrumented suite passed
+    4,684 tests clean while the gate failed twice on the same commit, a
+    different scan-on-open test each time, both because the scan had not landed
+    yet — ``assert 0 == 1`` on the worklist, then no ``.problem-fix`` button to
+    press.
     """
     import asyncio
+    import sys
     import time
 
+    # pytest-cov imports coverage into each worker before collection, so its
+    # presence is the signal — nothing to keep in sync with the CI script.
+    scale = 3.0 if "coverage" in sys.modules else 1.0
+
     async def _settle(pilot, predicate, *, timeout: float = 15.0) -> bool:
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout * scale
         while time.monotonic() < deadline:
             if predicate():
                 return True

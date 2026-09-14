@@ -140,7 +140,12 @@ def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env, settle):
 
     async def scenario():
         async with app.run_test(size=(120, 40)) as pilot:
-            await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            appeared = await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+            # Without this the timeout surfaces as NoMatches on '.problem-fix',
+            # which reads like a missing button rather than a scan that had not
+            # finished — the two failures this test produced in CI said exactly
+            # that, and neither named the cause.
+            assert appeared, "the real SHACL scan did not open the problems modal in time"
             app.screen.query_one(".problem-fix", Button).press()
             # The auto-fix drops the last row → the modal dismisses itself.
             closed = await settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))
