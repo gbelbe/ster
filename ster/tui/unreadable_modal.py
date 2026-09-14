@@ -78,9 +78,14 @@ class UnreadableModal(ModalBase[str | None]):
 
     def on_mount(self) -> None:
         self.query_one("#unreadable-box").border_title = f"ster cannot read {self._file_name}"
-        first = self.query(Button).first()
-        if first is not None:
-            first.focus()
+        # DOMQuery.first() raises NoMatches on an empty query rather than
+        # returning None, so the `is not None` guard this replaces could never
+        # run — and on_mount fires before the children are guaranteed composed,
+        # so the query really can be empty. That crashed the modal on open under
+        # load, which is a worse outcome than not moving the focus.
+        buttons = self.query(Button)
+        if buttons:
+            buttons.first().focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id)

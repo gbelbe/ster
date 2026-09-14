@@ -104,6 +104,10 @@ def _open(ctx, settle) -> None:
             await settle(pilot, lambda: _scan_settled(app))
             if _errors_found(app):
                 assert await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
+                # The screen is active before its rows mount, and the next line
+                # counts rows — so waiting on the screen alone returned a modal
+                # that was open and empty, and the count asserted 0 == 1.
+                await settle(pilot, lambda: bool(app.screen.query(ProblemRow)))
             ctx["modal_open"] = isinstance(app.screen, ProblemsModal)
             ctx["rows"] = len(app.screen.query(ProblemRow)) if ctx["modal_open"] else 0
 

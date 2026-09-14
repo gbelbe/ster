@@ -140,12 +140,15 @@ def test_auto_fix_removes_the_duplicate_label_and_closes(_plugin_env, settle):
 
     async def scenario():
         async with app.run_test(size=(120, 40)) as pilot:
-            appeared = await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
-            # Without this the timeout surfaces as NoMatches on '.problem-fix',
-            # which reads like a missing button rather than a scan that had not
-            # finished — the two failures this test produced in CI said exactly
-            # that, and neither named the cause.
-            assert appeared, "the real SHACL scan did not open the problems modal in time"
+            # Wait for the button, not for the screen. The modal becomes the
+            # active screen before its rows have mounted, so a predicate on the
+            # screen alone returns while the thing the next line uses does not
+            # exist yet — which is how this failed in CI as
+            # `NoMatches: '.problem-fix' on ProblemsModal()`: the modal was
+            # open, and empty. Waiting on the screen was a proxy for waiting on
+            # the scan, and a proxy is exactly what this fixture exists to avoid.
+            ready = await settle(pilot, lambda: bool(app.screen.query(".problem-fix")))
+            assert ready, "the problems modal never rendered a fix control"
             app.screen.query_one(".problem-fix", Button).press()
             # The auto-fix drops the last row → the modal dismisses itself.
             closed = await settle(pilot, lambda: not isinstance(app.screen, ProblemsModal))

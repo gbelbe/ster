@@ -43,9 +43,11 @@ class ChoiceModal(ModalBase[str | None]):
 
     def on_mount(self) -> None:
         self.query_one("#choice-box").border_title = self._prompt
-        first = self.query(Button).first()
-        if first is not None:
-            first.focus()
+        # Same as UnreadableModal: DOMQuery.first() raises on an empty query
+        # rather than returning None, so this guard never ran.
+        buttons = self.query(Button)
+        if buttons:
+            buttons.first().focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         assert event.button.id is not None
