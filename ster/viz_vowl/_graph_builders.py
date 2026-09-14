@@ -290,10 +290,17 @@ def _root_class_uris(taxonomy: Taxonomy) -> set[str]:
     return set(taxonomy.owl_classes) - non_root
 
 
-# Above this many classes + concepts, the default view shows roots only.
-# Mirrors INDIVIDUAL_COLLAPSE_LIMIT's reasoning exactly, one level up the
-# tree: below the threshold a taxonomy is legible whole, and scoping it
-# would only hide things (see test_a_small_ontology_is_left_whole_on_the_page_too).
+# Above this many classes — or this many concepts — that half of the default
+# view shows roots only. Mirrors INDIVIDUAL_COLLAPSE_LIMIT's reasoning exactly,
+# one level up the tree: below the threshold a taxonomy is legible whole, and
+# scoping it would only hide things (see
+# test_a_small_ontology_is_left_whole_on_the_page_too).
+#
+# The budget is per half, not shared. An OWL ontology and a SKOS scheme are
+# drawn in two separate tabs, so neither can crowd the other on screen, and a
+# shared budget meant that opening a 1,373-concept taxonomy alongside a
+# 23-class metamodel collapsed the metamodel to 19 root classes — hiding an
+# ontology that was perfectly legible and had not grown at all.
 CLASS_COLLAPSE_LIMIT = 150
 
 
@@ -313,15 +320,41 @@ def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
     so — unlike filtering ``build_vowl_graph``'s output after the fact — the
     (potentially expensive) per-node detail lookup only ever runs for the
     roots actually kept, not for every class/concept in the file.
+
+    Each half is judged on its own size: a large scheme no longer scopes away a
+    small ontology it merely sits beside.
     """
-    if len(taxonomy.owl_classes) + len(taxonomy.concepts) <= CLASS_COLLAPSE_LIMIT:
+    classes_fit = len(taxonomy.owl_classes) <= CLASS_COLLAPSE_LIMIT
+    concepts_fit = len(taxonomy.concepts) <= CLASS_COLLAPSE_LIMIT
+    if classes_fit and concepts_fit:
         return build_vowl_graph(taxonomy)
 
     nodes: list[dict] = []
+    edges: list[dict] = []
     seen_nodes: set[str] = set()
+    eid_counter = itertools.count()
+
+    if classes_fit:
+        _add_owl_class_nodes(taxonomy, nodes, seen_nodes)
+        _add_subclass_edges(taxonomy, edges, seen_nodes, eid_counter)
+        _add_object_property_edges(taxonomy, edges, seen_nodes, eid_counter)
+        _add_datatype_property_nodes_and_edges(taxonomy, nodes, edges, seen_nodes, eid_counter)
+        _mark_root_classes(taxonomy, nodes)
+    else:
+        _add_root_class_nodes(taxonomy, nodes, seen_nodes)
 
     _add_skos_scheme_nodes(taxonomy, nodes, seen_nodes)
+    if concepts_fit:
+        _add_skos_concept_nodes(taxonomy, nodes, seen_nodes)
+    else:
+        _add_top_concept_nodes(taxonomy, nodes, seen_nodes)
+    _add_skos_broader_edges(taxonomy, edges, seen_nodes, eid_counter)
 
+    return {_LIT_NODES: nodes, _LIT_EDGES: edges, _LIT_LAYOUT: "cose"}
+
+
+def _add_root_class_nodes(taxonomy: Taxonomy, nodes: list[dict], seen_nodes: set[str]) -> None:
+    """The class half, scoped: roots only, each explorable via /api/class-links."""
     for uri in _root_class_uris(taxonomy):
         cls = taxonomy.owl_classes[uri]
         _add_node(
@@ -337,9 +370,13 @@ def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
         if n["type"] == _LIT_CLASS:
             n[_LIT_ROOTCLASS] = 1
 
-    top_concept_uris = {u for u, c in taxonomy.concepts.items() if c.top_concept_of}
-    for uri in top_concept_uris:
-        concept = taxonomy.concepts[uri]
+
+def _add_top_concept_nodes(taxonomy: Taxonomy, nodes: list[dict], seen_nodes: set[str]) -> None:
+    """The concept half, scoped: top concepts only, explorable via
+    /api/concept-relations."""
+    for uri, concept in taxonomy.concepts.items():
+        if not concept.top_concept_of:
+            continue
         _add_node(
             nodes,
             seen_nodes,
@@ -349,12 +386,6 @@ def build_default_vowl_graph(taxonomy: Taxonomy) -> dict:
             "topconcept",
             _detail_concept(concept, taxonomy),
         )
-
-    edges: list[dict] = []
-    eid_counter = itertools.count()
-    _add_skos_broader_edges(taxonomy, edges, seen_nodes, eid_counter)
-
-    return {_LIT_NODES: nodes, _LIT_EDGES: edges, _LIT_LAYOUT: "cose"}
 
 
 def _included_class_closure(taxonomy: Taxonomy, root_uri: str) -> set[str]:

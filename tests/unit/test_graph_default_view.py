@@ -101,6 +101,77 @@ def test_a_large_taxonomy_is_scoped_to_top_concepts(tmp_path) -> None:
     assert len(scheme_nodes) == 1
 
 
+def _mixed(owl_roots, owl_children, skos_tops, skos_narrower, tmp_path):
+    """One file holding both an OWL ontology and a SKOS scheme."""
+    owl = _owl_taxonomy(owl_roots, owl_children, tmp_path / "o")
+    skos = _skos_taxonomy(skos_tops, skos_narrower, tmp_path / "s")
+    for uri, concept in skos.concepts.items():
+        owl.concepts[uri] = concept
+    for uri, scheme in skos.schemes.items():
+        owl.schemes[uri] = scheme
+    return owl
+
+
+def test_a_big_scheme_does_not_scope_away_a_small_ontology(tmp_path) -> None:
+    """The budget is per half, not shared.
+
+    An OWL ontology and a SKOS scheme are drawn in two separate tabs, so neither
+    can crowd the other on screen. Summing them meant that opening a large
+    taxonomy beside a small metamodel collapsed the metamodel to its root
+    classes — hiding an ontology that was perfectly legible and had not grown.
+    """
+    tmp_path.joinpath("o").mkdir()
+    tmp_path.joinpath("s").mkdir()
+    taxonomy = _mixed(3, 4, CLASS_COLLAPSE_LIMIT + 10, 3, tmp_path)  # 15 classes, 604 concepts
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    class_nodes = [n for n in graph["nodes"] if n["type"] == "class"]
+    assert len(class_nodes) == 15, "every class survives — the classes did not grow"
+    assert not all(n.get("rootClass") == 1 for n in class_nodes), "not scoped to roots"
+
+
+def test_the_big_half_is_still_scoped_in_that_same_graph(tmp_path) -> None:
+    """Keeping the small half whole must not un-scope the large one."""
+    tmp_path.joinpath("o").mkdir()
+    tmp_path.joinpath("s").mkdir()
+    top_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _mixed(3, 4, top_count, 3, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    concept_nodes = [n for n in graph["nodes"] if n["type"] in ("concept", "topconcept")]
+    assert len(concept_nodes) == top_count
+    assert all(n["type"] == "topconcept" for n in concept_nodes)
+
+
+def test_the_kept_half_keeps_its_edges(tmp_path) -> None:
+    """Root-only scoping drops subclass and property edges with the nodes; the
+    half that is kept whole must keep the structure that makes it worth seeing."""
+    tmp_path.joinpath("o").mkdir()
+    tmp_path.joinpath("s").mkdir()
+    taxonomy = _mixed(3, 4, CLASS_COLLAPSE_LIMIT + 10, 3, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    assert any(e["type"] == "subClassOf" for e in graph["edges"])
+
+
+def test_a_big_ontology_beside_a_small_scheme_scopes_the_other_way(tmp_path) -> None:
+    """The rule is symmetric."""
+    tmp_path.joinpath("o").mkdir()
+    tmp_path.joinpath("s").mkdir()
+    root_count = CLASS_COLLAPSE_LIMIT + 10
+    taxonomy = _mixed(root_count, 3, 4, 2, tmp_path)
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    class_nodes = [n for n in graph["nodes"] if n["type"] == "class"]
+    assert all(n["rootClass"] == 1 for n in class_nodes), "the big half is scoped"
+    concept_nodes = [n for n in graph["nodes"] if n["type"] in ("concept", "topconcept")]
+    assert any(n["type"] == "concept" for n in concept_nodes), "the small half is whole"
+
+
 def test_scoping_only_computes_detail_for_kept_roots(tmp_path) -> None:
     """The point of scoping before adding nodes: never pay for what's dropped."""
     root_count = CLASS_COLLAPSE_LIMIT + 10
