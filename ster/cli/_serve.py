@@ -34,6 +34,36 @@ def cmd_init_ci(
         console.print("[green]created:[/green] onto-ci.yml")
 
 
+def _warn_about_other_servers() -> None:
+    """Name any other ``ster serve`` already running, and which build it is.
+
+    Reports, deliberately; it does not stop them. Two installs commonly coexist
+    — a ``uv tool`` copy and a project venv, the latter often editable and
+    tracking whichever branch is checked out — and a server started from one
+    keeps serving its own build until stopped. Updating the other install then
+    looks like it did nothing, which is doubly confusing because the version
+    string *did* change.
+
+    Killing them on launch was the obvious fix and the wrong one: running
+    several servers over different ontologies on different ports is a normal
+    thing to do, and a new window silently closing the one you were reading is
+    worse than the confusion it prevents. Naming them costs a line and leaves
+    the choice where it belongs.
+    """
+    from ..viz_vowl import other_ster_servers  # noqa: PLC0415
+
+    others = other_ster_servers()
+    if not others:
+        return
+    console.print(
+        f"[yellow]![/yellow]  {len(others)} other ster server(s) already running. "
+        "They keep serving the build they were started from:"
+    )
+    for pid, command in others:
+        console.print(f"     [dim]PID {pid}[/dim]  {command[:96]}")
+    console.print("     [dim]Stop them with:[/dim] pkill -f 'ster serve'")
+
+
 @_app.app.command("serve")
 def cmd_serve(
     file: Path = typer.Argument(..., help="Ontology file (.ttl / .rdf / .jsonld)."),
@@ -65,6 +95,7 @@ def cmd_serve(
             "[red]The graph server (fastapi/uvicorn) failed to import — reinstall ster.[/red]"
         )
         raise typer.Exit(1)
+    _warn_about_other_servers()
     serve(
         file.resolve(),
         host=host,

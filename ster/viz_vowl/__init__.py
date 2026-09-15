@@ -108,6 +108,7 @@ from ._server import (
     _start_api_server,
     _vowl_html,
     free_port,
+    other_ster_servers,
     port_holder,
 )
 
@@ -175,6 +176,7 @@ __all__ = [
     "_server_host_port",
     "_listening_pid",
     "_process_name",
+    "other_ster_servers",
     "port_holder",
     "_port_is_free",
     "free_port",

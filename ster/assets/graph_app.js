@@ -1070,6 +1070,12 @@ function _plural(n,singular,plural){return n===1?singular:plural;}
   if(c.schemes)p.push(c.schemes+' scheme'+_plural(c.schemes,'','s'));
   if(c.top_concepts)p.push(c.top_concepts+' top concept'+_plural(c.top_concepts,'','s'));
   if(c.concepts)p.push(c.concepts+' concept'+_plural(c.concepts,'','s'));
+  // Which build drew this. Cheap to show, and it is the one fact you cannot
+  // get from looking at the page: a server started from another install keeps
+  // serving its own build until it is stopped, so "I updated ster and this is
+  // still old" is usually a second install rather than a stale cache.
+  const ver=globalThis.__STER_GRAPH__.sterVersion;
+  if(ver)p.push('ster '+ver);
   document.getElementById('stats').textContent=p.join(' · ');
   document.getElementById('stats').style.left=(W/2)+'px';
 })();

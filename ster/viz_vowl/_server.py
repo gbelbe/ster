@@ -62,6 +62,60 @@ def _process_name(pid: int) -> str:
     return name or f"PID {pid}"
 
 
+# The invocation this looks for, named once: it is matched, filtered on, and
+# split at, and three spellings of one string is three chances to drift.
+_SERVE_CMD = "ster serve"
+
+
+def other_ster_servers() -> list[tuple[int, str]]:
+    """Every *other* running ``ster serve`` on this machine, as ``(pid, command)``.
+
+    Not for killing anything. Two ster installs commonly coexist — a ``uv tool``
+    copy and a project venv, the latter often editable and tracking whichever
+    branch is checked out — and a server started from one keeps serving its own
+    build until it is stopped. Updating the other install then looks like it did
+    nothing, which is confusing precisely because the version string *did*
+    change.
+
+    Best-effort and silent on failure: this exists to explain a surprise, never
+    to block a launch.
+    """
+    # pgrep -a is Linux-only; on macOS it yields an empty command, so the PIDs
+    # come from pgrep and the command line from ps via _process_name.
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", _SERVE_CMD], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    mine = {os.getpid(), os.getppid()}
+    found: list[tuple[int, str]] = []
+    seen_args: set[str] = set()
+    for line in result.stdout.split():
+        try:
+            pid = int(line)
+        except ValueError:
+            continue
+        # Skip ourselves and our own parent — a TUI that started its own server
+        # is not a stale one, and reporting it would cry wolf on every launch.
+        if pid in mine:
+            continue
+        command = _process_name(pid)
+        # pgrep -f matches anything whose command line merely *mentions* the
+        # phrase — a shell running a script that greps for it, for instance —
+        # so require a real invocation.
+        if _SERVE_CMD not in command or " -c " in command:
+            continue
+        # `uv run ... ster serve X` and the python it execs are one server, not
+        # two. They share everything after the subcommand, so that is the key.
+        tail = command.split(_SERVE_CMD, 1)[1].strip()
+        if tail in seen_args:
+            continue
+        seen_args.add(tail)
+        found.append((pid, command))
+    return found
+
+
 def port_holder(host: str | None = None, port: int | None = None) -> tuple[int, str] | None:
     """The ``(pid, command)`` of the process listening on the configured server port, or
     None when the port is free or the process cannot be identified. Used to warn — and

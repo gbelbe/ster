@@ -114,12 +114,20 @@ def _data_script(graph: dict, meta: dict, api_token: str, taxonomy: dict | None 
     is omitted entirely when there is no SKOS content, so the boot script can
     tell "no taxonomy" apart from "empty taxonomy" with a single key check.
     """
+    from .._version import __version__  # noqa: PLC0415
     from ..api_server import load_graph_viz_config  # noqa: PLC0415 - avoids an import cycle
 
     payload: dict[str, Any] = {
         "data": strip_detail(graph),
         "meta": meta,
         "token": api_token,
+        # Which build produced this page. Two ster installs commonly coexist —
+        # a `uv tool` copy and a project venv (often editable, tracking whatever
+        # branch is checked out) — and a server started from one keeps serving
+        # its own build until it is stopped. So "I updated ster and the graph
+        # view is still old" is usually true and usually not a cache: the page
+        # came from a different install. Now the page can say so itself.
+        "sterVersion": __version__,
         # Level-of-detail thresholds travel with the data rather than being baked
         # into the asset: the asset is cached and shared, the thresholds are the
         # viewer's own setting (ster setup → Graph Viz).
