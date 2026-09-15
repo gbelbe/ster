@@ -221,14 +221,21 @@ def test_the_panel_renders_media_for_every_node_type():
 # ── node labels ───────────────────────────────────────────────────────────────
 
 
-def test_node_labels_are_dark_with_a_light_halo():
-    """Regression: a label that wrapped past its node was white on white canvas.
+def test_node_labels_read_on_the_nodes_and_on_the_canvas():
+    """Regression it guards: a label that wrapped past its node was white on
+    white canvas.
 
-    Dark text alone would be unreadable on the darker nodes, so the halo is what
-    makes one colour work both inside the shape and outside it.
+    The halo used to be what made one colour work both inside the shape and
+    outside it. It is gone, and the fills were lightened instead, so plain black
+    now reads on every node *and* on the canvas behind them — the same guarantee
+    by cheaper means. Per-fill contrast is asserted in
+    test_graph_readability.py; this pins the canvas half.
     """
+    from ster.viz_vowl._html_template import _HTML_TEMPLATE
+
     js = _app_js().replace(" ", "").replace('"', "'")
 
-    assert "'color':'#0f172a'" in js
-    assert "'text-outline-color':'#ffffff'" in js
+    assert "'color':'#000000'" in js
+    assert "text-outline" not in js
     assert "'color':'white'" not in js
+    assert "background:#f1f5f9" in _HTML_TEMPLATE  # canvas, light enough for black

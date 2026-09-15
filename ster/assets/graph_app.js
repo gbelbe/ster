@@ -12,6 +12,57 @@
 // shown by default made large-taxonomy pages take a very long time to render.
 function initSterRelationsGraph(){
 try{
+// ── Busy indicator ───────────────────────────────────────────────────────────
+// Every call this view makes goes through fetch, so counting in flight here
+// covers search, class expansion, explore/extend, node detail and the live
+// refresh at once — and covers whatever is added next, which wrapping eleven
+// call sites by hand would not.
+//
+// Shown only after a delay: most of these answer in tens of milliseconds, and an
+// indicator that flashes on every keystroke is worse than none. The version poll
+// is excluded because it runs on a timer — a light that blinks by itself tells
+// you nothing about what you just did.
+const _BUSY_DELAY_MS=250;
+const _BUSY_SILENT=/\/api\/version/;
+let _busyCount=0,_busyTimer=null;
+function _busyRefresh(){
+  const el=document.getElementById('busy');
+  if(!el)return;
+  if(_busyCount>0){
+    if(!_busyTimer)_busyTimer=setTimeout(()=>{el.classList.add('on');},_BUSY_DELAY_MS);
+  }else{
+    clearTimeout(_busyTimer);_busyTimer=null;
+    el.classList.remove('on');
+  }
+}
+function busy(message){
+  const msg=document.getElementById('busy-msg');
+  if(msg&&message)msg.textContent=message;
+  _busyCount++;_busyRefresh();
+  let done=false;
+  return()=>{if(done){return;}done=true;_busyCount=Math.max(0,_busyCount-1);_busyRefresh();};
+}
+// fetch accepts three things, and each keeps its URL somewhere different.
+// Named rather than nested in a conditional chain: the chain read as one
+// expression while actually being three unrelated lookups, and a fourth input
+// type would have made it worse. Anything else yields '' so the caller falls
+// through to the untouched fetch.
+function _fetchUrl(target){
+  if(typeof target==='string')return target;
+  if(target instanceof URL)return target.href;
+  if(target instanceof Request)return target.url;
+  return '';
+}
+(function wrapFetch(){
+  const raw=globalThis.fetch.bind(globalThis);
+  globalThis.fetch=function(...args){
+    const url=_fetchUrl(args[0]);
+    if(!url.includes('/api/')||_BUSY_SILENT.test(url))return raw(...args);
+    const end=busy(url.includes('/api/search')?'Searching\u2026':'Loading\u2026');
+    return raw(...args).finally(end);
+  };
+})();
+
 const graphData=globalThis.__STER_GRAPH__.data;
 const taxoMeta=globalThis.__STER_GRAPH__.meta;
 const API_TOKEN=globalThis.__STER_GRAPH__.token;
@@ -67,19 +118,19 @@ const CY_STYLE=[
   // Dark text with a white halo: a long label wraps past the node onto the white
   // canvas, where white text was invisible. The halo keeps it legible on top of a
   // dark node too, so one colour works both on and off the shape.
-  {selector:'node',style:{'label':'data(label)','text-halign':'center','text-valign':'center','color':'#0f172a','text-outline-color':'#ffffff','text-outline-width':2.5,'text-outline-opacity':1,'font-family':'system-ui,sans-serif','text-wrap':'wrap','text-max-width':'80px','font-size':12}},
-  {selector:'node[type="class"]',style:{'shape':'ellipse','width':84,'height':84,'background-color':'#3c6ebf','border-color':'#5a87cc','border-width':2,'font-weight':600}},
+  {selector:'node',style:{'label':'data(label)','text-halign':'center','text-valign':'center','color':'#000000','font-family':'system-ui,sans-serif','text-wrap':'wrap','text-max-width':'80px','font-size':12}},
+  {selector:'node[type="class"]',style:{'shape':'ellipse','width':84,'height':84,'background-color':'#a9c7ea','border-color':'#3c6ebf','border-width':2,'font-weight':600}},
   // A class whose individuals are collapsed says how many it holds, and wears a
   // dashed border to read as openable. Once expanded and capped it says what it
   // withheld — "200 of 1027" — so the omission stays on screen rather than
   // passing by in a toast nobody was looking at.
   {selector:'node[individualCount > 0]',style:{
     'border-style':'dashed','border-width':3,'label':classCountLabel}},
-  {selector:'node[type="class"][rootClass=1]',style:{'width':104,'height':104,'border-color':'#6694d1','border-width':5,'font-size':13,'text-max-width':'92px'}},
-  {selector:'node[type="individual"]',style:{'shape':'ellipse','width':68,'height':68,'background-color':'#7fb8e0','border-color':'#4a90c4','border-width':1.5,'color':'#0f172a'}},
-  {selector:'node[type="scheme"]',style:{'shape':'ellipse','width':88,'height':88,'background-color':'#7c3aed','border-color':'#a78bfa','border-width':2,'font-weight':600}},
-  {selector:'node[type="topconcept"]',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#0e7490','border-color':'#22d3ee','border-width':2}},
-  {selector:'node[type="concept"]',style:{'shape':'ellipse','width':56,'height':56,'background-color':'#166534','border-color':'#4ade80','border-width':1.5}},
+  {selector:'node[type="class"][rootClass=1]',style:{'width':104,'height':104,'background-color':'#93b8e4','border-color':'#2f5896','border-width':5,'font-size':13,'text-max-width':'92px'}},
+  {selector:'node[type="individual"]',style:{'shape':'ellipse','width':68,'height':68,'background-color':'#c6e2f5','border-color':'#4a90c4','border-width':1.5}},
+  {selector:'node[type="scheme"]',style:{'shape':'ellipse','width':88,'height':88,'background-color':'#cbb8f9','border-color':'#7c3aed','border-width':2,'font-weight':600}},
+  {selector:'node[type="topconcept"]',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#8fd6ef','border-color':'#0e7490','border-width':2}},
+  {selector:'node[type="concept"]',style:{'shape':'ellipse','width':56,'height':56,'background-color':'#9fe3b6','border-color':'#166534','border-width':1.5}},
   {selector:'node[type="datatype"]',style:{'shape':'round-rectangle','background-color':'#fef3c7','border-color':'#f59e0b','border-width':1.5,'color':'#92400e','font-size':10,'padding':'4px 8px','width':'label','height':22}},
   {selector:'node.searched',style:{'overlay-color':'#fbbf24','overlay-opacity':.45,'overlay-padding':7}},
   // Dimming recedes a node; it must not take it out of play. Nodes once carried
@@ -123,6 +174,24 @@ const CY_STYLE=[
     'width':3,'opacity':1,'z-index':40,'events':'yes'}},
   {selector:'node.kin-end',style:{'border-color':'#d97706','border-width':3,
     'opacity':1,'z-index':35}},
+  // ── Depth in the hierarchy ─────────────────────────────────────────────────
+  // Weight falls off with distance from a root, so the shape of the thing is
+  // readable before any of it is. "Order" is the codebase's own word: first
+  // order is a root class (the existing ft-first-order filter uses exactly this
+  // set), second is its direct children, and so on down.
+  //
+  // These sit after the level-of-detail rules on purpose. Shedding labels is
+  // right for the long tail and wrong for the handful of nodes that carry the
+  // structure, so the top two orders keep their names whatever the node count —
+  // which is what makes a 1,400-node graph still say what it is at a glance.
+  {selector:'node.ord1',style:{'border-width':5,'font-size':15,'font-weight':700,'z-index':20}},
+  {selector:'node.ord2',style:{'border-width':3,'font-size':12,'z-index':15}},
+  {selector:'node.ord3',style:{'border-width':2,'font-size':11,'opacity':.82,'z-index':10}},
+  {selector:'node.ord4',style:{'border-width':1,'font-size':10,'opacity':.6,'z-index':5}},
+  {selector:'node.lod-quiet.ord1',style:{'label':'data(label)','width':84,'height':84,
+    'text-valign':'center','font-size':14}},
+  {selector:'node.lod-quiet.ord2',style:{'label':'data(label)','width':56,'height':56,
+    'text-valign':'center','font-size':11}},
 ];
 // fcose (cytoscape-fcose, layered on layout-base + cose-base) replaces the
 // plain cose force layout used here through Phase 0: cose's per-iteration cost
@@ -180,9 +249,24 @@ function _debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(_saveSt
 
 // cose is asynchronous: persist positions only once the layout settles,
 // otherwise we'd save the initial origin pile-up and restore clutter next time.
+// The spinner is in the markup already showing, so the page is never blank while
+// a large payload is parsed and laid out. It comes down when the first layout
+// settles — or immediately, when saved positions meant there was no layout to
+// wait for.
+function hideSpinner(){
+  const el=document.getElementById('graph-spinner');
+  if(el)el.hidden=true;
+}
+function showSpinner(message){
+  const el=document.getElementById('graph-spinner');
+  if(!el)return;
+  const msg=document.getElementById('graph-spinner-msg');
+  if(msg&&message)msg.textContent=message;
+  el.hidden=false;
+}
 function runLayout(){
   const l=cy.layout(makeLayout());
-  l.one('layoutstop',_saveState);
+  l.one('layoutstop',()=>{_saveState();hideSpinner();});
   l.run();
 }
 
@@ -195,10 +279,13 @@ function runLayout(){
       for(const p of s.pos){posMap[p.id]={x:p.x,y:p.y};}
       for(const n of cy.nodes()){if(posMap[n.id()])n.position(posMap[n.id()]);}
       cy.viewport({zoom:s.zoom||1,pan:s.pan||{x:0,y:0}});
+      hideSpinner();
       return;
     }
   }catch(err){console.debug('Unable to restore graph state:',err);}
   runLayout();
+  // fcose does not always emit layoutstop; never leave the page behind a veil
+  setTimeout(hideSpinner,20000);
 })();
 
 cy.on('viewport',_debouncedSave);
@@ -212,19 +299,50 @@ cy.on('dragfree','node',_debouncedSave);
 //
 // The delta is measured between drag ticks rather than against the grab point,
 // so the followers track the class continuously instead of jumping at the end.
-let _dragAnchor=null;
-cy.on('grab','node',e=>{const p=e.target.position();_dragAnchor={x:p.x,y:p.y};});
+// Everything beneath a node travels with it, at any level: drag a top concept
+// and its whole scheme comes; drag one branch and only that branch moves. This
+// used to apply to an expanded class and its individuals alone, which meant the
+// one arrangement you could rearrange was the one the machine had just made.
+//
+// "Beneath" is read off the hierarchy edges, all of which point child → parent:
+// a subclass names its superclass, a narrower concept its broader, an individual
+// its class, a concept its scheme. So the children of a node are the sources of
+// its incoming edges of those types.
+const _HIERARCHY_EDGES=new Set(['subClassOf','broader','instanceOf','inScheme']);
+function _descendantsOf(node){
+  const seen=new Set([node.id()]);
+  const found=[];
+  const queue=[node];
+  while(queue.length){
+    const current=queue.shift();
+    for(const edge of current.incomers('edge').toArray()){
+      if(!_HIERARCHY_EDGES.has(edge.data('type')))continue;
+      const child=edge.source();
+      if(seen.has(child.id()))continue;   // a cycle, or a child with two parents
+      seen.add(child.id());
+      found.push(child);
+      queue.push(child);
+    }
+  }
+  return cy.collection(found);
+}
+// Walked once when the drag starts, not on every tick: the set cannot change
+// mid-drag, and re-walking a deep branch per mouse-move is what would make a
+// large graph stutter.
+let _dragAnchor=null,_dragFollowers=null;
+cy.on('grab','node',e=>{
+  const p=e.target.position();
+  _dragAnchor={x:p.x,y:p.y};
+  _dragFollowers=_descendantsOf(e.target);
+});
 cy.on('drag','node',e=>{
-  const node=e.target,uri=node.data('id');
-  if(!_dragAnchor||!_expanded.has(uri))return;
-  const p=node.position(),dx=p.x-_dragAnchor.x,dy=p.y-_dragAnchor.y;
+  if(!_dragAnchor||!_dragFollowers||_dragFollowers.empty())return;
+  const p=e.target.position(),dx=p.x-_dragAnchor.x,dy=p.y-_dragAnchor.y;
   if(!dx&&!dy)return;
   _dragAnchor={x:p.x,y:p.y};
-  const followers=cy.nodes().filter(n=>n.data('ofClass')===uri&&n!==node);
-  if(followers.empty())return;
-  followers.positions(n=>{const q=n.position();return{x:q.x+dx,y:q.y+dy};});
+  _dragFollowers.positions(n=>{const q=n.position();return{x:q.x+dx,y:q.y+dy};});
 });
-cy.on('free','node',()=>{_dragAnchor=null;});
+cy.on('free','node',()=>{_dragAnchor=null;_dragFollowers=null;});
 
 // ── Smart graph update (live refresh — preserves positions and viewport) ──────
 function applyGraphUpdate(d){
@@ -471,8 +589,13 @@ function _applyServerMatches(d,localCount,reqId){
   const onCanvas=new Set(cy.nodes().map(n=>n.id()));
   const extra=_serverMatches.filter(r=>!onCanvas.has(r.id)).length;
   const countEl=document.getElementById('search-count');
-  if(!countEl||!extra)return;
-  if(countEl.textContent.startsWith(String(localCount)+' '))countEl.textContent+=' (+'+extra+' elsewhere)';
+  if(!countEl)return;
+  if(!countEl.textContent.startsWith(String(localCount)+' '))return;
+  // The server caps what it returns, so "+50 elsewhere" on a term matching
+  // 7,888 things read as "there are 50 more" when there were 7,838 more than
+  // that. Say how many there actually are whenever the list was cut.
+  if(d?.truncated)countEl.textContent+=' (showing '+_serverMatches.length+' of '+d.total+')';
+  else if(extra)countEl.textContent+=' (+'+extra+' elsewhere)';
 }
 function clearSearch(){
   const box=document.getElementById('search-box');
@@ -600,6 +723,53 @@ function _quiet(mode,count,threshold){
   if(mode==='off')return true;
   return count>threshold;
 }
+// Distance from a root, capped at 4 — past that the difference stops being
+// legible and the classes would just multiply. Roots are the nodes nothing in
+// the hierarchy points down to: root classes, schemes, and anything orphaned.
+// The walk reuses _HIERARCHY_EDGES, so "below" means the same thing here as it
+// does when you drag a branch.
+const _MAX_ORDER=4;
+// One step down the hierarchy: everything directly beneath *frontier* that the
+// walk has not already placed. Lifted out of applyHierarchyOrders because two
+// nested loops and two guards, inside a while, inside a batch callback, were
+// most of that function's cognitive load while being none of its subject — the
+// walk reads as three lines once this has a name.
+//
+// *seen* is updated here rather than returned alongside: a node reachable from
+// two parents belongs to the shallower order, and marking it the moment it is
+// first taken is what guarantees that.
+function _hierarchyChildren(frontier,seen){
+  const next=[];
+  for(const node of frontier.toArray()){
+    for(const edge of node.incomers('edge').toArray()){
+      if(!_HIERARCHY_EDGES.has(edge.data('type')))continue;
+      const child=edge.source();
+      if(seen.has(child.id()))continue;
+      seen.add(child.id());
+      next.push(child);
+    }
+  }
+  return next;
+}
+function applyHierarchyOrders(){
+  const roots=cy.nodes().filter(n=>
+    n.outgoers('edge').filter(e=>_HIERARCHY_EDGES.has(e.data('type'))).empty());
+  cy.batch(()=>{
+    cy.nodes().removeClass('ord1 ord2 ord3 ord4');
+    let frontier=roots,order=1;
+    const seen=new Set(roots.map(n=>n.id()));
+    while(!frontier.empty()&&order<=_MAX_ORDER){
+      frontier.addClass('ord'+order);
+      if(order===_MAX_ORDER)break;
+      frontier=cy.collection(_hierarchyChildren(frontier,seen));
+      order++;
+    }
+    // Whatever the walk never reached — a cycle with no entry point, or a node
+    // hanging off no hierarchy at all — reads as the far tail rather than as a
+    // root, which is what leaving it unclassed would have made it look like.
+    cy.nodes().filter(n=>!seen.has(n.id())).addClass('ord4');
+  });
+}
 function applyLevelOfDetail(){
   const n=cy.nodes().length;
   cy.batch(()=>{
@@ -607,6 +777,7 @@ function applyLevelOfDetail(){
     cy.nodes()[_quiet(_nodeLabelMode,n,LOD_QUIET_NODES_ABOVE)?'addClass':'removeClass']('lod-quiet');
   });
   _refreshLodButtons();
+  applyHierarchyOrders();
 }
 // The button reads as struck-through when the labels are off, exactly like the
 // edge-type filters beside it, so the bar means one thing throughout.
@@ -719,6 +890,9 @@ applyLevelOfDetail();
 // renderDetail/individualToggleNodes/detailRelationsNodes) rather than an
 // inline onclick attribute, so navigateTo no longer needs a global wrapper
 // for markup to call into — kept anyway as a small, harmless debug/test hook.
+// The show-all button is rendered server-side (see _render.py) and fires
+// before this module's own handlers exist, so it reaches the spinner globally.
+globalThis.showSpinner=showSpinner;
 globalThis._sterNav=navigateTo;
 // The Taxonomie tab's own asset (taxonomy_app.js) shares this panel but owns no
 // part of its open/close state — it calls this to make sure a click always

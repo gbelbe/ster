@@ -39,11 +39,11 @@ def _tax() -> Taxonomy:
 
 
 def test_empty_query_returns_no_results():
-    assert build_search_results(_tax(), "") == {"results": []}
+    assert build_search_results(_tax(), "") == {"results": [], "total": 0, "truncated": False}
 
 
 def test_whitespace_only_query_returns_no_results():
-    assert build_search_results(_tax(), "   ") == {"results": []}
+    assert build_search_results(_tax(), "   ") == {"results": [], "total": 0, "truncated": False}
 
 
 def test_matches_by_label_case_insensitively():
@@ -65,7 +65,11 @@ def test_matches_by_uri_when_label_does_not_match():
 
 
 def test_no_match_returns_empty_results():
-    assert build_search_results(_tax(), "nonexistent-xyz") == {"results": []}
+    assert build_search_results(_tax(), "nonexistent-xyz") == {
+        "results": [],
+        "total": 0,
+        "truncated": False,
+    }
 
 
 def test_each_result_carries_id_label_and_type():
@@ -106,10 +110,18 @@ def test_results_are_capped_at_limit():
     assert len(res["results"]) == 3
 
 
-def test_results_are_sorted_by_label():
+def test_results_are_ordered_by_relevance_then_by_label():
+    """Alphabetical order was the old contract, and it put opaque ids that
+    matched on URI ahead of the entity you actually named. Results are ranked
+    now — exact label, prefix, word prefix, substring, URI-only — and ties
+    inside a rank fall back to the shorter, then alphabetical, label.
+    """
     res = build_search_results(_tax(), "a")
     labels = [r["label"] for r in res["results"]]
-    assert labels == sorted(labels, key=str.lower)
+    prefixed = [lbl for lbl in labels if lbl.lower().startswith("a")]
+
+    assert labels[: len(prefixed)] == prefixed, "prefix matches lead"
+    assert prefixed == sorted(prefixed, key=lambda lbl: (len(lbl), lbl.lower()))
 
 
 # ── Phase 4: property candidates + type filtering ───────────────────────────

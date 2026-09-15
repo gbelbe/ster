@@ -410,7 +410,12 @@ def integrated_tree(tax: Taxonomy, lang: str = "en") -> IntegratedTree:
 
 
 def search_rows(tax: Taxonomy, lang: str = "en") -> list[tuple[str, str, str]]:
-    """``(label, uri, kind)`` for every browsable entity, sorted by label."""
+    """``(label, uri, kind)`` for every browsable entity, sorted by label.
+
+    All five stores, the same five ``_uri_store`` walks. Schemes were the one
+    left out, so a scheme sat in the tree with an icon and a detail panel and
+    was reachable by every route except the one for finding things by name.
+    """
     rows: list[tuple[str, str, str]] = []
     for uri in tax.owl_classes:
         rows.append((label_of(tax, uri, lang), uri, _LIT_CLASS))
@@ -420,4 +425,6 @@ def search_rows(tax: Taxonomy, lang: str = "en") -> list[tuple[str, str, str]]:
         rows.append((label_of(tax, uri, lang), uri, "property"))
     for uri in tax.concepts:
         rows.append((label_of(tax, uri, lang), uri, _LIT_CONCEPT))
+    for uri in tax.schemes:
+        rows.append((label_of(tax, uri, lang), uri, _LIT_SCHEME))
     return sorted(rows, key=lambda r: r[0].lower())

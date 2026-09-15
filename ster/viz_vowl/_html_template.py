@@ -49,6 +49,33 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 #zoom-ctrl{position:fixed;bottom:10px;right:12px;display:flex;gap:4px;z-index:10}
 #zoom-ctrl button{background:#f8fafc;border:1px solid #e2e8f0;color:#475569;cursor:pointer;font-size:14px;min-width:28px;height:28px;border-radius:4px;line-height:1;padding:0 6px}
 #zoom-ctrl button:hover{background:#e2e8f0}
+/* Shown from first paint and taken down once the first layout settles. A large
+   ontology spends real seconds parsing the payload and running fcose, and until
+   this existed the page was simply blank for all of it — indistinguishable from
+   a page that had failed. Also raised again before the show-all button navigates,
+   (Not quoting that button's label on purpose: the scoping tests assert the
+   absence of that exact string when the button is not rendered, so a comment
+   repeating it makes those tests pass or fail on prose.)
+   which is the slowest thing the view can be asked to do. */
+/* The quiet counterpart to #graph-spinner: that one veils the page while it is
+   being built, this one just says "something is in flight" without blocking
+   anything, because search and expansion happen while you keep working. */
+#busy{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:150;
+  display:none;align-items:center;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;
+  border-radius:20px;padding:5px 14px;font:11px system-ui,sans-serif;color:#475569;
+  box-shadow:0 2px 8px rgba(0,0,0,.12);pointer-events:none}
+#busy.on{display:flex}
+#busy .ring{width:12px;height:12px;border:2px solid #cbd5e1;border-top-color:#2563eb;
+  border-radius:50%;animation:ster-spin .9s linear infinite}
+@media (prefers-reduced-motion:reduce){#busy .ring{animation-duration:3s}}
+#graph-spinner{position:fixed;inset:0;z-index:200;display:flex;align-items:center;
+  justify-content:center;flex-direction:column;gap:14px;background:rgba(248,250,252,.92);
+  font:13px system-ui,sans-serif;color:#475569}
+#graph-spinner[hidden]{display:none}
+#graph-spinner .ring{width:34px;height:34px;border:3px solid #cbd5e1;border-top-color:#2563eb;
+  border-radius:50%;animation:ster-spin .9s linear infinite}
+@keyframes ster-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){#graph-spinner .ring{animation-duration:3s}}
 #tip{position:fixed;pointer-events:none;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:11px;color:#e2e8f0;max-width:280px;word-break:break-all;display:none;z-index:99}
 #explore-btn{position:absolute;display:none;transform:translate(-50%,-100%);z-index:40;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
 #explore-btn:hover{background:#1d4ed8}
@@ -127,13 +154,15 @@ __OFFLINE_BANNER__
 <div id="tm-breadcrumb"></div>
 <div id="tm-filters"><label>Scheme <select id="tm-filter-scheme"></select></label><label>Depth ≤ <select id="tm-filter-depth"></select></label><label>Layout <select id="tm-filter-layout"><option value="horizontal" selected>Horizontal</option><option value="radial">Radial</option></select></label></div>
 </div>
+<div id="busy" class="view-relations"><div class="ring"></div><span id="busy-msg">Working\u2026</span></div>
+<div id="graph-spinner"><div class="ring"></div><div id="graph-spinner-msg">Laying out the graph\u2026</div></div>
 <div id="cy" class="view-relations"></div>
 <div id="treemap" class="view-taxonomy"></div>
 </div>
 <div id="detail-panel"></div>
 <button id="panel-close" title="Close panel (Esc)">\xd7</button>
 <div id="stats" class="view-relations"></div>
-<div id="hint" class="view-relations">drag\xb7pan\xb7scroll→zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button><span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-edge-labels">edge labels</button><button class="ftbtn active" id="ft-node-labels">node labels</button>__SHOW_ALL_BTN__</div>
+<div id="hint" class="view-relations">drag\xb7pan\xb7scroll\u2192zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-edge-labels">Hide edge labels</button><button class="ftbtn active" id="ft-node-labels">Hide node labels</button>__SHOW_ALL_BTN__<span id="ft-legacy" style="display:none"><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button></span></div>
 <button id="explore-btn" class="view-relations">&#8857; explore relations</button><button id="individuals-btn" class="view-relations">&#8853; show individuals</button>
 <div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button></div>
 <div id="tip" class="view-relations"></div>

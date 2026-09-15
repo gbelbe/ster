@@ -33,10 +33,15 @@ def _graph_path(file_path: Path | None) -> Path:
     return cache / f"{stem}_vowl.html"
 
 
+# Raises the spinner before navigating: the unscoped graph is the slowest thing
+# the view can be asked for — the server rebuilds it, then the browser parses and
+# lays out every node — and without this the button simply appeared to do nothing
+# for several seconds.
 _SHOW_ALL_BTN_HTML = (
     '<span style="color:#cbd5e1"> │ </span>'
     '<button class="ftbtn active" '
-    "onclick=\"location.href=location.pathname+'?full=1'\">"
+    "onclick=\"if(globalThis.showSpinner)showSpinner('Loading every node\\u2026');"
+    "location.href=location.pathname+'?full=1'\">"
     "Show all nodes</button>"
 )
 
