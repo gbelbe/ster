@@ -13,10 +13,12 @@ from __future__ import annotations
 import rdflib
 
 from ster import store
+from ster.model import OWLIndividual
 from ster.viz_vowl import (
     CLASS_COLLAPSE_LIMIT,
     build_default_vowl_graph,
     build_vowl_graph,
+    collapse_individuals,
     render_vowl_html,
 )
 
@@ -155,6 +157,31 @@ def test_the_kept_half_keeps_its_edges(tmp_path) -> None:
     graph = build_default_vowl_graph(taxonomy)
 
     assert any(e["type"] == "subClassOf" for e in graph["edges"])
+
+
+def test_the_kept_half_can_still_be_dug_into(tmp_path) -> None:
+    """Keeping the class half whole must not strand its individuals.
+
+    A class becomes expandable by carrying an ``individualCount``, and that count
+    is computed by ``collapse_individuals`` from the instanceOf edges in the
+    graph. Build the class half without individuals and there is nothing to
+    count, so every class reports nothing and 22,146 individuals sit behind
+    classes that look empty.
+    """
+    tmp_path.joinpath("o").mkdir()
+    tmp_path.joinpath("s").mkdir()
+    taxonomy = _mixed(3, 4, CLASS_COLLAPSE_LIMIT + 10, 3, tmp_path)
+    root = next(iter(taxonomy.owl_classes))
+    for i in range(5):
+        uri = f"{NS}ind{i}"
+        taxonomy.owl_individuals[uri] = OWLIndividual(uri=uri, types=[root])
+
+    graph = build_default_vowl_graph(taxonomy)
+
+    assert any(e["type"] == "instanceOf" for e in graph["edges"]), "individuals reach the graph"
+    collapsed = collapse_individuals(graph, limit=1)
+    counts = {n["id"]: n.get("individualCount") for n in collapsed["nodes"]}
+    assert counts.get(root) == 5
 
 
 def test_a_big_ontology_beside_a_small_scheme_scopes_the_other_way(tmp_path) -> None:

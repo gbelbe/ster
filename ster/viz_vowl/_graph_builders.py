@@ -336,9 +336,15 @@ def build_default_vowl_graph(taxonomy: Taxonomy, limit: int = CLASS_COLLAPSE_LIM
 
     if classes_fit:
         _add_owl_class_nodes(taxonomy, nodes, seen_nodes)
+        # Individuals come in so that they can go back out again: the caller
+        # collapses them into an ``individualCount`` on their class, which is
+        # what makes a class expandable. Leaving them out left 22,146
+        # individuals unreachable behind classes advertising nothing.
+        _add_owl_individual_nodes(taxonomy, nodes, seen_nodes)
         _add_subclass_edges(taxonomy, edges, seen_nodes, eid_counter)
         _add_object_property_edges(taxonomy, edges, seen_nodes, eid_counter)
         _add_datatype_property_nodes_and_edges(taxonomy, nodes, edges, seen_nodes, eid_counter)
+        _add_individual_type_edges(taxonomy, nodes, edges, seen_nodes, eid_counter)
         _mark_root_classes(taxonomy, nodes)
     else:
         _add_root_class_nodes(taxonomy, nodes, seen_nodes)
