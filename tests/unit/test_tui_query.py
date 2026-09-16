@@ -320,9 +320,15 @@ def test_status_reports_located_count_when_geodata_present() -> None:
     assert "map" in status.lower()
 
 
-def test_status_omits_geo_hint_when_no_geodata() -> None:
-    status = _run_screen(PLAIN_QUERY, geo=False)
-    assert "map" not in status.lower()
+def test_status_says_why_the_map_is_unavailable_rather_than_hiding_it() -> None:
+    """Both views are named on every run, the unavailable one dimmed with its
+    reason. A control you only see when it works is one you never learn exists,
+    so silence was the wrong answer here — the status now explains instead.
+    """
+    status = _run_screen(PLAIN_QUERY, geo=False).lower()
+
+    assert "map unavailable" in status
+    assert "no coordinates" in status
 
 
 def test_map_binding_opens_url_with_current_query() -> None:
@@ -337,6 +343,64 @@ def test_map_binding_opens_url_with_current_query() -> None:
     assert opened, "expected a browser to be opened"
     assert "/map" in opened[0]
     assert "wgs84_pos" in opened[0]  # the query travelled with it
+
+
+CONSTRUCT_QUERY = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } LIMIT 5"
+
+
+def test_graph_binding_opens_url_with_current_query() -> None:
+    opened: list[str] = []
+
+    def press_graph(screen) -> None:
+        screen._open = opened.append
+        screen._server_ok = lambda: True
+        screen.action_graph()
+
+    _run_screen(CONSTRUCT_QUERY, geo=False, after=press_graph)
+
+    assert opened, "expected a browser to be opened"
+    assert "/viz" in opened[0]
+    assert "CONSTRUCT" in opened[0]  # the query travelled with it
+
+
+def test_graph_action_declines_a_select() -> None:
+    """A SELECT returns columns; the graph view draws triples. Opening it would
+    show an empty canvas and look broken, so it declines and says why."""
+    opened: list[str] = []
+
+    def press_graph(screen) -> None:
+        screen._open = opened.append
+        screen._server_ok = lambda: True
+        screen.action_graph()
+
+    _run_screen(PLAIN_QUERY, geo=False, after=press_graph)
+
+    assert not opened
+
+
+def test_graph_action_reports_a_dead_server_rather_than_opening_a_dead_tab() -> None:
+    opened: list[str] = []
+
+    def press_graph(screen) -> None:
+        screen._open = opened.append
+        screen._server_ok = lambda: False
+        screen.action_graph()
+
+    _run_screen(CONSTRUCT_QUERY, geo=False, after=press_graph)
+
+    assert not opened
+
+
+def test_graph_action_warns_when_the_browser_will_not_open() -> None:
+    """`webbrowser.open` returning False is the one failure the caller can see;
+    silence there would look like the action did nothing."""
+
+    def press_graph(screen) -> None:
+        screen._open = lambda _url: False
+        screen._server_ok = lambda: True
+        screen.action_graph()
+
+    _run_screen(CONSTRUCT_QUERY, geo=False, after=press_graph)
 
 
 def test_map_action_does_nothing_without_geodata() -> None:

@@ -414,7 +414,7 @@ def test_root_with_root_param_calls_html_fn_with_uri():
     html_fn = MagicMock(return_value="<html/>")
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=html_fn)
     TestClient(app).get("/", params={"root": uri("Dog")})
-    html_fn.assert_called_once_with(uri("Dog"), False)
+    html_fn.assert_called_once_with(uri("Dog"), False, "")
 
 
 def test_root_without_root_param_calls_html_fn_with_none():
@@ -423,7 +423,7 @@ def test_root_without_root_param_calls_html_fn_with_none():
     html_fn = MagicMock(return_value="<html/>")
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=html_fn)
     TestClient(app).get("/")
-    html_fn.assert_called_once_with(None, False)
+    html_fn.assert_called_once_with(None, False, "")
 
 
 # ── graph page caching ─────────────────────────────────────────────────────────
@@ -434,7 +434,11 @@ def test_root_graph_page_is_not_cached():
     tax = make_taxonomy()
     bc = SSEBroadcaster()
     app = create_app(
-        tax, TOKEN, bc, lambda t: None, html_fn=lambda root=None, full=False: "<html>g</html>"
+        tax,
+        TOKEN,
+        bc,
+        lambda t: None,
+        html_fn=lambda root=None, full=False, sparql="": "<html>g</html>",
     )
     client = TestClient(app)
     r = client.get("/")

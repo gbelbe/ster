@@ -56,6 +56,10 @@ class QueryIn(BaseModel):
     """A read-only SPARQL query. SELECT and ASK only; see is_read_only_sparql."""
 
     query: str
+    # Optional "map" or "graph": adds a link opening the result in that view, or
+    # the reason one cannot be built. Offered here as well as on the MCP tool so
+    # neither transport has a capability the other lacks.
+    view: str | None = None
 
 
 class _VersionedIn(BaseModel):
@@ -367,14 +371,16 @@ def create_app(
 def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     """HTML landing pages and the raw-ontology endpoint (no auth: read-only views)."""
 
-    def _graph_html_response(root_uri: str | None, full: bool = False) -> HTMLResponse:
+    def _graph_html_response(
+        root_uri: str | None, full: bool = False, sparql: str = ""
+    ) -> HTMLResponse:
         # no-store: the page inlines its JS, so caching it served stale builds
         # until a manual hard-reload.
         render = _st.get("html_fn")
         if render is None:
             raise HTTPException(status_code=501, detail="No HTML renderer configured")
         return HTMLResponse(
-            render(root_uri, full),
+            render(root_uri, full, sparql),
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
@@ -389,8 +395,14 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     def viz(
         root_uri: str | None = Query(default=None, alias="root"),
         full: bool = False,
+        sparql: str = Query(default="", alias="q"),
     ) -> HTMLResponse:
-        return _graph_html_response(root_uri, full)
+        """The graph page, optionally drawing a CONSTRUCT instead of the model.
+
+        ``?q=`` mirrors ``/map?q=``: the query travels in the URL, the token does
+        not — the page embeds it, so it stays out of browser history.
+        """
+        return _graph_html_response(root_uri, full, sparql)
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
     def map_page(sparql: str = Query(default="", alias="q")) -> HTMLResponse:
@@ -853,7 +865,7 @@ def _register_mutation_routes(
 
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(status_code=403, detail="Origin not allowed")
-        return sparql_payload(_st[_LIT_TAXONOMY], body.query)
+        return sparql_payload(_st[_LIT_TAXONOMY], body.query, body.view)
 
     @app.get(
         "/api/version",

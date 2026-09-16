@@ -55,7 +55,7 @@ def given_api_no_file(ctx: dict) -> None:
 def given_api_vowl(ctx: dict) -> None:
     from ster.api import SSEBroadcaster, create_app
 
-    def _html_fn(_root=None, _full=False) -> str:
+    def _html_fn(_root=None, _full=False, _sparql="") -> str:
         return "<html><body>vowl</body></html>"
 
     app = create_app(_minimal_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, html_fn=_html_fn)

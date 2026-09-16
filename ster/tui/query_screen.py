@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Callable
+from typing import Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -31,6 +32,14 @@ _EDITOR_ID = "query-editor"
 _EDITOR = f"#{_EDITOR_ID}"
 
 
+# Every notify from this screen is advisory — nothing here fails an action,
+# it declines one and says why. Named once so the ratchet does not count the
+# word six times and so a future severity change is one edit.
+# Typed as the literal, not str: Textual's notify() takes a Literal, so a
+# plain str constant is rejected at the call site.
+_WARN: Literal["warning"] = "warning"
+
+
 class QueryScreen(Screen[None]):
     """SPARQL editor over a results table. Runs against the live taxonomy."""
 
@@ -51,6 +60,9 @@ class QueryScreen(Screen[None]):
         # NOT ctrl+m: terminals send carriage return for it, so it is
         # indistinguishable from Enter and the binding never fires.
         Binding("ctrl+g", "map", "Map"),
+        # ctrl+y rather than a shifted ctrl+g: terminals do not distinguish
+        # ctrl+G from ctrl+shift+G, so the second binding would never fire.
+        Binding("ctrl+y", "graph", "Graph"),
         Binding("escape", "close", "Close"),
     ]
 
@@ -64,6 +76,7 @@ class QueryScreen(Screen[None]):
         self._index = query.build_entity_index(tax, graph=self._graph)
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
         self._located = 0  # rows of the last run that carry coordinates
+        self._graphable = False  # last run returned triples the graph can draw
         self._status_line = ""  # last status rendered, for tests/introspection
         # Indirected so tests can capture the URL instead of launching a browser.
         # ``webbrowser.open`` rather than ``App.open_url``: the latter's driver
@@ -132,32 +145,57 @@ class QueryScreen(Screen[None]):
         for row in result.rows:
             table.add_row(*row)
         self._status_line = (
-            f"{result.query_type} · {len(result.rows)} row(s){self._geo_hint(result)}"
+            f"{result.query_type} · {len(result.rows)} row(s){self._view_hint(result)}"
         )
         status.update(self._status_line)
 
-    def _geo_hint(self, result: QueryResult) -> str:
-        """The trailing 'N can be mapped' note, or nothing when none can be.
+    def _view_hint(self, result: QueryResult) -> str:
+        """What the result can be opened as, and what it cannot.
 
-        Kept out of the way deliberately: the query screen is a refine-and-rerun
-        loop, and a modal on every run would interrupt it.
+        Both views are named on every run, the unavailable one dimmed with its
+        reason, rather than the available one appearing and the other staying
+        invisible — a control you only see when it works is one you never learn
+        exists. Kept to the status line deliberately: the query screen is a
+        refine-and-rerun loop, and a modal on every run would interrupt it.
         """
         self._located = query.located_count(self._graph, result)
-        if not self._located:
-            return ""
-        return f" · {self._located} mappable · ctrl+g for map"
+        self._graphable = query.is_graphable(result)
+        parts = [
+            f"{self._located} mappable · ctrl+g map"
+            if self._located
+            else "[dim]no coordinates · map unavailable[/dim]",
+            "ctrl+y graph"
+            if self._graphable
+            else f"[dim]{result.query_type} returns rows, not triples · "
+            "graph needs CONSTRUCT[/dim]",
+        ]
+        return " · " + " · ".join(parts)
 
     def action_map(self) -> None:
         """Open the map page on the query that produced the current results."""
         if self._last_result is None or not self._located:
-            self.notify("No geographic data in these results", severity="warning")
+            self.notify("No geographic data in these results", severity=_WARN)
             return
         if not self._server_ok():
-            self.notify(query.server_unavailable_reason(), severity="warning")
+            self.notify(query.server_unavailable_reason(), severity=_WARN)
             return
         url = query.map_url(self._editor.text)
         if not self._open(url):
-            self.notify("Could not open a browser", severity="warning")
+            self.notify("Could not open a browser", severity=_WARN)
+
+    def action_graph(self) -> None:
+        """Open the graph view on the triples this query produced."""
+        if self._last_result is None or not self._graphable:
+            self.notify(
+                "The graph view draws triples — run a CONSTRUCT or DESCRIBE",
+                severity=_WARN,
+            )
+            return
+        if not self._server_ok():
+            self.notify(query.server_unavailable_reason(), severity=_WARN)
+            return
+        if not self._open(query.graph_url(self._editor.text)):
+            self.notify("Could not open a browser", severity=_WARN)
 
     def action_presets(self) -> None:
         presets = query.presets()

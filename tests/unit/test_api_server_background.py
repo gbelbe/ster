@@ -264,8 +264,8 @@ def test_start_background_wires_injected_renderer_with_live_taxonomy_and_token(m
     """The renderer is called with the *live* taxonomy, so it tracks later pushes."""
     got: dict = {}
 
-    def renderer(taxonomy, root_uri, token, full=False):
-        got.update(taxonomy=taxonomy, root_uri=root_uri, token=token, full=full)
+    def renderer(taxonomy, root_uri, token, full=False, sparql=""):
+        got.update(taxonomy=taxonomy, root_uri=root_uri, token=token, full=full, sparql=sparql)
         return "<html>graph</html>"
 
     _start(monkeypatch, html_renderer=renderer)
@@ -283,7 +283,9 @@ def test_pushed_taxonomy_reaches_the_landing_page(monkeypatch):
     # object is collected, which made an id-based assertion flaky under xdist.
     _start(
         monkeypatch,
-        html_renderer=lambda tax, _root, _token, _full=False: f"<html>{tax.ontology_uri}</html>",
+        html_renderer=lambda tax, _root, _token, _full=False, _sparql="": (
+            f"<html>{tax.ontology_uri}</html>"
+        ),
     )
     app = srv.current_app()
 

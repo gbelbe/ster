@@ -52,6 +52,7 @@ def render_vowl_html(
     api_token: str = "",
     root_uri: str | None = None,
     full: bool = False,
+    sparql: str = "",
 ) -> str:
     """Return the rendered VOWL HTML string.
 
@@ -70,7 +71,15 @@ def render_vowl_html(
     _viz_limits = load_graph_viz_config()
     title = _ontology_title(taxonomy, file_path)
     show_all_btn = ""
-    if root_uri:
+    if sparql.strip():
+        # A query replaces the model walk entirely, exactly as /api/graph?q does
+        # — same payload, so the page renders it without knowing which produced
+        # it. Not scoped and not collapsed: you asked for these triples, so
+        # holding some of them back would answer a question you did not ask.
+        from ._from_query import graph_from_query  # noqa: PLC0415
+
+        graph = graph_from_query(taxonomy, sparql)
+    elif root_uri:
         root_cls = taxonomy.owl_classes.get(root_uri)
         root_label = root_cls.label("en") if root_cls else _local(root_uri)
         title = f"{title} — {root_label}"

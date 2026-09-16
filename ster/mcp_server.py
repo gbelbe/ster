@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 from . import mcp_context as ctx
 from .model import Taxonomy
@@ -73,10 +73,14 @@ INTERNAL_ERROR = -32603
 
 _STRING = {"type": "string"}
 
+# The key every tool and every parameter carries. Named once so the ratchet
+# counts one spelling, and so the schema shape stays greppable.
+_DESC: Final = "description"
+
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_current_context",
-        "description": (
+        _DESC: (
             "What the user is looking at right now in ster: the focused entity with its "
             "labels, descriptions, parents and children, plus its ancestor chain, its "
             "siblings, and an overview of the whole file. When nothing is focused (no TUI "
@@ -90,7 +94,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_overview",
-        "description": (
+        _DESC: (
             "Orientation for the whole ontology/taxonomy: its URI and title, the number of "
             "schemes, concepts, classes, individuals and properties, the concept schemes, "
             "and every language present on labels."
@@ -103,7 +107,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_entity",
-        "description": (
+        _DESC: (
             "Full detail for one entity by URI: kind (concept/class/individual/property/"
             "scheme), labels, descriptions, parent and child entities, and rdf:types. "
             "Works for both SKOS concepts (broader/narrower) and OWL classes (subClassOf)."
@@ -117,7 +121,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "search_entities",
-        "description": (
+        _DESC: (
             "Find entities whose label or URI contains the query (case-insensitive), across "
             "concepts, classes, individuals, properties and schemes. Use this to resolve a "
             "name the user mentions into a URI before calling get_entity."
@@ -135,7 +139,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_vocabulary",
-        "description": (
+        _DESC: (
             "The predicates, types, prefixes and language tags this file actually uses. "
             "Call this before writing any SPARQL: it tells you whether labels are on "
             "skos:prefLabel or rdfs:label, whether the hierarchy is skos:broader or "
@@ -146,7 +150,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "run_sparql",
-        "description": (
+        _DESC: (
             "Run a read-only SPARQL query (SELECT or ASK) against the open file and get "
             "columns plus rows. Update forms (INSERT/DELETE/DROP/CLEAR/LOAD) are refused. "
             "Use this for questions the other tools cannot answer directly, such as counting "
@@ -160,7 +164,20 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"query": _STRING},
+            "properties": {
+                "query": _STRING,
+                "view": {
+                    "type": "string",
+                    "enum": ["map", "graph"],
+                    _DESC: (
+                        "Also return a URL opening these results in ster's map or graph "
+                        "view. 'map' needs rows carrying coordinates, or naming an entity "
+                        "that does; 'graph' needs a CONSTRUCT or DESCRIBE, since it draws "
+                        "triples. When the view cannot be built the rows still come back "
+                        "and 'view_unavailable' says why."
+                    ),
+                },
+            },
             "required": ["query"],
             "additionalProperties": False,
         },
@@ -189,7 +206,7 @@ def _tool_get_vocabulary(tax: Taxonomy, _selection: str | None, _args: dict) -> 
 
 
 def _tool_run_sparql(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
-    return ctx.run_sparql(tax, args["query"])
+    return ctx.run_sparql(tax, args["query"], args.get("view"))
 
 
 # name → implementation. A registry, so adding a tool is one row plus one entry

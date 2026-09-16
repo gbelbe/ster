@@ -21,7 +21,9 @@ from typing import Any, Final
 # A renderer for the server's HTML landing pages: (taxonomy, root_uri, token) -> html.
 # Injected by the caller so this module stays free of any front-end feature
 # (the VOWL graph passes ``render_vowl_html``; the MCP server passes nothing).
-HtmlRenderer = Callable[[Any, str | None, str, bool], str]
+# (taxonomy, root_uri, token, full, sparql) — the last is a CONSTRUCT to draw
+# instead of walking the model, as /viz?q= and /map?q= both take.
+HtmlRenderer = Callable[[Any, str | None, str, bool, str], str]
 
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
@@ -260,8 +262,8 @@ def _make_html_fn(app: Any, renderer: HtmlRenderer, token: str) -> Callable[...,
     ``push_taxonomy`` updates rather than freezing the one it started with.
     """
 
-    def html_fn(root_uri: str | None = None, full: bool = False) -> str:
-        return renderer(app.state._ster["taxonomy"], root_uri, token, full)
+    def html_fn(root_uri: str | None = None, full: bool = False, sparql: str = "") -> str:
+        return renderer(app.state._ster["taxonomy"], root_uri, token, full, sparql)
 
     return html_fn
 

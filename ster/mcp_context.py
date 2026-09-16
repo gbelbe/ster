@@ -395,7 +395,7 @@ def is_read_only_sparql(query: str) -> bool:
     return not any(re.search(rf"\b{kw}\b", stripped, flags=re.IGNORECASE) for kw in _WRITE_KEYWORDS)
 
 
-def sparql_payload(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
+def sparql_payload(taxonomy: Taxonomy, query: str, view: str | None = None) -> dict[str, Any]:
     """Run a read-only SPARQL query and shape the answer for the wire.
 
     The single implementation behind both transports: ``POST /api/sparql_query`` and
@@ -413,14 +413,26 @@ def sparql_payload(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
     result = run_query_on_taxonomy(taxonomy, query)
     if result.error:
         return {"error": "query_error", "message": result.error}
-    return {
+    payload = {
         "columns": result.columns,
         "rows": result.rows,
         "row_count": len(result.rows),
         "query_type": result.query_type,
     }
+    # *view* is handled here rather than in either caller, for the reason this
+    # function exists: a protocol is a way in, not a place where behaviour
+    # lives. Putting it in the MCP tool alone would have given the agent a
+    # capability the REST endpoint does not have.
+    from .view_links import annotate  # noqa: PLC0415
+
+    return annotate(payload, taxonomy, result, query, view)
 
 
-def run_sparql(taxonomy: Taxonomy, query: str) -> dict[str, Any]:
-    """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable."""
-    return sparql_payload(taxonomy, query)
+def run_sparql(taxonomy: Taxonomy, query: str, view: str | None = None) -> dict[str, Any]:
+    """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable.
+
+    *view* is advisory: the rows come back whether or not a map or graph can be
+    built from them, and an unbuildable view is reported as a reason rather than
+    raised. A failed view is not a failed query.
+    """
+    return sparql_payload(taxonomy, query, view)

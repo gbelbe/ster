@@ -191,16 +191,26 @@ def located_count(graph: rdflib.Graph, result: QueryResult) -> int:
 def map_url(sparql: str) -> str:
     """Address of the running server's map page, carrying *sparql* to run there.
 
-    The page is served by ster itself (same origin as the API) so its re-runs
-    post to ``/mcp`` without CORS, and the token stays out of this URL — the
-    page embeds it, exactly as the VOWL graph viewer does.
+    Delegates to :mod:`ster.view_links`, which MCP uses too — one place that
+    knows the port, the URL shape and the encoding.
     """
-    from urllib.parse import quote  # noqa: PLC0415
+    from ster.view_links import map_url as _map_url  # noqa: PLC0415
 
-    from ster.api_server import load_server_config  # noqa: PLC0415
+    return _map_url(sparql)
 
-    url, port = load_server_config()
-    return f"{url}:{port}/map?q={quote(sparql)}"
+
+def graph_url(sparql: str) -> str:
+    """Address of the running server's graph page, drawing *sparql*'s triples."""
+    from ster.view_links import graph_url as _graph_url  # noqa: PLC0415
+
+    return _graph_url(sparql)
+
+
+def is_graphable(result: QueryResult) -> bool:
+    """True when *result* is triples the graph view can draw."""
+    from ster.view_links import is_graphable as _is_graphable  # noqa: PLC0415
+
+    return _is_graphable(result)
 
 
 def server_is_running() -> bool:
