@@ -1405,6 +1405,59 @@ def test_cmd_export_generates_html_and_prints_created_files(tmp_ttl, tmp_path, m
     browser_open.assert_called_once()
 
 
+def test_cmd_export_no_open_writes_the_files_and_opens_nothing(tmp_ttl, tmp_path, monkeypatch):
+    """export is the documentation build, so a pipeline wants the files and not
+    a browser it has no display for. Until this flag there was no way to decline.
+    """
+    monkeypatch.chdir(tmp_path)
+    out_file = tmp_path / "html" / "test_en.html"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("<html></html>", encoding="utf-8")
+
+    with (
+        patch("ster.html_export.generate_html", return_value=[out_file]),
+        patch("webbrowser.open") as browser_open,
+    ):
+        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl), "--no-open"])
+
+    assert result.exit_code == 0
+    assert "Generated 1 file(s)" in result.stdout
+    browser_open.assert_not_called()
+
+
+def test_cmd_export_no_open_still_says_where_the_file_is(tmp_ttl, tmp_path, monkeypatch):
+    """Suppressing the browser must not suppress the answer, or the command
+    looks like it did nothing."""
+    monkeypatch.chdir(tmp_path)
+    out_file = tmp_path / "html" / "test_en.html"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("<html></html>", encoding="utf-8")
+
+    with (
+        patch("ster.html_export.generate_html", return_value=[out_file]),
+        patch("webbrowser.open"),
+    ):
+        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl), "--no-open"])
+
+    assert "Open it with:" in result.stdout
+
+
+def test_cmd_export_opens_by_default(tmp_ttl, tmp_path, monkeypatch):
+    """Interactive use is the common case; a script is the one that opts out."""
+    monkeypatch.chdir(tmp_path)
+    out_file = tmp_path / "html" / "test_en.html"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("<html></html>", encoding="utf-8")
+
+    with (
+        patch("ster.html_export.generate_html", return_value=[out_file]),
+        patch("webbrowser.open") as browser_open,
+    ):
+        _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
+
+    browser_open.assert_called_once()
+
+
 def test_cmd_export_reports_runtime_error(tmp_ttl):
     with patch("ster.html_export.generate_html", side_effect=RuntimeError("pyLODE missing")):
         result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])

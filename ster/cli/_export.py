@@ -49,6 +49,9 @@ def cmd_export(
         "-l",
         help="Comma-separated language codes to generate, e.g. en,fr. Defaults to all languages found.",
     ),
+    open_pages: bool = typer.Option(
+        True, "--open/--no-open", help="Open the generated documentation in the browser."
+    ),
 ) -> None:
     """Export the taxonomy to a browsable HTML website (requires pyLODE).
 
@@ -58,6 +61,7 @@ def cmd_export(
       ster export                         # auto-detect languages\n
       ster export --lang en               # English only\n
       ster export --lang en,fr --output ./docs\n
+      ster export --no-open                # write the files, open nothing\n
     """
     from ..html_export import detect_profile, generate_html
 
@@ -101,8 +105,15 @@ def cmd_export(
             f"\n[bold]Generated {len(created)} file(s)[/bold] in [cyan]{output_dir}[/cyan]"
         )
         entry = next((p for p in created if "_en" in p.name), created[0])
-        webbrowser.open(_browser_url(entry))
-        console.print(f"  [dim]Opened in browser:[/dim] {entry}")
+        # Spelled --open/--no-open to match `ster publish`, which already had it.
+        # Without a way to decline, export could not run unattended: it is the
+        # documentation build, so a pipeline or a CI job wants the files and not
+        # a browser it has no display for.
+        if open_pages:
+            webbrowser.open(_browser_url(entry))
+            console.print(f"  [dim]Opened in browser:[/dim] {entry}")
+        else:
+            console.print(f"  [dim]Open it with:[/dim] {_browser_url(entry)}")
 
 
 # ──────────────────────────── internal helpers ───────────────────────────────
