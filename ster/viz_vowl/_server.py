@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import http.server
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -114,6 +115,32 @@ def other_ster_servers() -> list[tuple[int, str]]:
         seen_args.add(tail)
         found.append((pid, command))
     return found
+
+
+# What is sitting on the live-server port. The distinction matters because the
+# caller SIGTERMs what it reclaims, and "a process holding port 8765" is not the
+# same thing as "a stale graph window".
+SERVER: Final = "server"  # a `ster serve` — a view, safe to replace
+EDITOR: Final = "editor"  # an interactive ster session — someone is working in it
+FOREIGN: Final = "foreign"  # not ster at all — never ours to kill
+
+# \b keeps this off "raster", "semanticdiff-ster" and the like: the preceding
+# character must be a path separator, whitespace, or the start of the line.
+_STER_INVOCATION = re.compile(r"(?:^|[/\s])ster(?:\s|$)")
+
+
+def holder_kind(command: str) -> str:
+    """Classify the command line of whatever holds the port.
+
+    A `ster serve` is a view of an ontology and replacing it costs nothing. An
+    interactive session is someone's open editor — SIGTERM there kills the TUI
+    mid-render and leaves the terminal in mouse-tracking mode, which is why the
+    screen fills with escape codes. And a process that is not ster has no
+    business being closed by ster at all.
+    """
+    if "ster serve" in command:
+        return SERVER
+    return EDITOR if _STER_INVOCATION.search(command) else FOREIGN
 
 
 def port_holder(host: str | None = None, port: int | None = None) -> tuple[int, str] | None:

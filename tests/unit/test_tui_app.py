@@ -3274,7 +3274,9 @@ def test_port_conflict_reclaims_the_port_then_opens_no_prompt() -> None:
             opened: list = []
             with (
                 patch.object(viz_vowl, "is_live_server", return_value=False),
-                patch.object(viz_vowl, "port_holder", return_value=(999, "old ster")),
+                # A real `ster serve` command line: only a server is reclaimed now,
+                # and "old ster" reads as an interactive session.
+                patch.object(viz_vowl, "port_holder", return_value=(999, "ster serve onto.ttl")),
                 patch.object(viz_vowl, "free_port", lambda pid, **kw: freed.append(pid) or True),
                 patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
             ):
@@ -3300,7 +3302,9 @@ def test_port_conflict_opens_a_snapshot_when_the_port_cannot_be_freed() -> None:
             opened: list = []
             with (
                 patch.object(viz_vowl, "is_live_server", return_value=False),
-                patch.object(viz_vowl, "port_holder", return_value=(999, "old ster")),
+                # A real `ster serve` command line: only a server is reclaimed now,
+                # and "old ster" reads as an interactive session.
+                patch.object(viz_vowl, "port_holder", return_value=(999, "ster serve onto.ttl")),
                 patch.object(viz_vowl, "free_port", lambda pid, **kw: False),
                 patch.object(app, "_open_graph_now", lambda t: opened.append(t)),
             ):

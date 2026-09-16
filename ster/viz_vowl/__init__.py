@@ -95,6 +95,9 @@ from ._search import (
 )
 from ._server import (
     API_PORT,
+    EDITOR,
+    FOREIGN,
+    SERVER,
     _api_file_path,
     _ensure_server,
     _file_path,
@@ -108,6 +111,7 @@ from ._server import (
     _start_api_server,
     _vowl_html,
     free_port,
+    holder_kind,
     other_ster_servers,
     port_holder,
 )
@@ -177,6 +181,10 @@ __all__ = [
     "_listening_pid",
     "_process_name",
     "other_ster_servers",
+    "EDITOR",
+    "FOREIGN",
+    "SERVER",
+    "holder_kind",
     "port_holder",
     "_port_is_free",
     "free_port",

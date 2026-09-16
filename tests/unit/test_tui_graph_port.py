@@ -32,11 +32,17 @@ def _isolate_prefs(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server, "_TOKEN_FILE", tmp_path / "api_token")
 
 
-def _stub_graph(monkeypatch) -> dict:
-    """Stub the viz_vowl entry points and record how the graph was opened."""
+def _stub_graph(monkeypatch, holder: str = "ster serve onto.ttl --port 8765") -> dict:
+    """Stub the viz_vowl entry points and record how the graph was opened.
+
+    *holder* is the command line of whatever has the port. It matters now: only
+    a `ster serve` is reclaimed. The default is one, since that is what "a
+    previous graph window" actually is — the old fixture said "old ster", which
+    reads as an interactive session and would no longer be touched.
+    """
     rec: dict = {"opened": [], "freed": []}
     monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
-    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: (1234, "old ster"))
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: (1234, holder))
     monkeypatch.setattr(
         viz_vowl,
         "open_in_browser",
@@ -103,3 +109,45 @@ def test_free_port_when_the_port_is_available(monkeypatch) -> None:
             assert rec["opened"] == ["GLOBAL"]
 
     _run(scenario)
+
+
+def test_another_ster_session_on_the_port_is_left_running(monkeypatch) -> None:
+    """The bug this guards: SIGTERM to another interactive session kills that
+    TUI mid-render with mouse tracking still on, so its terminal fills with
+    escape codes — and the person who lost the session is not the one who gets
+    the message. The self-PID guard was the only protection, and it only ever
+    covered our own process.
+    """
+    rec = _stub_graph(monkeypatch, holder="/Users/me/.local/bin/ster ontology/x.ttl")
+    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **kw: rec["freed"].append(pid) or True)
+
+    async def scenario() -> None:
+        app = OntologyApp(store.load(DEMO), source="demo.ttl")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+
+    _run(scenario)
+
+    assert rec["freed"] == [], "the other session must survive"
+    assert rec["opened"], "the graph still opens, as a snapshot"
+
+
+def test_a_process_that_is_not_ster_is_left_running(monkeypatch) -> None:
+    """It was never ster's to kill. Before this, someone's dev server on the
+    configured port would simply be SIGTERMed."""
+    rec = _stub_graph(monkeypatch, holder="/usr/bin/python3 -m http.server 8765")
+    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **kw: rec["freed"].append(pid) or True)
+
+    async def scenario() -> None:
+        app = OntologyApp(store.load(DEMO), source="demo.ttl")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+
+    _run(scenario)
+
+    assert rec["freed"] == []
+    assert rec["opened"]

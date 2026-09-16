@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ster.nav.logic import DetailField
 
 from ._state import _AppState
+
+# Typed as the literal because Textual's notify() takes one, and named once
+# because every notify here is advisory: nothing fails, an action declines
+# and says why.
+_WARN: Literal["warning"] = "warning"
 
 
 class _GraphMixin(_AppState):
@@ -15,7 +22,7 @@ class _GraphMixin(_AppState):
         if action == "view_focused_graph":
             target = field.meta.get("uri") or self._detail_uri
             if not target:
-                self.notify("No entity to focus the graph on.", severity="warning")
+                self.notify("No entity to focus the graph on.", severity=_WARN)
                 return
             self._show_graph(target)
         else:
@@ -70,19 +77,47 @@ class _GraphMixin(_AppState):
             self.notify(f"Couldn't open the graph: {exc}", severity="error")
 
     def _reclaim_port_and_open(self, holder: tuple[int, str], target: str | None) -> None:
-        """A previous graph window/process holds the live-server port — close it, then
-        open the graph. No prompt: re-opening the graph just replaces the old window. If
-        the process can't be closed, ``_open_graph_now`` still opens a read-only snapshot
-        (the port is busy), so the view always appears — it never hangs on a modal."""
+        """Something holds the live-server port. Close it only if it is ours to close.
+
+        A previous `ster serve` is a view of an ontology, and replacing it costs
+        nothing — that reclaim stays silent, because re-opening the graph should
+        simply replace the old window.
+
+        Another interactive ster session is not that. SIGTERM there kills the TUI
+        mid-render and leaves its terminal in mouse-tracking mode, so the other
+        window fills with escape codes — and the person who lost their session is
+        not the one who gets the message. Reclaiming used to do this, because the
+        only guard was against our *own* PID.
+
+        A process that is not ster was never ours to kill at all.
+
+        In both of those cases the port stays taken, and ``_open_graph_now``
+        falls back to a read-only snapshot — so the view still appears, and
+        nobody else's work ends.
+        """
         from ster import viz_vowl
 
-        pid, _desc = holder
+        pid, command = holder
+        kind = viz_vowl.holder_kind(command)
+        if kind != viz_vowl.SERVER:
+            what = (
+                "another ster session is open there"
+                if kind == viz_vowl.EDITOR
+                else "it is not a ster process"
+            )
+            self.notify(
+                f"Port held by PID {pid} — {what}, so it was left alone. "
+                "Opening a read-only snapshot.",
+                severity=_WARN,
+            )
+            self._open_graph_now(target)
+            return
         if viz_vowl.free_port(pid):
             self.notify(f"Closed the previous graph window (PID {pid}).")
         else:
             self.notify(
                 f"Couldn't close the previous graph process (PID {pid}) — "
                 "opening a read-only snapshot instead.",
-                severity="warning",
+                severity=_WARN,
             )
         self._open_graph_now(target)
