@@ -893,9 +893,7 @@ applyLevelOfDetail();
 // The show-all button is rendered server-side (see _render.py) and fires
 // before this module's own handlers exist, so it reaches the spinner globally.
 globalThis.showSpinner=showSpinner;
-_watchForNewBuild();
-const _staleReload=document.getElementById('stale-reload');
-if(_staleReload)_staleReload.addEventListener('click',()=>location.reload());
+_wireStaleBanner();
 globalThis._sterNav=navigateTo;
 // The Taxonomie tab's own asset (taxonomy_app.js) shares this panel but owns no
 // part of its open/close state — it calls this to make sure a click always
@@ -1748,6 +1746,15 @@ function _checkServerBuild(mine){
     // once, and it reads as the question — is there a build, and is it ours.
     .then(d=>{if(d?.ster&&d.ster!==mine)_showStaleBuild(mine,d.ster);})
     .catch(err=>{console.debug('Unable to check the server build:',err);});
+}
+// Both halves of the banner, wired in one call. Kept out of the init body
+// because a guard there counts against initSterRelationsGraph, which holds the
+// whole application and sits permanently on the cognitive-complexity limit —
+// so any feature adding a branch there trips the ratchet, whatever it is.
+function _wireStaleBanner(){
+  _watchForNewBuild();
+  const reload=document.getElementById('stale-reload');
+  if(reload)reload.addEventListener('click',()=>location.reload());
 }
 function _watchForNewBuild(){
   const mine=API_TOKEN&&globalThis.__STER_GRAPH__.sterVersion;
