@@ -1,0 +1,48 @@
+# Dependency updates.
+#
+# Three ecosystems, because ster ships three kinds of dependency and only one of
+# them was being watched. pip-audit in CI catches published CVEs in the Python
+# tree; it says nothing about the ten JavaScript libraries ster vendors into its
+# pages, nor about the actions the workflows pin.
+#
+# The npm manifest is not a build input — ster has no bundler, and the libraries
+# are fetched from a CDN at first use and cached. package.json is the manifest of
+# record for them, and tests/unit/test_browser_dependencies.py fails if a version
+# there and the constant in the Python source ever disagree. So a Dependabot PR
+# here is a real signal: it means a library moved, and the Python constant has to
+# move with it.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    # Grouped: a Cytoscape bump usually drags its layout packages with it, and
+    # six separate PRs for one upgrade is six times the CI for one decision.
+    groups:
+      cytoscape:
+        patterns:
+          - "cytoscape*"
+          - "cose-base"
+          - "layout-base"
+      d3:
+        patterns:
+          - "d3-*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore(ci)"

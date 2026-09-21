@@ -2,7 +2,7 @@
   "name": "ster-js",
   "version": "0.0.0",
   "private": true,
-  "description": "JavaScript linting for ster's browser-side graph assets (not published).",
+  "description": "JavaScript linting for ster's browser-side assets, and the manifest of record for the browser libraries ster vendors into its pages (not published).",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -13,6 +13,18 @@
   },
   "overrides": {
     "brace-expansion": "5.0.9"
+  },
+  "dependencies": {
+    "cose-base": "2.2.0",
+    "cytoscape": "3.29.2",
+    "cytoscape-expand-collapse": "4.1.1",
+    "cytoscape-fcose": "2.2.0",
+    "d3-hierarchy": "3.1.2",
+    "d3-path": "3.1.0",
+    "d3-shape": "3.2.0",
+    "layout-base": "2.0.1",
+    "leaflet": "1.9.4",
+    "vis-timeline": "7.7.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
