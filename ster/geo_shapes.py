@@ -1036,6 +1036,28 @@ def _symmetric_predicates(graph: rdflib.Graph) -> frozenset[str]:
     return found  # type: ignore[no-any-return]
 
 
+#: The taxonomy's own plumbing. These say how the vocabulary is *organised* —
+#: which scheme a concept files under, what sits below it — not what a place
+#: tagged with that concept *is*. Following them turns the ConceptScheme into a
+#: hub: every concept reaches its scheme through ``inScheme``, and the scheme
+#: reaches every other concept back through ``hasTopConcept``. Three hops of
+#: that gave every zone in a PLU the whole 18-concept vocabulary as its facet
+#: values, identical for all of them, so no value discriminated and clicking a
+#: filter changed nothing on the map. ``skos:broader`` is absent because it is
+#: already honoured as containment.
+_TAXONOMY_SPINE = frozenset(
+    {
+        "http://www.w3.org/2004/02/skos/core#inScheme",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#topConceptOf",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#hasTopConcept",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#narrower",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#narrowerTransitive",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#broaderTransitive",  # NOSONAR - RDF predicate IRI
+        "http://www.w3.org/2004/02/skos/core#member",  # NOSONAR - RDF predicate IRI
+    }
+)
+
+
 def _facet_values_from(
     graph: rdflib.Graph,
     current: rdflib.term.Node,
@@ -1055,7 +1077,7 @@ def _facet_values_from(
     # are — following competesWith dragged the rival's owner, brand and format
     # back onto every store, so a Leroy Merlin shop listed Kingfisher among its
     # groups and filtering by owner selected everything.
-    skip = containment | _symmetric_predicates(graph)
+    skip = containment | _symmetric_predicates(graph) | _TAXONOMY_SPINE
     for predicate, target in graph.predicate_objects(current):
         if str(predicate) in skip or not isinstance(target, rdflib.URIRef):
             continue

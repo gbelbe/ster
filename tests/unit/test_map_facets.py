@@ -179,6 +179,89 @@ def test_provenance_is_not_offered_as_a_filter(graph) -> None:
     assert not any(NS + "src1" in v for v in found.values())
 
 
+def test_a_concept_scheme_does_not_drag_its_whole_vocabulary_in() -> None:
+    """Tagging a place with one concept must not tag it with every sibling.
+
+    SKOS files the concept under a scheme, and the scheme names its top concepts
+    back — so ``inScheme`` up and ``hasTopConcept`` down is a two-hop round trip
+    from any concept to all of them, well inside FACET_DEPTH. On a real PLU that
+    gave all seven zones an identical set of eighteen values. The menu looked
+    right and was useless: every value matched every place, so clicking a filter
+    left the map exactly as it was.
+
+    The place is tagged ``haie`` here and nothing else; ``ebc`` is a sibling
+    reachable only through the scheme, and must stay out.
+    """
+    ttl = """\
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix wgs:  <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix ex:   <https://example.org/f#> .
+
+ex:Zone a owl:Class ; rdfs:label "Zone"@en .
+ex:typeDeZone a owl:ObjectProperty ; rdfs:domain ex:Zone ; rdfs:range skos:Concept .
+
+ex:TypeDeZone a skos:ConceptScheme ; rdfs:label "Type de zone"@en ;
+    skos:hasTopConcept ex:haie, ex:ebc, ex:znieff .
+
+ex:haie   a owl:NamedIndividual, skos:Concept ; skos:topConceptOf ex:TypeDeZone ;
+    skos:inScheme ex:TypeDeZone ; rdfs:label "Haie"@en .
+ex:ebc    a owl:NamedIndividual, skos:Concept ; skos:topConceptOf ex:TypeDeZone ;
+    skos:inScheme ex:TypeDeZone ; rdfs:label "EBC"@en .
+ex:znieff a owl:NamedIndividual, skos:Concept ; skos:topConceptOf ex:TypeDeZone ;
+    skos:inScheme ex:TypeDeZone ; rdfs:label "ZNIEFF"@en .
+
+ex:haieNord a owl:NamedIndividual, ex:Zone ; rdfs:label "Haie nord"@en ;
+    wgs:lat "48.1" ; wgs:long "-3.2" ; ex:typeDeZone ex:haie .
+"""
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")
+
+    found = geo_shapes.facets_of(g, rdflib.URIRef(NS + "haieNord"))
+    values = {v for vs in found.values() for v in vs}
+
+    assert NS + "haie" in values, "the concept the place is actually tagged with"
+    assert NS + "ebc" not in values, "a sibling, reachable only through the scheme"
+    assert NS + "znieff" not in values
+    assert NS + "TypeDeZone" not in values, "the scheme is plumbing, not a value"
+
+
+def test_two_places_tagged_differently_get_different_facet_values() -> None:
+    """The property that makes a filter work at all, stated directly.
+
+    The scheme-hub bug was invisible to a test that only counted values: every
+    place had facets, the menu drew, nothing was empty. What it did not have was
+    *difference*. This asserts the thing the map actually needs.
+    """
+    ttl = """\
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix wgs:  <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix ex:   <https://example.org/f#> .
+
+ex:Zone a owl:Class ; rdfs:label "Zone"@en .
+ex:typeDeZone a owl:ObjectProperty ; rdfs:domain ex:Zone ; rdfs:range skos:Concept .
+ex:S a skos:ConceptScheme ; skos:hasTopConcept ex:haie, ex:ebc .
+ex:haie a owl:NamedIndividual, skos:Concept ; skos:inScheme ex:S ; rdfs:label "Haie"@en .
+ex:ebc  a owl:NamedIndividual, skos:Concept ; skos:inScheme ex:S ; rdfs:label "EBC"@en .
+
+ex:one a owl:NamedIndividual, ex:Zone ; wgs:lat "48.1" ; wgs:long "-3.2" ;
+    ex:typeDeZone ex:haie .
+ex:two a owl:NamedIndividual, ex:Zone ; wgs:lat "48.2" ; wgs:long "-3.3" ;
+    ex:typeDeZone ex:ebc .
+"""
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")
+
+    def values(local):
+        found = geo_shapes.facets_of(g, rdflib.URIRef(NS + local))
+        return {v for vs in found.values() for v in vs}
+
+    assert values("one") != values("two"), "a filter that selects everything selects nothing"
+
+
 def test_a_facet_needs_more_than_one_value_to_be_worth_showing() -> None:
     """The rule the page applies: a facet that cannot discriminate is not a facet.
 
