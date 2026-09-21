@@ -102,9 +102,13 @@ def load(
 
     # Merged after the cache is written, so the cache stays a faithful copy of
     # this file alone and never depends on which context happened to be loaded.
-    for other in context or ():
-        _merge_context(taxonomy, Path(other))
     if context:
+        # Snapshot before any merging. A triple the editable file already asserts
+        # is its own even when a context file asserts it too, so the diff below
+        # can never mark it as another file's and strip it on save.
+        base_triples = frozenset(_to_graph.taxonomy_to_graph(taxonomy))
+        for other in context:
+            _merge_context(taxonomy, Path(other), base_triples)
         # Deliberately *not* re-normalising the hierarchy here. A context concept
         # declaring broader on an editable one would gain the reciprocal narrower
         # on that editable entity — and saving would then write a synthesised
@@ -239,7 +243,32 @@ def _promote_residue(taxonomy: Taxonomy, residue: list, path: Path) -> list:
     return rest
 
 
-def _merge_context(taxonomy: Taxonomy, path: Path) -> None:
+def _record_contributed(
+    taxonomy: Taxonomy, other: Taxonomy, path: Path, base_triples: frozenset
+) -> None:
+    """Record every triple *other* contributes that the editable file does not assert.
+
+    ``_merge_statements_onto`` puts a context file's statements on an entity the
+    editable file defines, which is what makes them queryable — but that entity
+    *is* written on save, so without this the statements migrate into the user's
+    file. Recording them here lets the writer take them out again, the same way
+    promoted residue is already handled.
+
+    Diffed against *base_triples* rather than taken wholesale: a triple both files
+    assert belongs to the editable one too, and stripping it would delete the
+    user's own data.
+    """
+    # Residue is excluded: _promote_residue records what it attaches and
+    # context_residue keeps the rest, so a triple stays in exactly one place.
+    residue = {tuple(t[:3]) for t in (other.residue or [])}
+    contributed = [
+        t for t in _to_graph.taxonomy_to_graph(other) if t not in base_triples and t not in residue
+    ]
+    if contributed:
+        taxonomy.context_statements.setdefault(path, []).extend(contributed)
+
+
+def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> None:
     """Merge *path* into *taxonomy* read-only, recording where each entity came from.
 
     An entity the editable file does not define is taken whole and marked as
@@ -254,6 +283,7 @@ def _merge_context(taxonomy: Taxonomy, path: Path) -> None:
     back — the retail competitor set alone carries 66 of them.
     """
     other = load(path)
+    _record_contributed(taxonomy, other, path, base_triples)
     for registry in _ENTITY_REGISTRIES:
         target = getattr(taxonomy, registry)
         for uri, entity in getattr(other, registry).items():

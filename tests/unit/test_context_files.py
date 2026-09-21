@@ -141,6 +141,143 @@ def test_saving_does_not_absorb_context_entities(files):
         assert absorbed not in written, f"{absorbed} came from the context file"
 
 
+# ── saving: statements merged onto an entity the editable file defines ────────
+#
+# Root cause of the regressions below: _merge_context has two paths that attach a
+# context file's statements to an entity the editable file already defines.
+# _promote_residue records each promotion in `context_statements`, so the writer
+# strips it again; _merge_statements_onto recorded nothing, so the writer could
+# not tell those statements apart from the editable file's own and wrote them out.
+
+
+def test_context_statements_on_a_shared_entity_do_not_leak_on_save_regression(files):
+    """A context file's label must not be written into the file the user edits.
+
+    The whole point of a read-only context is that the two files stay separate.
+    Merging the statement so it is queryable is right; emitting it into the other
+    file is not.
+    """
+    primary, context = files
+    context.write_text(
+        CONTEXT
+        + 'ex:Tent a skos:Concept ; skos:prefLabel "Tent from context"@en ;\n'
+        + '    skos:definition "Portable shelter."@en .\n',
+        encoding="utf-8",
+    )
+    tax = store.load(primary, context=[context])
+
+    store.save(tax, primary)
+
+    written = primary.read_text(encoding="utf-8")
+    assert "Tent from context" not in written, "the context file's label leaked"
+    assert "Portable shelter." not in written, "the context file's definition leaked"
+    assert "Tent" in written, "the editable file lost its own label"
+
+
+def test_a_leaked_label_would_make_the_editable_file_invalid_skos_regression(files):
+    """The leak does not only move data — it authors a SKOS violation.
+
+    Two prefLabels in one language on one concept (SKO001) in a file that had
+    exactly one before ster opened it.
+    """
+    primary, context = files
+    context.write_text(
+        CONTEXT + 'ex:Tent a skos:Concept ; skos:prefLabel "Tent from context"@en .\n',
+        encoding="utf-8",
+    )
+    tax = store.load(primary, context=[context])
+
+    store.save(tax, primary)
+
+    reloaded = store.load(primary)
+    english_prefs = [
+        label
+        for label in reloaded.concepts[NS + "Tent"].labels
+        if label.lang == "en" and label.type.value == "pref"
+    ]
+    assert len(english_prefs) == 1, f"one prefLabel@en expected, got {english_prefs}"
+
+
+def test_context_statements_on_a_shared_entity_stay_visible_in_the_model(files):
+    """Stripping them from the *written file* must not hide them from the model.
+
+    Guards the competitor-set behaviour: a context file saying something new
+    about a known entity is the ordinary case, and the merged graph is what makes
+    it queryable.
+    """
+    primary, context = files
+    context.write_text(
+        CONTEXT + 'ex:Tent a skos:Concept ; skos:definition "Portable shelter."@en .\n',
+        encoding="utf-8",
+    )
+
+    tax = store.load(primary, context=[context])
+
+    definitions = [d.value for d in tax.concepts[NS + "Tent"].definitions]
+    assert "Portable shelter." in definitions
+
+
+def test_a_statement_both_files_assert_survives_the_save(files):
+    """Only what the context file *adds* is stripped.
+
+    A triple the editable file asserts in its own right must survive, even when
+    the context file happens to assert it too — over-stripping silently deletes
+    the user's data.
+    """
+    primary, context = files
+    context.write_text(
+        CONTEXT + "ex:Tent a skos:Concept ; skos:inScheme ex:Scheme .\n",
+        encoding="utf-8",
+    )
+    tax = store.load(primary, context=[context])
+
+    store.save(tax, primary)
+
+    written = primary.read_text(encoding="utf-8")
+    assert "inScheme" in written, "a statement the editable file owns was stripped"
+    assert "Tent" in written
+
+
+def test_two_context_files_both_stay_out_of_the_editable_file(files, tmp_path):
+    primary, context = files
+    second = tmp_path / "second.ttl"
+    second.write_text(
+        f"""\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <{NS}> .
+ex:Tent a skos:Concept ; skos:definition "From the second file."@en .
+""",
+        encoding="utf-8",
+    )
+    context.write_text(
+        CONTEXT + 'ex:Tent a skos:Concept ; skos:prefLabel "Tent from context"@en .\n',
+        encoding="utf-8",
+    )
+    tax = store.load(primary, context=[context, second])
+
+    store.save(tax, primary)
+
+    written = primary.read_text(encoding="utf-8")
+    assert "Tent from context" not in written
+    assert "From the second file." not in written
+
+
+def test_a_shared_entity_round_trips_without_growing(files):
+    """Load → save → load → save must reach a fixed point, not accrete statements."""
+    primary, context = files
+    context.write_text(
+        CONTEXT + 'ex:Tent a skos:Concept ; skos:prefLabel "Tent from context"@en .\n',
+        encoding="utf-8",
+    )
+
+    store.save(store.load(primary, context=[context]), primary)
+    once = primary.read_text(encoding="utf-8")
+    store.save(store.load(primary, context=[context]), primary)
+    twice = primary.read_text(encoding="utf-8")
+
+    assert once == twice
+
+
 def test_saving_leaves_the_context_file_byte_identical(files):
     primary, context = files
     before = context.read_bytes()
