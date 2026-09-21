@@ -112,9 +112,18 @@ def test_scan_on_open_shows_the_problems_modal_for_an_error(
 
     async def scenario():
         async with app.run_test(size=(120, 40)) as pilot:
-            shown = await settle(pilot, lambda: isinstance(app.screen, ProblemsModal))
-            assert shown, "Problems modal did not open"
-            assert len(app.screen.query(ProblemRow)) == 1
+            # The predicate names the rows, not just the modal: Textual swaps the
+            # screen first and mounts its children on a later turn, so a wait that
+            # stops at `isinstance(..., ProblemsModal)` returns with the modal open
+            # and empty. Under -n auto that gap is wide enough to lose, which is
+            # how this test failed in CI while passing in isolation.
+            shown = await settle(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ProblemsModal) and len(app.screen.query(ProblemRow)) == 1
+                ),
+            )
+            assert shown, "Problems modal did not open with its one row"
 
     asyncio.run(scenario())
 

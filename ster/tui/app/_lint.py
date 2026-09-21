@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..detail_view import DetailRow
+from ._constants import _TREE_SELECTOR
 from ._state import _AppState
 
 
@@ -79,6 +80,29 @@ class _LintMixin(_AppState):
         result = self._compute_lint()
         self.call_from_thread(self._on_lint_ready, result)
 
+    def _panes_are_mounted(self) -> bool:
+        """True while the panes :meth:`_on_lint_ready` repaints are still on screen.
+
+        The lint lands a second or two after the edit that scheduled it, and the
+        view can go in between — the app quitting, or a working-file switch
+        tearing the panes down. The callback then rebuilt a tree that no longer
+        existed, Textual reported it as ``WorkerFailed``, and it surfaced as an
+        intermittent test failure; in the wild it is a crash on quit for anyone
+        who exits within a second or two of an edit.
+
+        ``_refresh_busy`` already guards the other end of the same lifecycle — a
+        job scheduled before the UI mounts — and this is that guard's twin.
+        """
+        from textual.widgets import Tree  # noqa: PLC0415
+
+        if not self.is_running:
+            return False
+        try:
+            self.query_one(_TREE_SELECTOR, Tree)
+        except Exception:  # noqa: BLE001 — the panes are gone; there is nothing to repaint
+            return False
+        return True
+
     def _on_lint_ready(self, result: tuple[dict, list] | None) -> None:
         """Apply a background lint result on the UI thread: recolour + refresh.
 
@@ -87,6 +111,8 @@ class _LintMixin(_AppState):
         the tree — so we remember the focused row and restore it after the rebuild."""
         self._end_activity("lint")  # the background check finished → clear its spinner
         self._set_lint(result)
+        if not self._panes_are_mounted():
+            return  # the view went away while the lint was running
         focused = self.focused
         keep_key = focused.field.key if isinstance(focused, DetailRow) else None
         self._rebuild_tree()

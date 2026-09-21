@@ -41,10 +41,33 @@ def _app(tmp_path: Path) -> OntologyApp:
     return OntologyApp(store.load(src), source="o.ttl", path=src)
 
 
-def _reveals(tmp_path, lint_active: bool) -> tuple[str | None, bool]:
+def _reveals(tmp_path, lint_active: bool, settle) -> tuple[str | None, bool]:
     app = _app(tmp_path)
     buddy = ZOO + "Buddy"
     dog = ZOO + "Dog"
+
+    # What this test is about is the *background* recompute, and the only honest
+    # signal that it landed is the callback that applies it. `_lint_computed` is
+    # not that signal: something recomputes synchronously during the rebuild, so
+    # it is already True the instant the command returns — a predicate naming it
+    # holds immediately and waits for nothing, which is how three earlier
+    # conversions in this repo ended up vacuous (see #181, #184, d0af901).
+    #
+    # The old `for _ in range(6): await pilot.pause()` never reached the 1.5 s
+    # debounce either, so the test ended with the worker still in flight; it then
+    # landed during teardown and blew up rebuilding a tree that was already gone.
+    landed: list[object] = []
+    original = app._on_lint_ready
+
+    def _record(result: object) -> None:
+        original(result)
+        landed.append(result)
+
+    app._on_lint_ready = _record  # type: ignore[method-assign]
+
+    def _revealed() -> bool:
+        node = app._uri_nodes.get(buddy)
+        return bool(node and node.parent and node.parent.is_expanded)
 
     async def scenario():
         import ster.plugins.semanticlint as sl
@@ -58,8 +81,15 @@ def _reveals(tmp_path, lint_active: bool) -> tuple[str | None, bool]:
                     OwlCreateIndividualFull(app._path, buddy, dog, (("en", "Buddy"),)),
                     select=buddy,
                 )
-                for _ in range(6):
-                    await pilot.pause()
+                if lint_active:
+                    # Wait for the rebuild that could clobber the reveal, then look.
+                    assert await settle(pilot, lambda: bool(landed)), (
+                        "the background lint never landed"
+                    )
+                else:
+                    # No background rebuild is coming; the reveal is the only thing
+                    # to wait for, and a deadline proves it if it never arrives.
+                    await settle(pilot, _revealed)
                 node = app._uri_nodes.get(buddy)
                 return app._detail_uri, bool(node and node.parent and node.parent.is_expanded)
         finally:
@@ -68,14 +98,14 @@ def _reveals(tmp_path, lint_active: bool) -> tuple[str | None, bool]:
     return asyncio.run(scenario())
 
 
-def test_create_reveals_new_individual_plugin_off(tmp_path):
-    detail_uri, ancestor_expanded = _reveals(tmp_path, lint_active=False)
+def test_create_reveals_new_individual_plugin_off(tmp_path, settle):
+    detail_uri, ancestor_expanded = _reveals(tmp_path, lint_active=False, settle=settle)
     assert detail_uri == ZOO + "Buddy"
     assert ancestor_expanded
 
 
-def test_create_reveals_new_individual_survives_background_lint(tmp_path):
+def test_create_reveals_new_individual_survives_background_lint(tmp_path, settle):
     # The background recompute must not collapse the tree / clobber the reveal.
-    detail_uri, ancestor_expanded = _reveals(tmp_path, lint_active=True)
+    detail_uri, ancestor_expanded = _reveals(tmp_path, lint_active=True, settle=settle)
     assert detail_uri == ZOO + "Buddy"
     assert ancestor_expanded
