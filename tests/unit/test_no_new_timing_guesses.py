@@ -41,7 +41,7 @@ _FIXED_WAIT = re.compile(r"for\s+_\s+in\s+range\(\s*\d+\s*\)\s*:\s*\n\s*await\s+
 # the test ended with the worker still in flight, it landed during teardown, and
 # rebuilding a tree that was already gone raised WorkerFailed. The flake was
 # reporting a real race in _on_lint_ready, not a slow machine.
-_BASELINE = 66
+_BASELINE = 65
 
 _TESTS = pathlib.Path(__file__).resolve().parents[1]
 

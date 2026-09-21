@@ -84,6 +84,52 @@ def _disable_version_check(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _forbid_real_config_writes(monkeypatch):
+    """Fail loudly if a test reaches the developer's real ~/.config/ster.
+
+    ``_isolate_prefs_globally`` below redirects every path we know about, but
+    that is a list someone has to remember to extend. A module that adds a new
+    config file, or an autouse fixture that writes one before the redirect is
+    in place, silently starts using the real thing — and then the suite passes
+    or fails depending on whose machine it runs on, which is the worst kind of
+    test failure to chase because it does not reproduce.
+
+    Reads are left alone: a missing real file is the same as a default, and
+    some code legitimately probes for one. Writes are the problem, so writes
+    are what this catches.
+    """
+    import builtins
+
+    real_open = builtins.open
+    real_home = Path.home() / ".config" / "ster"
+
+    def guarded_open(file, mode="r", *args, **kwargs):
+        if any(flag in str(mode) for flag in ("w", "a", "x", "+")):
+            try:
+                target = Path(file).resolve()
+            except (TypeError, ValueError, OSError):
+                target = None
+            if target is not None and real_home.resolve() in target.parents:
+                raise AssertionError(
+                    f"test wrote to the real user config: {target}\n"
+                    "Redirect it in _isolate_prefs_globally (tests/conftest.py) "
+                    "rather than letting the suite depend on this machine."
+                )
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+
+    original_write_text = Path.write_text
+
+    def guarded_write_text(self, *args, **kwargs):
+        if real_home.resolve() in self.resolve().parents:
+            raise AssertionError(f"test wrote to the real user config: {self}")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", guarded_write_text)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_prefs_globally(tmp_path_factory, monkeypatch):
     """Redirect every on-disk preference file to a per-test tmp dir.
 
@@ -99,6 +145,8 @@ def _isolate_prefs_globally(tmp_path_factory, monkeypatch):
     re-expose whatever paths the local version forgets to patch. Keeping the
     names distinct makes both run, so the full set is always covered.
     """
+    from ster import api_server
+    from ster.git.manager import _config_store as git_config_store
     from ster.nav import prefs
     from ster.plugins.semanticlint import config as sl_config
 
@@ -112,6 +160,13 @@ def _isolate_prefs_globally(tmp_path_factory, monkeypatch):
     ):
         monkeypatch.setattr(prefs, attr, lambda a=attr: d / f"{a}.json")
     monkeypatch.setattr(sl_config, "_config_path", lambda: d / "quality.json")
+    # Module-level constants rather than functions, so they are patched by value.
+    # Both were found by _forbid_real_config_writes above, which is what it is
+    # for: this list is one somebody has to remember to extend, and nobody did.
+    monkeypatch.setattr(api_server, "_SERVER_CONFIG_FILE", d / "server_config.json")
+    monkeypatch.setattr(api_server, "_TOKEN_FILE", d / "api_token")
+    monkeypatch.setattr(git_config_store, "CONFIG_FILE", d / "git_repos.json")
+    monkeypatch.setattr(git_config_store, "CONFIG_DIR", d)
 
 
 MINIMAL_TURTLE = """\

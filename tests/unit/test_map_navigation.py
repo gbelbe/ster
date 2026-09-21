@@ -228,3 +228,9 @@ def test_a_wms_layer_uses_leaflets_wms_constructor():
 
     assert "L.tileLayer.wms(" in page
     assert "layers: spec.wmsLayers" in page
+
+
+def test_opening_a_place_fills_the_pane():
+    """40px of padding each side framed the opened place in a band of sea worth
+    about a sixth of the view. What remains is aspect ratio, not padding."""
+    assert "padding:[8,8]" in _page()

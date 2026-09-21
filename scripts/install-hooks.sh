@@ -5,8 +5,8 @@
 # prek (https://prek.j178.dev) is a fast, drop-in pre-commit replacement.
 # It reads .pre-commit-config.yaml and installs both hook types declared in
 # `default_install_hook_types`:
-#   • pre-commit → ruff, format, mypy, bandit, import-linter, complexity ratchet
-#   • pre-push   → pip-audit + the full pytest suite (current Python)
+#   • pre-commit → ruff, format, mypy, import-linter and file hygiene
+#   • pre-push   → verifies the full local CI gate passed within the last hour
 
 set -euo pipefail
 
@@ -24,5 +24,5 @@ fi
 "${PREK[@]}" install --install-hooks
 
 echo "✓ git hooks installed via prek (pre-commit + pre-push)."
-echo "  Static checks run on commit; pip-audit + pytest run on push."
+echo "  Static checks run on commit; push requires a fresh full local CI pass."
 echo "  Run the full local gate any time with:  bash scripts/ci.sh"

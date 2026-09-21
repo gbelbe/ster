@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from functools import lru_cache
-from typing import Any
+from typing import Any, Final
 
 from .model import Taxonomy, is_builtin_uri
 
@@ -436,3 +436,66 @@ def run_sparql(taxonomy: Taxonomy, query: str, view: str | None = None) -> dict[
     raised. A failed view is not a failed query.
     """
     return sparql_payload(taxonomy, query, view)
+
+
+_TIMELINE_ITEM_LIMIT = 200
+_LIT_COUNT: Final = "count"
+
+
+def _timeline_url(focus: str = "") -> str:
+    """The running server's timeline page, or an empty string when unavailable."""
+    from urllib.parse import quote  # noqa: PLC0415
+
+    try:
+        from .api_server import load_server_config  # noqa: PLC0415
+
+        url, port = load_server_config()
+    except Exception:  # noqa: BLE001 - a missing server must not fail the answer
+        return ""
+    page = f"{url}:{port}/timeline"
+    return f"{page}?focus={quote(focus)}" if focus else page
+
+
+def timeline(
+    taxonomy: Taxonomy, uri: str = "", limit: int = _TIMELINE_ITEM_LIMIT
+) -> dict[str, Any]:
+    """Moments in the file, or those the optional URI stands over."""
+    import rdflib  # noqa: PLC0415
+
+    from .store import full_graph_rdflib  # noqa: PLC0415
+    from .time_shapes import (  # noqa: PLC0415
+        anything_dated,
+        dated_from,
+        is_dated,
+        span_of,
+        timeline_items,
+    )
+
+    graph = full_graph_rdflib(taxonomy)
+    if not anything_dated(graph):
+        return {
+            "items": [],
+            _LIT_COUNT: 0,
+            "span": None,
+            "url": "",
+            "note": "no dates in this file",
+        }
+    uris = (
+        dated_from(graph, rdflib.URIRef(uri))
+        if uri
+        else sorted(
+            {
+                str(subject)
+                for subject in graph.subjects()
+                if isinstance(subject, rdflib.URIRef) and is_dated(graph, subject)
+            }
+        )
+    )
+    items = timeline_items(graph, uris)
+    return {
+        "items": items[: max(1, limit)],
+        _LIT_COUNT: len(items),
+        "truncated": len(items) > limit,
+        "span": span_of(items),
+        "url": _timeline_url(uri),
+    }

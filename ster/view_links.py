@@ -37,7 +37,7 @@ def _base() -> str:
     return f"{url}:{port}"
 
 
-def map_url(sparql: str) -> str:
+def map_url(sparql: str, focus: str | None = None) -> str:
     """Address of the running server's map page, carrying *sparql* to run there.
 
     Same origin as the API, so the page's own re-runs post to ``/mcp`` without
@@ -46,7 +46,8 @@ def map_url(sparql: str) -> str:
     """
     from urllib.parse import quote  # noqa: PLC0415
 
-    return f"{_base()}/map?q={quote(sparql)}"
+    page = f"{_base()}/map?q={quote(sparql)}"
+    return page + (f"&focus={quote(focus)}" if focus else "")
 
 
 def graph_url(sparql: str) -> str:

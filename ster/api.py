@@ -150,6 +150,12 @@ class LocateIn(BaseModel):
     uris: list[str] = []
 
 
+class TimelineIn(BaseModel):
+    """The row URIs a timeline wants dated."""
+
+    uris: list[str] = []
+
+
 class SchemaOut(BaseModel):
     classes: list[ClassOut]
 
@@ -245,6 +251,56 @@ class SSEBroadcaster:
 #   when the truth was France 588, Spain 266. A map that is confidently wrong is
 #   worse than one that is slow, and the map draws a single level at a time
 #   anyway, so a large result costs little to hold.
+def _focused_map_query(taxonomy: Any, focus: str) -> str:
+    """A map query over exactly what *focus* can put on a map, or "" for nothing.
+
+    Built here rather than passed through the URL: a brand reaches every one of
+    its stores, and 145 IRIs in a query string is a link nobody can send. The
+    page carries it instead, where it also shows under "Show query" — so the
+    reader can see what was asked and edit it, rather than facing a map that
+    filtered itself for reasons it will not explain.
+    """
+    from .geo_shapes import located_from  # noqa: PLC0415
+
+    graph = _graph_for_locate(taxonomy)
+    reachable = located_from(graph, rdflib.URIRef(focus))
+    if not reachable:
+        return ""
+    values = " ".join(f"<{uri}>" for uri in reachable)
+    return (
+        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\n"
+        "SELECT DISTINCT ?thing ?name\n"
+        "WHERE {\n"
+        f"  VALUES ?thing {{ {values} }}\n"
+        "  OPTIONAL { ?thing rdfs:label ?name }\n"
+        "}"
+    )
+
+
+def _focused_timeline_query(taxonomy: Any, focus: str) -> str:
+    """A timeline query over exactly what *focus* can put on an axis, or "".
+
+    The mirror of :func:`_focused_map_query`, and built server-side for the same
+    reason: a procedure reaches its events, its deadlines and its provenance, and
+    those IRIs belong in the page rather than in a link nobody can send.
+    """
+    from .time_shapes import dated_from  # noqa: PLC0415
+
+    graph = _graph_for_locate(taxonomy)
+    reachable = dated_from(graph, rdflib.URIRef(focus))
+    if not reachable:
+        return ""
+    values = " ".join(f"<{uri}>" for uri in reachable)
+    return (
+        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\n"
+        "SELECT DISTINCT ?thing ?name\n"
+        "WHERE {\n"
+        f"  VALUES ?thing {{ {values} }}\n"
+        "  OPTIONAL { ?thing rdfs:label ?name }\n"
+        "}"
+    )
+
+
 _DEFAULT_MAP_QUERY = """\
 PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -354,6 +410,7 @@ def create_app(
     _register_graph_routes(app, _tax, _check_auth)
     _register_mutation_routes(app, _st, _check_auth, broadcaster)
     _register_locate(app, _tax, _check_auth)
+    _register_timeline(app, _tax, _check_auth)
     _register_events(app, token, broadcaster)
     _register_mcp(app, _st, _tax, _check_auth)
 
@@ -405,7 +462,11 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         return _graph_html_response(root_uri, full, sparql)
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
-    def map_page(sparql: str = Query(default="", alias="q")) -> HTMLResponse:
+    def map_page(
+        sparql: str = Query(default="", alias="q"),
+        show: str = Query(default="", alias="show"),
+        focus: str = Query(default="", alias="focus"),
+    ) -> HTMLResponse:
         """A live map of a SPARQL result — see :mod:`ster.geo_map_html`.
 
         Open like ``/viz``: the page itself needs no token, and embeds one so its
@@ -414,7 +475,31 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         """
         from .geo_map_html import render_map_html  # noqa: PLC0415
 
-        return HTMLResponse(render_map_html(sparql or _DEFAULT_MAP_QUERY, token))
+        query = sparql or (_focused_map_query(_st[_LIT_TAXONOMY], focus) if focus else "")
+        return HTMLResponse(
+            render_map_html(query or _DEFAULT_MAP_QUERY, token, show_all=show == "all")
+        )
+
+    @app.get("/timeline", response_class=HTMLResponse, include_in_schema=False)
+    def timeline_page(
+        sparql: str = Query(default="", alias="q"),
+        focus: str = Query(default="", alias="focus"),
+    ) -> HTMLResponse:
+        """A live frieze of a SPARQL result — see :mod:`ster.timeline_html`.
+
+        Opens like ``/map``: no token in the URL, one embedded in the page so its
+        own calls to ``/api/sparql_query`` and ``/api/timeline`` authenticate.
+        """
+        from .timeline_html import DEFAULT_TIMELINE_QUERY, render_timeline_html  # noqa: PLC0415
+
+        query = sparql or (_focused_timeline_query(_st[_LIT_TAXONOMY], focus) if focus else "")
+        # No-cache, as /viz does: the page embeds its own app layer, so a cached
+        # copy silently keeps serving yesterday's JavaScript after an edit — a
+        # confusing failure the author hits before any user does.
+        return HTMLResponse(
+            render_timeline_html(query or DEFAULT_TIMELINE_QUERY, token),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/onto", response_class=Response, include_in_schema=False)
     def serve_ontology(request: Request) -> Response:
@@ -625,6 +710,8 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         return build_search_results(_tax(), q, types=type_set)  # type: ignore[return-value]
 
 
+_LIT_LANE_LABEL: Final = "label"
+_LIT_LANE_COUNT: Final = "count"
 _LIT_TAXONOMY: Final = "taxonomy"
 _LIT_VERSION: Final = "version"
 _LIT_FILE_PATH: Final = "file_path"
@@ -1138,6 +1225,45 @@ def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
             "layers": map_layers(graph),
             "facets": facet_catalogue(graph, [p["uri"] for p in placed]),
         }
+
+
+def _lanes_of(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The lanes the items occupy, with their counts, for the filter row.
+
+    Computed from the items rather than from the ontology's class list: a lane
+    nothing falls into is a checkbox that does nothing, and the reader has no
+    way of telling it from one whose items are hidden.
+    """
+    counts: dict[str, dict[str, Any]] = {}
+    for item in items:
+        lane = counts.setdefault(
+            str(item["group"]),
+            {"uri": item["group"], _LIT_LANE_LABEL: item["groupLabel"], _LIT_LANE_COUNT: 0},
+        )
+        lane[_LIT_LANE_COUNT] = int(lane[_LIT_LANE_COUNT]) + 1
+    return sorted(counts.values(), key=lambda lane: str(lane[_LIT_LANE_LABEL]))
+
+
+def _register_timeline(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
+    """Moments for a set of URIs — the timeline's counterpart to /api/locate."""
+
+    @app.post(
+        "/api/timeline",
+        summary="Resolve entity URIs to instants and intervals",
+        tags=[_TAG_VIZ],
+    )
+    def timeline_uris(body: TimelineIn, _: None = Depends(_check_auth)) -> dict[str, Any]:
+        """Instants and spans for *uris*, skipping any that carry no time.
+
+        Resolved here rather than in the page's JavaScript so there is one
+        implementation of the datatype rule and of the declared interval pairs —
+        the same reason /api/locate parses WKT on the server.
+        """
+        from .time_shapes import span_of, timeline_items  # noqa: PLC0415
+
+        graph = _graph_for_locate(_tax())
+        items = timeline_items(graph, body.uris)
+        return {"items": items, "lanes": _lanes_of(items), "span": span_of(items)}
 
 
 def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> None:

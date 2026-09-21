@@ -2,8 +2,8 @@
 //
 // Lints the graph application layer (ster/assets/*.js) and the browser
 // extension (kai-extension/*.js). These are plain browser scripts (no bundler,
-// no modules) that use the vendored Cytoscape/d3-hierarchy globals, so the
-// config declares browser + cytoscape/d3 globals and keeps the ruleset
+// no modules) that use the vendored Cytoscape/d3-hierarchy/vis-timeline globals, so the
+// config declares browser + cytoscape/d3/vis globals and keeps the ruleset
 // pragmatic: it catches real bugs (undeclared variables, unreachable code)
 // without forcing a refactor of the existing IIFE style.
 
@@ -31,6 +31,8 @@ export default [
         ...globals.browser,
         cytoscape: "readonly",
         d3: "readonly",
+        // vis-timeline, vendored by ster/timeline_html.py for the frieze view
+        vis: "readonly",
         chrome: "readonly",
       },
     },

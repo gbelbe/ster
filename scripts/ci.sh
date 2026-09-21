@@ -7,7 +7,7 @@
 # Actions runs the 3.12 / 3.13 matrix on every PR.
 #
 # Usage:
-#   scripts/ci.sh            # full gate: prek + eslint + pip-audit + tests + diff-cover
+#   scripts/ci.sh            # full gate: prek + eslint + npm/pip audit + tests + diff-cover
 #   scripts/ci.sh --fast     # skip the patch-coverage gate (quick dev check)
 #   scripts/ci.sh --fix      # let prek's hooks auto-fix, then re-run to verify
 
@@ -153,7 +153,15 @@ else
   warn "npm not found — skipping eslint (CI installs Node)"
 fi
 
-# ── 3. Security — pip-audit (dependency CVEs) ────────────────────────────────
+# ── 3. Security — dependency CVEs ───────────────────────────────────────────
+step "Security — npm audit"
+if command -v npm >/dev/null 2>&1 && [[ -d node_modules ]]; then
+  npm audit --audit-level=high
+  ok "npm audit"
+else
+  warn "node_modules unavailable — skipping npm audit (CI runs it)"
+fi
+
 step "Security — pip-audit"
 uv run pip-audit --skip-editable
 ok "pip-audit"

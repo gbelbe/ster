@@ -39,8 +39,12 @@ def test_a_place_with_no_row_resolves_to_null_rather_than_undefined() -> None:
 def test_grouping_reads_the_whole_result_not_the_current_level() -> None:
     """Clustering by a column is an alternative to the hierarchy, not a filter
     inside it. Intersecting the two emptied the map at any level holding only
-    context places — which is every level above the rows themselves."""
-    assert "groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel()" in PAGE
+    context places — which is every level above the rows themselves.
+
+    The other branch is placesToDraw(), not atLevel(), since the Levels/Everything
+    switch chooses what the hierarchy shows; clustering still overrides both.
+    """
+    assert "groupBy !== null ? points.filter(p => rowOf(p) !== null) : placesToDraw()" in PAGE
 
 
 def test_context_places_are_excluded_from_a_column_grouping() -> None:

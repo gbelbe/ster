@@ -55,6 +55,9 @@ jobs:
       - name: Install JS dev deps
         run: npm ci
 
+      - name: npm audit — high and critical dependency CVEs
+        run: npm audit --audit-level=high
+
       - name: eslint — lint browser assets
         run: npx eslint .
 

@@ -37,6 +37,7 @@ __FAVICON__
 #facets { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
            padding:6px 12px; border-bottom:1px solid var(--line); background:var(--panel); }
 #facets:empty { display:none; border:0; padding:0; }
+#facets.folded { display:none; }
 .facet { display:flex; align-items:center; gap:6px; }
 .facet > .name { color:var(--muted); font-size:11px; text-transform:uppercase;
                  letter-spacing:.04em; margin-right:2px; }
@@ -50,7 +51,11 @@ __FAVICON__
 /* Operator marks laid on a shape. Offsets are in screen pixels, not degrees,
    so several on one country stay side by side at every zoom instead of piling
    onto the same point as you zoom out. */
-.badge-row { display:flex; gap:3px; align-items:center; pointer-events:none; }
+/* The attribute has to beat the class: a UA's [hidden]{display:none} loses to
+   any rule that sets display, so .seg stayed laid out while "hidden". */
+[hidden] { display:none !important; }
+.badge-row { display:flex; flex-wrap:wrap; gap:3px; align-items:center;
+             justify-content:center; pointer-events:none; }
 .badge-row img { object-fit:contain; background:#fff; border:1px solid rgba(0,0,0,.25);
                  border-radius:3px; padding:1px; box-shadow:0 1px 3px rgba(0,0,0,.3); }
 .legend { background: rgba(255,255,255,.92); border: 1px solid #ccc; border-radius: 4px;
@@ -201,8 +206,11 @@ __FAVICON__
 <header>
   <h1>Query map</h1>
   <span class="sub" id="sub">—</span>
-  <span class="sub">Cluster by</span>
+  <span class="sub">Show</span>
+  <div class="seg" id="mode"><button>Levels</button><button>Everything</button></div>
+  <span class="sub" id="seg-label">Cluster by</span>
   <div class="seg" id="seg"></div>
+  <button id="fold">Hide filters</button>
   <div class="crumbs" id="crumbs"></div>
   <button id="toggle">Show query</button>
   <div class="scale" id="scale"></div>
@@ -247,6 +255,7 @@ let layer = null, rows = [], columns = [], points = [], groupBy = null, scope = 
    the ontology, so nothing here knows what the levels are called. */
 let level = 0;            // which level of the hierarchy is on screen
 let focus = null;         // the URI drilled into, or null for "all of this level"
+let showAll = __SHOW_ALL__;  // draw every result beneath the focus, not one tier
 /* What the panel describes, which is not always what the map is filtered to. A
    leaf — a store, or any place in a file with no hierarchy at all — can be
    selected without being drilled into: filtering the map by it would hide its
@@ -339,6 +348,17 @@ const PIN = 18;          // a store icon, big enough to read at street zoom
 const BADGE_MIN = 11;
 const BADGE_MAX = 22;
 const BADGE_GAP = 3;
+const BADGE_PER_ROW_MAX = 4;   // beyond this a single row starves each mark
+
+/* How many rows the marks are laid out on. Two at most: a third is thinner
+   than the shape it sits on at any zoom worth reading, and the marks stop
+   saying which brand. Splitting is what buys the size back — eight logos in one
+   row across France are 8px each and unreadable; in two rows they are 17px. */
+const BADGE_ROWS_MAX = 2;
+
+function badgeRows(count) {
+  return count > BADGE_PER_ROW_MAX ? BADGE_ROWS_MAX : 1;
+}
 
 function badgeSize(shape, count) {
   /* Measure the shape as it is on screen, not in degrees: a country's pixel
@@ -350,8 +370,12 @@ function badgeSize(shape, count) {
     const nw = map.latLngToContainerPoint(b.getNorthWest());
     const se = map.latLngToContainerPoint(b.getSouthEast());
     const wide = Math.abs(se.x - nw.x), tall = Math.abs(se.y - nw.y);
-    const perLogo = (wide * 0.8 - BADGE_GAP * (count - 1)) / count;
-    const size = Math.floor(Math.min(perLogo, tall * 0.6));
+    /* Per row, not per logo: the marks share the width between the ones on
+       their own line, and share the height between the lines. */
+    const rows = badgeRows(count);
+    const perRow = Math.ceil(count / rows);
+    const perLogo = (wide * 0.8 - BADGE_GAP * (perRow - 1)) / perRow;
+    const size = Math.floor(Math.min(perLogo, (tall * 0.6 - BADGE_GAP * (rows - 1)) / rows));
     return size < BADGE_MIN ? 0 : Math.min(size, BADGE_MAX);   // 0: no room at all
   } catch { return 0; }
 }
@@ -369,15 +393,19 @@ function addBadges(visible) {
       if (!imgs.length) return null;
       const size = badgeSize(p.shape, imgs.length);
       if (!size) return null;               // too small to sit inside its shape
-      const width = imgs.length * size + BADGE_GAP * (imgs.length - 1);
-      const html = `<div class="badge-row" style="gap:${BADGE_GAP}px">` + imgs.map(({ b, src }) =>
+      const rows = badgeRows(imgs.length);
+      const perRow = Math.ceil(imgs.length / rows);
+      const width = perRow * size + BADGE_GAP * (perRow - 1);
+      const height = rows * size + BADGE_GAP * (rows - 1);
+      const html = `<div class="badge-row" style="gap:${BADGE_GAP}px;width:${width}px">` +
+        imgs.map(({ b, src }) =>
         `<img src="${plain(src)}" alt="${plain(b.label)}" title="${plain(b.label)}"` +
         ` style="width:${size}px;height:${size}px">`
       ).join('') + `</div>`;
       return L.marker([p.lat, p.long], {
         interactive: false,
-        icon: L.divIcon({ html, className: '', iconSize: [width, size],
-                          iconAnchor: [width / 2, size / 2] }),
+        icon: L.divIcon({ html, className: '', iconSize: [width, height],
+                          iconAnchor: [width / 2, height / 2] }),
       });
     })
     .filter(Boolean);
@@ -390,7 +418,17 @@ function drawFacets() {
   const groups = facetsInView();
   if (!groups.length) { el.innerHTML = ''; return; }
   const anyChosen = [...chosen.values()].some(s => s.size);
-  el.innerHTML = groups.map(gr => {
+  /* Geography leads the strip: it says where you are looking, and the rest say
+     what you are looking at. Its chips navigate rather than filter — picking a
+     country goes there, the way clicking its shape does — so they carry
+     data-geo and never enter `chosen`. */
+  const geo = geographyInView().map(tier =>
+    `<span class="facet"><span class="name">${plain(tier.kind)}</span>` +
+    tier.places.map(a =>
+      `<button class="fval" data-geo="${plain(a.uri)}">${plain(a.label || short(a.uri))}</button>`
+    ).join('') + '</span>').join('');
+
+  el.innerHTML = geo + groups.map(gr => {
     const meta = facetCatalogue[gr.cls] || { values: {} };
     const want = chosen.get(gr.cls) || new Set();
     const buttons = gr.values
@@ -402,7 +440,21 @@ function drawFacets() {
     return `<span class="facet"><span class="name">${plain(gr.label)}</span>${buttons}</span>`;
   }).join('') + (anyChosen ? `<button class="fclear">clear filters</button>` : '');
 
-  for (const b of el.querySelectorAll('.fval')) {
+  /* Same drill the map performs, so the two ways in cannot disagree. */
+  el.classList.toggle('folded', readFold());
+  for (const b of el.querySelectorAll('.fval[data-geo]')) {
+    b.addEventListener('click', () => {
+      const place = byUri.get(b.dataset.geo);
+      if (!place) return;
+      const next = childLevel(place);
+      if (next === null) return;
+      selected = place.uri;
+      focus = place.uri;
+      level = next;
+      draw(true);
+    });
+  }
+  for (const b of el.querySelectorAll('.fval:not([data-geo])')) {
     b.addEventListener('click', () => {
       const cls = b.dataset.cls, val = b.dataset.val;
       const set = chosen.get(cls) || new Set();
@@ -788,14 +840,51 @@ function atLevel() {
   return points.filter(p => (p.level ?? 0) === target
                             && (focus === null || descendsFrom(p, focus)));
 }
+/* What the map draws, and the only place the two modes differ.
+
+   A level answers "what is inside here"; Everything answers "show me all of
+   them", which no query can stand in for — the server adds every containing
+   place back as context so the drill-down has a hierarchy, so a leaf-only
+   query arrives with its containers attached and the map opens on those.
+
+   "All of them" means the leaves: a place nothing else sits inside. Not the
+   query's rows — the default query asks for everything that can be drawn, so
+   its rows include the very countries and regions the reader is trying to see
+   past, and drawing those puts the flags back on top of the stores.
+
+   Leaf-ness is read from the ancestor chains the server already sends, so it
+   holds for stores, sensors or branches without this file naming any of them.
+   A branch that bottoms out early is its own leaf — a country with no stores
+   draws as that country, which is the truthful answer to "show me what is in
+   there". The focus still filters, because drilling in should still mean
+   something.
+
+   Not called `visible`: draw() declares a local `const visible` for its own
+   coordinate-filtered list, and a function of that name is read six lines
+   before that const initialises — the temporal dead zone, which throws on every
+   draw and leaves an empty map with a working switch. */
+function placesToDraw() {
+  if (!showAll) return atLevel();
+  return points.filter(p => !containers.has(p.uri)
+                            && (focus === null || descendsFrom(p, focus)));
+}
+
 /* Outlines when there are few enough to read; dots otherwise. The cost and the
    clutter scale with how many are drawn, not with the zoom — zoom 7 alone hid
    every country in the demo, because a country is legible long before that. */
 const SHAPE_LIMIT = 40;
 const SHAPE_ZOOM = 7;
+/* Drawing a continent's worth of places at once is a question of DOM nodes, not
+   of how many there are. Two measurements on 1,453 stores: as <div><img> pins
+   over SVG circles, a draw took 3,746ms and the renderer stalled; as bare <img>
+   pins over one canvas, 215ms. So the pictures are never rationed — a store
+   looks like itself at every zoom — and the cost is kept down where it actually
+   sits. The circles share one canvas for the same reason: 1,453 SVG paths is
+   1,453 DOM nodes, one <canvas> is one. */
+const dotCanvas = L.canvas({ padding: 0.5 });
 let shapeMode = false;
 const wantsShapes = () => {
-  const withShapes = atLevel().filter(p => p.shape).length;
+  const withShapes = placesToDraw().filter(p => p.shape).length;
   if (!withShapes) return false;
   return withShapes <= SHAPE_LIMIT || map.getZoom() >= SHAPE_ZOOM;
 };
@@ -852,8 +941,15 @@ function passesFilters(p) {
    already sends: O(places x depth) rather than comparing every pair. */
 const facetsBeneath = new Map();
 
+/* Every URI that something else sits inside, so a leaf is a point that is not
+   in here. Built in the same pass as the facet index rather than asked per
+   point: hasChildren() scans all points, which is one scan per point and so
+   quadratic on a file this size. */
+const containers = new Set();
+
 function indexFacets() {
   facetsBeneath.clear();
+  containers.clear();
   const add = (uri, facets) => {
     let into = facetsBeneath.get(uri);
     if (!into) { into = {}; facetsBeneath.set(uri, into); }
@@ -864,8 +960,65 @@ function indexFacets() {
   };
   for (const p of points) {
     add(p.uri, p.facets);
-    for (const ancestor of (p.ancestors || [])) add(ancestor, p.facets);
+    for (const ancestor of (p.ancestors || [])) { add(ancestor, p.facets); containers.add(ancestor); }
   }
+  indexGeography();
+}
+
+/* Geography as a row of chips, so the hierarchy is reachable without hunting
+   for a shape on the map. Not derived from the ontology's vocabulary: a tier is
+   named by the class ster already resolved for the place — Continent, Country,
+   AdministrativeArea here, whatever an ontology calls its own tiers elsewhere.
+
+   Built from the ancestor chains the payload already carries, so this costs a
+   pass over points and no extra request. `byUri` is the same points array keyed
+   for lookup, because resolving an ancestor by scanning points is the quadratic
+   shape this file has been bitten by before. */
+const byUri = new Map();
+const geoTiers = new Map();   // class name -> Map(uri -> the place)
+
+function indexGeography() {
+  byUri.clear(); geoTiers.clear();
+  for (const p of points) byUri.set(p.uri, p);
+  for (const p of points) {
+    for (const uri of (p.ancestors || [])) {
+      const place = byUri.get(uri);
+      if (!place) continue;
+      const kind = place.kind || 'Place';
+      let tier = geoTiers.get(kind);
+      if (!tier) geoTiers.set(kind, tier = new Map());
+      tier.set(uri, place);
+    }
+  }
+}
+
+/* The tier worth offering from where the reader is standing: the nearest one
+   below the focus that holds a choice.
+
+   The nearest, not every tier below. Offering them all put all 96 regions of
+   six countries in one row at the top level — a list nobody reads, and one that
+   answers a question the reader has not asked yet. Narrowing as you descend is
+   what the drill-down already does; this is the same move in chips.
+
+   A tier holding one place is skipped rather than shown, for the reason the
+   other facets skip one: it cannot discriminate, and the breadcrumb already
+   says where you are. That is why a single-continent file offers countries
+   first. */
+function geographyInView() {
+  const floor = focus === null ? -1 : (byUri.get(focus)?.level ?? 0);
+  const tiers = [];
+  for (const [kind, tier] of geoTiers) {
+    const places = [...tier.values()].filter(a =>
+      a.uri !== focus &&
+      (focus === null || descendsFrom(a, focus)) &&
+      (a.level ?? 0) > floor);
+    if (places.length > 1) {
+      places.sort((a, b) => (a.label || '').localeCompare(b.label || ''));
+      tiers.push({ kind, places, level: places[0].level ?? 0 });
+    }
+  }
+  tiers.sort((a, b) => a.level - b.level);
+  return tiers.slice(0, 1);
 }
 
 /* What the menu offers *here*. Recomputed from the places in view, so drilling
@@ -873,8 +1026,13 @@ function indexFacets() {
    facet when only one value is left, because a facet that cannot discriminate
    is not a facet. */
 function facetsInView() {
-  const scope = atLevel();
-  const under = points.filter(p => scope.some(s => p === s || descendsFrom(p, s.uri)));
+  const shown = placesToDraw();
+  /* The level branch grows its scope to the descendants of the tier, because a
+     country carries no facets of its own. Everything mode already draws the
+     leaves, so expanding them asks descendsFrom about every pair of places to
+     learn nothing it does not already have. */
+  const under = showAll ? shown
+    : points.filter(p => shown.some(s => p === s || descendsFrom(p, s.uri)));
   const out = [];
   for (const [cls, meta] of Object.entries(facetCatalogue)) {
     const seen = new Set();
@@ -1019,7 +1177,7 @@ function draw(fit = true) {
      filter inside it: it answers "where are my rows", so it reads the whole
      result rather than the level currently drilled to. Intersecting the two
      emptied the map wherever the level held only context places. */
-  const source = (groupBy !== null ? points.filter(p => rowOf(p) !== null) : atLevel())
+  const source = (groupBy !== null ? points.filter(p => rowOf(p) !== null) : placesToDraw())
     .filter(passesFilters);
   /* Counting and plotting are different questions. A place with no coordinates
      is real and belongs in every total; drawing it would put NaN into Leaflet
@@ -1046,6 +1204,7 @@ function draw(fit = true) {
     const name = grouped ? short(key) : members[0].label;
     const total = members.reduce((a, p) => a + valueOf(p), 0);
     const mark = L.circleMarker([lat, long], {
+      renderer: dotCanvas,
       radius: 6 + Math.sqrt(total) * 4, color:'#fff', weight:2,
       fillColor: ramp(total, lo, hi), fillOpacity:0.92
     }).bindTooltip(`<b>${name}</b>` + measureLine(total) +
@@ -1082,12 +1241,14 @@ function draw(fit = true) {
        a dot. What a store looks like is the ontology's to say — ster only reads
        whichever image predicate it used and honours it. */
     if (!grouped && only && only.icon) {
+      /* L.icon, not L.divIcon: an <img> element on its own rather than an <img>
+         inside a <div>. Half the DOM per store, which is the difference between
+         a continent's worth of them drawing and the renderer stalling. */
       const pin = L.marker([lat, long], {
-        icon: L.divIcon({
-          html: `<img src="${plain(only.icon)}" alt="${plain(name)}"` +
-                ` style="width:${PIN}px;height:${PIN}px;display:block">`,
-          className: '', iconSize: [PIN, PIN], iconAnchor: [PIN / 2, PIN / 2],
+        icon: L.icon({
+          iconUrl: only.icon, iconSize: [PIN, PIN], iconAnchor: [PIN / 2, PIN / 2],
         }),
+        alt: name, keyboard: false,
       }).bindTooltip(`<b>${name}</b>` + (only.kind ? ` <i>${plain(only.kind)}</i>` : '') +
                      measureLine(total), { direction:'top' });
       pin.on('click', drill);
@@ -1112,7 +1273,12 @@ function draw(fit = true) {
     if (!bounds || !bounds.isValid()) bounds = layer.getBounds();
     if (bounds && bounds.isValid()) {
       selfMoveUntil = Date.now() + 600;
-      map.fitBounds(bounds, { padding:[40,40], maxZoom:14 });
+      /* Barely any padding: the place you opened should fill the pane, not sit
+         in a frame of sea. 40px each side cost about a sixth of the view on a
+         laptop. What is left is the aspect ratio — a tall country in a wide
+         pane cannot touch all four edges without cropping it, and cropping the
+         thing you just asked to see is worse than a margin. */
+      map.fitBounds(bounds, { padding:[8,8], maxZoom:14 });
     }
   }
 
@@ -1138,6 +1304,69 @@ function renderCrumbs() {
 
 function render() { renderCrumbs(); draw(); }
 
+/* Folding the filter strip. It is five rows deep on a rich file and pushes the
+   map down the page; a reader who has set their filters wants the map back.
+
+   Remembered across reloads, because a fold that forgets is a fold you set
+   every time. localStorage is per-browser and may throw outright where site
+   data is blocked, so every touch of it is guarded and the strip simply starts
+   open when it cannot be read. */
+const FOLD_KEY = 'ster.map.filters.folded';
+
+function readFold() {
+  try { return localStorage.getItem(FOLD_KEY) === '1'; } catch { return false; }
+}
+
+function foldControls() {
+  const button = document.getElementById('fold');
+  const strip = document.getElementById('facets');
+  if (!button || !strip) return;
+  const paint = folded => {
+    strip.classList.toggle('folded', folded);
+    button.textContent = folded ? 'Show filters' : 'Hide filters';
+    button.setAttribute('aria-expanded', folded ? 'false' : 'true');
+  };
+  paint(readFold());
+  button.addEventListener('click', () => {
+    const folded = !strip.classList.contains('folded');
+    paint(folded);
+    try { localStorage.setItem(FOLD_KEY, folded ? '1' : '0'); } catch { /* not stored */ }
+  });
+}
+
+/* The switch, and the link that carries it. Level and focus are deliberately
+   untouched: flipping back should land the reader where they were standing,
+   not at the top of the map. */
+function modeControls() {
+  const box = document.getElementById('mode');
+  const [levels, everything] = box.children;
+  const paint = () => {
+    levels.classList.toggle('on', !showAll);
+    everything.classList.toggle('on', showAll);
+  };
+  const pick = want => {
+    if (showAll === want) return;
+    showAll = want;
+    paint();
+    rememberMode();
+    render();
+  };
+  levels.addEventListener('click', () => pick(false));
+  everything.addEventListener('click', () => pick(true));
+  paint();
+}
+
+/* replaceState, not pushState: flipping a switch is not a navigation, and
+   undoing it should not cost a press of Back. The parameter is dropped rather
+   than set to a falsy value, so a shared link carries the mode it is in
+   instead of accumulating a stale one. */
+function rememberMode() {
+  const url = new URL(window.location);
+  if (showAll) url.searchParams.set('show', 'all');
+  else url.searchParams.delete('show');
+  history.replaceState(null, '', url);
+}
+
 /* Clusterings are whatever the result offers: any URI-valued column that is not
    the one supplying the coordinates. */
 function clusterControls() {
@@ -1148,6 +1377,13 @@ function clusterControls() {
     if (values.length && !values.some(v => located.has(v))) options.push({ i, name:c });
   });
   const seg = document.getElementById('seg');
+  /* One option is not a choice. The default query returns the locating column
+     and a label, so nothing else is ever offered and the control sat there
+     permanently pressed. A query that returns another URI column — a brand
+     beside its stores — brings it back on its own. */
+  const useful = options.length > 1;
+  seg.hidden = !useful;
+  document.getElementById('seg-label').hidden = !useful;
   seg.innerHTML = options.map(o => `<button>${o.name}</button>`).join('');
   [...seg.children].forEach((b, n) => b.addEventListener('click', () => {
     groupBy = options[n].i; scope = null;
@@ -1156,6 +1392,8 @@ function clusterControls() {
     render();
   }));
   if (seg.firstChild) seg.firstChild.classList.add('on');
+  modeControls();
+  foldControls();
 }
 
 /* Two waits, not one: the query runs, then every row it returned has to be
@@ -1218,9 +1456,17 @@ run();
 _PAGE = _PAGE.replace("__FAVICON__", FAVICON_LINK_TAG)
 
 
-def render_map_html(query: str, token: str) -> str:
-    """The ``/map`` page, primed with *query* and able to re-run it via *token*."""
-    return _PAGE.replace("__QUERY__", _escape(query)).replace("__TOKEN__", json.dumps(token))
+def render_map_html(query: str, token: str, show_all: bool = False) -> str:
+    """The ``/map`` page, primed with *query* and able to re-run it via *token*.
+
+    *show_all* opens the page drawing every result beneath the focus rather than
+    one tier of the hierarchy, so a link can be shared in either mode.
+    """
+    return (
+        _PAGE.replace("__QUERY__", _escape(query))
+        .replace("__TOKEN__", json.dumps(token))
+        .replace("__SHOW_ALL__", "true" if show_all else "false")
+    )
 
 
 def _escape(text: str) -> str:

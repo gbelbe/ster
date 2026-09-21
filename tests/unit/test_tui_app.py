@@ -1178,7 +1178,7 @@ def test_deactivating_plugin_clears_tree_icon_colours(tmp_path, semanticlint_ena
 
 
 def test_toggling_quality_block_feature_hides_overview_block(
-    tmp_path, semanticlint_enabled
+    tmp_path, semanticlint_enabled, settle
 ) -> None:
     """Regression: unchecking 'Show the Quality & Coverage block' must remove the
     overview's Quality & Coverage group. Root cause: the overview presenter always
@@ -1212,9 +1212,14 @@ def test_toggling_quality_block_feature_hides_overview_block(
                     },
                 }
             )
-            for _ in range(4):
-                await pilot.pause()
-            assert app._overview_quality_on is False
+            # Wait on the flag, not on four turns. _overview_quality_on is
+            # recomputed by _sync_lint_features during a tree rebuild, which is
+            # work that takes *time*; four pauses bound it in *turns*. Under a
+            # loaded CI runner the rebuild had not happened yet and the flag
+            # still held its previous value — the failure read `assert True is
+            # False`, which looks like a logic bug and is a race.
+            settled = await settle(pilot, lambda: app._overview_quality_on is False)
+            assert settled, "the tree never rebuilt after the feature was turned off"
             assert not _has_group(app)  # the whole group is gone
 
     _run(scenario)
@@ -3385,6 +3390,12 @@ def test_an_edit_debounces_the_relint(tmp_path, monkeypatch) -> None:
         src = tmp_path / "o.ttl"
         src.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
         app = OntologyApp(store.load(src), source="o.ttl", path=src)
+        # Hold the debounce open for the whole test. The real 1.5 s is tuned for a
+        # human's typing lull; here it is a deadline we would be racing, because the
+        # background save below can outlast it on a loaded runner. When it did, the
+        # timer fired by itself and `calls` held [1] — the test then read as "linted
+        # synchronously" when all that had happened was that we waited too long.
+        monkeypatch.setattr(app, "_LINT_DEBOUNCE", 3600.0)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             app._show(ZOO + "Person")
@@ -4044,17 +4055,34 @@ def test_the_background_lint_shows_then_clears_the_checking_indicator(
     _run(scenario)
 
 
-def test_m_keypress_opens_the_map_view(monkeypatch) -> None:
+_LOCATED_TTL = """
+@prefix ex:   <https://ex.org/m#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix wgs:  <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+
+ex:Shop  a owl:Class ; rdfs:label "Shop"@en .
+ex:shop1 a owl:NamedIndividual , ex:Shop ; rdfs:label "Shop One"@en ;
+         wgs:lat 48.11 ; wgs:long -1.68 .
+"""
+
+
+def test_m_keypress_opens_the_map_view(monkeypatch, tmp_path) -> None:
     """Press the real key, not just the action: a binding that never fires is the
-    failure mode that shipped once already (ctrl+m is Enter in a terminal)."""
+    failure mode that shipped once already (ctrl+m is Enter in a terminal).
+
+    On a file that has something to place — the demo taxonomy has none, and the
+    map now refuses rather than opening empty."""
     from ster.tui import query
 
     opened: list[str] = []
     monkeypatch.setattr(query, "server_is_running", lambda: True)
     monkeypatch.setattr(query, "open_browser", lambda url: bool(opened.append(url) or True))
+    source = tmp_path / "located.ttl"
+    source.write_text(_LOCATED_TTL, encoding="utf-8")
 
     async def scenario() -> None:
-        app = _app()
+        app = OntologyApp(store.load(source), source="located.ttl")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await pilot.press("m")
@@ -4063,6 +4091,29 @@ def test_m_keypress_opens_the_map_view(monkeypatch) -> None:
     _run(scenario)
     assert opened, "pressing 'm' did not open the map"
     assert "/map" in opened[0]
+
+
+def test_m_refuses_a_file_with_nothing_to_place(monkeypatch) -> None:
+    """An empty map reads as a broken feature rather than as an answer, so the
+    shortcut says what is wrong instead of opening a window on nothing."""
+    from ster.tui import query
+
+    opened: list[str] = []
+    notices: list[str] = []
+    monkeypatch.setattr(query, "server_is_running", lambda: True)
+    monkeypatch.setattr(query, "open_browser", lambda url: bool(opened.append(url) or True))
+
+    async def scenario() -> None:
+        app = _app()  # the demo taxonomy: no coordinates, no shapes
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+
+    _run(scenario)
+    assert opened == []
+    assert any("map" in n.lower() for n in notices), notices
 
 
 def test_map_binding_is_registered_on_the_app() -> None:

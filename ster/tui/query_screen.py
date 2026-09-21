@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Callable
-from typing import Literal
+from typing import Final, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -38,6 +38,7 @@ _EDITOR = f"#{_EDITOR_ID}"
 # Typed as the literal, not str: Textual's notify() takes a Literal, so a
 # plain str constant is rejected at the call site.
 _WARN: Literal["warning"] = "warning"
+_BROWSER_FAIL: Final = "Could not open a browser"
 
 
 class QueryScreen(Screen[None]):
@@ -63,6 +64,7 @@ class QueryScreen(Screen[None]):
         # ctrl+y rather than a shifted ctrl+g: terminals do not distinguish
         # ctrl+G from ctrl+shift+G, so the second binding would never fire.
         Binding("ctrl+y", "graph", "Graph"),
+        Binding("ctrl+t", "timeline", "Timeline"),
         Binding("escape", "close", "Close"),
     ]
 
@@ -77,6 +79,7 @@ class QueryScreen(Screen[None]):
         self._last_result: QueryResult | None = None  # last run, for tests/introspection
         self._located = 0  # rows of the last run that carry coordinates
         self._graphable = False  # last run returned triples the graph can draw
+        self._dated = 0  # rows of the last run that carry a date
         self._status_line = ""  # last status rendered, for tests/introspection
         # Indirected so tests can capture the URL instead of launching a browser.
         # ``webbrowser.open`` rather than ``App.open_url``: the latter's driver
@@ -122,7 +125,7 @@ class QueryScreen(Screen[None]):
 
     def on_mount(self) -> None:
         editor = self._editor
-        editor.border_title = "SPARQL  (ctrl+r run · ctrl+p presets · ctrl+g map · esc close)"
+        editor.border_title = "SPARQL  (ctrl+r run · ctrl+p presets · ctrl+g map · ctrl+y graph · ctrl+t timeline · esc close)"
         self.query_one("#query-results", DataTable).border_title = "Results"
         editor.focus()
 
@@ -144,9 +147,7 @@ class QueryScreen(Screen[None]):
             table.add_columns(*result.columns)
         for row in result.rows:
             table.add_row(*row)
-        self._status_line = (
-            f"{result.query_type} · {len(result.rows)} row(s){self._view_hint(result)}"
-        )
+        self._status_line = f"{result.query_type} · {len(result.rows)} row(s){self._view_hint(result)}{self._time_hint(result)}"
         status.update(self._status_line)
 
     def _view_hint(self, result: QueryResult) -> str:
@@ -171,6 +172,29 @@ class QueryScreen(Screen[None]):
         ]
         return " · " + " · ".join(parts)
 
+    def _time_hint(self, result: QueryResult) -> str:
+        """The trailing 'N can be dated' note, or nothing when none can be.
+
+        Beside the geo hint rather than instead of it: a result can be both, and
+        a reader who is told only about the map will not look for the frieze.
+        """
+        self._dated = query.dated_count(self._graph, result)
+        if not self._dated:
+            return ""
+        return f" · {self._dated} datable · ctrl+t for timeline"
+
+    def action_timeline(self) -> None:
+        """Open the timeline page on the query that produced the current results."""
+        if self._last_result is None or not self._dated:
+            self.notify("No temporal data in these results", severity=_WARN)
+            return
+        if not self._server_ok():
+            self.notify(query.server_unavailable_reason(), severity=_WARN)
+            return
+        url = query.timeline_url(self._editor.text)
+        if not self._open(url):
+            self.notify(_BROWSER_FAIL, severity=_WARN)
+
     def action_map(self) -> None:
         """Open the map page on the query that produced the current results."""
         if self._last_result is None or not self._located:
@@ -181,7 +205,7 @@ class QueryScreen(Screen[None]):
             return
         url = query.map_url(self._editor.text)
         if not self._open(url):
-            self.notify("Could not open a browser", severity=_WARN)
+            self.notify(_BROWSER_FAIL, severity=_WARN)
 
     def action_graph(self) -> None:
         """Open the graph view on the triples this query produced."""
@@ -195,7 +219,7 @@ class QueryScreen(Screen[None]):
             self.notify(query.server_unavailable_reason(), severity=_WARN)
             return
         if not self._open(query.graph_url(self._editor.text)):
-            self.notify("Could not open a browser", severity=_WARN)
+            self.notify(_BROWSER_FAIL, severity=_WARN)
 
     def action_presets(self) -> None:
         presets = query.presets()

@@ -72,85 +72,93 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 _STRING = {"type": "string"}
+_ARG_LIMIT: Final = "limit"
+_LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": 200}
+
+
+def _tool(
+    name: str,
+    description: str,
+    properties: dict[str, Any] | None = None,
+    required: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build one MCP tool declaration without repeating JSON-Schema scaffolding."""
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties or {},
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = required
+    return {"name": name, "description": description, "inputSchema": schema}
+
 
 # The key every tool and every parameter carries. Named once so the ratchet
 # counts one spelling, and so the schema shape stays greppable.
 _DESC: Final = "description"
 
 TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "get_current_context",
-        _DESC: (
+    _tool(
+        "get_current_context",
+        (
             "What the user is looking at right now in ster: the focused entity with its "
             "labels, descriptions, parents and children, plus its ancestor chain, its "
             "siblings, and an overview of the whole file. When nothing is focused (no TUI "
             "attached), returns the file overview alone. Call this first to orient yourself."
         ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"lang": _STRING},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_overview",
-        _DESC: (
+        {"lang": _STRING},
+    ),
+    _tool(
+        "get_overview",
+        (
             "Orientation for the whole ontology/taxonomy: its URI and title, the number of "
             "schemes, concepts, classes, individuals and properties, the concept schemes, "
             "and every language present on labels."
         ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"lang": _STRING},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_entity",
-        _DESC: (
+        {"lang": _STRING},
+    ),
+    _tool(
+        "get_entity",
+        (
             "Full detail for one entity by URI: kind (concept/class/individual/property/"
             "scheme), labels, descriptions, parent and child entities, and rdf:types. "
             "Works for both SKOS concepts (broader/narrower) and OWL classes (subClassOf)."
         ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"uri": _STRING, "lang": _STRING},
-            "required": ["uri"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "search_entities",
-        _DESC: (
+        {"uri": _STRING, "lang": _STRING},
+        ["uri"],
+    ),
+    _tool(
+        "search_entities",
+        (
             "Find entities whose label or URI contains the query (case-insensitive), across "
             "concepts, classes, individuals, properties and schemes. Use this to resolve a "
             "name the user mentions into a URI before calling get_entity."
         ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": _STRING,
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "lang": _STRING,
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_vocabulary",
-        _DESC: (
+        {"query": _STRING, _ARG_LIMIT: _LIMIT_SCHEMA, "lang": _STRING},
+        ["query"],
+    ),
+    _tool(
+        "get_vocabulary",
+        (
             "The predicates, types, prefixes and language tags this file actually uses. "
             "Call this before writing any SPARQL: it tells you whether labels are on "
             "skos:prefLabel or rdfs:label, whether the hierarchy is skos:broader or "
             "rdfs:subClassOf, and which language tags exist — the three things that "
             "otherwise get guessed wrong and return zero rows."
         ),
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "run_sparql",
-        _DESC: (
+    ),
+    _tool(
+        "get_timeline",
+        (
+            "Everything the file dates, as instants and intervals ready to plot, plus the "
+            "URL of ster's timeline page. Pass a URI to narrow it to the dated entities "
+            "that point to it."
+        ),
+        {"uri": _STRING, _ARG_LIMIT: _LIMIT_SCHEMA},
+    ),
+    _tool(
+        "run_sparql",
+        (
             "Run a read-only SPARQL query (SELECT or ASK) against the open file and get "
             "columns plus rows. Update forms (INSERT/DELETE/DROP/CLEAR/LOAD) are refused. "
             "Use this for questions the other tools cannot answer directly, such as counting "
@@ -162,26 +170,22 @@ TOOLS: list[dict[str, Any]] = [
             "empty one. Avoid naming a variable after a write keyword (?add, ?copy, ?create, "
             "?move): the read-only guard matches those words and will refuse the query."
         ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": _STRING,
-                "view": {
-                    "type": "string",
-                    "enum": ["map", "graph"],
-                    _DESC: (
-                        "Also return a URL opening these results in ster's map or graph "
-                        "view. 'map' needs rows carrying coordinates, or naming an entity "
-                        "that does; 'graph' needs a CONSTRUCT or DESCRIBE, since it draws "
-                        "triples. When the view cannot be built the rows still come back "
-                        "and 'view_unavailable' says why."
-                    ),
-                },
+        {
+            "query": _STRING,
+            "view": {
+                "type": "string",
+                "enum": ["map", "graph"],
+                _DESC: (
+                    "Also return a URL opening these results in ster's map or graph "
+                    "view. 'map' needs rows carrying coordinates, or naming an entity "
+                    "that does; 'graph' needs a CONSTRUCT or DESCRIBE, since it draws "
+                    "triples. When the view cannot be built the rows still come back "
+                    "and 'view_unavailable' says why."
+                ),
             },
-            "required": ["query"],
-            "additionalProperties": False,
         },
-    },
+        ["query"],
+    ),
 ]
 
 
@@ -198,11 +202,15 @@ def _tool_get_entity(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
 
 
 def _tool_search_entities(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
-    return ctx.search(tax, args["query"], int(args.get("limit", 20)), args.get("lang", "en"))
+    return ctx.search(tax, args["query"], int(args.get(_ARG_LIMIT, 20)), args.get("lang", "en"))
 
 
 def _tool_get_vocabulary(tax: Taxonomy, _selection: str | None, _args: dict) -> Any:
     return ctx.vocabulary(tax)
+
+
+def _tool_get_timeline(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
+    return ctx.timeline(tax, args.get("uri", ""), int(args.get(_ARG_LIMIT, 200)))
 
 
 def _tool_run_sparql(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
@@ -217,6 +225,7 @@ _IMPLS: dict[str, Callable[[Taxonomy, str | None, dict], Any]] = {
     "get_entity": _tool_get_entity,
     "search_entities": _tool_search_entities,
     "get_vocabulary": _tool_get_vocabulary,
+    "get_timeline": _tool_get_timeline,
     "run_sparql": _tool_run_sparql,
 }
 

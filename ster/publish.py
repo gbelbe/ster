@@ -143,7 +143,7 @@ class HtmlSerializer:
 
         with tempfile.NamedTemporaryFile(suffix=".ttl", delete=False) as tmp:
             tmp_path = Path(tmp.name)
-            tmp_path.write_text(ctx.graph.serialize(format="turtle"))
+            tmp.write(ctx.graph.serialize(format="turtle").encode("utf-8"))
 
         try:
             html = render_html(tmp_path)

@@ -72,6 +72,22 @@ Every capability below is reachable from the home menu, acting on the file you s
 | **Import External Ontology** | Fetch and cache external vocabularies, binding their namespaces for reuse |
 | **Linked Data Publish & Version** | Semver-tagged releases served over a local Linked-Data server |
 
+### In-browser views
+
+Three views open in the browser from the TUI, on the entity you have selected or
+on the whole file. Each one refuses to open on a file that has nothing to show,
+rather than presenting an empty canvas that reads as a bug:
+
+| Key | View | What it draws |
+|---|---|---|
+| `g` | **Graph** | The VOWL-style class/property graph (Cytoscape) |
+| `m` | **Map** | Everything the file locates — points and shapes alike, read from GeoSPARQL literals by datatype, with the tile layers the file itself declares |
+| `t` | **Timeline** | Everything the file dates, as a zoomable frieze (vis-timeline): one lane per class, thumbnails and notes from the metadata, and spans only where the file declares the pair of predicates that forms one |
+
+From the SPARQL screen the same views open on the current result — `ctrl+g` for
+the map, `ctrl+t` for the timeline — and the status line says how many rows each
+one can place before you try.
+
 ## Ask your AI agent about your ontology
 
 ster exposes a **read-only [MCP](https://modelcontextprotocol.io) endpoint**, so

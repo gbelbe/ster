@@ -12,10 +12,37 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
+import tempfile
 from pathlib import Path
 from typing import Literal
 
 Profile = Literal["vocpub", "ontpub"]
+_UTF_8 = "utf-8"
+
+
+@contextlib.contextmanager
+def _pylode_cache_lock():
+    """Serialize pyLODE's process-wide background-ontology cache initialization."""
+    import fcntl
+
+    lock_path = Path(tempfile.gettempdir()) / "ster-pylode-cache.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _remove_empty_pylode_caches() -> None:
+    """Discard only interrupted pyLODE cache writes before it tries to unpickle them."""
+    from pylode.utils import RDF_FOLDER  # type: ignore[import]
+
+    for name in ("refs.pickle", "refs_titles.pickle"):
+        path = RDF_FOLDER / name
+        if path.exists() and os.path.getsize(path) == 0:
+            path.unlink()
 
 
 @contextlib.contextmanager
@@ -209,7 +236,7 @@ def _sanitize_ontpub_graph(taxonomy_path: Path) -> Path:
 
     with tempfile.NamedTemporaryFile(suffix=".ttl", delete=False) as _f:
         tmp = Path(_f.name)
-    tmp.write_text(g.serialize(format="turtle"))
+        _f.write(g.serialize(format="turtle").encode(_UTF_8))
     return tmp
 
 
@@ -267,22 +294,24 @@ def render_html(
     _asyncio_logger.setLevel(logging.WARNING)
 
     try:
-        if profile == "ontpub":
-            tmp_path = _sanitize_ontpub_graph(taxonomy_path)
-            try:
-                return OntPub(ontology=str(tmp_path.resolve())).make_html()
-            finally:
-                tmp_path.unlink(missing_ok=True)
+        with _pylode_cache_lock():
+            _remove_empty_pylode_caches()
+            if profile == "ontpub":
+                tmp_path = _sanitize_ontpub_graph(taxonomy_path)
+                try:
+                    return OntPub(ontology=str(tmp_path.resolve())).make_html()
+                finally:
+                    tmp_path.unlink(missing_ok=True)
 
-        # vocpub
-        if language is not None:
-            try:
-                vp = VocPub(ontology=str(taxonomy_path.resolve()), default_language=language)
-            except TypeError:
+            # vocpub
+            if language is not None:
+                try:
+                    vp = VocPub(ontology=str(taxonomy_path.resolve()), default_language=language)
+                except TypeError:
+                    vp = VocPub(ontology=str(taxonomy_path.resolve()))
+            else:
                 vp = VocPub(ontology=str(taxonomy_path.resolve()))
-        else:
-            vp = VocPub(ontology=str(taxonomy_path.resolve()))
-        return vp.make_html()
+            return vp.make_html()
     finally:
         logging.root.setLevel(_root_level)
         _asyncio_logger.setLevel(_asyncio_level)
@@ -330,7 +359,7 @@ def generate_html(
 
     if profile == "ontpub":
         out_path = output_dir / f"{stem}.html"
-        out_path.write_text(render_html(taxonomy_path, profile="ontpub"), encoding="utf-8")
+        out_path.write_text(render_html(taxonomy_path, profile="ontpub"), encoding=_UTF_8)
         created.append(out_path)
         return created
 
@@ -351,7 +380,7 @@ def generate_html(
             out_path = output_dir / f"{stem}_{lang}.html"
         else:
             out_path = output_dir / f"{stem}.html"
-        out_path.write_text(html, encoding="utf-8")
+        out_path.write_text(html, encoding=_UTF_8)
         created.append(out_path)
 
     return created

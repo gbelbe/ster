@@ -25,6 +25,10 @@ from typing import Any, Final
 # instead of walking the model, as /viz?q= and /map?q= both take.
 HtmlRenderer = Callable[[Any, str | None, str, bool, str], str]
 
+# The key the published model lives under in ``app.state._ster``; named once
+# so the six places that read or republish it cannot drift apart.
+_LIT_TAXONOMY = "taxonomy"
+
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
 
@@ -160,7 +164,7 @@ def _start_file_watcher(
         for _ in watchfiles.watch(file_path):
             try:
                 reloaded = load(file_path, context=context or [])
-                app.state._ster["taxonomy"] = reloaded  # type: ignore[attr-defined]
+                app.state._ster[_LIT_TAXONOMY] = reloaded  # type: ignore[attr-defined]
                 broadcaster.notify(loop)
             except Exception:  # noqa: BLE001
                 pass  # don't kill the watcher on a parse error
@@ -209,7 +213,51 @@ def push_taxonomy(taxonomy: Any) -> None:
     """Publish an updated *taxonomy* to the running server and wake SSE subscribers."""
     if _bg.app is None:
         return
-    _bg.app.state._ster["taxonomy"] = taxonomy
+    _bg.app.state._ster[_LIT_TAXONOMY] = taxonomy
+    _bg.broadcaster.notify(_bg.loop)
+
+
+def _persist_to_working_file(state: dict[str, Any], tax: Any) -> None:
+    """Save *tax* to whatever file the session currently treats as writable.
+
+    Read from the live state on every save rather than closed over when the
+    server started: the editor can change which file is writable underneath a
+    running server (see :func:`publish_working_file`), and a captured path would
+    keep writing every later edit into the file the server happened to open with.
+    """
+    target = state.get("file_path")
+    if target is not None:
+        from .store import save  # noqa: PLC0415
+
+        save(tax, target)
+
+
+def publish_working_file(taxonomy: Any, file_path: Path, context: list[Path]) -> None:
+    """Republish the session after the editor changed which file is writable.
+
+    ``push_taxonomy``'s sibling: the model alone is not enough, because "what
+    may be edited" is answered from three places that each cache it.
+
+    * ``taxonomy`` — its ``context_source`` is what ``_require_editable`` reads,
+      so the 403s move with it.
+    * ``file_path`` — the save target and the raw-ontology view. It is read from
+      this state on every use rather than closed over, so that republishing here
+      is enough to redirect writes.
+    * ``_mutation_backend`` — a lazily built ``(service, workspace, path)``
+      cached for the life of the app. Left alone, every later write would go
+      through the *previous* file's workspace and land in the previous file, so
+      it is dropped and rebuilt against the new state on the next mutation.
+
+    A no-op when no server is running: the TUI starts one best-effort (a taken
+    port means no MCP that session) and switching files must work regardless.
+    """
+    if _bg.app is None:
+        return
+    state = _bg.app.state._ster
+    state[_LIT_TAXONOMY] = taxonomy
+    state["file_path"] = file_path
+    state["context"] = list(context)
+    state.pop("_mutation_backend", None)
     _bg.broadcaster.notify(_bg.loop)
 
 
@@ -263,7 +311,7 @@ def _make_html_fn(app: Any, renderer: HtmlRenderer, token: str) -> Callable[...,
     """
 
     def html_fn(root_uri: str | None = None, full: bool = False, sparql: str = "") -> str:
-        return renderer(app.state._ster["taxonomy"], root_uri, token, full, sparql)
+        return renderer(app.state._ster[_LIT_TAXONOMY], root_uri, token, full, sparql)
 
     return html_fn
 
@@ -325,7 +373,7 @@ def start_background(
     """
     if _bg.app is not None:
         state = _bg.app.state._ster
-        state["taxonomy"] = taxonomy
+        state[_LIT_TAXONOMY] = taxonomy
         if html_renderer is not None and state.get("html_fn") is None:
             state["html_fn"] = _make_html_fn(_bg.app, html_renderer, state["token"])
         return True
@@ -341,10 +389,7 @@ def start_background(
     broadcaster = sse_broadcaster()
 
     def save_fn(tax: Any) -> None:
-        if file_path is not None:
-            from .store import save  # noqa: PLC0415
-
-            save(tax, file_path)
+        _persist_to_working_file(app.state._ster, tax)
         if on_change is not None:
             on_change()
 
@@ -408,7 +453,7 @@ def serve(
 
     def html_fn(root_uri: str | None = None, full: bool = False) -> str:
         return render_vowl_html(
-            app.state._ster["taxonomy"],  # type: ignore[attr-defined]
+            app.state._ster[_LIT_TAXONOMY],  # type: ignore[attr-defined]
             file_path,
             api_token=token,
             root_uri=root_uri,

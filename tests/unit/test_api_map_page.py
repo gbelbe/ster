@@ -106,3 +106,40 @@ def test_quotes_in_a_query_are_escaped_too():
     page = render_map_html('SELECT ?s WHERE { ?s ?p "x" }', "tok")
 
     assert "&quot;x&quot;" in page
+
+
+def test_a_focus_primes_the_page_with_a_query_over_what_it_reaches() -> None:
+    """Regression: this called _tax(), which is not in scope in _register_pages,
+    so every focused request answered 500. The unit tests called the query
+    builder directly and never touched the route, and a plain /map still worked
+    — so nothing caught it until a link was actually followed."""
+    import rdflib
+
+    from ster import api
+
+    graph = rdflib.Graph().parse(
+        data="""
+@prefix ex:  <https://example.org/onto#> .
+@prefix wgs: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+ex:Brand ex:label "Brand" .
+ex:shop  ex:partOf ex:Brand ; wgs:lat 48.11 ; wgs:long -1.68 .
+""",
+        format="turtle",
+    )
+    original = api._graph_for_locate
+    api._graph_for_locate = lambda _tax: graph  # type: ignore[assignment]
+    try:
+        response = _client().get("/map", params={"focus": NS + "Brand"})
+    finally:
+        api._graph_for_locate = original  # type: ignore[assignment]
+
+    assert response.status_code == 200
+    assert "VALUES ?thing" in response.text
+    assert "shop" in response.text
+
+
+def test_a_focus_that_reaches_nothing_still_serves_the_default_map() -> None:
+    response = _client().get("/map", params={"focus": NS + "Nowhere"})
+
+    assert response.status_code == 200
+    assert "VALUES ?thing" not in response.text

@@ -17,10 +17,11 @@ one file but not a natural fit for the module-level-functions split used by
 free functions. Instead it is split into **mixin classes**, one per business
 domain (lifecycle, config, tree building, panels, detail rendering, lint,
 rebuild, busy/save, problems, row actions, context menu, editing modals,
-ontology identity, tree events, misc actions, graph view, SHACL), composed
+ontology identity, tree events, misc actions, graph view, SHACL, working
+file), composed
 into the final class right here:
 
-    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _GraphMixin, _ShaclMixin, App):
+    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _GraphMixin, _ShaclMixin, _WorkingFileMixin, App):
         ...
 
 This is safe and Textual-native: ``Widget.__init_subclass__`` and
@@ -94,6 +95,7 @@ from ._shacl import _ShaclMixin
 from ._tree_build import _TreeBuildMixin
 from ._tree_events import _TreeEventsMixin
 from ._tree_widget import OntologyTree
+from ._working_file import _WorkingFileMixin
 
 __all__ = [
     "EntitySearch",
@@ -130,6 +132,7 @@ class OntologyApp(
     _ActionsMixin,
     _GraphMixin,
     _ShaclMixin,
+    _WorkingFileMixin,
     App,
 ):
     """A modern, themeable ontology browser."""
@@ -314,7 +317,9 @@ class OntologyApp(
         Binding("g", "open_graph", "GraphView"),
         Binding("s", "open_query", "SPARQL"),
         Binding("m", "open_map", "Map"),
+        Binding("t", "open_timeline", "Timeline"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
+        Binding("f", "working_file", "Working file"),
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),
         Binding("exclamation_mark", "problems", "Problems", show=False),

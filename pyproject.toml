@@ -86,6 +86,9 @@ dependencies = [
 #
 [project.optional-dependencies]
 dev = [
+    # A spec-compliant HTML parser for the tests that read a rendered page
+    # back. Present transitively already; named here because tests import it.
+    "html5lib>=1.1",
     # Testing
     "pytest>=9.0.3",
     "pytest-bdd>=7.0",

@@ -129,3 +129,21 @@ class _BusySaveMixin(_AppState):
             if self._save_dirty and self._path is not None:
                 store.save(self.tax, self._path)
                 self._save_dirty = False
+
+    def _install_working_file(self, taxonomy, path, context) -> None:
+        """Swap the model, its file and its context together, under the save lock.
+
+        ``_save_worker`` reads ``self.tax`` and ``self._path`` as a pair, so the
+        two must never be observable apart: a save that caught a new path beside
+        the old model would write one ontology into another ontology's file.
+        Changing which file is writable is the only operation that moves both,
+        which is why it is the only one that needs this.
+
+        The dirty flag is deliberately not cleared — the caller flushes *before*
+        the roles move (see ``ster.working_file.switch``), so anything still
+        unsaved here belongs to the model being installed, not the one leaving.
+        """
+        with self._save_lock:
+            self.tax = taxonomy
+            self._path = path
+            self._context_files = list(context)

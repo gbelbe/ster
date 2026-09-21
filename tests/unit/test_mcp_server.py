@@ -142,6 +142,7 @@ def test_tools_are_registered_with_expected_names(zoo):
         "get_entity",
         "search_entities",
         "get_vocabulary",
+        "get_timeline",
         "run_sparql",
     }
 

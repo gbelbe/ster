@@ -127,7 +127,10 @@ def test_the_whole_row_is_one_marker() -> None:
     page = geo_map_html._PAGE
 
     assert "display:flex" in page.split(".badge-row")[1][:80]
-    assert "iconAnchor: [width / 2, size / 2]" in page
+    # Anchored on the block's own centre. That used to be `size / 2` because the
+    # row was one logo tall; it wraps onto a second row now, so the height is
+    # computed and a marker anchored on `size` would hang half out of its shape.
+    assert "iconAnchor: [width / 2, height / 2]" in page
 
 
 def test_badges_reach_the_client() -> None:

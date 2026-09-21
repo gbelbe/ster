@@ -188,7 +188,34 @@ def located_count(graph: rdflib.Graph, result: QueryResult) -> int:
     return _located_count(graph, result)
 
 
-def map_url(sparql: str) -> str:
+def dated_count(graph: rdflib.Graph, result: QueryResult) -> int:
+    """How many result rows can be put on a time axis.
+
+    Detection lives in :mod:`ster.time_results` and keys on literal datatypes,
+    so it works for any ontology rather than one vocabulary — the counterpart of
+    :func:`located_count` for the timeline.
+    """
+    from ster.time_results import dated_count as _dated_count  # noqa: PLC0415
+
+    return _dated_count(graph, result)
+
+
+def timeline_url(sparql: str, focus: str | None = None) -> str:
+    """Address of the running server's timeline page, carrying *sparql*.
+
+    Same shape as :func:`map_url`, and for the same reasons: served by ster so
+    the page's own calls are same-origin, and the token stays out of the URL.
+    """
+    from urllib.parse import quote  # noqa: PLC0415
+
+    from ster.api_server import load_server_config  # noqa: PLC0415
+
+    url, port = load_server_config()
+    page = f"{url}:{port}/timeline?q={quote(sparql)}"
+    return page + (f"&focus={quote(focus)}" if focus else "")
+
+
+def map_url(sparql: str, focus: str | None = None) -> str:
     """Address of the running server's map page, carrying *sparql* to run there.
 
     Delegates to :mod:`ster.view_links`, which MCP uses too — one place that
@@ -196,7 +223,7 @@ def map_url(sparql: str) -> str:
     """
     from ster.view_links import map_url as _map_url  # noqa: PLC0415
 
-    return _map_url(sparql)
+    return _map_url(sparql, focus)
 
 
 def graph_url(sparql: str) -> str:

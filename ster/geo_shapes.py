@@ -314,6 +314,117 @@ def _asserted_centroid(graph: rdflib.Graph, node: rdflib.URIRef) -> tuple[float,
     return None
 
 
+def is_located(graph: rdflib.Graph, node: rdflib.term.Node) -> bool:
+    """True when *node* can be put on a map — a point or a geometry, either will do.
+
+    Both, not just coordinates: a file of regions carries WKT and no lat/long,
+    and reading only points would call an atlas unmappable.
+    """
+    if isinstance(node, rdflib.URIRef) and coordinates_of(graph, node) is not None:
+        return True
+    return any(
+        isinstance(o, rdflib.Literal) and o.datatype in GEOMETRY_DATATYPES
+        for o in graph.objects(node, None)
+    )
+
+
+def anything_located(graph: rdflib.Graph) -> bool:
+    """Whether this file holds any geography at all.
+
+    Asked before the map is opened rather than after: a taxonomy with no
+    coordinates produces an empty map, which reads as a broken feature instead
+    of as an answer.
+    """
+    if next(graph.subjects(LAT, None), None) is not None:
+        return True
+    return any(
+        isinstance(o, rdflib.Literal) and o.datatype in GEOMETRY_DATATYPES for _s, _p, o in graph
+    )
+
+
+# How far a selection may reach for something placeable. Three, the same as
+# FACET_DEPTH below and for the same reason: a store, its unit and its brand is
+# three hops, and that is the longest chain worth calling "this entity's
+# geography". Declared here rather than shared with FACET_DEPTH because that one
+# is defined further down and the two are free to diverge.
+REACH_DEPTH = 3
+
+
+def located_from(graph: rdflib.Graph, node: rdflib.URIRef, depth: int = REACH_DEPTH) -> list[str]:
+    """The placeable entities *node* stands over — itself, and what refers to it.
+
+    Only what points *at* the node, never what it points to, and that direction
+    is the whole design. Following links outward walks up the model and then
+    back down somebody else's branch: Castorama is owned by Kingfisher, which
+    owns Brico Depot, so "Castorama's geography" came back as 1,324 of the
+    file's 1,509 placeable entities — every rival's estate included. Inward,
+    the same question returns its own 228 stores, because a store names its
+    unit and a unit names its brand, and nothing names a sibling.
+
+    It reads as the right question too. A brand is not *at* its stores; the
+    stores are its. A region is not at the shops inside it; they are in it. What
+    a reader means by "show me this on the map" is everything that answers to
+    the thing selected.
+
+    The node itself counts when it is placeable, so a region maps its own
+    outline as well as its shops, and the whole closure within *depth* is taken
+    rather than the first hop that yields anything: a country that stopped early
+    would map its regions and none of their stores, leaving the map with
+    containers and nothing inside them.
+
+    Bounded for the reason the facet walk is bounded — in a connected file an
+    unbounded walk reaches everything from anywhere, and a focus that selects
+    the whole file is not a focus.
+    """
+    found = {str(node)} if is_located(graph, node) else set()
+    found.update(
+        str(reached)
+        for reached in _inward_closure(graph, node, depth)
+        if is_located(graph, reached)
+    )
+    return sorted(found)
+
+
+def _inward_closure(
+    graph: rdflib.Graph, node: rdflib.URIRef, depth: int
+) -> Iterator[rdflib.URIRef]:
+    """Everything that refers to *node*, or refers to something that does, within
+    *depth* hops. Breadth-first, each node yielded once."""
+    seen = {str(node)}
+    frontier = [node]
+    for _ in range(depth):
+        nxt = [referrer for current in frontier for referrer in _unseen(graph, current, seen)]
+        if not nxt:
+            return
+        yield from nxt
+        frontier = nxt
+
+
+def _unseen(graph: rdflib.Graph, node: rdflib.URIRef, seen: set[str]) -> Iterator[rdflib.URIRef]:
+    """*node*'s referrers that the walk has not reached yet, marking them as it goes."""
+    for referrer in _referrers(graph, node):
+        if str(referrer) not in seen:
+            seen.add(str(referrer))
+            yield referrer
+
+
+def _referrers(graph: rdflib.Graph, node: rdflib.URIRef) -> Iterator[rdflib.URIRef]:
+    """URI subjects that name *node* as an object, except through a peer link.
+
+    A symmetric property is not containment in either direction — it says these
+    two are rivals, not that one is inside the other — and following it turns
+    "Weldom France's shops" into every rival's shop in France, 846 of them for
+    a chain that has 266. The facet walk excludes symmetric properties for the
+    same reason, stated the same way.
+    """
+    peers = _symmetric_predicates(graph)
+    for s, p in graph.subject_predicates(node):
+        if str(p) in peers:
+            continue
+        if isinstance(s, rdflib.URIRef) and not is_builtin_uri(str(s)):
+            yield s
+
+
 def geometry_of(graph: rdflib.Graph, node: rdflib.URIRef) -> Geometry | None:
     """The geometry to draw for *node*, or None when it carries nothing usable.
 

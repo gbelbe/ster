@@ -14,6 +14,7 @@ from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Static, Tree
+from textual.widgets._header import HeaderIcon, HeaderTitle
 from textual.widgets.tree import TreeNode
 
 from ster.metadata_coverage import MetaProp
@@ -24,6 +25,7 @@ from .. import data, detail
 from ..context_menu import ContextMenu
 from ..detail_view import DetailView
 from ..theme import STER_THEME
+from ..working_file_chip import WorkingFileChip, WorkingFileMenu
 from ._constants import (
     _DETAIL_SELECTOR,
     _LARGE_TAXONOMY_THRESHOLD,
@@ -58,6 +60,17 @@ class StaticHeader(Header):
     def _on_click(self, event: events.Click) -> None:  # type: ignore[override]
         """Swallow the click: there is nothing to expand into."""
         event.prevent_default()  # stops the MRO walk before Header's toggle
+
+    def compose(self) -> ComposeResult:
+        """Icon, title, and the working-file chip where the clock would sit.
+
+        ``Header`` docks a ``HeaderClockSpace`` right to reserve the corner for a
+        clock ster never shows. The chip takes that reservation, which is why
+        the header can gain a control without gaining a row.
+        """
+        yield HeaderIcon().data_bind(Header.icon)
+        yield HeaderTitle()
+        yield WorkingFileChip(id="working-file")
 
 
 class _LifecycleMixin(_AppState):
@@ -455,12 +468,17 @@ class _LifecycleMixin(_AppState):
         yield Static("", id="lang-indicator")  # bottom-right status: selected language
         yield Static("", id="busy")  # bottom-left status: Saving… / Checking… spinner
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
+        yield WorkingFileMenu(id="working-file-menu")  # hidden overlay; shown from the header chip
 
     def on_mount(self) -> None:
         from ster._version import __version__ as _version  # noqa: PLC0415
 
-        self.title = f"STER version {_version} - {self.source}"
+        # The filename lives in the working-file chip now; repeating it here
+        # would spend the header's width saying the same thing twice, and the
+        # chip is the copy that can be acted on.
+        self.title = f"STER version {_version}"
         self.sub_title = ""
+        self._refresh_working_file_chip()
         if self._progressive_startup:
             self._loading_spinner_timer = self.set_interval(0.12, self._advance_loading_spinner)
         if self._loading_from_file:

@@ -366,3 +366,56 @@ def test_vocabulary_on_empty_graph_returns_empty_inventory(tmp_path):
     assert out["predicates"] == []
     assert out["label_predicates"] == []
     assert out["shape"] == "unknown"
+
+
+# ── the timeline tool ─────────────────────────────────────────────────────────
+#
+# An agent asking "what happened, and when" gets both the data and the page URL,
+# resolved the same way the /timeline page resolves it — so what the agent says
+# and what the reader sees cannot disagree.
+
+
+def _dated_taxonomy():
+    """A file with one dated individual, loaded through the normal path."""
+    import tempfile
+    from pathlib import Path
+
+    from ster import store
+
+    turtle = """
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex:   <https://example.org/onto#> .
+
+ex:Event a owl:Class ; rdfs:label "Event" .
+ex:deposit a owl:NamedIndividual, ex:Event ;
+    rdfs:label "Dépôt" ;
+    ex:on "2026-08-18"^^xsd:date .
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "dated.ttl"
+        path.write_text(turtle, encoding="utf-8")
+        return store.load(path)
+
+
+def test_timeline_returns_items_a_span_and_a_url():
+    payload = mc.timeline(_dated_taxonomy())
+    assert payload["count"] == 1
+    assert payload["items"][0]["start"] == "2026-08-18"
+    assert payload["span"] == ("2026-08-18", "2026-08-18")
+    assert "/timeline" in payload["url"]
+
+
+def test_timeline_on_a_file_with_no_dates_says_so_rather_than_returning_nothing():
+    from ster.model import Taxonomy
+
+    payload = mc.timeline(Taxonomy())
+    assert payload["count"] == 0
+    assert payload["note"] == "no dates in this file"
+
+
+def test_timeline_limit_truncates_and_says_it():
+    payload = mc.timeline(_dated_taxonomy(), limit=1)
+    assert payload["truncated"] is False
+    assert len(payload["items"]) == 1

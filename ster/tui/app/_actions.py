@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Final, Literal
+
 from textual.widgets import Tree
 
 from ..detail_view import DetailRow
@@ -9,6 +11,17 @@ from ..help_screen import HelpScreen
 from ._constants import _TREE_SELECTOR
 from ._state import _AppState
 from ._tree_widget import OntologyTree
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import rdflib
+
+    from ...viz_shared import ReachFn
+
+# Textual's own severity name, spelled once: three notifications in this module
+# use it and the duplicate-literal rule counts the third as drift. Typed as the
+# literal rather than as str, because notify() takes a Literal and a widened
+# constant silently stops satisfying it.
+_WARNING: Final[Literal["warning"]] = "warning"
 
 
 class _ActionsMixin(_AppState):
@@ -59,22 +72,111 @@ class _ActionsMixin(_AppState):
         return None
 
     def action_open_map(self) -> None:
-        """The 'm' shortcut: map everything in the file that carries coordinates.
+        """The 'm' shortcut: map the selection, or everything that carries coordinates.
 
-        A view, not a mutation. The page's default query asks for anything with
-        WGS84 coordinates, so concepts, classes and individuals all appear —
-        what is mapped depends on the data, not the kind of entity.
+        A view, not a mutation. Three answers, in order.
+
+        A file with no geography at all gets a warning and no window. An empty
+        map is not an answer — it reads as a broken feature, and the reader
+        cannot tell it apart from one that failed to load.
+
+        A selection that can be put on a map opens focused on it. "Can be" is
+        read through what it is linked to, not only what it carries: a brand
+        holds no coordinates and its stores hold them all.
+
+        A selection that reaches nothing placeable still opens the whole map,
+        saying so. Refusing there would be worse than the map the reader asked
+        for, and the file does have something to show.
         """
+        from ster.geo_shapes import anything_located, located_from  # noqa: PLC0415
+        from ster.store import full_graph_rdflib  # noqa: PLC0415
+
         from .. import query as _query
 
         if not _query.server_is_running():
-            self.notify(_query.server_unavailable_reason(), severity="warning")
+            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
             return
-        url = _query.map_url("")  # empty query → the server's "anything located" default
+
+        # The session as one graph, not the file on disk: the same view the map
+        # itself is built from, so what the reader is told matches what opens.
+        graph = full_graph_rdflib(self.tax)
+        if not anything_located(graph):
+            self.notify(
+                "Nothing in this file can be put on a map — no coordinates and no shapes.",
+                severity=_WARNING,
+            )
+            return
+
+        focus = self._map_focus_target(graph, located_from)
+        url = _query.map_url("", focus)  # empty query → the server builds one
         if not _query.open_browser(url):
-            self.notify("Couldn't open a browser for the map.", severity="warning")
+            self.notify("Couldn't open a browser for the map.", severity=_WARNING)
             return
         self.notify(f"Map opened in your browser — {url}")
+
+    def action_open_timeline(self) -> None:
+        """The 't' shortcut: put the selection on a time axis, or the whole file.
+
+        The same three answers as :meth:`action_open_map`, and deliberately the
+        same shape: a file with no dates gets a warning and no window, a
+        selection that reaches something dated opens focused on it, and one that
+        reaches nothing still opens the whole frieze rather than refusing.
+
+        "Reaches" is read through what points at the selection, not only what it
+        carries: a procedure holds no date of its own and its events hold them
+        all.
+        """
+        from ster.store import full_graph_rdflib  # noqa: PLC0415
+        from ster.time_shapes import anything_dated, dated_from  # noqa: PLC0415
+
+        from .. import query as _query
+
+        if not _query.server_is_running():
+            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
+            return
+
+        graph = full_graph_rdflib(self.tax)
+        if not anything_dated(graph):
+            self.notify(
+                "Nothing in this file can be put on a timeline — no dates.",
+                severity=_WARNING,
+            )
+            return
+
+        focus = self._timeline_focus_target(graph, dated_from)
+        url = _query.timeline_url("", focus)  # empty query → the server builds one
+        if not _query.open_browser(url):
+            self.notify("Couldn't open a browser for the timeline.", severity=_WARNING)
+            return
+        self.notify(f"Timeline opened in your browser — {url}")
+
+    def _timeline_focus_target(self, graph: rdflib.Graph, dated_from: ReachFn) -> str | None:
+        """The selected entity, when it can put anything on a time axis."""
+        import rdflib  # noqa: PLC0415
+
+        uri = self._detail_uri
+        if not uri:
+            return None
+        if dated_from(graph, rdflib.URIRef(uri)):
+            return uri
+        self.notify(f"{uri.rsplit('#', 1)[-1]} has no dates — showing the whole file.")
+        return None
+
+    def _map_focus_target(self, graph: rdflib.Graph, located_from: ReachFn) -> str | None:
+        """The selected entity, when it can put anything on a map.
+
+        Returns None — and says why — when the selection reaches nothing
+        placeable, so the caller opens the whole map rather than a blank one.
+        """
+        import rdflib  # noqa: PLC0415
+
+        uri = self._detail_uri
+        if not uri:
+            return None
+        if located_from(graph, rdflib.URIRef(uri)):
+            return uri
+        self.notify(f"{uri.rsplit('#', 1)[-1]} has nothing on the map — showing the whole file.")
+        return None
 
     def _active_tree(self) -> Tree:
         """The tree the expand/collapse shortcuts act on: whichever pane is focused

@@ -61,7 +61,7 @@ class _RowActionsMixin(_AppState):
         # the difference between "you can't" and "you can, over there".
         if (source := self.tax.context_source.get(uri)) is not None:
             self.notify(
-                f"Read-only — defined in {source.name}. Open that file to edit it.",
+                f"Read-only — defined in {source.name}. Press f to make it the working file.",
                 title="Context file",
                 severity=_LIT_WARNING,
             )

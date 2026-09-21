@@ -228,7 +228,10 @@ def test_filtering_judges_a_place_by_what_lies_beneath_it() -> None:
     page = geo_map_html._PAGE
 
     assert "const facetsBeneath = new Map();" in page
-    assert "for (const ancestor of (p.ancestors || [])) add(ancestor, p.facets);" in page
+    # The same walk also records which URIs are containers, for the Levels /
+    # Everything switch; what matters here is that every ancestor still takes
+    # its descendant's facets.
+    assert "for (const ancestor of (p.ancestors || [])) { add(ancestor, p.facets);" in page
     assert "facetsBeneath.get(p.uri)" in page
 
 

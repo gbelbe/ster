@@ -215,3 +215,40 @@ OWL — a graph traversal covers `broader` cycles without a reasoner.
 - Do the closure and the git repository boundary coincide? If a closure spans
   repositories, CI needs to fetch the imports before it can validate anything
   beyond Layer 1.
+
+## 8. Changing which file is writable, mid-session
+
+A session loads one writable file plus read-only context (`store.load`'s
+*context* argument; §5). Until now that choice was fixed when the session
+opened, so editing an entity the tree already showed meant quitting and
+reopening — the editor said as much, in a notification that named the file and
+then offered nothing.
+
+`ster.working_file.switch` swaps the roles instead. It is deliberately a small
+pure-ish function taking its side effects as arguments, because every way this
+operation fails is an **ordering** mistake rather than a logic one:
+
+1. validate — a refused switch must leave the session untouched;
+2. no-op when the chosen file is already writable — re-parsing on a menu
+   reopen is a freeze with nothing to show for it;
+3. **flush before the roles move** — a pending edit belongs to the file that is
+   writable *now*;
+4. load, then apply — a parse failure leaves the previous model in place.
+
+Step 3 is the one that bites. The editor saves on a debounced background worker
+that reads `self.tax` and `self._path` **as a pair**; flushing after the swap
+writes one ontology into another ontology's file. `_install_working_file` holds
+`_save_lock` across the swap for the same reason.
+
+The API serving the same session caches the same answer in three places, all
+repointed by `api_server.publish_working_file`: the published `taxonomy` (whose
+`context_source` drives the read-only guard), `file_path` (the save target —
+read from live state, never closed over), and the lazily built
+`_mutation_backend` tuple, which is dropped so the next write rebuilds it
+against the new roles.
+
+**Known limitation.** `publish_dir` is derived once as
+`file_path.parent / "ontology"` and mounted as StaticFiles at app startup, and
+a mount cannot be repointed afterwards. Switching to a working file in a
+*different directory* and then publishing still targets the original session's
+`ontology/`. Files in one directory — the normal layout — are unaffected.
