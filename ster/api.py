@@ -879,11 +879,17 @@ def _register_mutation_routes(
         no file backing it — a read-only session cannot go stale, so the caller
         needs no special case for it.
         """
+        from ._version import __version__  # noqa: PLC0415
+
+        # The ster build answering, alongside the ontology version. A page bakes
+        # in the build that drew it, so comparing the two is how it notices the
+        # server was replaced by a different one underneath it — which is the
+        # whole of "I updated ster and the graph view is still old".
         backend = _mutation_backend(_st)
         if backend is None:
-            return {_LIT_VERSION: 0, "editable": False}
+            return {_LIT_VERSION: 0, "editable": False, "ster": __version__}
         service, _workspace, path = backend
-        return {_LIT_VERSION: service.version(path), "editable": True}
+        return {_LIT_VERSION: service.version(path), "editable": True, "ster": __version__}
 
     @app.post(
         "/api/entity-label",

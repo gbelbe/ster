@@ -67,15 +67,25 @@ _VERSION_CACHE = Path(tempfile.gettempdir()) / "ster_version_check.json"
 
 
 def _newer(a: str, b: str) -> bool:
-    """Return True if version string *a* is greater than *b*."""
+    """Return True if version string *a* is greater than *b*, by PEP 440.
 
-    def _t(v: str) -> tuple[int, ...]:
-        try:
-            return tuple(int(x) for x in v.split("."))
-        except ValueError:
-            return (0,)
+    The hand-rolled split this replaces called ``int()`` on every dot-separated
+    part, so a local build — ``0.22.1.dev14+g3c6ac5c3a`` — raised on
+    ``dev14+g3c6ac5c3a`` and fell back to ``(0,)``. Every PyPI release then
+    compared as newer, and anyone working from a checkout was told on every
+    launch to "upgrade" to a version years behind their own.
 
-    return _t(a) > _t(b)
+    PEP 440 gets the cases that matter here right: 0.22.1.dev14 is ahead of a
+    0.10.0 release, and behind a 0.22.1 final — which is exactly when someone on
+    a dev build *should* hear about a release.
+    """
+    from packaging.version import InvalidVersion, Version  # noqa: PLC0415
+
+    try:
+        return Version(a) > Version(b)
+    except InvalidVersion:
+        # An unparseable version is not grounds for nagging someone to upgrade.
+        return False
 
 
 def _parse_changelog_section(description: str, version: str, max_bullets: int = 5) -> str:

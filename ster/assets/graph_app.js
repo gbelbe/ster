@@ -893,6 +893,9 @@ applyLevelOfDetail();
 // The show-all button is rendered server-side (see _render.py) and fires
 // before this module's own handlers exist, so it reaches the spinner globally.
 globalThis.showSpinner=showSpinner;
+_watchForNewBuild();
+const _staleReload=document.getElementById('stale-reload');
+if(_staleReload)_staleReload.addEventListener('click',()=>location.reload());
 globalThis._sterNav=navigateTo;
 // The Taxonomie tab's own asset (taxonomy_app.js) shares this panel but owns no
 // part of its open/close state — it calls this to make sure a click always
@@ -1716,6 +1719,41 @@ function _canEdit(d){
 // and it stays null on a read-only session, where omitting it means "no check",
 // exactly the previous behaviour.
 let _docVersion=null;
+// ── Has the server been replaced under us? ───────────────────────────────────
+// The page bakes in the build that drew it; /api/version reports the build
+// answering now. When they differ, ster was updated and restarted while this
+// tab stayed open — so what is on screen is the previous build's output, which
+// looks perfectly fine and is not. That is the whole of "I updated ster and the
+// graph view is still old".
+//
+// Checked on a timer rather than once: the replacement happens *after* load, or
+// it would not be a problem. Read-only sessions carry no token and so cannot
+// ask; they also cannot be edited, so the stakes are lower.
+const _BUILD_CHECK_MS=30000;
+// Raised once the server answers as a build other than the one that drew this
+// page. Named rather than inlined in the poll: the banner is the interesting
+// half, and a chain of guards nested three deep inside an interval inside a
+// fetch is most of the enclosing function's cognitive load for none of its
+// meaning.
+function _showStaleBuild(mine,theirs){
+  const el=document.getElementById('stale');
+  const msg=document.getElementById('stale-msg');
+  if(msg)msg.textContent='This page was drawn by ster '+mine+'; the server is now '+theirs+'.';
+  if(el)el.classList.add('on');
+}
+function _checkServerBuild(mine){
+  return fetch('/api/version',{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():null)
+    // Optional chaining rather than a `!d||!d.ster` pair: one question asked
+    // once, and it reads as the question — is there a build, and is it ours.
+    .then(d=>{if(d?.ster&&d.ster!==mine)_showStaleBuild(mine,d.ster);})
+    .catch(err=>{console.debug('Unable to check the server build:',err);});
+}
+function _watchForNewBuild(){
+  const mine=API_TOKEN&&globalThis.__STER_GRAPH__.sterVersion;
+  if(!mine)return;
+  setInterval(()=>_checkServerBuild(mine),_BUILD_CHECK_MS);
+}
 function _initDocVersion(){
   if(!API_TOKEN)return;
   fetch('/api/version',{headers:{'Authorization':'Bearer '+API_TOKEN}})

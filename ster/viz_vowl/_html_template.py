@@ -60,6 +60,17 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 /* The quiet counterpart to #graph-spinner: that one veils the page while it is
    being built, this one just says "something is in flight" without blocking
    anything, because search and expansion happen while you keep working. */
+/* Raised when the server answering is a different ster build from the one that
+   drew this page — which means the server was restarted under it and what you
+   are looking at is last build's output. Not dismissible by timeout: the whole
+   problem is a page that looks fine and is not. */
+#stale{position:fixed;top:0;left:0;right:0;z-index:300;display:none;
+  align-items:center;justify-content:center;gap:12px;padding:8px 14px;
+  background:#fef3c7;border-bottom:1px solid #f59e0b;color:#92400e;
+  font:13px system-ui,sans-serif}
+#stale.on{display:flex}
+#stale button{background:#92400e;color:#fff;border:none;border-radius:5px;
+  cursor:pointer;font:600 12px system-ui,sans-serif;padding:4px 12px}
 #busy{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:150;
   display:none;align-items:center;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;
   border-radius:20px;padding:5px 14px;font:11px system-ui,sans-serif;color:#475569;
@@ -156,6 +167,7 @@ __OFFLINE_BANNER__
 </div>
 <div id="busy" class="view-relations"><div class="ring"></div><span id="busy-msg">Working\u2026</span></div>
 <div id="graph-spinner"><div class="ring"></div><div id="graph-spinner-msg">Laying out the graph\u2026</div></div>
+<div id="stale"><span id="stale-msg">This page was drawn by an older ster build.</span><button id="stale-reload">Reload</button></div>
 <div id="cy" class="view-relations"></div>
 <div id="treemap" class="view-taxonomy"></div>
 </div>

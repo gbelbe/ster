@@ -62,7 +62,10 @@ def test_a_client_can_read_the_version_it_should_build_on(client):
     r = client.get("/api/version", headers=AUTH)
 
     assert r.status_code == 200
-    assert r.json() == {"version": 0, "editable": True}
+    body = r.json()
+
+    assert body["version"] == 0
+    assert body["editable"] is True
 
 
 def test_a_read_only_session_reports_zero_rather_than_failing(tmp_path):
@@ -70,7 +73,8 @@ def test_a_read_only_session_reports_zero_rather_than_failing(tmp_path):
     app = create_app(make_taxonomy(), TOKEN, SSEBroadcaster(), lambda t: None)
     body = TestClient(app).get("/api/version", headers=AUTH).json()
 
-    assert body == {"version": 0, "editable": False}
+    assert body["version"] == 0
+    assert body["editable"] is False
 
 
 def test_the_version_advances_with_each_edit(client):
