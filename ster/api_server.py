@@ -28,6 +28,10 @@ HtmlRenderer = Callable[[Any, str | None, str, bool, str], str]
 # The key the published model lives under in ``app.state._ster``; named once
 # so the six places that read or republish it cannot drift apart.
 _LIT_TAXONOMY = "taxonomy"
+# The landing-page callable's key in the shared server state. Named for the
+# same reason as _LIT_TAXONOMY: three places read or write it, and a typo in
+# one of them is a 501 nobody can grep for.
+_LIT_HTML_FN = "html_fn"
 
 _TOKEN_FILE = Path.home() / ".config" / "ster" / "api_token"
 _SERVER_CONFIG_FILE = Path.home() / ".config" / "ster" / "server_config.json"
@@ -374,8 +378,8 @@ def start_background(
     if _bg.app is not None:
         state = _bg.app.state._ster
         state[_LIT_TAXONOMY] = taxonomy
-        if html_renderer is not None and state.get("html_fn") is None:
-            state["html_fn"] = _make_html_fn(_bg.app, html_renderer, state["token"])
+        if html_renderer is not None and state.get(_LIT_HTML_FN) is None:
+            state[_LIT_HTML_FN] = _make_html_fn(_bg.app, html_renderer, state["token"])
         return True
 
     deps = _server_deps()
@@ -404,7 +408,7 @@ def start_background(
     app.state._ster["broadcaster"] = broadcaster
     app.state._ster["token"] = token
     if html_renderer is not None:
-        app.state._ster["html_fn"] = _make_html_fn(app, html_renderer, token)
+        app.state._ster[_LIT_HTML_FN] = _make_html_fn(app, html_renderer, token)
     _bg.app, _bg.broadcaster = app, broadcaster
 
     holder = _spawn_uvicorn(app, host, port, uvicorn)
@@ -451,13 +455,23 @@ def serve(
     def save_fn(tax: Any) -> None:
         save(tax, file_path)
 
-    def html_fn(root_uri: str | None = None, full: bool = False) -> str:
+    # Bound through _make_html_fn, the same seam the background server uses,
+    # rather than a second hand-written landing-page callable. The duplicate
+    # here had fallen a parameter behind: _graph_html_response always passes
+    # three (GET / and GET /viz both route through it, and /viz carries the
+    # query), so every landing-page request under `ster serve` raised TypeError
+    # and answered 500 before rendering anything. One binding cannot drift from
+    # itself.
+    def _renderer(
+        taxonomy_now: Any, root_uri: str | None, api_token: str, full: bool, sparql: str
+    ) -> str:
         return render_vowl_html(
-            app.state._ster[_LIT_TAXONOMY],  # type: ignore[attr-defined]
+            taxonomy_now,
             file_path,
-            api_token=token,
+            api_token=api_token,
             root_uri=root_uri,
             full=full,
+            sparql=sparql,
         )
 
     app = create_app(
@@ -465,12 +479,12 @@ def serve(
         token,
         broadcaster,
         save_fn,
-        html_fn=html_fn,
         file_path=file_path,
         context=context,
     )
     # Also store broadcaster in shared state so the watcher can reach it
     app.state._ster["broadcaster"] = broadcaster  # type: ignore[attr-defined]
+    app.state._ster[_LIT_HTML_FN] = _make_html_fn(app, _renderer, token)  # type: ignore[attr-defined]
 
     def _on_startup() -> None:
         _start_file_watcher(file_path, app, asyncio.get_running_loop(), context)

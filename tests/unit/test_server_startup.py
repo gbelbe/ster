@@ -216,3 +216,48 @@ def test_start_api_server_reports_failure_when_uvicorn_cannot_bind(monkeypatch, 
 
     assert result is False, "must not claim success when uvicorn fails to bind"
     assert srv.current_app() is None
+
+
+def test_serve_binds_a_landing_page_that_matches_how_it_is_called() -> None:
+    """`ster serve` answered 500 on every graph page: its own hand-written
+    html_fn took (root_uri, full) while _graph_html_response always passes
+    three — GET / and GET /viz both route through it, and /viz carries the
+    query. The existing tests could not catch it, because they pass a mock as
+    html_fn and a mock accepts any signature.
+
+    So this pins the real binding: whatever `serve` attaches must accept the
+    call the route actually makes.
+    """
+    import inspect
+
+    from ster import api_server
+
+    source = inspect.getsource(api_server.serve)
+    # serve must not hand-roll a second landing-page callable; it shares the
+    # one seam the background server already uses, so the two cannot drift.
+    assert "_make_html_fn(app, _renderer, token)" in source
+    assert "def html_fn(" not in source
+
+
+def test_the_shared_landing_page_binding_takes_root_full_and_query() -> None:
+    """The three arguments _graph_html_response passes, positionally."""
+    import inspect
+
+    from ster.api_server import _make_html_fn
+
+    class _App:
+        class state:  # noqa: N801
+            _ster = {"taxonomy": object()}
+
+    seen: list[tuple] = []
+
+    def renderer(tax, root_uri, token, full, sparql):  # noqa: ANN001, ANN202
+        seen.append((root_uri, token, full, sparql))
+        return "<html/>"
+
+    html_fn = _make_html_fn(_App, renderer, "tok")
+    assert html_fn("some:uri", True, "SELECT *") == "<html/>"
+    assert seen == [("some:uri", "tok", True, "SELECT *")]
+    # and the defaults the route relies on
+    params = inspect.signature(html_fn).parameters
+    assert list(params) == ["root_uri", "full", "sparql"]
