@@ -24,7 +24,7 @@
     "d3-shape": "3.2.0",
     "layout-base": "2.0.1",
     "leaflet": "1.9.4",
-    "vis-timeline": "7.7.3"
+    "vis-timeline": "8.5.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
