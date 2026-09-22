@@ -22,7 +22,19 @@ _CY_VERSION = "3.29.2"
 
 _CY_CDN = f"https://cdnjs.cloudflare.com/ajax/libs/cytoscape/{_CY_VERSION}/cytoscape.min.js"
 
-_CY_CACHE_FILE = "cytoscape.min.js"  # stored under ~/.cache/ster/
+
+def _cache_name(library: str, version: str, suffix: str = ".min.js") -> str:
+    """The ~/.cache/ster filename for one vendored library at one version.
+
+    Keys carry the version, as the timeline's vis-timeline cache already did.
+    Without it a bump silently kept serving the old library: the file is only
+    downloaded when it does not exist, and "cytoscape.min.js" exists whatever
+    version wrote it, so anyone testing a bump tested the previous release.
+    """
+    return f"{library}-{version}{suffix}"
+
+
+_CY_CACHE_FILE = _cache_name("cytoscape", _CY_VERSION)  # stored under ~/.cache/ster/
 
 
 def _cytoscape_script_tag() -> str:
@@ -49,7 +61,9 @@ _D3_HIERARCHY_CDN = (
     f"https://cdn.jsdelivr.net/npm/d3-hierarchy@{_D3_HIERARCHY_VERSION}/dist/d3-hierarchy.min.js"
 )
 
-_D3_HIERARCHY_CACHE_FILE = "d3-hierarchy.min.js"  # stored under ~/.cache/ster/
+_D3_HIERARCHY_CACHE_FILE = (
+    _cache_name("d3-hierarchy", _D3_HIERARCHY_VERSION)  # stored under ~/.cache/ster/
+)
 
 
 def _d3_hierarchy_script_tag() -> str:
@@ -75,7 +89,7 @@ _D3_PATH_VERSION = "3.1.0"
 
 _D3_PATH_CDN = f"https://cdn.jsdelivr.net/npm/d3-path@{_D3_PATH_VERSION}/dist/d3-path.min.js"
 
-_D3_PATH_CACHE_FILE = "d3-path.min.js"  # stored under ~/.cache/ster/
+_D3_PATH_CACHE_FILE = _cache_name("d3-path", _D3_PATH_VERSION)  # stored under ~/.cache/ster/
 
 
 def _d3_path_script_tag() -> str:
@@ -100,7 +114,7 @@ _D3_SHAPE_VERSION = "3.2.0"
 
 _D3_SHAPE_CDN = f"https://cdn.jsdelivr.net/npm/d3-shape@{_D3_SHAPE_VERSION}/dist/d3-shape.min.js"
 
-_D3_SHAPE_CACHE_FILE = "d3-shape.min.js"  # stored under ~/.cache/ster/
+_D3_SHAPE_CACHE_FILE = _cache_name("d3-shape", _D3_SHAPE_VERSION)  # stored under ~/.cache/ster/
 
 
 def _d3_shape_script_tag() -> str:
@@ -130,7 +144,9 @@ _LAYOUT_BASE_VERSION = "2.0.1"
 
 _LAYOUT_BASE_CDN = f"https://cdn.jsdelivr.net/npm/layout-base@{_LAYOUT_BASE_VERSION}/layout-base.js"
 
-_LAYOUT_BASE_CACHE_FILE = "layout-base.js"  # stored under ~/.cache/ster/
+_LAYOUT_BASE_CACHE_FILE = _cache_name(
+    "layout-base", _LAYOUT_BASE_VERSION, ".js"
+)  # stored under ~/.cache/ster/
 
 
 def _layout_base_script_tag() -> str:
@@ -154,7 +170,9 @@ _COSE_BASE_VERSION = "2.2.0"
 
 _COSE_BASE_CDN = f"https://cdn.jsdelivr.net/npm/cose-base@{_COSE_BASE_VERSION}/cose-base.js"
 
-_COSE_BASE_CACHE_FILE = "cose-base.js"  # stored under ~/.cache/ster/
+_COSE_BASE_CACHE_FILE = _cache_name(
+    "cose-base", _COSE_BASE_VERSION, ".js"
+)  # stored under ~/.cache/ster/
 
 
 def _cose_base_script_tag() -> str:
@@ -179,7 +197,9 @@ _FCOSE_VERSION = "2.2.0"
 
 _FCOSE_CDN = f"https://cdn.jsdelivr.net/npm/cytoscape-fcose@{_FCOSE_VERSION}/cytoscape-fcose.js"
 
-_FCOSE_CACHE_FILE = "cytoscape-fcose.js"  # stored under ~/.cache/ster/
+_FCOSE_CACHE_FILE = _cache_name(
+    "cytoscape-fcose", _FCOSE_VERSION, ".js"
+)  # stored under ~/.cache/ster/
 
 
 def _fcose_script_tag() -> str:
@@ -212,7 +232,11 @@ _EXPAND_COLLAPSE_CDN = (
     f"{_EXPAND_COLLAPSE_VERSION}/cytoscape-expand-collapse.js"
 )
 
-_EXPAND_COLLAPSE_CACHE_FILE = "cytoscape-expand-collapse.js"  # stored under ~/.cache/ster/
+_EXPAND_COLLAPSE_CACHE_FILE = (
+    _cache_name(
+        "cytoscape-expand-collapse", _EXPAND_COLLAPSE_VERSION, ".js"
+    )  # stored under ~/.cache/ster/
+)
 
 
 def _expand_collapse_script_tag() -> str:

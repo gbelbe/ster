@@ -137,3 +137,42 @@ def test_nothing_is_declared_that_the_code_does_not_load() -> None:
         assert name in loaded, (
             f"{name} is declared in package.json but no view loads it — remove it"
         )
+
+
+# ── where the lockfile fetches from ──────────────────────────────────────────
+#
+# Dependabot resolves through whatever registry it is configured with, and
+# writes *that* host into package-lock.json. When it is a private proxy, CI
+# runners have no credentials for it and `npm ci` fails hard on a 401 — not on
+# the bumped package, on the whole install. That reached main once (#229) and
+# turned `Lint JS` red on every branch cut from it afterwards.
+#
+# It is invisible locally: npm serves the tarball from its content-addressed
+# cache, keyed by integrity, without touching the network — so the developer
+# who has built once sees nothing wrong. This test is the seam that does not
+# depend on a warm cache, and it runs in the Python job, which is the one that
+# still runs on a Dependabot PR.
+
+_PUBLIC_REGISTRY = "https://registry.npmjs.org/"
+
+
+def _resolved_urls() -> list[str]:
+    root = Path(__file__).resolve().parents[2]
+    lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+    return [
+        entry["resolved"]
+        for entry in lock.get("packages", {}).values()
+        if isinstance(entry, dict) and "resolved" in entry
+    ]
+
+
+def test_every_lockfile_entry_comes_from_the_public_registry() -> None:
+    """A private-proxy URL here is a 401 on every CI runner, for the whole install."""
+    foreign = sorted({u for u in _resolved_urls() if not u.startswith(_PUBLIC_REGISTRY)})
+    assert not foreign, (
+        "package-lock.json resolves from a registry CI cannot authenticate to:\n  "
+        + "\n  ".join(foreign)
+        + f"\n\nRewrite the host to {_PUBLIC_REGISTRY} — the tarball is the same package, "
+        "so the integrity hash already in the lockfile still matches. The lasting fix is "
+        "the private-registry setting above the repository."
+    )

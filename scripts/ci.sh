@@ -140,7 +140,11 @@ fi
 
 if command -v npm >/dev/null 2>&1; then
   if [[ ! -d node_modules ]]; then
-    npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1 || true
+    # Same reasoning as the GitHub job: resolve fresh rather than from the
+    # lockfile, whose hosts a private registry may have rewritten. Still tolerant
+    # of a machine on too old a Node — missing tooling is a warning here, and the
+    # lockfile itself is guarded by a test, not by this install succeeding.
+    npm install --no-package-lock --no-audit --no-fund >/dev/null 2>&1 || true
   fi
   if [[ -d node_modules ]]; then
     npx --no-install eslint .

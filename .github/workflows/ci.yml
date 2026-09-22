@@ -53,7 +53,18 @@ jobs:
           node-version-file: ".nvmrc"
 
       - name: Install JS dev deps
-        run: npm ci
+        # Deliberately not `npm ci`. Dependabot resolves through a private
+        # registry and writes those hosts into package-lock.json; runners have no
+        # credentials for it, and npm ci then fails the *whole* install with a
+        # 401 rather than skipping one entry — which is how a cytoscape bump
+        # turned this job red on main and on every branch cut from it.
+        #
+        # package.json is a manifest of record here, not a build input: ster has
+        # no bundler and the browser libraries are fetched from a CDN at first
+        # use. Resolving fresh from the public registry is all eslint needs, and
+        # tests/unit/test_browser_dependencies.py still fails if the lockfile
+        # points somewhere CI cannot reach.
+        run: npm install --no-package-lock --no-audit --no-fund
 
       - name: npm audit — high and critical dependency CVEs
         run: npm audit --audit-level=high
