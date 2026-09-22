@@ -203,7 +203,7 @@ jobs:
           path: .
 
       - name: "📡 Code Quality: Sonar push"
-        uses: adeo/sonarqube--scan-action@84f845bcd23f3fff451d91b91a910af2c941d60c # v2.5.0
+        uses: adeo/sonarqube--scan-action@0bdf2411a72513d05f1582d1c896de6d3cfce878 # v2.5.1
 
   # ── 5. Create the GitHub Release for a fresh tag ────────────────────────────
   # release-tag.yml already tagged this commit if it earned a release. Creating
