@@ -99,10 +99,10 @@ def render_timeline_html(query: str, token: str) -> str:
 
 _PAGE = """\
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ster — frise temporelle</title>
+<title>ster — timeline</title>
 __VIS_CSS__
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -112,9 +112,13 @@ header button{background:#fff;border:1px solid #cbd5e1;color:#475569;cursor:poin
 header button:hover{background:#e2e8f0}
 #status{font-size:11px;color:#64748b;margin-left:auto}
 #lanes{display:flex;gap:5px;flex-wrap:wrap;padding:6px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
-.ftbtn{background:none;border:1px solid #cbd5e1;color:#94a3b8;border-radius:6px;cursor:pointer;font-size:10px;padding:2px 7px;text-decoration:line-through}
-.ftbtn.active{color:#475569;border-color:#94a3b8;text-decoration:none}
+.ftbtn{background:transparent;border:1px solid #cbd5e1;color:#1e293b;border-radius:999px;cursor:pointer;font:inherit;font-size:11px;padding:2px 9px}
+.ftbtn:hover{border-color:#1f5b80}
+.ftbtn.on{background:#1f5b80;border-color:#1f5b80;color:#fff}
+.fclear{border:0;background:none;color:#64748b;cursor:pointer;font:inherit;font-size:11px;text-decoration:underline}
 #qbox{display:none;padding:8px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+#qbox.open{display:block}
+header button.active{background:#1f5b80;border-color:#1f5b80;color:#fff}
 #q{width:100%;height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;padding:6px}
 #main{flex:1;display:flex;min-height:0}
 #tl{flex:1;background:#fff;min-width:0}
@@ -131,15 +135,20 @@ header button:hover{background:#e2e8f0}
 .vis-item .pred{color:#64748b;font-size:10px;margin-left:6px}
 .vis-item.interval{background:#dbeafe;border-color:#60a5fa}
 .vis-item.instant{background:#fef3c7;border-color:#fbbf24}
+/* PROV-O moments, last so they win over the instant/interval pair: the shape
+   still says instant or interval, the colour says this is the record of a fact
+   rather than the fact. */
+.vis-item.provenance{background:#ede9fe;border-color:#a78bfa;color:#3b0764}
+.vis-item.provenance .pred{color:#6d28d9}
 </style>
 </head>
 <body>
 <header>
-  <strong style="font-size:13px">Frise temporelle</strong>
-   <button id="fit">Tout voir</button>
-   <button id="toggle-q">Requête</button>
-   <button id="toggle-auxiliary">Display Provenance / annotations</button>
-   <button id="run">Relancer</button>
+  <strong style="font-size:13px">Timeline</strong>
+   <button id="fit">Fit to data</button>
+   <button id="toggle-q">Query</button>
+   <button id="toggle-auxiliary">Provenance &amp; annotations</button>
+   <button id="run">Run</button>
   <span id="status"></span>
 </header>
 <div id="qbox"><textarea id="q">__QUERY__</textarea></div>

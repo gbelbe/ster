@@ -10,14 +10,18 @@ A navigable frieze of everything the open file dates. Zoom runs continuously
 from the hour to two centuries, the axis relabelling itself as it goes; drag to
 pan. One lane per class, one item per moment.
 
-- **Instants** are boxes, **intervals** are bars. Colour says which.
+- **Instants** are boxes, **intervals** are bars. Colour says which, and a
+  PROV-O moment is violet whichever shape it takes: the shape still says instant
+  or interval, the colour says this is the record of a fact rather than the fact.
 - Items carry their metadata: the entity's label, a `schema:image` thumbnail
   where one exists, and the predicate that dated it, so the same entity dated
   twice reads as two facts rather than one blurred one.
 - Clicking an item opens the detail panel — URI, the moment, the markdown note —
   and then enriches it from `/api/node-detail`, the endpoint the graph and map
   views already use, so an entity reads the same way wherever it is clicked.
-- A chip per lane hides or shows it, with a live count.
+- A chip per lane narrows the frieze to it, with a count. The map's model:
+  chips hold what was *picked*, never what was dropped, so every lane stays on
+  screen and a pick can be undone. Nothing picked means no filter.
 - The query is visible and editable, and re-running redraws.
 
 It refuses to open on a file with no dates at all, saying so. An empty frieze

@@ -55,8 +55,47 @@ def test_timeline_route_renders_the_supplied_query() -> None:
 
 def test_timeline_starts_with_provenance_and_annotations_hidden() -> None:
     page = _client().get("/timeline").text
-    assert 'id="toggle-auxiliary">Display Provenance / annotations</button>' in page
+    assert 'id="toggle-auxiliary">Provenance &amp; annotations</button>' in page
     assert "state.showAuxiliary || !i.auxiliary" in page
+
+
+def test_provenance_moments_carry_their_own_colour() -> None:
+    """The class the server flags must reach an item, and the stylesheet must paint it."""
+    page = _client().get("/timeline").text
+    assert "item.provenance ? ' provenance' : ''" in page
+    assert ".vis-item.provenance{" in page
+
+
+def test_the_controls_are_in_english() -> None:
+    """They were hard-coded French, never a locale — one button was already English."""
+    page = _client().get("/timeline").text
+    assert '<html lang="en">' in page
+    for label in (">Fit to data<", ">Query<", ">Run<", ">Timeline<"):
+        assert label in page, label
+    for gone in ("Tout voir", "Requête", "Relancer", "Frise temporelle"):
+        assert gone not in page, gone
+
+
+def test_the_query_box_opens_on_a_single_click() -> None:
+    """Toggling a class, because the box is hidden by the stylesheet: reading
+    style.display back gives "" on the first click, so a read-and-flip handler
+    wrote back the state it was already in and the button looked dead."""
+    page = _client().get("/timeline").text
+    assert "#qbox.open{display:block}" in page
+    assert "el('qbox').classList.toggle('open')" in page
+
+
+def test_lane_filters_are_chosen_not_hidden() -> None:
+    """The map's model: picking a lane narrows to it, and every lane stays on
+    screen so the pick can be undone. Building the strip from what is *left*
+    after filtering is what made a clicked lane's own button disappear."""
+    page = _client().get("/timeline").text
+    assert "state.chosen" in page
+    assert "state.hidden" not in page
+    # the strip is built from everything the auxiliary switch admits, not from
+    # what survives the lane filter
+    assert "admitted().forEach(function (item) {" in page
+    assert "clear filters" in page
 
 
 def test_the_default_query_asks_for_temporal_datatypes() -> None:

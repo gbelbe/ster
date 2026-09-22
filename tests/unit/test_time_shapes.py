@@ -169,6 +169,21 @@ def test_provenance_and_annotation_moments_are_marked_auxiliary() -> None:
     assert by_predicate["http://www.w3.org/ns/prov#generatedAtTime"] is True
 
 
+def test_only_prov_moments_are_marked_provenance() -> None:
+    """An annotation is auxiliary too, but it is not provenance and is not coloured as such."""
+    graph = _graph(
+        "ex:annotated a owl:AnnotationProperty .\n"
+        'ex:doc ex:published "2026-02-01"^^xsd:date ;\n'
+        '       ex:annotated "2026-09-15"^^xsd:date ;\n'
+        '       prov:generatedAtTime "2026-09-16"^^xsd:date .'
+    )
+    items = time_shapes.timeline_items(graph, [NS + "doc"])
+    by_predicate = {item["predicate"]: item["provenance"] for item in items}
+    assert by_predicate[NS + "published"] is False
+    assert by_predicate[NS + "annotated"] is False
+    assert by_predicate["http://www.w3.org/ns/prov#generatedAtTime"] is True
+
+
 def test_items_are_ordered_and_span_covers_them() -> None:
     graph = _graph('ex:a ex:on "2026-08-18"^^xsd:date .\nex:b ex:on "1977"^^xsd:gYear .')
     items = time_shapes.timeline_items(graph, [NS + "a", NS + "b"])

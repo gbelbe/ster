@@ -168,10 +168,22 @@ def _label_of_predicate(graph: rdflib.Graph, uri: str) -> str:
     return local_name(uri)
 
 
+def is_provenance(predicate: str) -> bool:
+    """Whether a temporal predicate comes from PROV-O.
+
+    Kept apart from :func:`is_annotation_or_provenance` because the two answer
+    different questions. Both kinds are *auxiliary* — commentary rather than the
+    event — but only provenance says where a fact came from, and the timeline
+    colours it on its own so a reader can tell the record from the thing it
+    records without reading a single label.
+    """
+    return predicate.startswith(str(PROV))
+
+
 def is_annotation_or_provenance(graph: rdflib.Graph, predicate: str) -> bool:
     """Whether a temporal predicate is supporting metadata rather than the event itself."""
     ref = rdflib.URIRef(predicate)
-    return predicate.startswith(str(PROV)) or (ref, RDF.type, OWL.AnnotationProperty) in graph
+    return is_provenance(predicate) or (ref, RDF.type, OWL.AnnotationProperty) in graph
 
 
 def moments_of(graph: rdflib.Graph, node: rdflib.term.Node) -> list[Moment]:
@@ -297,6 +309,7 @@ def timeline_items(graph: rdflib.Graph, uris: list[str]) -> list[dict[str, objec
                     "predicate": moment.predicate,
                     "predicateLabel": moment.predicate_label,
                     "auxiliary": is_annotation_or_provenance(graph, moment.predicate),
+                    "provenance": is_provenance(moment.predicate),
                     "group": lane_uri or "—",
                     "groupLabel": lane_label,
                     "sort": _sort_key(moment.start),

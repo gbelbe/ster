@@ -10,7 +10,12 @@
 
   var CFG = window.__STER_TIMELINE__ || {};
   var TOKEN = CFG.token || '';
-  var state = { items: [], lanes: [], hidden: {}, showAuxiliary: false, timeline: null, groups: null, data: null };
+  /* `chosen` holds the lanes the reader picked, never the ones they dropped —
+     the map's model, and the reason its filter strip can be unclicked. An
+     opt-out set cannot: the lane leaves the view, the button is rebuilt from
+     what is left, and the only control that could bring it back has gone with
+     it. Empty means no filter, so the page opens showing everything. */
+  var state = { items: [], lanes: [], chosen: {}, showAuxiliary: false, timeline: null, groups: null, data: null };
 
   function el(id) { return document.getElementById(id); }
   function esc(s) {
@@ -72,10 +77,26 @@
     return item.label + '\n' + item.predicateLabel + ' : ' + when + note;
   }
 
+  /* Provenance wins over the instant/interval pair it is drawn with: a reader
+     scanning the frieze needs to see at a glance which marks are the record of
+     a fact rather than the fact itself, and the shape already says which of the
+     two it is. */
+  function classOf(item) {
+    return item.kind + (item.provenance ? ' provenance' : '');
+  }
+
+  function anyChosen() { return Object.keys(state.chosen).length > 0; }
+
+  /* The auxiliary switch and the lane filter are asked separately, because the
+     lane buttons have to be built from everything the switch admits — including
+     the lanes nobody picked, which is what keeps them clickable a second time. */
+  function admitted() {
+    return state.items.filter(function (i) { return state.showAuxiliary || !i.auxiliary; });
+  }
+
   function visible() {
-    return state.items.filter(function (i) {
-      return !state.hidden[i.group] && (state.showAuxiliary || !i.auxiliary);
-    });
+    var filtering = anyChosen();
+    return admitted().filter(function (i) { return !filtering || state.chosen[i.group]; });
   }
 
   function draw() {
@@ -90,7 +111,7 @@
         end: i.end || undefined,
         type: i.end ? 'range' : 'box',
         content: content(i), title: tooltip(i),
-        className: i.kind
+        className: classOf(i)
       };
     });
     var container = el('tl');
@@ -122,14 +143,17 @@
       if (hit) detail(hit);
     });
     if (items.length) state.timeline.fit();
-    status(items.length + ' moments · ' + groups.length + ' couloirs');
+    status(items.length + ' moments · ' + groups.length + ' lanes');
   }
 
+  /* Every lane the auxiliary switch admits, picked or not. Counts are of what
+     that lane would contribute, so they do not move as lanes are chosen — a
+     count that changed with the selection would be counting the filter. */
   function lanes() {
     var box = el('lanes');
     box.innerHTML = '';
     var counts = {};
-    visible().forEach(function (item) {
+    admitted().forEach(function (item) {
       if (!counts[item.group]) counts[item.group] = { uri: item.group, label: item.groupLabel, count: 0 };
       counts[item.group].count++;
     });
@@ -138,14 +162,22 @@
     }).forEach(function (uri) {
       var lane = counts[uri];
       var b = document.createElement('button');
-      b.className = 'ftbtn' + (state.hidden[lane.uri] ? '' : ' active');
+      b.className = 'ftbtn' + (state.chosen[lane.uri] ? ' on' : '');
       b.textContent = lane.label + ' (' + lane.count + ')';
       b.onclick = function () {
-        state.hidden[lane.uri] = !state.hidden[lane.uri];
+        if (state.chosen[lane.uri]) delete state.chosen[lane.uri];
+        else state.chosen[lane.uri] = 1;
         lanes(); draw();
       };
       box.appendChild(b);
     });
+    if (anyChosen()) {
+      var clear = document.createElement('button');
+      clear.className = 'fclear';
+      clear.textContent = 'clear filters';
+      clear.onclick = function () { state.chosen = {}; lanes(); draw(); };
+      box.appendChild(clear);
+    }
   }
 
   /* Detail comes from /api/node-detail — the same endpoint the graph and map
@@ -167,29 +199,32 @@
   }
 
   async function load() {
-    status('interrogation…');
+    status('querying…');
     try {
       var result = await runQuery(el('q').value);
       var uris = urisOf(result);
-      if (!uris.length) { status('aucune entité dans le résultat'); return; }
+      if (!uris.length) { status('no entity in the result'); return; }
       var data = await resolve(uris);
       state.items = data.items || [];
       state.lanes = data.lanes || [];
-      state.hidden = {};
+      state.chosen = {};
       state.showAuxiliary = false;
       el('toggle-auxiliary').classList.remove('active');
-      if (!state.items.length) { status('aucune donnée temporelle sur ces entités'); return; }
+      if (!state.items.length) { status('no temporal data on these entities'); return; }
       lanes(); draw();
     } catch (e) {
-      status('erreur : ' + e.message);
+      status('error: ' + e.message);
     }
   }
 
   el('run').onclick = load;
   el('fit').onclick = function () { if (state.timeline) state.timeline.fit(); };
+  /* Toggled through a class, not through style.display: the box is hidden by
+     the stylesheet, so its inline display starts empty and the first click of
+     a read-and-flip handler only ever wrote back the state it was already in —
+     the button looked dead until it was pressed twice. */
   el('toggle-q').onclick = function () {
-    var box = el('qbox');
-    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    this.classList.toggle('active', el('qbox').classList.toggle('open'));
   };
   el('toggle-auxiliary').onclick = function () {
     state.showAuxiliary = !state.showAuxiliary;
