@@ -18,7 +18,7 @@ _LIT_SCRIPT_SRC: Final = '<script src="'
 _LIT_SCRIPT_OPEN: Final = "<script>"
 
 
-_CY_VERSION = "3.29.2"
+_CY_VERSION = "3.34.3"
 
 _CY_CDN = f"https://cdnjs.cloudflare.com/ajax/libs/cytoscape/{_CY_VERSION}/cytoscape.min.js"
 
