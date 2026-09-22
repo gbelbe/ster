@@ -8,6 +8,7 @@ from textual.widgets import Tree
 
 from ..detail_view import DetailRow
 from ..help_screen import HelpScreen
+from ..source_view import SourceView
 from ._constants import _TREE_SELECTOR
 from ._state import _AppState
 from ._tree_widget import OntologyTree
@@ -38,6 +39,39 @@ class _ActionsMixin(_AppState):
         """Open the keys-and-actions help overlay."""
         self.push_screen(HelpScreen())
 
+    # ── The OS clipboard seam ────────────────────────────────────────────────
+    # Textual's own widgets copy through App.copy_to_clipboard, which writes
+    # OSC 52 and nothing else — and its docstring says plainly that this "does
+    # not work on macOS Terminal". So Ctrl+C inside a modal reached Input's
+    # copy, emitted an escape sequence Terminal.app discards, and put nothing
+    # on the clipboard, while ster's own action_copy (which does call pbcopy)
+    # never ran because the widget had already handled the key.
+    #
+    # Overriding the two App members every widget goes through fixes the lot at
+    # once — Input, TextArea, screen text selection, DataTable — instead of
+    # racing each widget's bindings.
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Textual's OSC 52, plus the local clipboard for terminals that ignore it."""
+        super().copy_to_clipboard(text)  # type: ignore[misc]
+        from ..clipboard import copy_to_system_clipboard  # noqa: PLC0415
+
+        copy_to_system_clipboard(text)
+
+    @property
+    def clipboard(self) -> str:
+        """What a paste should insert: the OS clipboard, else what Textual holds.
+
+        ``App.clipboard`` records only what was copied inside the app, so a
+        paste served from it cannot see anything copied from a browser, an
+        editor, or another terminal. Reading the real clipboard is what makes
+        Ctrl+V mean the same thing here as everywhere else.
+        """
+        from ..clipboard import paste_from_system_clipboard  # noqa: PLC0415
+
+        system = paste_from_system_clipboard()
+        return system if system is not None else str(self._clipboard)
+
     def action_copy(self) -> None:
         """Ctrl+C / Cmd+C: copy the current text selection, or — with nothing selected — the
         value under the focus (a tree node's URI, or a detail row's value). Copies to the
@@ -59,6 +93,10 @@ class _ActionsMixin(_AppState):
         focused = self.focused
         if isinstance(focused, DetailRow):
             return focused.field.value or None
+        if isinstance(focused, SourceView):
+            # The whole entity, not a row: the pane's unit is the statement block,
+            # and pasting half a Turtle document is never what was wanted.
+            return focused.text or None
         if isinstance(focused, OntologyTree):
             node = focused.cursor_node
             data = node.data if node is not None else None

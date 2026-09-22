@@ -8,6 +8,10 @@ from __future__ import annotations
 
 _ACTION_SUFFIX = "__"
 _DETAIL_SELECTOR = "#detail"
+_SOURCE_SELECTOR = "#source"
+# The right pane is a switcher holding both faces of one slot: the composed
+# detail panel and the entity's raw Turtle.
+_RIGHT_SELECTOR = "#right"
 _READ_ONLY_MESSAGE = "Read-only session (no file loaded)."
 _TREE_SELECTOR = "#tree"
 _ONTOLOGY_TREE_SELECTOR = "#ont-tree"

@@ -17,11 +17,11 @@ one file but not a natural fit for the module-level-functions split used by
 free functions. Instead it is split into **mixin classes**, one per business
 domain (lifecycle, config, tree building, panels, detail rendering, lint,
 rebuild, busy/save, problems, row actions, context menu, editing modals,
-ontology identity, tree events, misc actions, graph view, SHACL, working
-file), composed
+ontology identity, tree events, misc actions, source pane, graph view, SHACL,
+working file), composed
 into the final class right here:
 
-    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _GraphMixin, _ShaclMixin, _WorkingFileMixin, App):
+    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _SourceMixin, _GraphMixin, _ShaclMixin, _WorkingFileMixin, App):
         ...
 
 This is safe and Textual-native: ``Widget.__init_subclass__`` and
@@ -92,6 +92,7 @@ from ._problems import _ProblemsMixin
 from ._rebuild import _RebuildMixin
 from ._row_actions import _RowActionsMixin
 from ._shacl import _ShaclMixin
+from ._source import _SourceMixin
 from ._tree_build import _TreeBuildMixin
 from ._tree_events import _TreeEventsMixin
 from ._tree_widget import OntologyTree
@@ -130,6 +131,7 @@ class OntologyApp(
     _OntologyIdentityMixin,
     _TreeEventsMixin,
     _ActionsMixin,
+    _SourceMixin,
     _GraphMixin,
     _ShaclMixin,
     _WorkingFileMixin,
@@ -177,7 +179,7 @@ class OntologyApp(
 
     /* Each pane is a rounded, titled box whose border lights up when focused —
        so you always see which pane you're in and what it holds. */
-    .main-tree, #prop-tree, #detail {
+    .main-tree, #prop-tree, #detail, #source {
         border: round $foreground 40%;
         border-title-color: $foreground 70%;
         background: $surface;
@@ -185,7 +187,7 @@ class OntologyApp(
     }
     /* The contextual keyboard hint rides the bottom border of the focused pane only
        (set in code); keep it dim + left-aligned so it reads as a hint, not a second title. */
-    .main-tree, #prop-tree, #detail {
+    .main-tree, #prop-tree, #detail, #source {
         border-subtitle-color: $foreground 55%;
         border-subtitle-align: left;
     }
@@ -199,14 +201,19 @@ class OntologyApp(
         overflow: hidden hidden;
         scrollbar-size: 0 0;
     }
+    #right { width: 1fr; height: 1fr; }
     #detail { width: 1fr; padding: 1 2; }
+    /* The other face of the right slot. Same box as #detail so toggling does not
+       move the frame; tighter left padding because the gutter carries line
+       numbers and a wide indent would push short Turtle lines off-centre. */
+    #source { width: 1fr; padding: 1 1; }
     /* Hovering a left pane lights its border + title, cueing that it's clickable (its header
        row accordions the pane). Focus-within (below) then takes over with the full accent. */
     .main-tree:hover, #prop-tree:hover {
         border: round $primary 60%;
         border-title-color: $primary 80%;
     }
-    .main-tree:focus-within, #prop-tree:focus-within, #detail:focus-within {
+    .main-tree:focus-within, #prop-tree:focus-within, #detail:focus-within, #source:focus-within {
         border: round $primary;
         border-title-color: $primary;
     }
@@ -319,6 +326,7 @@ class OntologyApp(
         Binding("m", "open_map", "Map"),
         Binding("t", "open_timeline", "Timeline"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
+        Binding("r", "toggle_source", "Source"),
         Binding("f", "working_file", "Working file"),
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),

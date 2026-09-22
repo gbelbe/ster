@@ -73,6 +73,7 @@ class _BusySaveMixin(_AppState):
         self.tax = self._workspace.taxonomies[self._path]
         self._refresh_search_rows()
         self._invalidate_lint()  # the edit may fix/introduce issues
+        self._invalidate_source()  # and it certainly changed the Turtle
         self._rebuild_affected(result.affected_uris, select)  # rebuild only the touched pane(s)
         # A freshly created entity (select) is revealed; anything else keeps the
         # highlight on the current entity — following it if the edit renamed its URI.

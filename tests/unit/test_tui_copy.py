@@ -3,7 +3,13 @@
 Textual has no keyboard text-selection for read-only content, so the reliable way to grab a
 URI (or any value) is to copy the *focused* element: Ctrl+C copies the current mouse
 selection when there is one, else the value under the focus — a tree node's URI, or a detail
-row's value. ``copy_to_clipboard`` records the text on ``app.clipboard`` (and emits OSC 52).
+row's value. ``copy_to_clipboard`` records the text on Textual's own clipboard (and emits
+OSC 52, and writes the local OS clipboard — see ``ster.tui.clipboard``).
+
+These tests are about *what ster decided to copy*, not about the machine they run on, so
+they isolate the read side: ``app.clipboard`` now reports the real OS clipboard, which is
+shared with every other process and with the rest of the suite. Left unisolated, a test
+asserting "nothing was copied" reads whatever the previous test put there.
 """
 
 from __future__ import annotations
@@ -11,8 +17,22 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from ster import store
+from ster.tui import clipboard as _clipboard
 from ster.tui.app import OntologyApp
+
+
+@pytest.fixture(autouse=True)
+def _isolated_clipboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read back only what this app copied, never the machine's clipboard.
+
+    Only the read side: the tests below that exercise ``copy_to_system_clipboard``
+    itself need the real function.
+    """
+    monkeypatch.setattr(_clipboard, "paste_from_system_clipboard", lambda: None)
+
 
 E = "https://ex.org/"
 

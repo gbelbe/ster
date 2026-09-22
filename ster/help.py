@@ -75,6 +75,13 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "SOURCE  (right-hand pane)",
+        [
+            ("r", "read the selected entity as Turtle, and back"),
+            ("Ctrl+C", "copy the shown RDF"),
+        ],
+    ),
+    (
         "GENERAL",
         [
             ("q / Esc", "quit ster"),

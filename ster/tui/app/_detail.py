@@ -44,6 +44,9 @@ class _DetailMixin(_AppState):
             entity_metadata_props=self.entity_metadata_props,
         )
         view.border_title = self._detail_title(uri)
+        # The source face reads the same selection. It is a no-op while the
+        # detail face is showing, so navigating costs nothing until asked for.
+        self._refresh_source(uri)
 
     def _metadata_coverage(self) -> dict | None:
         """Ontology/entity metadata-completion percentages vs the configured catalogs."""

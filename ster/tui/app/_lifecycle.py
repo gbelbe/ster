@@ -13,7 +13,7 @@ from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Static, Tree
+from textual.widgets import ContentSwitcher, Footer, Header, Static, Tree
 from textual.widgets._header import HeaderIcon, HeaderTitle
 from textual.widgets.tree import TreeNode
 
@@ -24,6 +24,7 @@ from ster.nav.logic import DetailField
 from .. import data, detail
 from ..context_menu import ContextMenu
 from ..detail_view import DetailView
+from ..source_view import SourceView
 from ..theme import STER_THEME
 from ..working_file_chip import WorkingFileChip, WorkingFileMenu
 from ._constants import (
@@ -125,6 +126,10 @@ class _LifecycleMixin(_AppState):
         self._untyped_individuals: list[str] = []
         self._detail_text = ""  # last-rendered detail markup (handy for tests)
         self._detail_uri: str | None = None  # entity currently shown in the detail pane
+        # The right pane's source face: whether it is the one showing, and the
+        # session graph its text is cut from (built on first use, not at startup).
+        self._source_showing: bool = False
+        self._source_graph_cache: object | None = None
         self._active_main_tree_id = "tree"  # last-focused main pane: "tree" (unified) or "ont-tree"
         self._detail_source_pid = (
             "tree"  # the pane Tab/→ crossed from; Escape in detail returns here
@@ -463,7 +468,11 @@ class _LifecycleMixin(_AppState):
                 yield OntologyTree("unified", id="tree", classes="main-tree")
                 yield OntologyTree("ontology", id="ont-tree", classes="main-tree")
                 yield OntologyTree("properties", id="prop-tree")
-            yield DetailView(id="detail")
+            # One slot, two faces. ContentSwitcher keeps both mounted, so
+            # toggling is instant and each keeps its own scroll position.
+            with ContentSwitcher(initial="detail", id="right"):
+                yield DetailView(id="detail")
+                yield SourceView(id="source")
         yield Footer()
         yield Static("", id="lang-indicator")  # bottom-right status: selected language
         yield Static("", id="busy")  # bottom-left status: Saving… / Checking… spinner
