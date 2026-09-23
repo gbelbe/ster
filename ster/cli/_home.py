@@ -11,10 +11,31 @@ from ..project import Project, _git_root
 from . import _app, _constants, _file_picker, _query_launcher, _state, _viewer, _workspace_ui
 
 
+def _launch_place(arg: str) -> tuple[Path, Path | None] | None:
+    """Where ``ster ARG`` should run as though launched there, and what to open.
+
+    A folder is ``cd FOLDER && ster``; an existing RDF file is the same in its
+    folder, with that file opened first. Anything else is not a place.
+    """
+    path = Path(arg)
+    if path.is_dir():
+        return path.resolve(), None
+    if path.suffix.lower() in _app._TAXONOMY_SUFFIXES and path.exists():
+        target = path.resolve()
+        return target.parent, target
+    return None
+
+
+def _is_path_like(arg: str) -> bool:
+    """Not a subcommand and not an option — so it was meant as a path."""
+    return arg not in _app._SUBCOMMANDS and not arg.startswith("-")
+
+
 def main() -> None:
     """Entry point.
 
     • ``ster``                   — interactive home screen (loops until Ctrl+C)
+    • ``ster FOLDER``            — the same, as if launched from inside FOLDER
     • ``ster taxonomy.ttl``      — open the file, then the home screen for its folder
     • ``ster show taxonomy.ttl`` — one-shot viewer (plus the other subcommands)
     • ``ster <subcommand> …``    — delegate to Typer
@@ -23,26 +44,27 @@ def main() -> None:
     import sys
 
     args = sys.argv[1:]
-
-    # Non-bare invocation → delegate to Typer once (no loop)
-    if args:
-        first = args[0]
-        if first not in _app._SUBCOMMANDS and not first.startswith("-"):
-            p = Path(first)
-            if p.suffix.lower() in _app._TAXONOMY_SUFFIXES:
-                # `ster PATH/file.ttl` (no other args) behaves like bare `ster`
-                # run inside the file's folder: open the file, then the menu.
-                if len(args) == 1 and p.exists():
-                    target = p.resolve()
-                    os.chdir(target.parent)
-                    _home_screen(initial_file=Path.cwd() / target.name)
-                    return
-                sys.argv.insert(1, "show")
-        _app.app()
+    if not args:
+        _home_screen()
         return
-
-    # ── Bare invocation → interactive home screen loop ────────────────────────
-    _home_screen()
+    first = args[0]
+    place = _launch_place(first) if len(args) == 1 and _is_path_like(first) else None
+    if place is not None:
+        folder, initial_file = place
+        os.chdir(folder)
+        if initial_file is None:
+            _home_screen()
+        else:
+            _home_screen(initial_file=Path.cwd() / initial_file.name)
+        return
+    if _is_path_like(first) and Path(first).suffix.lower() in _app._TAXONOMY_SUFFIXES:
+        sys.argv.insert(1, "show")  # `ster file.ttl --lang fr` → the one-shot viewer
+    elif len(args) == 1 and _is_path_like(first):
+        # Typer would say "No such command", which misleads when a folder was
+        # meant — the likelier intent for a lone path-shaped argument.
+        typer.echo(f"ster: no such folder, RDF file or command: {first}", err=True)
+        raise SystemExit(2)
+    _app.app()
 
 
 def _found_taxonomy_files() -> list[Path]:

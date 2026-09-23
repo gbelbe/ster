@@ -64,6 +64,62 @@ def test_main_single_ttl_arg_opens_home_screen_in_its_folder(tmp_path, monkeypat
     assert Path.cwd() == ttl.parent.resolve()
 
 
+def test_main_single_dir_arg_opens_home_screen_in_that_folder(tmp_path, monkeypatch):
+    """`ster DIR` is `cd DIR && ster`: the home screen, run from inside DIR."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    folder = tmp_path / "vocab"
+    folder.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["ster", str(folder)])
+    with patch("ster.cli._home._home_screen") as home_screen:
+        ster.cli.main()
+    home_screen.assert_called_once_with()
+    assert Path.cwd() == folder.resolve()
+
+
+def test_main_relative_dir_arg_is_resolved(tmp_path, monkeypatch):
+    from pathlib import Path
+    from unittest.mock import patch
+
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "a")
+    monkeypatch.setattr("sys.argv", ["ster", "b"])
+    with patch("ster.cli._home._home_screen"):
+        ster.cli.main()
+    assert Path.cwd() == (tmp_path / "a" / "b").resolve()
+
+
+def test_main_dir_arg_with_other_args_is_not_treated_as_a_folder(tmp_path, monkeypatch):
+    """Like the file shortcut, only the bare `ster DIR` form is special."""
+    from unittest.mock import patch
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["ster", str(tmp_path), "--lang", "fr"])
+    with (
+        patch("ster.cli._home._home_screen") as home_screen,
+        patch("ster.cli._app.app") as app,
+    ):
+        ster.cli.main()
+    home_screen.assert_not_called()
+    app.assert_called_once_with()
+
+
+def test_main_unknown_path_arg_reports_it_clearly(tmp_path, monkeypatch, capsys):
+    """Not Typer's "No such command": the argument may have been meant as a folder."""
+    import pytest
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["ster", "nowhere"])
+    with pytest.raises(SystemExit) as exit_info:
+        ster.cli.main()
+    assert exit_info.value.code != 0
+    err = capsys.readouterr().err
+    assert "nowhere" in err
+    assert "folder" in err
+
+
 def test_main_ttl_arg_with_options_delegates_to_show(monkeypatch, tmp_path):
     from unittest.mock import patch
 
