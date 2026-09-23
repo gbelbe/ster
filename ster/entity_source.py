@@ -6,25 +6,39 @@ what comes back has to fit a pane beside the tree.
 
 **What counts as the entity's source.** Its own triples, plus the blank nodes it
 owns — a blank node is not addressable on its own, so cutting the closure there
-would print ``[ ]`` and lose everything inside it. Then, separately and clearly
-marked, the triples that point *at* it. That second half is what makes the pane
-worth opening on a graph rather than a file: ``ant:depot`` says nothing about
-belonging to a dossier, because that fact is written on the dossier. But it is
-also the unbounded half — a hub entity can be the object of thousands of
-triples — so it is capped, and the cap says so rather than trailing off.
+would print ``[ ]`` and lose everything inside it. Then, separately, the triples
+that point *at* it. That second half is what makes the pane worth opening on a
+graph rather than a file: ``ant:depot`` says nothing about belonging to a
+dossier, because that fact is written on the dossier. But it is also the
+unbounded half — a hub entity can be the object of thousands of triples — so it
+is capped, and the cap is counted rather than trailing off.
+
+**One block per file.** A session can merge read-only context files into the
+editable one, and the merged graph no longer says which file said what. Given a
+:class:`~ster.store.Provenance`, each half is split into one block per file,
+editable file first. A block holds only statements that are really in that
+file: headings, counts and notes are the pane's to draw, in its own style,
+never Turtle comments that would read as if the file contained them. The
+``@prefix`` lines the blocks need are written once, above them all — per
+block, they outnumbered the statements — so a block parses with those
+prefixes, and the copied pane as a whole is one valid document.
 
 Pure functions over an :class:`rdflib.Graph`: no widget, no Textual, no theme,
 so the same call serves the pane, a test, and anything later that wants an
-entity's Turtle — this is a way to read the file as code instead of through the
-UI, and nothing about it is particular to one view.
+entity's Turtle.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Final
+from pathlib import Path
+from typing import TYPE_CHECKING, Final
 
 import rdflib
+
+if TYPE_CHECKING:
+    from .store import Provenance
 
 # How many inbound triples the pane will print. Past this it is no longer
 # context, it is a second document: nobody reads the four-hundredth thing that
@@ -36,110 +50,133 @@ MAX_INCOMING: Final[int] = 40
 # a cycle through blank nodes would otherwise not terminate.
 _BNODE_DEPTH: Final[int] = 8
 
-_DIRECTIVES: Final[tuple[str, ...]] = ("@prefix", "@base", "PREFIX", "BASE")
+_FileOf = Callable[[tuple], "Path | None"]
 
 
-def _closure(graph: rdflib.Graph, node: rdflib.term.Node, depth: int) -> list[tuple]:
-    """*node*'s triples, following blank-node objects down to *depth*."""
-    found: list[tuple] = []
+def _no_file(_triple: tuple) -> Path | None:
+    return None
+
+
+@dataclass(frozen=True)
+class FileBlock:
+    """The statements one file makes, as standalone Turtle. *file* is None when
+    the caller gave no provenance to place them with."""
+
+    file: Path | None
+    turtle: str
+
+
+@dataclass(frozen=True)
+class EntitySource:
+    """An entity's Turtle: its own statements, then what points at it, by file."""
+
+    own: tuple[FileBlock, ...] = ()
+    pointing: tuple[FileBlock, ...] = ()
+    incoming: int = 0
+    omitted: int = 0
+    # The ``@prefix`` lines every block needs, written once rather than per
+    # block: repeated, they outnumbered the statements they were there to spell.
+    prefixes: str = ""
+
+    @property
+    def text(self) -> str:
+        """The prefixes, then every block's Turtle — one document, what copying yields."""
+        blocks = [block.turtle for block in (*self.own, *self.pointing)]
+        return "\n\n".join([self.prefixes, *blocks] if blocks else [])
+
+
+def _closure(
+    graph: rdflib.Graph, node: rdflib.term.Node, depth: int, file_of: _FileOf
+) -> list[tuple[tuple, Path | None]]:
+    """*node*'s triples, each with its file, following blank-node objects down to *depth*.
+
+    A blank node's statements take the file of the statement that reached it:
+    merging re-mints blank nodes, so they cannot be looked up by themselves,
+    and a ``[ ... ]`` is written in the same file as the statement holding it.
+    """
+    found: list[tuple[tuple, Path | None]] = []
     seen: set[rdflib.term.Node] = set()
 
-    def walk(subject: rdflib.term.Node, left: int) -> None:
+    def walk(subject: rdflib.term.Node, left: int, inherited: Path | None) -> None:
         if subject in seen or left < 0:
             return
         seen.add(subject)
         for predicate, obj in graph.predicate_objects(subject):
-            found.append((subject, predicate, obj))
+            triple = (subject, predicate, obj)
+            file = inherited if isinstance(subject, rdflib.BNode) else file_of(triple)
+            found.append((triple, file))
             if isinstance(obj, rdflib.BNode):
-                walk(obj, left - 1)
+                walk(obj, left - 1, file)
 
-    walk(node, depth)
+    walk(node, depth, None)
     return found
 
 
-def _with_prefixes(source: rdflib.Graph, triples: list[tuple]) -> rdflib.Graph:
-    """*triples* in a fresh graph that spells URIs the way the source file does."""
+def _turtle(source: rdflib.Graph, triples: list[tuple]) -> tuple[list[str], str]:
+    """*triples* as Turtle, split into its ``@prefix`` lines and its statements.
+
+    Every namespace is bound but rdflib writes only the ``@prefix`` lines the
+    triples use, so the lines returned are exactly what the statements need.
+    """
     out = rdflib.Graph()
     for prefix, namespace in source.namespaces():
         out.bind(prefix, namespace, replace=True)
     for triple in triples:
         out.add(triple)
-    return out
+    lines = str(out.serialize(format="turtle")).strip().splitlines()
+    directives = [line for line in lines if line.startswith("@prefix")]
+    body = "\n".join(line for line in lines if not line.startswith("@prefix")).strip()
+    return directives, body
 
 
-def _turtle(graph: rdflib.Graph) -> str:
-    return str(graph.serialize(format="turtle")).strip()
+def _blocks(
+    source: rdflib.Graph,
+    placed: list[tuple[tuple, Path | None]],
+    files: Sequence[Path],
+    prefixes: set[str],
+) -> tuple[FileBlock, ...]:
+    """One block per file, in *files* order; a file *files* does not list goes last.
 
-
-def _strip_directives(turtle: str) -> str:
-    """Drop a serialisation's ``@prefix`` header — the document already has one."""
-    lines = turtle.splitlines()
-    body = [line for line in lines if not line.strip().startswith(_DIRECTIVES)]
-    return "\n".join(body).strip()
-
-
-def _first_statement_line(turtle: str) -> int:
-    """1-based line of the first statement, i.e. the first non-directive line."""
-    for index, line in enumerate(turtle.splitlines(), start=1):
-        stripped = line.strip()
-        if stripped and not stripped.startswith(_DIRECTIVES):
-            return index
-    return 1
-
-
-@dataclass(frozen=True)
-class EntitySource:
-    """Turtle for one entity, and where its own statements sit in that text.
-
-    *focus* is a 1-based inclusive line range so the pane can mark the entity's
-    own block: the inbound half below it is context, and a reader who cannot see
-    the join reads someone else's triples as the entity's own.
+    Each block's ``@prefix`` lines are added to *prefixes* instead of kept.
     """
-
-    text: str
-    focus: tuple[int, int]
-    incoming: int = 0
-    omitted: int = 0
-
-    @property
-    def focus_lines(self) -> set[int]:
-        start, end = self.focus
-        return set(range(start, end + 1))
+    by_file: dict[Path | None, list[tuple]] = {}
+    for triple, file in placed:
+        by_file.setdefault(file, []).append(triple)
+    rank = {file: index for index, file in enumerate(files)}
+    blocks = []
+    for file in sorted(by_file, key=lambda file: rank.get(file, len(rank))):  # type: ignore[arg-type]
+        directives, body = _turtle(source, by_file[file])
+        prefixes.update(directives)
+        blocks.append(FileBlock(file, body))
+    return tuple(blocks)
 
 
 def entity_source(
-    graph: rdflib.Graph, uri: str, *, max_incoming: int = MAX_INCOMING
+    graph: rdflib.Graph,
+    uri: str,
+    *,
+    provenance: Provenance | None = None,
+    max_incoming: int = MAX_INCOMING,
 ) -> EntitySource:
-    """*uri*'s Turtle: its own statements, then what points at it.
+    """*uri*'s Turtle: its own statements, then what points at it, each by file.
 
-    An entity with no triples at all still returns a readable note rather than
-    an empty pane: an empty pane reads as a broken feature, and the reader
-    cannot tell it apart from one that failed to load.
+    The inbound cap is applied before grouping, so it bounds the pane as a
+    whole rather than each file's share of it.
     """
     node = rdflib.URIRef(uri)
-    own = _closure(graph, node, _BNODE_DEPTH)
-    inbound = [(s, p, o) for s, p, o in graph.triples((None, None, node)) if s != node]
-    inbound.sort(key=lambda t: (str(t[0]), str(t[1])))
-
-    if not own and not inbound:
-        return EntitySource(text=f"# {uri}\n# not in the graph", focus=(1, 2))
-
-    head = _turtle(_with_prefixes(graph, own)) if own else f"# {uri}\n# no statements of its own"
-    start = _first_statement_line(head)
-    text = head
-    end = len(head.splitlines())
-
-    shown = inbound[:max_incoming]
-    if shown:
-        body = _strip_directives(_turtle(_with_prefixes(graph, list(shown))))
-        omitted = len(inbound) - len(shown)
-        note = f"# {len(inbound)} statements point here"
-        if omitted:
-            note += f" — {len(shown)} shown, {omitted} omitted"
-        text = f"{head}\n\n{note}\n{body}"
+    file_of = provenance.file_of if provenance is not None else _no_file
+    files = provenance.files if provenance is not None else ()
+    own = _closure(graph, node, _BNODE_DEPTH, file_of)
+    inbound = sorted(
+        ((s, p, o) for s, p, o in graph.triples((None, None, node)) if s != node),
+        key=lambda t: (str(t[0]), str(t[1])),
+    )
+    shown = [(triple, file_of(triple)) for triple in inbound[:max_incoming]]
+    prefixes: set[str] = set()
     return EntitySource(
-        text=text,
-        focus=(start, end),
+        own=_blocks(graph, own, files, prefixes),
+        pointing=_blocks(graph, shown, files, prefixes),
         incoming=len(inbound),
-        omitted=max(0, len(inbound) - len(shown)),
+        omitted=len(inbound) - len(shown),
+        prefixes="\n".join(sorted(prefixes)),
     )

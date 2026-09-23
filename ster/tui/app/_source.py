@@ -27,6 +27,8 @@ from ._state import _AppState
 if TYPE_CHECKING:
     import rdflib
 
+    from ster.store import Provenance
+
 
 class _SourceMixin(_AppState):
     """Mixin: the Turtle view of the selected entity, in the right-hand slot."""
@@ -39,6 +41,14 @@ class _SourceMixin(_AppState):
             self._source_graph_cache = full_graph_rdflib(self.tax)
         return self._source_graph_cache
 
+    def _source_provenance(self) -> Provenance:
+        """Which file each statement came from — built with the graph, dropped with it."""
+        from ster.store import provenance  # noqa: PLC0415
+
+        if self._source_provenance_cache is None:
+            self._source_provenance_cache = provenance(self.tax)
+        return self._source_provenance_cache
+
     def _invalidate_source(self) -> None:
         """Drop the cached graph: the next look recomputes it.
 
@@ -50,6 +60,7 @@ class _SourceMixin(_AppState):
         made themselves is the more jarring half of the trade.
         """
         self._source_graph_cache = None
+        self._source_provenance_cache = None
         try:
             self.query_one(_SOURCE_SELECTOR, SourceView).forget_scroll()
         except Exception:  # noqa: BLE001 — before mount there is nothing to forget
@@ -67,7 +78,11 @@ class _SourceMixin(_AppState):
         from ster.entity_source import entity_source  # noqa: PLC0415
 
         view = self.query_one(_SOURCE_SELECTOR, SourceView)
-        source = entity_source(self._source_graph(), uri) if uri else None
+        source = (
+            entity_source(self._source_graph(), uri, provenance=self._source_provenance())
+            if uri
+            else None
+        )
         view.show(uri, source)
         view.border_title = self._source_title(uri, source)
 

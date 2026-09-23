@@ -183,20 +183,83 @@ def test_the_inbound_count_is_in_the_pane_title(tmp_path) -> None:
     _run(scenario)
 
 
-def test_copy_from_the_source_pane_yields_the_whole_entity(tmp_path) -> None:
+def _open_on(app, pilot, uri: str):
+    """Select *uri*, open the source face, and return the view."""
+
+    async def go() -> SourceView:
+        await pilot.pause()
+        app._show(uri)
+        await pilot.press("r")
+        await pilot.pause()
+        return app.query_one("#source", SourceView)
+
+    return go()
+
+
+def test_copy_yields_the_turtle_without_headings(tmp_path) -> None:
     app = _app(tmp_path)
 
     async def scenario() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            view.focus()
             await pilot.pause()
-            app._show(THING)
-            await pilot.press("r")
-            await pilot.pause()
-            app.query_one("#source", SourceView).focus()
-            await pilot.pause()
-            assert "ex:Thing" in (app._focused_copy_value() or "")
+            copied = app._focused_copy_value() or ""
+            assert "ex:Thing" in copied
+            assert "demo.ttl" not in copied
+            assert "point here" not in copied
 
     _run(scenario)
+
+
+def test_headings_and_file_labels_are_drawn_outside_the_turtle(tmp_path) -> None:
+    """Only statements really in a file are Turtle; ster's commentary is its own kind."""
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)  # ex:Other points at it
+            kinds = [kind for kind, _ in view.parts]
+            assert kinds == [
+                *("heading", "turtle"),  # the shared prefixes
+                *("heading", "file", "turtle"),  # own statements
+                *("heading", "file", "turtle"),  # what points here
+            ]
+            assert ("file", "demo.ttl") in view.parts
+            assert all("demo.ttl" not in text for kind, text in view.parts if kind == "turtle")
+
+    _run(scenario)
+
+
+def test_the_statements_pointing_here_are_counted_in_their_heading(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            headings = [text for kind, text in view.parts if kind == "heading"]
+            assert any("1 statement points here" in text for text in headings)
+
+    _run(scenario)
+
+
+def test_an_entity_with_nothing_of_its_own_says_so_in_a_note(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, "https://ex.org/s#Nowhere")
+            assert view.parts == [("note", "https://ex.org/s#Nowhere is not in the graph")]
+            assert view.text == ""
+
+    _run(scenario)
+
+
+def test_the_turtle_has_no_line_numbers() -> None:
+    """They would count lines of this snippet, not of the file — a false claim."""
+    from ster.tui.source_view import _turtle_renderable
+
+    assert _turtle_renderable("ex:a ex:b ex:c .", "ansi_dark").line_numbers is False
 
 
 def test_toggling_back_leaves_the_selection_exactly_where_it_was(tmp_path) -> None:

@@ -283,6 +283,7 @@ def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> N
     back — the retail competitor set alone carries 66 of them.
     """
     other = load(path)
+    taxonomy.context_files.append(path)
     _record_contributed(taxonomy, other, path, base_triples)
     for registry in _ENTITY_REGISTRIES:
         target = getattr(taxonomy, registry)
@@ -292,7 +293,12 @@ def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> N
                 continue
             target[uri] = entity
             taxonomy.context_source[uri] = path
-    kept = _promote_residue(taxonomy, other.residue, path)
+    # A residue triple the editable file also asserts is the editable file's, as
+    # in _record_contributed. Left in, it would be credited to *path* — and if
+    # promoted, recorded in context_statements, which the writer strips from
+    # the editable file on save.
+    residue = [t for t in other.residue if tuple(t[:3]) not in base_triples]
+    kept = _promote_residue(taxonomy, residue, path)
     if kept:
         taxonomy.context_residue.setdefault(path, []).extend(kept)
     for prefix, namespace in other.namespace_bindings.items():

@@ -107,6 +107,7 @@ from ._normalize import (
     _normalize_hierarchy,
     _normalize_scheme_links,
 )
+from ._provenance import Provenance, provenance
 from ._to_graph import (
     _CONCEPT_LABEL_PREDS,
     _CONCEPT_LIST_PREDS,
@@ -231,6 +232,8 @@ __all__ = [
     "format_parse_error",
     "graph_to_taxonomy",
     "is_editable",
+    "Provenance",
+    "provenance",
     "source_files",
     "is_rdfxml_path",
     "load",

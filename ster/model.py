@@ -317,6 +317,10 @@ class Taxonomy:
     # Everything here is excluded when the taxonomy is serialised, so saving can
     # never absorb a context file into the editable one.
     context_source: dict[str, Path] = field(default_factory=dict, compare=False, repr=False)
+    # The context files in the order they were loaded. The tables around it
+    # record what each file brought, but each fills in its own order, so none
+    # of them can say which file came first.
+    context_files: list[Path] = field(default_factory=list, compare=False, repr=False)
     # Residue from each read-only context file, kept per file rather than pooled:
     # a triple the model cannot describe still belongs to exactly one file, and
     # writing it back to the wrong one is the same loss as dropping it.

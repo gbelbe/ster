@@ -88,6 +88,7 @@ if TYPE_CHECKING:
         _save_lock: Any
         _service: Any
         _source_graph_cache: Any
+        _source_provenance_cache: Any
         _source_showing: Any
         _spinner_frame: Any
         _untyped_individuals: list[str]
