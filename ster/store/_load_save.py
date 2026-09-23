@@ -175,9 +175,26 @@ def _entity_holding(taxonomy: Taxonomy, uri: str, attribute: str) -> object | No
     """
     for registry in _ENTITY_REGISTRIES:
         entity = getattr(taxonomy, registry).get(uri)
-        if entity is not None and isinstance(getattr(entity, attribute, None), list):
+        if entity is not None and _can_hold(entity, attribute):
             return entity
     return None
+
+
+def _can_hold(entity: object, attribute: str) -> bool:
+    """Whether *entity* can take a promoted value in *attribute* without changing it.
+
+    ``labels`` is the trap: on a Concept or ConceptScheme it holds SKOS labels,
+    written back as ``skos:prefLabel`` / ``dcterms:title``. An ``rdfs:label``
+    filed there comes out as a different statement — one the writer cannot
+    match against the recorded ``rdfs:label`` to strip, so saving leaked the
+    context file's label into the editable file. Left unpromoted, it stays
+    context residue: read, queryable, and still ``rdfs:label``.
+    """
+    from ..model import Concept, ConceptScheme  # noqa: PLC0415
+
+    if attribute == "labels" and isinstance(entity, (Concept, ConceptScheme)):
+        return False
+    return isinstance(getattr(entity, attribute, None), list)
 
 
 def _promoted_value(predicate: str, obj: object) -> tuple[str, object]:
