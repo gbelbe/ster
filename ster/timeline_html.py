@@ -26,7 +26,7 @@ from .viz_shared import vendored
 
 # Pinned, like the Cytoscape vendoring: a library that changes under a cached
 # file is a bug report nobody can reproduce.
-_VIS_VERSION = "7.7.3"
+_VIS_VERSION = "8.5.4"
 _VIS_JS_CDN = (
     f"https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/{_VIS_VERSION}/"
     "vis-timeline-graph2d.min.js"
