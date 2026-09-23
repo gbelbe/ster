@@ -25,6 +25,8 @@ from ._constants import _RIGHT_SELECTOR, _SOURCE_SELECTOR
 from ._state import _AppState
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import rdflib
 
     from ster.store import Provenance
@@ -49,6 +51,19 @@ class _SourceMixin(_AppState):
             self._source_provenance_cache = provenance(self.tax)
         return self._source_provenance_cache
 
+    def _source_locate(self, path: Path, uri: str) -> list[int]:
+        """Where *uri* starts its statements in *path* — each file read once.
+
+        Kept with the graph and dropped with it: an edit saved to disk moves
+        lines, and a stale number would send the reader to the wrong place.
+        """
+        from ster.source_lines import SourceLines  # noqa: PLC0415
+
+        if path not in self._source_lines_cache:
+            self._source_lines_cache[path] = SourceLines.from_file(path)
+        lines = self._source_lines_cache[path]
+        return lines.starts(uri) if lines is not None else []
+
     def _invalidate_source(self) -> None:
         """Drop the cached graph: the next look recomputes it.
 
@@ -61,6 +76,7 @@ class _SourceMixin(_AppState):
         """
         self._source_graph_cache = None
         self._source_provenance_cache = None
+        self._source_lines_cache = {}
         try:
             self.query_one(_SOURCE_SELECTOR, SourceView).forget_scroll()
         except Exception:  # noqa: BLE001 — before mount there is nothing to forget
@@ -79,7 +95,12 @@ class _SourceMixin(_AppState):
 
         view = self.query_one(_SOURCE_SELECTOR, SourceView)
         source = (
-            entity_source(self._source_graph(), uri, provenance=self._source_provenance())
+            entity_source(
+                self._source_graph(),
+                uri,
+                provenance=self._source_provenance(),
+                locate=self._source_locate,
+            )
             if uri
             else None
         )

@@ -232,3 +232,100 @@ def test_the_inbound_cap_is_applied_before_grouping(tmp_path) -> None:
 
     shown = sum(block.turtle.count("skos:related") for block in source.pointing)
     assert (source.incoming, source.omitted, shown) == (MAX_INCOMING + 10, 10, MAX_INCOMING)
+
+
+# ── line numbers and which files use each prefix ────────────────────────────
+
+
+def _locate(path, uri: str) -> list[int]:
+    from ster.source_lines import SourceLines
+
+    lines = SourceLines.from_file(path)
+    return lines.starts(uri) if lines else []
+
+
+def _gutter(block) -> dict[str, str]:
+    """``{first token of a line: its line mark}`` for the lines that carry one."""
+    return {
+        text.split()[0]: mark
+        for text, mark in zip(block.turtle.splitlines(), block.lines, strict=True)
+        if mark
+    }
+
+
+def test_each_statement_is_marked_with_the_line_it_starts_on(tmp_path) -> None:
+    # _PREFIXES is five lines, so the body starts on line 6.
+    graph, prov = _session(
+        tmp_path,
+        'ex:Farm a skos:Concept ;\n    skos:prefLabel "Farm"@en .\nex:Policy skos:related ex:Farm .\n',
+    )
+    source = entity_source(graph, NS + "Farm", provenance=prov, locate=_locate)
+
+    assert _gutter(source.own[0]) == {"ex:Farm": "L6"}
+    assert _gutter(source.pointing[0]) == {"ex:Policy": "L8"}
+
+
+def test_only_a_statement_s_first_line_is_marked(tmp_path) -> None:
+    graph, prov = _session(
+        tmp_path,
+        'ex:Farm a skos:Concept ;\n    skos:prefLabel "Farm"@en ;\n    skos:notation "F" .\n',
+    )
+    [block] = entity_source(graph, NS + "Farm", provenance=prov, locate=_locate).own
+
+    assert [mark for mark in block.lines if mark] == ["L6"]
+    assert len(block.lines) == len(block.turtle.splitlines())
+
+
+def test_a_subject_starting_several_statements_lists_each_line(tmp_path) -> None:
+    graph, prov = _session(
+        tmp_path,
+        'ex:Farm a skos:Concept .\nex:Other a skos:Concept .\nex:Farm skos:notation "F" .\n',
+    )
+    [block] = entity_source(graph, NS + "Farm", provenance=prov, locate=_locate).own
+
+    assert _gutter(block) == {"ex:Farm": "L6, L8"}
+
+
+def test_lines_come_from_each_block_s_own_file(tmp_path) -> None:
+    graph, prov = _session(
+        tmp_path,
+        "ex:Farm a skos:Concept .\n",
+        ("labels.ttl", '\n\nex:Farm skos:altLabel "Ferme"@fr .\n'),
+    )
+    source = entity_source(graph, NS + "Farm", provenance=prov, locate=_locate)
+
+    assert [_gutter(block) for block in source.own] == [{"ex:Farm": "L6"}, {"ex:Farm": "L8"}]
+
+
+def test_without_a_locator_no_line_is_marked(tmp_path) -> None:
+    graph, prov = _session(tmp_path, "ex:Farm a skos:Concept .\n")
+    [block] = entity_source(graph, NS + "Farm", provenance=prov).own
+
+    assert not any(block.lines)
+
+
+def test_each_prefix_names_the_files_whose_blocks_use_it(tmp_path) -> None:
+    graph, prov = _session(
+        tmp_path,
+        "ex:Farm a skos:Concept .\n",
+        ("links.ttl", "ex:Elsewhere rdfs:seeAlso ex:Farm .\n"),
+    )
+    uses = dict(entity_source(graph, NS + "Farm", provenance=prov).prefix_uses)
+
+    by_name = {line.split()[1]: files for line, files in uses.items()}
+    assert by_name["ex:"] == ("vocab.ttl", "links.ttl")
+    assert by_name["skos:"] == ("vocab.ttl",)
+    assert by_name["rdfs:"] == ("links.ttl",)
+
+
+def test_prefixes_are_sorted_most_shared_first_then_by_name(tmp_path) -> None:
+    graph, prov = _session(
+        tmp_path,
+        "ex:Farm a skos:Concept .\n",
+        ("links.ttl", "ex:Elsewhere rdfs:seeAlso ex:Farm .\n"),
+    )
+    source = entity_source(graph, NS + "Farm", provenance=prov)
+
+    names = [line.split()[1] for line, _ in source.prefix_uses]
+    assert names == ["ex:", "rdfs:", "skos:"]
+    assert source.prefixes.splitlines() == [line for line, _ in source.prefix_uses]

@@ -131,6 +131,7 @@ class _LifecycleMixin(_AppState):
         self._source_showing: bool = False
         self._source_graph_cache: object | None = None
         self._source_provenance_cache: object | None = None
+        self._source_lines_cache: dict = {}
         self._active_main_tree_id = "tree"  # last-focused main pane: "tree" (unified) or "ont-tree"
         self._detail_source_pid = (
             "tree"  # the pane Tab/→ crossed from; Escape in detail returns here

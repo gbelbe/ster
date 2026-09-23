@@ -37,7 +37,13 @@ PLACEHOLDER = "Select an entity to see its RDF."
 # Only "turtle" is ever drawn as Turtle. The rest is ster talking about the
 # files, so it is drawn in ster's own style: as a `#` comment it would read as
 # though the file contained it.
+#
+# Beside a "turtle" part run two more columns of ster's own, one entry per line
+# of the Turtle: *left* holds where each statement starts in its file ("L42"),
+# *right* what the line is used by ("← vocab.ttl, links.ttl" on a prefix).
 Part = tuple[str, str]
+Aside = tuple[str, str]
+Row = tuple[str, str, str, str]  # kind, text, left, right
 
 HEADING: Final = "heading"
 FILE: Final = "file"
@@ -60,12 +66,21 @@ def _turtle_text(text: str, theme: str) -> Text:
     return highlighted
 
 
-def _file_parts(blocks: tuple[FileBlock, ...]) -> list[Part]:
-    parts: list[Part] = []
+def _row(kind: str, text: str, left: str = "", right: str = "") -> Row:
+    return (kind, text, left, right)
+
+
+def _file_rows(blocks: tuple[FileBlock, ...]) -> list[Row]:
+    rows: list[Row] = []
     for block in blocks:
-        parts.append((FILE, block.file.name if block.file else "(not saved to a file)"))
-        parts.append((TURTLE, block.turtle))
-    return parts
+        rows.append(_row(FILE, block.file.name if block.file else "(not saved to a file)"))
+        rows.append(_row(TURTLE, block.turtle, left="\n".join(block.lines)))
+    return rows
+
+
+def _prefix_row(source: EntitySource) -> Row:
+    notes = "\n".join(f"← {', '.join(files)}" if files else "" for _, files in source.prefix_uses)
+    return _row(TURTLE, source.prefixes, right=notes)
 
 
 def _pointing_heading(source: EntitySource) -> str:
@@ -76,17 +91,41 @@ def _pointing_heading(source: EntitySource) -> str:
     return heading
 
 
-def source_parts(uri: str, source: EntitySource) -> list[Part]:
-    """Everything the pane draws for *uri*, as typed parts."""
+def source_rows(uri: str, source: EntitySource) -> list[Row]:
+    """Everything the pane draws for *uri*, as typed rows with their side columns."""
     if not source.own and not source.pointing:
-        return [(NOTE, f"{uri} is not in the graph")]
-    parts: list[Part] = [(HEADING, "Prefixes"), (TURTLE, source.prefixes)]
-    parts.append((HEADING, "Own statements"))
-    parts += _file_parts(source.own) or [(NOTE, "No statements of its own")]
+        return [_row(NOTE, f"{uri} is not in the graph")]
+    rows = [_row(HEADING, "Prefixes"), _prefix_row(source), _row(HEADING, "Own statements")]
+    rows += _file_rows(source.own) or [_row(NOTE, "No statements of its own")]
     if source.pointing:
-        parts.append((HEADING, _pointing_heading(source)))
-        parts += _file_parts(source.pointing)
-    return parts
+        rows.append(_row(HEADING, _pointing_heading(source)))
+        rows += _file_rows(source.pointing)
+    return rows
+
+
+def _with_asides(code: Text, left: str, right: str) -> Text:
+    """*code*'s lines, with *left* before each and *right* after, dimmed.
+
+    Both columns are padded to a common width so the Turtle and the notes each
+    line up; an empty column takes no room at all.
+    """
+    lines = code.split("\n")
+    lefts = left.split("\n") if left else []
+    rights = right.split("\n") if right else []
+    left_width = max((len(mark) for mark in lefts), default=0)
+    code_width = max((len(line) for line in lines), default=0)
+    out = Text()
+    for index, line in enumerate(lines):
+        if index:
+            out.append("\n")
+        if left_width:
+            mark = lefts[index] if index < len(lefts) else ""
+            out.append(mark.ljust(left_width) + "  ", style="dim")
+        out.append_text(line)
+        note = rights[index] if index < len(rights) else ""
+        if note:
+            out.append(" " * (code_width - len(line) + 3) + note, style="italic dim")
+    return out
 
 
 class SourceView(VerticalScroll):
@@ -122,7 +161,7 @@ class SourceView(VerticalScroll):
         # through. Keyed by URI; dropped when the model is rebuilt.
         self._scroll_memory: dict[str, float] = {}
         self._uri: str | None = None
-        self._parts: list[Part] = []
+        self._rows: list[Row] = []
 
     def compose(self):  # type: ignore[no-untyped-def]
         with Vertical(id="source-body"):
@@ -136,7 +175,12 @@ class SourceView(VerticalScroll):
     @property
     def parts(self) -> list[Part]:
         """What the pane is drawing, as ``(kind, text)`` in order."""
-        return list(self._parts)
+        return [(kind, text) for kind, text, _left, _right in self._rows]
+
+    @property
+    def asides(self) -> list[Aside]:
+        """Each part's ``(left, right)`` columns, in the same order as :attr:`parts`."""
+        return [(left, right) for _kind, _text, left, right in self._rows]
 
     def _accent(self) -> str:
         """The theme's accent, so ster's own lines match the rest of the app."""
@@ -145,10 +189,10 @@ class SourceView(VerticalScroll):
         except Exception:  # noqa: BLE001 — a colour is a nicety; never blank the pane
             return "cyan"
 
-    def _part_widget(self, kind: str, text: str) -> Static:
+    def _part_widget(self, kind: str, text: str, left: str, right: str) -> Static:
         """One part as a Static holding Text — the form Textual can select."""
         if kind == TURTLE:
-            content = _turtle_text(text, self._theme_name())
+            content = _with_asides(_turtle_text(text, self._theme_name()), left, right)
         elif kind == HEADING:
             content = Text(f"▌ {text}", style=f"bold {self._accent()}")
         elif kind == FILE:
@@ -184,12 +228,12 @@ class SourceView(VerticalScroll):
         body = self.query_one("#source-body", Vertical)
         body.remove_children()
         if uri is None or source is None:
-            self._uri, self._text, self._parts = None, "", []
+            self._uri, self._text, self._rows = None, "", []
             body.mount(Static(PLACEHOLDER))
             return
         self._uri, self._text = uri, source.text
-        self._parts = source_parts(uri, source)
-        body.mount_all(self._part_widget(kind, text) for kind, text in self._parts)
+        self._rows = source_rows(uri, source)
+        body.mount_all(self._part_widget(*row) for row in self._rows)
         # After the new parts are laid out, or the offset lands on the old height.
         offset = self._scroll_memory.get(uri, 0)
         self.call_after_refresh(self.scroll_to, y=offset, animate=False)

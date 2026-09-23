@@ -369,3 +369,64 @@ def test_the_source_face_does_not_steal_focus_from_the_tree(tmp_path) -> None:
             assert app.focused is focused
 
     _run(scenario)
+
+
+# ── line numbers and prefix files, beside the Turtle ─────────────────────────
+# DEMO opens with a blank line and three prefixes, so ex:Thing's statement
+# starts on line 6 and ex:Other's on line 7.
+
+
+def _asides(view, kind: str) -> list[tuple[str, str]]:
+    return [aside for (k, _), aside in zip(view.parts, view.asides, strict=True) if k == kind]
+
+
+def test_each_statement_s_line_is_shown_on_its_first_line(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            _prefixes, own, pointing = _asides(view, "turtle")
+            assert own[0].splitlines()[0] == "L6"
+            assert pointing[0].splitlines()[0] == "L7"
+
+    _run(scenario)
+
+
+def test_each_prefix_names_the_files_that_use_it(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            prefixes, *_ = _asides(view, "turtle")
+            assert all(note == "← demo.ttl" for note in prefixes[1].splitlines())
+
+    _run(scenario)
+
+
+def test_line_numbers_and_prefix_files_are_not_copied(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            view.focus()
+            await pilot.pause()
+            copied = app._focused_copy_value() or ""
+            assert "L6" not in copied and "←" not in copied
+
+    _run(scenario)
+
+
+def test_the_gutter_is_drawn_beside_the_turtle_not_inside_it(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            view = await _open_on(app, pilot, THING)
+            assert all("L6" not in text for kind, text in view.parts if kind == "turtle")
+            shown = [str(w.render()) for w in app.query("#source Static")]
+            assert any(line.startswith("L6") for text in shown for line in text.splitlines())
+
+    _run(scenario)

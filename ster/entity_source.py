@@ -23,6 +23,11 @@ never Turtle comments that would read as if the file contained them. The
 block, they outnumbered the statements — so a block parses with those
 prefixes, and the copied pane as a whole is one valid document.
 
+**Where to find it.** Each prefix records the files whose blocks use it, and,
+given a *locate* function (:mod:`ster.source_lines`), each statement's first
+line is marked with the line it starts on in its file — so a reader can go
+straight from the pane to the place to fix it.
+
 Pure functions over an :class:`rdflib.Graph`: no widget, no Textual, no theme,
 so the same call serves the pane, a test, and anything later that wants an
 entity's Turtle.
@@ -31,11 +36,13 @@ entity's Turtle.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import rdflib
+
+from .source_lines import subject_iri
 
 if TYPE_CHECKING:
     from .store import Provenance
@@ -57,13 +64,23 @@ def _no_file(_triple: tuple) -> Path | None:
     return None
 
 
+# Where a subject starts its statements in a file: ``locate(file, iri)`` → lines.
+Locate = Callable[[Path, str], "list[int]"]
+
+
 @dataclass(frozen=True)
 class FileBlock:
-    """The statements one file makes, as standalone Turtle. *file* is None when
-    the caller gave no provenance to place them with."""
+    """The statements one file makes, as Turtle. *file* is None when the caller
+    gave no provenance to place them with.
+
+    *lines* runs beside the Turtle, one entry per line of it: ``"L42"`` (or
+    ``"L5, L40"``) on the line where a statement starts, ``""`` elsewhere. Only
+    the first line matters — it is where the reader goes to find the statement.
+    """
 
     file: Path | None
     turtle: str
+    lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,9 +91,14 @@ class EntitySource:
     pointing: tuple[FileBlock, ...] = ()
     incoming: int = 0
     omitted: int = 0
-    # The ``@prefix`` lines every block needs, written once rather than per
-    # block: repeated, they outnumbered the statements they were there to spell.
-    prefixes: str = ""
+    # Each ``@prefix`` line the blocks need, with the names of the files whose
+    # blocks use it — written once rather than per block, most shared first.
+    prefix_uses: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    @property
+    def prefixes(self) -> str:
+        """The ``@prefix`` lines alone, in the order they are shown."""
+        return "\n".join(line for line, _files in self.prefix_uses)
 
     @property
     def text(self) -> str:
@@ -129,26 +151,59 @@ def _turtle(source: rdflib.Graph, triples: list[tuple]) -> tuple[list[str], str]
     return directives, body
 
 
-def _blocks(
-    source: rdflib.Graph,
-    placed: list[tuple[tuple, Path | None]],
-    files: Sequence[Path],
-    prefixes: set[str],
-) -> tuple[FileBlock, ...]:
-    """One block per file, in *files* order; a file *files* does not list goes last.
+@dataclass
+class _Assembler:
+    """Builds the blocks of one entity's source, remembering which file used
+    which prefix along the way so the shared prefix block can say so."""
 
-    Each block's ``@prefix`` lines are added to *prefixes* instead of kept.
-    """
-    by_file: dict[Path | None, list[tuple]] = {}
-    for triple, file in placed:
-        by_file.setdefault(file, []).append(triple)
-    rank = {file: index for index, file in enumerate(files)}
-    blocks = []
-    for file in sorted(by_file, key=lambda file: rank.get(file, len(rank))):  # type: ignore[arg-type]
-        directives, body = _turtle(source, by_file[file])
-        prefixes.update(directives)
-        blocks.append(FileBlock(file, body))
-    return tuple(blocks)
+    graph: rdflib.Graph
+    files: Sequence[Path]
+    locate: Locate | None
+    prefix_files: dict[str, set[Path]] = field(default_factory=dict)
+
+    def _rank(self, file: Path | None) -> int:
+        """*files* order; a file it does not list (or none) goes last."""
+        order = list(self.files)
+        return order.index(file) if file in order else len(order)
+
+    def blocks(self, placed: list[tuple[tuple, Path | None]]) -> tuple[FileBlock, ...]:
+        """One block per file, in file order; each block's prefixes are pooled."""
+        by_file: dict[Path | None, list[tuple]] = {}
+        for triple, file in placed:
+            by_file.setdefault(file, []).append(triple)
+        blocks = []
+        for file in sorted(by_file, key=self._rank):
+            directives, body = _turtle(self.graph, by_file[file])
+            for line in directives:
+                used_by = self.prefix_files.setdefault(line, set())
+                if file is not None:
+                    used_by.add(file)
+            blocks.append(FileBlock(file, body, self._marks(body, file)))
+        return tuple(blocks)
+
+    def _marks(self, body: str, file: Path | None) -> tuple[str, ...]:
+        """``"L42"`` beside each line where a statement starts, ``""`` elsewhere.
+
+        A statement's first line is the one rdflib writes flush left, starting
+        with the subject; the lines under it are indented continuations.
+        """
+        namespaces = {prefix: str(ns) for prefix, ns in self.graph.namespaces()}
+        return tuple(self._mark(line, file, namespaces) for line in body.splitlines())
+
+    def _mark(self, line: str, file: Path | None, namespaces: dict[str, str]) -> str:
+        if self.locate is None or file is None or not line or line[0].isspace():
+            return ""
+        subject = subject_iri(line, namespaces)
+        found = self.locate(file, subject) if subject else []
+        return ", ".join(f"L{number}" for number in found)
+
+    def prefix_uses(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Each prefix line with its files, most shared first, then by prefix."""
+        uses = [
+            (line, tuple(file.name for file in sorted(used_by, key=self._rank)))
+            for line, used_by in self.prefix_files.items()
+        ]
+        return tuple(sorted(uses, key=lambda use: (-len(use[1]), use[0])))
 
 
 def entity_source(
@@ -156,27 +211,30 @@ def entity_source(
     uri: str,
     *,
     provenance: Provenance | None = None,
+    locate: Locate | None = None,
     max_incoming: int = MAX_INCOMING,
 ) -> EntitySource:
     """*uri*'s Turtle: its own statements, then what points at it, each by file.
 
     The inbound cap is applied before grouping, so it bounds the pane as a
-    whole rather than each file's share of it.
+    whole rather than each file's share of it. With *locate*, each statement's
+    first line is marked with where it starts in its file.
     """
     node = rdflib.URIRef(uri)
     file_of = provenance.file_of if provenance is not None else _no_file
-    files = provenance.files if provenance is not None else ()
+    assembler = _Assembler(graph, provenance.files if provenance else (), locate)
     own = _closure(graph, node, _BNODE_DEPTH, file_of)
     inbound = sorted(
         ((s, p, o) for s, p, o in graph.triples((None, None, node)) if s != node),
         key=lambda t: (str(t[0]), str(t[1])),
     )
     shown = [(triple, file_of(triple)) for triple in inbound[:max_incoming]]
-    prefixes: set[str] = set()
+    own_blocks = assembler.blocks(own)
+    pointing_blocks = assembler.blocks(shown)
     return EntitySource(
-        own=_blocks(graph, own, files, prefixes),
-        pointing=_blocks(graph, shown, files, prefixes),
+        own=own_blocks,
+        pointing=pointing_blocks,
         incoming=len(inbound),
         omitted=len(inbound) - len(shown),
-        prefixes="\n".join(sorted(prefixes)),
+        prefix_uses=assembler.prefix_uses(),
     )
