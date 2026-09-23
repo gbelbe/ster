@@ -66,6 +66,10 @@ function _fetchUrl(target){
 const graphData=globalThis.__STER_GRAPH__.data;
 const taxoMeta=globalThis.__STER_GRAPH__.meta;
 const API_TOKEN=globalThis.__STER_GRAPH__.token;
+// How often a served page asks whether it is still the current build. Declared
+// here, not beside the check: _wireStaleBanner() runs mid-file, and a const read
+// before its line has run throws, which aborted the whole served graph view.
+const _BUILD_CHECK_MS=30000;
 const panelEl=document.getElementById('detail-panel');
 let panelVisible=true;
 let W=globalThis.innerWidth-(panelVisible?panelEl.getBoundingClientRect().width:0);
@@ -1726,8 +1730,8 @@ let _docVersion=null;
 //
 // Checked on a timer rather than once: the replacement happens *after* load, or
 // it would not be a problem. Read-only sessions carry no token and so cannot
-// ask; they also cannot be edited, so the stakes are lower.
-const _BUILD_CHECK_MS=30000;
+// ask; they also cannot be edited, so the stakes are lower. The interval,
+// _BUILD_CHECK_MS, is declared up with API_TOKEN.
 // Raised once the server answers as a build other than the one that drew this
 // page. Named rather than inlined in the poll: the banner is the interesting
 // half, and a chain of guards nested three deep inside an interval inside a
