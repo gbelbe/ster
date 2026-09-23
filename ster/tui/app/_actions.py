@@ -79,10 +79,9 @@ class _ActionsMixin(_AppState):
         text = self.screen.get_selected_text() or self._focused_copy_value()
         if not text:
             return
-        from ..clipboard import copy_to_system_clipboard
-
-        self.copy_to_clipboard(text)  # OSC 52 — reaches the *client* clipboard over SSH
-        local = copy_to_system_clipboard(text)  # local OS clipboard — when OSC 52 is ignored
+        # OSC 52 reaches the *client* clipboard over SSH; the local OS clipboard
+        # covers terminals that ignore it. Shared with copy-on-select.
+        local = self._copy_text(text)
         shown = text if len(text) <= 60 else text[:57] + "…"
         where = "" if local else "  (OSC 52 — enable clipboard access in your terminal)"
         self.notify(f"Copied: {shown}{where}", timeout=3)

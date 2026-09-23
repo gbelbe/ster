@@ -21,7 +21,7 @@ ontology identity, tree events, misc actions, source pane, graph view, SHACL,
 working file), composed
 into the final class right here:
 
-    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _SourceMixin, _GraphMixin, _ShaclMixin, _WorkingFileMixin, App):
+    class OntologyApp(_LifecycleMixin, _ConfigMixin, _TreeBuildMixin, _PanelsMixin, _DetailMixin, _LintMixin, _RebuildMixin, _BusySaveMixin, _ProblemsMixin, _RowActionsMixin, _ContextMenuMixin, _CopyOnSelectMixin, _EditingModalsMixin, _OntologyIdentityMixin, _TreeEventsMixin, _ActionsMixin, _SourceMixin, _GraphMixin, _ShaclMixin, _WorkingFileMixin, App):
         ...
 
 This is safe and Textual-native: ``Widget.__init_subclass__`` and
@@ -69,6 +69,7 @@ from ._busy_save import _BusySaveMixin
 from ._config import _ConfigMixin
 from ._constants import _READ_ONLY_MESSAGE
 from ._context_menu import _ContextMenuMixin
+from ._copy_on_select import _CopyOnSelectMixin
 from ._detail import _DetailMixin
 from ._editing_modals import _EditingModalsMixin
 from ._entity_search import EntitySearch
@@ -127,6 +128,7 @@ class OntologyApp(
     _ProblemsMixin,
     _RowActionsMixin,
     _ContextMenuMixin,
+    _CopyOnSelectMixin,
     _EditingModalsMixin,
     _OntologyIdentityMixin,
     _TreeEventsMixin,
@@ -333,6 +335,9 @@ class OntologyApp(
         Binding("exclamation_mark", "problems", "Problems", show=False),
         # Ctrl+C / Cmd+C copy the selection or the focused value (quit stays on q / Ctrl+Q).
         Binding("ctrl+c,super+c", "copy", "Copy", show=False),
+        # Escape drops a mouse selection and its "copied" message. Priority so it
+        # wins while text is selected; check_action stands it aside otherwise.
+        Binding("escape", "clear_text_selection", show=False, priority=True),
         Binding("q", "quit", "Quit"),
     ]
 
