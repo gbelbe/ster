@@ -9,9 +9,9 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import rdflib
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -566,6 +566,8 @@ def _register_schema_routes(
         return _individual_out(new_uri, tax.owl_individuals[new_uri])
 
 
+# A node type the graph page sends, and the fallback slug for an unnamed individual.
+_INDIVIDUAL: Final = "individual"
 _TAG_VIZ = "Visualisation"
 
 
@@ -693,6 +695,36 @@ def _register_graph_routes(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         from .viz_vowl import build_class_links_graph
 
         return build_class_links_graph(_tax(), uri, subclass_only=subclass_only)  # type: ignore[return-value]
+
+    @app.get(
+        "/api/has-relations",
+        summary="Whether exploring this node's relations would show anything",
+        tags=[_TAG_VIZ],
+    )
+    def get_has_relations(
+        uri: str = Query(description="URI of the node under the cursor"),
+        kind: Literal["class", "individual", "concept", "topconcept"] = Query(
+            alias="type", description="The node's type, as the graph page knows it"
+        ),
+        _: None = Depends(_check_auth),
+    ) -> dict[str, bool]:
+        """Asked on hover, so the page only offers "explore relations" when it
+        would open something. Same builders as the explore endpoints above, so
+        the button and the action cannot disagree."""
+        from .viz_vowl import (  # noqa: PLC0415
+            build_class_links_graph,
+            build_concept_relations_graph,
+            build_individual_relations_graph,
+        )
+
+        builders: dict[str, Callable[..., dict[str, Any]]] = {
+            "class": build_class_links_graph,
+            _INDIVIDUAL: build_individual_relations_graph,
+            "concept": build_concept_relations_graph,
+            "topconcept": build_concept_relations_graph,
+        }
+        graph = builders[kind](_tax(), uri)
+        return {"relations": bool(graph.get("edges"))}
 
     @app.get(
         "/api/search",
@@ -1356,7 +1388,7 @@ def _add_individual(tax: Taxonomy, body: IndividualIn) -> str:
     """Create the individual described by *body* and return its new URI."""
     if body.class_uri not in tax.owl_classes:
         raise HTTPException(status_code=422, detail=f"Unknown class URI: {body.class_uri}")
-    hint = body.local_name or (_slugify(body.labels[0].value) if body.labels else "individual")
+    hint = body.local_name or (_slugify(body.labels[0].value) if body.labels else _INDIVIDUAL)
     new_uri = _unique_uri(tax, _namespace(tax), hint)
     tax.owl_individuals[new_uri] = OWLIndividual(
         uri=new_uri,
@@ -1435,7 +1467,7 @@ def _slugify(text: str) -> str:
     nfkd = unicodedata.normalize("NFKD", text)
     ascii_text = nfkd.encode("ascii", "ignore").decode()
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_text).strip("_")
-    return slug or "individual"
+    return slug or _INDIVIDUAL
 
 
 def _unique_uri(tax: Taxonomy, namespace: str, local: str) -> str:

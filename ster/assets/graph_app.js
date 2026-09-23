@@ -1137,6 +1137,26 @@ function _positionExploreBtn(node){
   if(individualsBtn){individualsBtn.style.left=cx+'px';individualsBtn.style.top=bb.y2+'px';}
 }
 function _hideOverlay(){_cancelRetarget();exploreBtn.style.display='none';if(individualsBtn)individualsBtn.style.display='none';}
+function _overlayShowing(){
+  return exploreBtn.style.display==='block'||(!!individualsBtn&&individualsBtn.style.display==='block');
+}
+// Whether "explore relations" would show anything, asked once per node on first
+// hover and remembered: the server answers with the very builder the explore
+// action uses, so a button that is offered never opens an empty view. Asking up
+// front for every node would cost minutes on a large ontology; one node costs
+// milliseconds. Unknown (offline, an error) counts as yes — a dead button is
+// better than a missing one. Dropped on every live refresh: an edit can add or
+// remove a node's relations.
+const _relationsKnown=new Map();
+function _whenRelationsKnown(node,then){
+  const id=node.data('id');
+  if(_relationsKnown.has(id)){then(_relationsKnown.get(id));return;}
+  const q='?uri='+encodeURIComponent(id)+'&type='+encodeURIComponent(node.data('type'));
+  fetch('/api/has-relations'+q,{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():{relations:true})
+    .then(d=>{const has=d.relations!==false;_relationsKnown.set(id,has);then(has);})
+    .catch(()=>then(true));
+}
 // Which buttons a node earns. Both actions need the API — explore fetches
 // relations, and opening a class fetches the individuals the server withheld —
 // so an offline page offers neither rather than offering a dead button. A class
@@ -1148,7 +1168,13 @@ function _showOverlay(node){
   // becomes "extend" (merge onto the current view).
   exploreBtn.textContent=_savedGraph?'\u2295 extend relations':'\u2299 explore relations';
   _positionExploreBtn(node);
-  exploreBtn.style.display='block';
+  exploreBtn.style.display='none';
+  const uri=node.data('id');
+  _whenRelationsKnown(node,has=>{
+    // Still the node under the cursor? The answer may land after it moved on.
+    if(_exploreHoverUri!==uri)return;
+    if(has)exploreBtn.style.display='block';
+  });
   if(!individualsBtn)return;
   individualsBtn.textContent=_expanded.has(node.data('id'))
     ?'\u2296 hide individuals'
@@ -1185,7 +1211,7 @@ if(exploreBtn&&API_TOKEN){
     if(uri===_exploreHoverUri){_cancelRetarget();_showOverlay(node);return;}
     // Cursor is on a button — a node underneath it does not get to interrupt.
     if(_onOverlayBtn)return;
-    if(_exploreHoverUri&&exploreBtn.style.display==='block'){
+    if(_exploreHoverUri&&_overlayShowing()){
       _cancelRetarget();
       _retargetTimer=setTimeout(()=>{
         _retargetTimer=null;_exploreHoverUri=uri;_showOverlay(node);
@@ -1870,6 +1896,7 @@ function initLiveRefresh(){
       try{
         const resp=await fetch('/api/graph',{headers:{'Authorization':'Bearer '+API_TOKEN}});
         const data=await resp.json();
+        _relationsKnown.clear();
         applyGraphUpdate(data);
       }catch(err){console.error('Graph refresh failed:',err);}
     };

@@ -46,8 +46,10 @@ def test_returning_to_the_same_node_switches_nothing():
 
 def test_the_grace_period_only_applies_while_an_overlay_is_up():
     """With no overlay showing there is nothing to protect, so the first node
-    hovered takes it immediately."""
-    assert "if(_exploreHoverUri&&exploreBtn.style.display==='block'){" in _js()
+    hovered takes it immediately. "Showing" means either button: explore can
+    now be hidden on its own (a node with no relations) while "show individuals"
+    is up."""
+    assert "if(_exploreHoverUri&&_overlayShowing()){" in _js()
 
 
 def test_hiding_the_overlay_drops_any_pending_switch():
