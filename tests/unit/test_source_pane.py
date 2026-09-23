@@ -257,9 +257,70 @@ def test_an_entity_with_nothing_of_its_own_says_so_in_a_note(tmp_path) -> None:
 
 def test_the_turtle_has_no_line_numbers() -> None:
     """They would count lines of this snippet, not of the file — a false claim."""
-    from ster.tui.source_view import _turtle_renderable
+    from ster.tui.source_view import _turtle_text
 
-    assert _turtle_renderable("ex:a ex:b ex:c .", "ansi_dark").line_numbers is False
+    assert _turtle_text("ex:a ex:b ex:c .", "ansi_dark").plain.strip() == "ex:a ex:b ex:c ."
+
+
+# ── selecting text ────────────────────────────────────────────────────────────
+# Root cause of the regression these lock in: the pane drew one Rich Group of
+# Syntax blocks, and Textual can only select text in a widget that renders Text
+# or Content — for anything else Widget.get_selection returns None, so nothing
+# in the pane could be selected or copied with the mouse.
+
+
+def _select_all_in(app, text: str) -> str:
+    """Select everything in the pane's part showing *text*; return what is selected."""
+    widget = next(w for w in app.query("#source Static") if text in str(w.render()))
+    widget.text_select_all()
+    return app.screen.get_selected_text() or ""
+
+
+def test_the_turtle_can_be_selected_regression(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_on(app, pilot, THING)
+            await pilot.pause()
+            assert "ex:Thing a owl:Class" in _select_all_in(app, "owl:Class")
+
+    _run(scenario)
+
+
+def test_ster_s_headings_can_be_selected_too(tmp_path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_on(app, pilot, THING)
+            await pilot.pause()
+            assert "Own statements" in _select_all_in(app, "Own statements")
+            assert "demo.ttl" in _select_all_in(app, "demo.ttl")
+
+    _run(scenario)
+
+
+def test_copy_takes_the_selection_rather_than_the_whole_entity(tmp_path) -> None:
+    """With text selected, Ctrl+C copies what was selected — nothing more."""
+    from unittest.mock import patch
+
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_on(app, pilot, THING)
+            await pilot.pause()
+            selected = _select_all_in(app, "rdfs:subClassOf")  # the part pointing here
+            with (
+                patch.object(app, "copy_to_clipboard") as copied,
+                patch("ster.tui.clipboard.copy_to_system_clipboard", return_value=True),
+            ):
+                app.action_copy()
+            assert copied.call_args.args[0] == selected
+            assert "ex:Other" in selected and "owl:Class" not in selected
+
+    _run(scenario)
 
 
 def test_toggling_back_leaves_the_selection_exactly_where_it_was(tmp_path) -> None:

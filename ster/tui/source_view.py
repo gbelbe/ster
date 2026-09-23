@@ -19,12 +19,10 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-from rich.console import Group, RenderableType
-from rich.padding import Padding
 from rich.syntax import Syntax
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 from ..entity_source import EntitySource, FileBlock
@@ -47,17 +45,19 @@ TURTLE: Final = "turtle"
 NOTE: Final = "note"
 
 
-def _turtle_renderable(text: str, theme: str) -> Syntax:
-    """Turtle as code. No line numbers: they would count lines of this snippet,
-    not of the file, and read as a claim about where the statement sits."""
-    return Syntax(
-        text,
-        "turtle",  # never "ttl" — that alias is a different language
-        theme=theme,
-        line_numbers=False,
-        word_wrap=True,
-        background_color="default",
-    )
+def _turtle_text(text: str, theme: str) -> Text:
+    """Turtle highlighted as styled text, not as a Rich ``Syntax`` renderable.
+
+    Textual can only select text in a widget that renders Text or Content; for
+    anything else ``Widget.get_selection`` returns None, which is what made the
+    pane impossible to select from. ``Syntax.highlight`` gives the same colours
+    as plain styled text. No line numbers: they would count lines of this
+    snippet, not of the file, and read as a claim about where it sits.
+    """
+    syntax = Syntax(text, "turtle", theme=theme, background_color="default")  # never "ttl"
+    highlighted = syntax.highlight(text)
+    highlighted.rstrip()  # in place: highlight() ends every block with a newline
+    return highlighted
 
 
 def _file_parts(blocks: tuple[FileBlock, ...]) -> list[Part]:
@@ -98,6 +98,13 @@ class SourceView(VerticalScroll):
     """
 
     can_focus = True
+    # One widget per part, so each is a Text Textual can select. Spacing and the
+    # code blocks' shading live here rather than in the renderable.
+    DEFAULT_CSS = """
+    SourceView #source-body { height: auto; }
+    SourceView .source-turtle { margin: 0 0 1 2; background: $boost; }
+    SourceView .source-file, SourceView .source-note { margin-left: 2; }
+    """
     # One binding per destination rather than per key: every way out of the pane
     # but Escape means the same thing, and spelling that five times is five
     # places to forget when it changes.
@@ -118,7 +125,8 @@ class SourceView(VerticalScroll):
         self._parts: list[Part] = []
 
     def compose(self):  # type: ignore[no-untyped-def]
-        yield Static(PLACEHOLDER, id="source-body")
+        with Vertical(id="source-body"):
+            yield Static(PLACEHOLDER)
 
     @property
     def text(self) -> str:
@@ -137,14 +145,17 @@ class SourceView(VerticalScroll):
         except Exception:  # noqa: BLE001 — a colour is a nicety; never blank the pane
             return "cyan"
 
-    def _render_part(self, kind: str, text: str) -> RenderableType:
+    def _part_widget(self, kind: str, text: str) -> Static:
+        """One part as a Static holding Text — the form Textual can select."""
         if kind == TURTLE:
-            return Padding(_turtle_renderable(text, self._theme_name()), (0, 0, 1, 2))
-        if kind == HEADING:
-            return Text(f"▌ {text}", style=f"bold {self._accent()}")
-        if kind == FILE:
-            return Text(f"  {text}", style=f"italic {self._accent()}")
-        return Text(f"  {text}", style="italic dim")
+            content = _turtle_text(text, self._theme_name())
+        elif kind == HEADING:
+            content = Text(f"▌ {text}", style=f"bold {self._accent()}")
+        elif kind == FILE:
+            content = Text(text, style=f"italic {self._accent()}")
+        else:
+            content = Text(text, style="italic dim")
+        return Static(content, classes=f"source-{kind}")
 
     def _theme_name(self) -> str:
         """A Pygments theme that follows the terminal, not a fixed palette.
@@ -170,15 +181,18 @@ class SourceView(VerticalScroll):
     def show(self, uri: str | None, source: EntitySource | None) -> None:
         """Render *source*, restoring where the reader last was in this entity."""
         self.remember_scroll()
-        body = self.query_one("#source-body", Static)
+        body = self.query_one("#source-body", Vertical)
+        body.remove_children()
         if uri is None or source is None:
             self._uri, self._text, self._parts = None, "", []
-            body.update(PLACEHOLDER)
+            body.mount(Static(PLACEHOLDER))
             return
         self._uri, self._text = uri, source.text
         self._parts = source_parts(uri, source)
-        body.update(Group(*(self._render_part(kind, text) for kind, text in self._parts)))
-        self.scroll_to(y=self._scroll_memory.get(uri, 0), animate=False)
+        body.mount_all(self._part_widget(kind, text) for kind, text in self._parts)
+        # After the new parts are laid out, or the offset lands on the old height.
+        offset = self._scroll_memory.get(uri, 0)
+        self.call_after_refresh(self.scroll_to, y=offset, animate=False)
 
     def action_back_to_panel(self) -> None:
         """Escape: leave the pane and re-select the left panel it was reached from."""
