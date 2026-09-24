@@ -30,14 +30,21 @@ VIEWS: Final = (MAP, GRAPH)
 GRAPHABLE_QUERY_TYPES: Final = frozenset({"CONSTRUCT", "DESCRIBE"})
 
 
-def _base() -> str:
+def _base(base: str | None = None) -> str:
+    """*base* when a request named the server's address, else the saved config.
+
+    A request that arrived over HTTP knows the address its caller used — which
+    is right under ``ster serve --port`` too, where the saved config is not.
+    """
+    if base:
+        return base.rstrip("/")
     from .api_server import load_server_config  # noqa: PLC0415
 
     url, port = load_server_config()
     return f"{url}:{port}"
 
 
-def map_url(sparql: str, focus: str | None = None) -> str:
+def map_url(sparql: str, focus: str | None = None, base: str | None = None) -> str:
     """Address of the running server's map page, carrying *sparql* to run there.
 
     Same origin as the API, so the page's own re-runs post to ``/mcp`` without
@@ -46,15 +53,15 @@ def map_url(sparql: str, focus: str | None = None) -> str:
     """
     from urllib.parse import quote  # noqa: PLC0415
 
-    page = f"{_base()}/map?q={quote(sparql)}"
+    page = f"{_base(base)}/map?q={quote(sparql)}"
     return page + (f"&focus={quote(focus)}" if focus else "")
 
 
-def graph_url(sparql: str) -> str:
+def graph_url(sparql: str, base: str | None = None) -> str:
     """Address of the running server's graph page, drawing *sparql*'s triples."""
     from urllib.parse import quote  # noqa: PLC0415
 
-    return f"{_base()}/viz?q={quote(sparql)}"
+    return f"{_base(base)}/viz?q={quote(sparql)}"
 
 
 def is_graphable(result: QueryResult) -> bool:
@@ -76,9 +83,14 @@ def mappable_count(taxonomy: Taxonomy, result: QueryResult) -> int:
 
 
 def link_for(
-    taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str
+    taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str, base: str | None = None
 ) -> tuple[str | None, str | None]:
     """``(url, unavailable_reason)`` for opening *result* as *view*.
+
+    *base* is the server address a request arrived on. A request that arrived
+    proves the server is up, so the running check is only for callers with no
+    request (the TUI) — asking for the background server alone told every agent
+    on ``ster serve``, which starts none, that the server answering it was down.
 
     Exactly one is ever set. The reason is written for whoever asked — it names
     what is wrong *and* what would fix it, because "no" without a next step is
@@ -86,7 +98,7 @@ def link_for(
     """
     if view not in VIEWS:
         return None, f"unknown view {view!r} — expected one of {', '.join(VIEWS)}"
-    if not _server_running():
+    if base is None and not _server_running():
         return None, "ster's HTTP server is not running — start it with `ster serve <file>`"
     if view == GRAPH:
         if not is_graphable(result):
@@ -94,13 +106,13 @@ def link_for(
                 f"{result.query_type} returns rows, not triples — "
                 "use CONSTRUCT or DESCRIBE to draw a graph"
             )
-        return graph_url(sparql), None
+        return graph_url(sparql, base=base), None
     if not mappable_count(taxonomy, result):
         return None, (
             "no row carries coordinates, and no entity named in one does either — "
             "return a place, or a lat/long pair, to map this"
         )
-    return map_url(sparql), None
+    return map_url(sparql, base=base), None
 
 
 def _server_running() -> bool:
@@ -110,7 +122,12 @@ def _server_running() -> bool:
 
 
 def annotate(
-    payload: dict[str, Any], taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str | None
+    payload: dict[str, Any],
+    taxonomy: Taxonomy,
+    result: QueryResult,
+    sparql: str,
+    view: str | None,
+    base: str | None = None,
 ) -> dict[str, Any]:
     """Add ``view_url``/``view_unavailable`` to *payload* when a view was asked for.
 
@@ -120,7 +137,7 @@ def annotate(
     """
     if not view:
         return payload
-    url, reason = link_for(taxonomy, result, sparql, view)
+    url, reason = link_for(taxonomy, result, sparql, view, base)
     payload["view_url"] = url
     payload["view_unavailable"] = reason
     if url:

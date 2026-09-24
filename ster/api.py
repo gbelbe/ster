@@ -984,7 +984,7 @@ def _register_mutation_routes(
 
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(status_code=403, detail="Origin not allowed")
-        return sparql_payload(_st[_LIT_TAXONOMY], body.query, body.view)
+        return sparql_payload(_st[_LIT_TAXONOMY], body.query, body.view, str(request.base_url))
 
     @app.get(
         "/api/version",
@@ -1347,7 +1347,9 @@ def _register_mcp(app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any
                     "error": {"code": PARSE_ERROR, "message": "Parse error."},
                 }
             )
-        reply = handle_message(message, _tax(), _st.get("selection"))
+        reply = handle_message(
+            message, _tax(), _st.get("selection"), base_url=str(request.base_url)
+        )
         if reply is None:  # a notification takes no response body
             return Response(status_code=202)
         return _json_response(reply)

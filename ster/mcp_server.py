@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Final
 
 from . import mcp_context as ctx
@@ -189,37 +190,51 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _tool_get_current_context(tax: Taxonomy, selection: str | None, args: dict) -> Any:
-    return ctx.current_context(tax, selection, args.get("lang", "en"))
+@dataclass(frozen=True)
+class CallContext:
+    """What one MCP call knows beyond its arguments.
+
+    *selection* is the entity focused in an attached TUI. *base_url* is the
+    server address the request arrived on — the only address a link handed back
+    to the caller is sure to reach, since ``ster serve --port`` never reaches
+    the saved config. None when the call did not come over HTTP (tests, TUI).
+    """
+
+    selection: str | None = None
+    base_url: str | None = None
 
 
-def _tool_get_overview(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
+def _tool_get_current_context(tax: Taxonomy, call: CallContext, args: dict) -> Any:
+    return ctx.current_context(tax, call.selection, args.get("lang", "en"))
+
+
+def _tool_get_overview(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
     return ctx.overview(tax, args.get("lang", "en"))
 
 
-def _tool_get_entity(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
+def _tool_get_entity(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
     return ctx.entity(tax, args["uri"], args.get("lang", "en"))
 
 
-def _tool_search_entities(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
+def _tool_search_entities(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
     return ctx.search(tax, args["query"], int(args.get(_ARG_LIMIT, 20)), args.get("lang", "en"))
 
 
-def _tool_get_vocabulary(tax: Taxonomy, _selection: str | None, _args: dict) -> Any:
+def _tool_get_vocabulary(tax: Taxonomy, _call: CallContext, _args: dict) -> Any:
     return ctx.vocabulary(tax)
 
 
-def _tool_get_timeline(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
+def _tool_get_timeline(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
     return ctx.timeline(tax, args.get("uri", ""), int(args.get(_ARG_LIMIT, 200)))
 
 
-def _tool_run_sparql(tax: Taxonomy, _selection: str | None, args: dict) -> Any:
-    return ctx.run_sparql(tax, args["query"], args.get("view"))
+def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
+    return ctx.run_sparql(tax, args["query"], args.get("view"), call.base_url)
 
 
 # name → implementation. A registry, so adding a tool is one row plus one entry
 # in TOOLS rather than another branch.
-_IMPLS: dict[str, Callable[[Taxonomy, str | None, dict], Any]] = {
+_IMPLS: dict[str, Callable[[Taxonomy, CallContext, dict], Any]] = {
     "get_current_context": _tool_get_current_context,
     "get_overview": _tool_get_overview,
     "get_entity": _tool_get_entity,
@@ -275,7 +290,7 @@ This server is read-only: SELECT and ASK only, and update forms are refused.
 """
 
 
-def _handle_initialize(params: dict, _tax: Taxonomy, _sel: str | None) -> dict[str, Any]:
+def _handle_initialize(params: dict, _tax: Taxonomy, _call: CallContext) -> dict[str, Any]:
     from ._version import __version__
 
     return {
@@ -286,11 +301,11 @@ def _handle_initialize(params: dict, _tax: Taxonomy, _sel: str | None) -> dict[s
     }
 
 
-def _handle_tools_list(_params: dict, _tax: Taxonomy, _sel: str | None) -> dict[str, Any]:
+def _handle_tools_list(_params: dict, _tax: Taxonomy, _call: CallContext) -> dict[str, Any]:
     return {"tools": TOOLS}
 
 
-def _handle_tools_call(params: dict, tax: Taxonomy, selection: str | None) -> dict[str, Any]:
+def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[str, Any]:
     # Normalise to str: a missing or null name becomes "", which matches no tool
     # and falls through to the unknown_tool result below.
     name = str(params.get("name") or "")
@@ -302,14 +317,14 @@ def _handle_tools_call(params: dict, tax: Taxonomy, selection: str | None) -> di
     if required and not args.get(required):
         return _text_result({"error": "missing_argument", "argument": required}, is_error=True)
     try:
-        return _text_result(impl(tax, selection, args))
+        return _text_result(impl(tax, call, args))
     # A fault inside one tool is reported as an error result; it must not take
     # down the whole JSON-RPC session.
     except Exception as exc:  # noqa: BLE001
         return _text_result({"error": "tool_failed", "message": str(exc)}, is_error=True)
 
 
-_METHODS: dict[str, Callable[[dict, Taxonomy, str | None], dict[str, Any]]] = {
+_METHODS: dict[str, Callable[[dict, Taxonomy, CallContext], dict[str, Any]]] = {
     "initialize": _handle_initialize,
     "tools/list": _handle_tools_list,
     "tools/call": _handle_tools_call,
@@ -320,8 +335,12 @@ def handle_message(
     message: Any,
     taxonomy: Taxonomy,
     selection: str | None = None,
+    *,
+    base_url: str | None = None,
 ) -> dict[str, Any] | None:
     """Turn one decoded JSON-RPC *message* into its reply.
+
+    *base_url* is the address the request arrived on, for links in the reply.
 
     Returns None for notifications (no ``id``), which take no reply — the caller
     should answer with an empty HTTP 202.
@@ -346,4 +365,4 @@ def handle_message(
         params = {}
     if not isinstance(params, dict):
         return _err(msg_id, INVALID_PARAMS, "params must be an object.")
-    return _ok(msg_id, handler(params, taxonomy, selection))
+    return _ok(msg_id, handler(params, taxonomy, CallContext(selection, base_url)))

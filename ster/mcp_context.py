@@ -395,7 +395,9 @@ def is_read_only_sparql(query: str) -> bool:
     return not any(re.search(rf"\b{kw}\b", stripped, flags=re.IGNORECASE) for kw in _WRITE_KEYWORDS)
 
 
-def sparql_payload(taxonomy: Taxonomy, query: str, view: str | None = None) -> dict[str, Any]:
+def sparql_payload(
+    taxonomy: Taxonomy, query: str, view: str | None = None, base: str | None = None
+) -> dict[str, Any]:
     """Run a read-only SPARQL query and shape the answer for the wire.
 
     The single implementation behind both transports: ``POST /api/sparql_query`` and
@@ -425,17 +427,19 @@ def sparql_payload(taxonomy: Taxonomy, query: str, view: str | None = None) -> d
     # capability the REST endpoint does not have.
     from .view_links import annotate  # noqa: PLC0415
 
-    return annotate(payload, taxonomy, result, query, view)
+    return annotate(payload, taxonomy, result, query, view, base)
 
 
-def run_sparql(taxonomy: Taxonomy, query: str, view: str | None = None) -> dict[str, Any]:
+def run_sparql(
+    taxonomy: Taxonomy, query: str, view: str | None = None, base: str | None = None
+) -> dict[str, Any]:
     """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable.
 
     *view* is advisory: the rows come back whether or not a map or graph can be
     built from them, and an unbuildable view is reported as a reason rather than
     raised. A failed view is not a failed query.
     """
-    return sparql_payload(taxonomy, query, view)
+    return sparql_payload(taxonomy, query, view, base)
 
 
 _TIMELINE_ITEM_LIMIT = 200
