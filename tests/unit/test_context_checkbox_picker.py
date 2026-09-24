@@ -168,3 +168,31 @@ def test_the_picker_leaves_when_stdin_ends_instead_of_spinning(three) -> None:
 def test_the_returned_order_follows_the_list_not_the_clicks(three) -> None:
     """Stable output: the same ticks give the same list however they were made."""
     assert _run(three, DOWN + DOWN + SPACE + UP + UP + SPACE + ENTER) == [three[0], three[2]]
+
+
+# ── remembered from last time ────────────────────────────────────────────────
+
+
+def _run_ticked(options: list[Path], ticked: list[Path], keys: bytes) -> list[Path]:
+    fake_stdin = MagicMock()
+    fake_stdin.isatty.return_value = True
+    fake_stdin.fileno.return_value = 0
+    fake_stdin.buffer = io.BytesIO(keys)
+    with (
+        patch("sys.stdin", fake_stdin),
+        patch("sys.stdout.write", return_value=None),
+        patch("sys.stdout.flush", return_value=None),
+        patch("tty.setraw", return_value=None),
+        patch("termios.tcgetattr", return_value=[]),
+        patch("termios.tcsetattr", return_value=None),
+        patch("termios.tcflush", return_value=None),
+    ):
+        return _context_checkbox_picker(options, ticked=ticked)
+
+
+def test_last_time_s_files_start_ticked_so_enter_accepts_them(three) -> None:
+    assert _run_ticked(three, [three[2], three[0]], ENTER) == [three[0], three[2]]
+
+
+def test_a_remembered_file_can_still_be_unticked(three) -> None:
+    assert _run_ticked(three, [three[0], three[1]], SPACE + ENTER) == [three[1]]

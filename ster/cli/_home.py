@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import typer
 
 from ..display import console
 from ..project import Project, _git_root
 from . import _app, _constants, _file_picker, _query_launcher, _state, _viewer, _workspace_ui
+from ._discovery import discover_rdf_files, subfolder_rdf_files
 
 
 def _launch_place(arg: str) -> tuple[Path, Path | None] | None:
@@ -31,6 +33,30 @@ def _is_path_like(arg: str) -> bool:
     return arg not in _app._SUBCOMMANDS and not arg.startswith("-")
 
 
+# ``--ask-again``: forget the remembered subfolder answer and context choices,
+# then start as usual, so both are asked afresh. Handled here rather than by
+# Typer because it applies to every way of starting ster, bare launch included.
+ASK_AGAIN: Final = "--ask-again"
+
+
+def _take_flag(flag: str) -> bool:
+    """Remove *flag* from sys.argv, reporting whether it was there."""
+    import sys  # noqa: PLC0415
+
+    if flag not in sys.argv[1:]:
+        return False
+    sys.argv[1:] = [arg for arg in sys.argv[1:] if arg != flag]
+    return True
+
+
+def _forget_choices(root: Path) -> None:
+    """Drop the answers remembered for *root*'s project; nothing to do without one."""
+    project = Project.load(root)
+    if project is not None:
+        project.forget_choices()
+        _workspace_ui._save_quietly(project)
+
+
 def main() -> None:
     """Entry point.
 
@@ -39,24 +65,34 @@ def main() -> None:
     • ``ster taxonomy.ttl``      — open the file, then the home screen for its folder
     • ``ster show taxonomy.ttl`` — one-shot viewer (plus the other subcommands)
     • ``ster <subcommand> …``    — delegate to Typer
+    • ``--ask-again``            — with any of these: forget remembered choices first
     """
     import os
     import sys
 
+    ask_again = _take_flag(ASK_AGAIN)
     args = sys.argv[1:]
+    first = args[0] if args else None
+    place = _launch_place(first) if first and len(args) == 1 and _is_path_like(first) else None
+    if place is not None:
+        os.chdir(place[0])
+    if ask_again:
+        _forget_choices(Path.cwd())
     if not args:
         _home_screen()
-        return
+    elif place is not None and place[1] is not None:
+        _home_screen(initial_file=Path.cwd() / place[1].name)
+    elif place is not None:
+        _home_screen()
+    else:
+        _run_command(args)
+
+
+def _run_command(args: list[str]) -> None:
+    """A subcommand, or ``ster file.ttl --option`` (the one-shot viewer), via Typer."""
+    import sys  # noqa: PLC0415
+
     first = args[0]
-    place = _launch_place(first) if len(args) == 1 and _is_path_like(first) else None
-    if place is not None:
-        folder, initial_file = place
-        os.chdir(folder)
-        if initial_file is None:
-            _home_screen()
-        else:
-            _home_screen(initial_file=Path.cwd() / initial_file.name)
-        return
     if _is_path_like(first) and Path(first).suffix.lower() in _app._TAXONOMY_SUFFIXES:
         sys.argv.insert(1, "show")  # `ster file.ttl --lang fr` → the one-shot viewer
     elif len(args) == 1 and _is_path_like(first):
@@ -68,11 +104,30 @@ def main() -> None:
 
 
 def _found_taxonomy_files() -> list[Path]:
-    """Every taxonomy file in the current folder, sorted and de-duplicated."""
-    found: list[Path] = []
-    for pattern in _app._TAXONOMY_GLOBS:
-        found.extend(Path.cwd().glob(pattern))
-    return sorted(set(found))
+    """Every taxonomy file in the current folder, and one level down if agreed."""
+    root = Path.cwd()
+    return discover_rdf_files(root, include_subfolders=_include_subfolders(root))
+
+
+def _include_subfolders(root: Path) -> bool:
+    """Whether to offer files one level down — asked once per project, then remembered.
+
+    No question when no subfolder holds an RDF file, and none without a
+    terminal: an answer nobody gave is not saved, so it is asked for real later.
+    """
+    import sys  # noqa: PLC0415
+
+    below = subfolder_rdf_files(root)
+    if not below:
+        return False
+    project = Project.load(root) or Project(root=_git_root(root) or root)
+    if project.include_subfolders is not None:
+        return project.include_subfolders
+    if not sys.stdin.isatty():
+        return False
+    project.include_subfolders = _workspace_ui.ask_include_subfolders(below)
+    _workspace_ui._save_quietly(project)
+    return project.include_subfolders
 
 
 def _print_home_intro() -> None:
@@ -96,7 +151,15 @@ def _open_selected_in_viewer(
 ) -> None:
     """Persist the project, validate the workspace, then open the primary file in the viewer."""
     git_root = _git_root(Path.cwd()) or Path.cwd()
-    updated_project = Project(root=git_root, files=[], lang=project.lang if project else "en")
+    # Rebuilt for the new file list, but carrying what the user already answered:
+    # a fresh Project here would forget the subfolder answer and every context.
+    updated_project = Project(
+        root=git_root,
+        files=[],
+        lang=project.lang if project else "en",
+        include_subfolders=project.include_subfolders if project else None,
+        context=dict(project.context) if project else {},
+    )
     for f in selected:
         updated_project.add_file(f)
     try:
@@ -113,7 +176,7 @@ def _open_selected_in_viewer(
     _state.session_file = primary
     # Asked here rather than in the file list: the answer belongs to the file
     # just chosen, and a folder holding only that file never sees the question.
-    context = _workspace_ui.context_files_for(primary, found)
+    context = _workspace_ui.context_files_for(primary, found, updated_project)
     try:
         _viewer._open_viewer(primary, lang=updated_project.lang, context=context)
     except Exception as exc:

@@ -41,6 +41,12 @@ class Project:
     root: Path  # git root or CWD
     files: list[Path] = field(default_factory=list)  # paths relative to *root*
     lang: str = "en"
+    # Whether to offer RDF files one level down. None until the user answers,
+    # which is what lets ster ask exactly once.
+    include_subfolders: bool | None = None
+    # The read-only context last chosen for each editable file, all relative to
+    # *root*: ``{"gear.ttl": ["vocab/labels.ttl"]}``. Offered pre-ticked.
+    context: dict[str, list[str]] = field(default_factory=dict)
 
     # ── class-level path helpers ──────────────────────────────────────────────
 
@@ -68,6 +74,8 @@ class Project:
                 root=root,
                 files=[Path(f) for f in data.get("files", [])],
                 lang=data.get("lang", "en"),
+                include_subfolders=data.get("include_subfolders"),
+                context=dict(data.get("context", {})),
             )
         except Exception:
             return None
@@ -77,10 +85,14 @@ class Project:
         ster_dir = self.root / ".ster"
         ster_dir.mkdir(parents=True, exist_ok=True)
         p = ster_dir / "project.json"
-        data = {
+        data: dict[str, object] = {
             "files": [str(f) for f in self.files],
             "lang": self.lang,
         }
+        if self.include_subfolders is not None:
+            data["include_subfolders"] = self.include_subfolders
+        if self.context:
+            data["context"] = self.context
         p.write_text(json.dumps(data, indent=2))
 
     # ── file list helpers ─────────────────────────────────────────────────────
@@ -94,21 +106,39 @@ class Project:
                 result.append(abs_f)
         return result
 
+    def _relative(self, path: Path) -> Path:
+        """*path* relative to root, or absolute when it lies outside it."""
+        try:
+            return path.resolve().relative_to(self.root.resolve())
+        except ValueError:
+            return path.resolve()
+
     def add_file(self, path: Path) -> None:
         """Add *path* to the project (stored relative to root)."""
-        try:
-            rel = path.resolve().relative_to(self.root.resolve())
-        except ValueError:
-            rel = path.resolve()  # not under root — store absolute
+        rel = self._relative(path)
         if rel not in self.files:
             self.files.append(rel)
 
     def remove_file(self, path: Path) -> None:
-        try:
-            rel = path.resolve().relative_to(self.root.resolve())
-        except ValueError:
-            rel = path.resolve()
+        rel = self._relative(path)
         self.files = [f for f in self.files if f != rel]
+
+    # ── remembered context ────────────────────────────────────────────────────
+
+    def forget_choices(self) -> None:
+        """Forget the subfolder answer and every remembered context, so both are asked again."""
+        self.include_subfolders = None
+        self.context = {}
+
+    def remember_context(self, editable: Path, chosen: list[Path]) -> None:
+        """Record *chosen* as the read-only context last loaded beside *editable*."""
+        self.context[str(self._relative(editable))] = [str(self._relative(p)) for p in chosen]
+
+    def remembered_context(self, editable: Path) -> list[Path]:
+        """The context last chosen for *editable*, minus files that no longer exist."""
+        stored = self.context.get(str(self._relative(editable)), [])
+        paths = [self.root / name for name in stored]
+        return [path for path in paths if path.exists()]
 
     def set_lang(self, lang: str) -> None:
         self.lang = lang

@@ -42,8 +42,17 @@ def _app_callback(
         is_eager=True,
         help="Show version and exit.",
     ),
+    ask_again: bool = typer.Option(  # noqa: ARG001
+        False,
+        "--ask-again",
+        help="Forget the remembered subfolder answer and context-file choices, then ask afresh.",
+    ),
 ) -> None:
-    """Suppress Typer's default no-args behaviour; main() handles it."""
+    """Suppress Typer's default no-args behaviour; main() handles it.
+
+    ``--ask-again`` is declared here only so ``ster --help`` lists it: main()
+    takes it out of the arguments before Typer ever sees them.
+    """
 
 
 _AUTHOR = "ster contributors"

@@ -33,7 +33,7 @@ def folder(tmp_path: Path) -> Path:
 def test_more_than_one_file_in_the_folder_asks(folder, monkeypatch) -> None:
     asked: list[tuple] = []
     monkeypatch.setattr(
-        cli._workspace_ui, "prompt_for_context_files", lambda e, f: asked.append((e, f)) or []
+        cli._workspace_ui, "prompt_for_context_files", lambda e, f, **_: asked.append((e, f)) or []
     )
 
     cli.context_files_for(folder / "main.ttl", sorted(folder.glob("*.ttl")))
@@ -46,7 +46,7 @@ def test_a_folder_with_one_file_skips_the_step(tmp_path, monkeypatch) -> None:
     only = tmp_path / "solo.ttl"
     only.write_text("", encoding="utf-8")
     monkeypatch.setattr(
-        cli._workspace_ui, "prompt_for_context_files", lambda e, f: pytest.fail("asked anyway")
+        cli._workspace_ui, "prompt_for_context_files", lambda e, f, **_: pytest.fail("asked anyway")
     )
 
     assert cli.context_files_for(only, [only]) == []
@@ -55,7 +55,7 @@ def test_a_folder_with_one_file_skips_the_step(tmp_path, monkeypatch) -> None:
 def test_the_editable_file_is_never_offered_as_its_own_context(folder, monkeypatch) -> None:
     offered: list[list[Path]] = []
 
-    def spy(editable, found):
+    def spy(editable, found, **_):
         offered.append([f for f in found if f != editable])
         return []
 
@@ -63,6 +63,56 @@ def test_the_editable_file_is_never_offered_as_its_own_context(folder, monkeypat
     cli.context_files_for(folder / "main.ttl", sorted(folder.glob("*.ttl")))
 
     assert folder / "main.ttl" not in offered[0]
+
+
+# ── remembered from last time ─────────────────────────────────────────────────
+
+
+def test_the_files_chosen_last_time_start_ticked(folder, monkeypatch) -> None:
+    from ster.project import Project
+
+    project = Project(root=folder)
+    project.remember_context(folder / "main.ttl", [folder / "products.ttl"])
+    seen: dict = {}
+
+    def spy(editable, found, ticked=()):
+        seen["ticked"] = list(ticked)
+        return list(ticked)
+
+    monkeypatch.setattr(cli._workspace_ui, "prompt_for_context_files", spy)
+    cli.context_files_for(folder / "main.ttl", sorted(folder.glob("*.ttl")), project)
+
+    assert seen["ticked"] == [folder / "products.ttl"]
+
+
+def test_the_confirmed_choice_is_saved_for_next_time(folder, monkeypatch) -> None:
+    from ster.project import Project
+
+    monkeypatch.setattr("ster.project._git_root", lambda cwd: None)
+    project = Project(root=folder)
+    monkeypatch.setattr(
+        cli._workspace_ui, "prompt_for_context_files", lambda e, f, **_: [folder / "places.ttl"]
+    )
+    cli.context_files_for(folder / "main.ttl", sorted(folder.glob("*.ttl")), project)
+
+    assert Project.load(folder).remembered_context(folder / "main.ttl") == [folder / "places.ttl"]
+
+
+def test_a_remembered_file_no_longer_offered_is_not_ticked(folder, monkeypatch) -> None:
+    from ster.project import Project
+
+    project = Project(root=folder)
+    project.remember_context(folder / "main.ttl", [folder / "places.ttl"])
+    seen: dict = {}
+    monkeypatch.setattr(
+        cli._workspace_ui,
+        "prompt_for_context_files",
+        lambda e, f, ticked=(): seen.setdefault("ticked", list(ticked)) or [],
+    )
+    offered = [folder / "main.ttl", folder / "products.ttl"]  # places.ttl no longer offered
+    cli.context_files_for(folder / "main.ttl", offered, project)
+
+    assert seen["ticked"] == []
 
 
 # ── the answer arrives ────────────────────────────────────────────────────────

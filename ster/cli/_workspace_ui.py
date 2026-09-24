@@ -9,6 +9,7 @@ from typing import BinaryIO, Final
 from rich.prompt import Confirm, Prompt
 
 from ..display import console
+from ..project import Project
 from ..workspace import TaxonomyWorkspace
 
 _LIT_CYAN_OPEN: Final = "  [cyan]"
@@ -17,6 +18,7 @@ _ABORT_KEY: Final = "abort"
 
 
 from . import _app, _constants, _file_picker
+from ._discovery import shown
 from ._tty_input import _read_after_escape
 
 # ──────────────────────────── multi-file / workspace helpers ─────────────────
@@ -108,7 +110,7 @@ def _render_checkboxes(
         sys.stdout.write(f"\033[{len(options) + 1}A")
     for i, path in enumerate(options):
         box = f"{GR}[x]{R}" if ticked[i] else f"{D}[ ]{R}"
-        row = f"{box} {path.name}"
+        row = f"{box} {shown(path)}"
         sys.stdout.write(
             f"{CLEAR}  {BCY}❯{R} {B}{row}{R}{NL}" if i == sel else f"{CLEAR}    {row}{NL}"
         )
@@ -118,7 +120,7 @@ def _render_checkboxes(
     sys.stdout.flush()
 
 
-def _context_checkbox_picker(options: list[Path]) -> list[Path]:
+def _context_checkbox_picker(options: list[Path], ticked: list[Path] | None = None) -> list[Path]:
     """Tick which files to load read-only, with arrows and space.
 
     Checkboxes rather than a typed list: the answer is a *set*, and a set is
@@ -142,10 +144,11 @@ def _context_checkbox_picker(options: list[Path]) -> list[Path]:
     import termios
     import tty
 
-    ticked = [False] * len(options)
+    remembered = set(ticked or ())
+    ticks = [path in remembered for path in options]
     sel = 0
 
-    _render_checkboxes(options, ticked, sel, first=True)
+    _render_checkboxes(options, ticks, sel, first=True)
     fd = sys.stdin.fileno()
     old_cfg = termios.tcgetattr(fd)
     try:
@@ -159,31 +162,53 @@ def _context_checkbox_picker(options: list[Path]) -> list[Path]:
             if key == "enter":
                 break
             if key in (_ABORT_KEY, "none"):
-                ticked = [False] * len(options)
+                ticks = [False] * len(options)
                 break
             move = _CHECKBOX_MOVES.get(key)
             if move:
-                ticked, sel = move(ticked, sel)
-            _render_checkboxes(options, ticked, sel)
+                ticks, sel = move(ticks, sel)
+            _render_checkboxes(options, ticks, sel)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_cfg)
         sys.stdout.write("\r\n")
-    return [path for path, on in zip(options, ticked, strict=True) if on]
+    return [path for path, on in zip(options, ticks, strict=True) if on]
 
 
-def context_files_for(editable: Path, found: list[Path]) -> list[Path]:
+def context_files_for(
+    editable: Path, found: list[Path], project: Project | None = None
+) -> list[Path]:
     """Which files to load read-only beside *editable*, asking only when useful.
 
     One file in the folder means there is nothing to offer, so the question is
     skipped rather than answered "none" — the single-file case, which is most of
     them, keeps exactly the keystrokes it had.
+
+    With a *project*, the files chosen last time for *editable* start ticked
+    (Enter accepts them) and the confirmed choice is saved for next time.
     """
-    if len([f for f in found if f != editable]) == 0:
+    offered = [f for f in found if f != editable]
+    if not offered:
         return []
-    return prompt_for_context_files(editable, found)
+    remembered = project.remembered_context(editable) if project else []
+    ticked = [path for path in remembered if path in offered]
+    chosen = prompt_for_context_files(editable, found, ticked=ticked)
+    if project is not None:
+        project.remember_context(editable, chosen)
+        _save_quietly(project)
+    return chosen
 
 
-def prompt_for_context_files(editable: Path, found: list[Path]) -> list[Path]:
+def _save_quietly(project: Project) -> None:
+    """Remembering is a convenience: a read-only project folder must not stop ster."""
+    try:
+        project.save()
+    except OSError:
+        pass
+
+
+def prompt_for_context_files(
+    editable: Path, found: list[Path], ticked: list[Path] | None = None
+) -> list[Path]:
     """Ask which other files to load read-only alongside *editable*.
 
     Skipped entirely when there is nothing else to offer, so the common
@@ -204,15 +229,16 @@ def prompt_for_context_files(editable: Path, found: list[Path]) -> list[Path]:
             import termios  # noqa: F401 — availability probe for the raw-tty picker
             import tty  # noqa: F401
 
-            return _context_checkbox_picker(options)
+            return _context_checkbox_picker(options, ticked=ticked)
         except ImportError:
             pass  # no raw-tty UI here — fall through to the numbered prompt
 
     for i, f in enumerate(options, 1):
-        console.print(f"    [cyan]{i}{_LIT_CYAN_CLOSE}{f.name}")
+        console.print(f"    [cyan]{i}{_LIT_CYAN_CLOSE}{shown(f)}")
     console.print("  [dim]numbers (1,3) · all · none[/dim]")
+    last = ",".join(str(options.index(p) + 1) for p in (ticked or ()) if p in options)
     try:
-        answer = Prompt.ask("  Context files", default="none")
+        answer = Prompt.ask("  Context files", default=last or "none")
     except (KeyboardInterrupt, EOFError):
         return []
     return parse_context_choice(answer, options)
@@ -461,3 +487,15 @@ def _load_workspace(
     workspace = TaxonomyWorkspace.from_files(files)
     _resolve_broken_mappings_at_load(workspace, all_found)
     return workspace
+
+
+def ask_include_subfolders(below: list[Path]) -> bool:
+    """Ask whether to offer *below*, the RDF files one level down. No by default."""
+    folders = sorted({path.parent.name for path in below})
+    names = ", ".join(f"{name}/" for name in folders)
+    noun = "subfolder" if len(folders) == 1 else "subfolders"
+    console.print(f"\n  Found {len(below)} RDF file(s) in {len(folders)} {noun} ({names}).")
+    try:
+        return Confirm.ask("  Include them?", default=False)
+    except (KeyboardInterrupt, EOFError):
+        return False

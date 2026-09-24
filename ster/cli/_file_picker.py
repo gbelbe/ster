@@ -17,6 +17,7 @@ _LIT_CYAN: Final = "  [cyan]"
 
 
 from . import _app, _constants, _rdfxml, _state
+from ._discovery import discover_rdf_files, shown
 from ._tty_input import _read_after_escape
 
 # ──────────────────────────── session / file resolution ──────────────────────
@@ -83,11 +84,7 @@ def _resolve_file(path: Path | None) -> Path:
         _save_session(saved)
         return _state.session_file
 
-    # Discover taxonomy files in CWD
-    found: list[Path] = []
-    for pattern in _app._TAXONOMY_GLOBS:
-        found.extend(Path.cwd().glob(pattern))
-    found = sorted(set(found))
+    found = discover_rdf_files(Path.cwd())
 
     if not found:
         _app.err.print("[red]No taxonomy file found in the current directory.[/red]")
@@ -95,7 +92,7 @@ def _resolve_file(path: Path | None) -> Path:
         raise typer.Exit(1)
 
     if len(found) == 1:
-        console.print(f"[dim]Auto-detected:[/dim] [bold]{found[0].name}[/bold]")
+        console.print(f"[dim]Auto-detected:[/dim] [bold]{shown(found[0])}[/bold]")
         if not Confirm.ask("Use this file for this session?", default=True):
             raise typer.Abort()
         found0 = _rdfxml._maybe_prompt_rdfxml_convert(found[0])
@@ -128,7 +125,7 @@ def _print_file_picker_prompt(
             if preselect and f == preselect
             else ""
         )
-        console.print(f"{_LIT_CYAN}{i:>2}[/cyan]  {f.name}{marker}")
+        console.print(f"{_LIT_CYAN}{i:>2}[/cyan]  {shown(f)}{marker}")
     console.print(
         f"{_LIT_CYAN}{create_idx:>2}[/cyan]  [bold green]+ Create new taxonomy[/bold green]"
     )
@@ -153,12 +150,13 @@ def _resolve_picker_digit_choice(
 
 def _resolve_picker_name_choice(choice: str, files: list[Path]) -> Path | None:
     """Resolve a typed filename/prefix, or _constants._PICKER_RETRY (already reported) to loop again."""
-    matches = [f for f in files if f.name == choice or f.name.startswith(choice)]
+    # By the path as shown (``vocab/gear.ttl``) as well as by bare name.
+    matches = [f for f in files if any(key.startswith(choice) for key in (f.name, shown(f)))]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         _app.err.print(
-            f"[yellow]Ambiguous — {[f.name for f in matches]}. Be more specific.[/yellow]"
+            f"[yellow]Ambiguous — {[shown(f) for f in matches]}. Be more specific.[/yellow]"
         )
     else:
         _app.err.print(f"[red]{choice!r} not found.[/red]")
@@ -235,7 +233,7 @@ def _pick_file_interactive(
     if default_num:
         prompt_text = (
             f"Select [bold](number or filename)[/bold]"
-            f" [dim](Enter → {files[initial_sel].name})[/dim]"
+            f" [dim](Enter → {shown(files[initial_sel])})[/dim]"
         )
     else:
         prompt_text = f"Select [bold](1–{QUIT_IDX})[/bold]"
@@ -271,8 +269,8 @@ def _picker_item_label(
         coloured = f"{GR}{plain}{R}"
     else:
         last = "  ← last session" if preselect and val == preselect else ""
-        plain = f"{val.name}{last}"  # type: ignore[union-attr]
-        coloured = f"{val.name}{f'  {D}← last session{R}' if last else ''}"
+        plain = f"{shown(val)}{last}"  # type: ignore[arg-type]
+        coloured = f"{shown(val)}{f'  {D}← last session{R}' if last else ''}"  # type: ignore[arg-type]
 
     if selected:
         # Reverse-video highlight on number + plain text — readable on any theme
