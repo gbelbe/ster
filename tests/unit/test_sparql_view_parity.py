@@ -25,7 +25,7 @@ def test_the_mcp_tool_accepts_a_view():
     properties = _run_sparql_tool()["inputSchema"]["properties"]
 
     assert "view" in properties
-    assert set(properties["view"]["enum"]) == {"map", "graph"}
+    assert set(properties["view"]["enum"]) == {"map", "graph", "timeline"}
 
 
 def test_the_rest_endpoint_accepts_the_same_view():

@@ -56,7 +56,7 @@ class QueryIn(BaseModel):
     """A read-only SPARQL query. SELECT and ASK only; see is_read_only_sparql."""
 
     query: str
-    # Optional "map" or "graph": adds a link opening the result in that view, or
+    # Optional "map", "graph" or "timeline": adds a link opening the result in that view, or
     # the reason one cannot be built. Offered here as well as on the MCP tool so
     # neither transport has a capability the other lacks.
     view: str | None = None
@@ -412,7 +412,7 @@ def create_app(
     _register_locate(app, _tax, _check_auth)
     _register_timeline(app, _tax, _check_auth)
     _register_events(app, token, broadcaster)
-    _register_mcp(app, _st, _tax, _check_auth)
+    _register_mcp(app, _st, _tax, _check_auth, token)
 
     return app
 
@@ -1314,7 +1314,53 @@ def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> N
         return StreamingResponse(broadcaster.subscribe(), media_type="text/event-stream")
 
 
-def _register_mcp(app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any) -> None:
+def _caller_is_local(request: Request) -> bool:
+    """True when the request came from this machine (any loopback address).
+
+    Decides whether ``open_view`` may open a browser: a window opened for a
+    caller elsewhere on the network would appear on a screen nobody asking sees.
+    """
+    import ipaddress  # noqa: PLC0415
+
+    host = request.client.host if request.client else ""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def _in_process_api(app: FastAPI, token: str, base_url: str) -> Callable[..., Any]:
+    """A ``POST`` to this server's own HTTP API, for MCP tools that must use it.
+
+    Goes through the whole ASGI stack — middleware, authentication with the
+    server's own token, validation, the route — without a network hop. Called
+    from the worker thread ``/mcp`` runs on, it hands the request back to the
+    event loop, which is free to serve it because ``/mcp`` is not holding it.
+    """
+    import anyio.from_thread  # noqa: PLC0415
+    import httpx  # noqa: PLC0415
+
+    async def _post(path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url=base_url) as client:
+            response = await client.post(
+                path, json=payload, headers={"Authorization": f"Bearer {token}"}
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"detail": response.text}
+        return response.status_code, body if isinstance(body, dict) else {"detail": body}
+
+    def post(path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        return anyio.from_thread.run(_post, path, payload)
+
+    return post
+
+
+def _register_mcp(
+    app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any, token: str
+) -> None:
     """The read-only MCP endpoint (see :mod:`ster.mcp_server`)."""
 
     @app.post(
@@ -1347,8 +1393,22 @@ def _register_mcp(app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any
                     "error": {"code": PARSE_ERROR, "message": "Parse error."},
                 }
             )
-        reply = handle_message(
-            message, _tax(), _st.get("selection"), base_url=str(request.base_url)
+        from fastapi.concurrency import run_in_threadpool  # noqa: PLC0415
+
+        from . import mcp_views  # noqa: PLC0415
+
+        base_url = str(request.base_url)
+        # On a worker thread, not the event loop: open_view calls back into this
+        # server's own API, which the loop must be free to answer. The other
+        # tools gain too — a slow query no longer stalls every other request.
+        reply = await run_in_threadpool(
+            handle_message,
+            message,
+            _tax(),
+            _st.get("selection"),
+            base_url=base_url,
+            api_post=_in_process_api(app, token, base_url),
+            open_browser=mcp_views.open_in_browser if _caller_is_local(request) else None,
         )
         if reply is None:  # a notification takes no response body
             return Response(status_code=202)

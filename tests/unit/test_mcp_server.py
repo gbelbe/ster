@@ -144,7 +144,45 @@ def test_tools_are_registered_with_expected_names(zoo):
         "get_vocabulary",
         "get_timeline",
         "run_sparql",
+        "open_view",
     }
+
+
+def test_open_view_is_listed_with_its_schema(zoo):
+    reply = ms.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, zoo)
+    tool = next(t for t in reply["result"]["tools"] if t["name"] == "open_view")
+    schema = tool["inputSchema"]
+
+    assert set(schema["properties"]["view"]["enum"]) == {"graph", "map", "timeline"}
+    assert set(schema["required"]) == {"view", "query"}
+    assert schema["properties"]["open"]["type"] == "boolean"
+
+
+def test_instructions_no_longer_claim_no_side_effects(zoo):
+    """The server still never edits the file, but open_view can open a tab:
+    telling agents it only reads would be the one false line in its hint."""
+    reply = ms.handle_message(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, zoo
+    )
+    instructions = reply["result"]["instructions"]
+
+    assert "never edits the file" in instructions
+    assert "open_view" in instructions
+    assert "read-only:" not in instructions
+
+
+def test_open_view_without_the_http_api_refuses_instead_of_calling_ster(zoo):
+    """Outside an HTTP request there is no API to go through; the tool must say
+    so rather than fall back to calling ster's code directly."""
+    call = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "open_view", "arguments": {"view": "map", "query": "SELECT ?s {}"}},
+    }
+    reply = ms.handle_message(call, zoo)
+
+    assert '"no_api"' in reply["result"]["content"][0]["text"]
 
 
 def test_every_advertised_tool_has_an_implementation():

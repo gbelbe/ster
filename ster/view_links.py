@@ -4,16 +4,17 @@ Shared by the TUI's query screen and by the MCP ``run_sparql`` tool, so the port
 the URL shape and the eligibility rules live in one place. A caller that builds
 these itself works until the configured port changes.
 
-Deliberately returns a **URL and a reason**, and never opens anything. The MCP
-server runs inside ster's API process — which may be headless, on another
-machine, or started days ago in a terminal nobody is watching — so opening a
-browser there is a side effect in the wrong session, arriving through the one
-tool that most advertises having none. The TUI opens browsers because it *is*
-the foreground session; MCP is not, and cannot know what its caller can display.
+Deliberately returns a **URL and a reason**, and never opens anything. The API
+process may be headless, on another machine, or started days ago in a terminal
+nobody is watching, so whether a window can be opened is for the caller to
+decide: the TUI opens one because it *is* the foreground session, and the MCP
+``open_view`` tool does only for an agent on the same machine.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -22,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 MAP: Final = "map"
 GRAPH: Final = "graph"
-VIEWS: Final = (MAP, GRAPH)
+TIMELINE: Final = "timeline"
 
 # A SELECT returns columns; the graph view draws triples. Wrapping rows into
 # triples would invent a graph the query never asked for, so the link is refused
@@ -64,6 +65,13 @@ def graph_url(sparql: str, base: str | None = None) -> str:
     return f"{_base(base)}/viz?q={quote(sparql)}"
 
 
+def timeline_url(sparql: str, base: str | None = None) -> str:
+    """Address of the running server's timeline page, dating *sparql*'s rows."""
+    from urllib.parse import quote  # noqa: PLC0415
+
+    return f"{_base(base)}/timeline?q={quote(sparql)}"
+
+
 def is_graphable(result: QueryResult) -> bool:
     """True when *result* is triples the graph view can draw."""
     return bool(result.rows) and result.query_type in GRAPHABLE_QUERY_TYPES
@@ -82,37 +90,107 @@ def mappable_count(taxonomy: Taxonomy, result: QueryResult) -> int:
     return located_count(full_graph_rdflib(taxonomy), result)
 
 
-def link_for(
+def dated_count(taxonomy: Taxonomy, result: QueryResult) -> int:
+    """How many moments the timeline would draw for the entities *result* names.
+
+    The same resolution ``POST /api/timeline`` runs for the page, so the count
+    is what the reader will see rather than a guess at it.
+    """
+    from .store import full_graph_rdflib  # noqa: PLC0415
+    from .time_shapes import timeline_items  # noqa: PLC0415
+    from .viz_shared import is_uri  # noqa: PLC0415
+
+    uris = list(dict.fromkeys(cell for row in result.rows for cell in row if is_uri(str(cell))))
+    return len(timeline_items(full_graph_rdflib(taxonomy), uris)) if uris else 0
+
+
+def _triple_count(_taxonomy: Taxonomy, result: QueryResult) -> int:
+    return len(result.rows) if result.query_type in GRAPHABLE_QUERY_TYPES else 0
+
+
+def _why_no_graph(result: QueryResult) -> str:
+    if result.query_type not in GRAPHABLE_QUERY_TYPES:
+        return (
+            f"{result.query_type} returns rows, not triples — "
+            "use CONSTRUCT or DESCRIBE to draw a graph"
+        )
+    return f"the {result.query_type} produced no triples — loosen its WHERE clause"
+
+
+def _why_no_map(_result: QueryResult) -> str:
+    return (
+        "no row carries coordinates, and no entity named in one does either — "
+        "return a place, or a lat/long pair, to map this"
+    )
+
+
+def _why_no_timeline(_result: QueryResult) -> str:
+    return (
+        "no entity named in the rows carries a date — return things with an "
+        "xsd:date, xsd:dateTime or xsd:gYear value to put them on a timeline"
+    )
+
+
+@dataclass(frozen=True)
+class _View:
+    """What one view needs: how much a result would show in it, why nothing
+    would, and the page that draws it."""
+
+    count: Callable[[Taxonomy, QueryResult], int]
+    why_empty: Callable[[QueryResult], str]
+    url: Callable[[str, str | None], str]
+
+
+# One row per view, so a new view is a row here rather than another branch.
+_VIEWS: Final[dict[str, _View]] = {
+    GRAPH: _View(_triple_count, _why_no_graph, lambda q, base: graph_url(q, base=base)),
+    MAP: _View(mappable_count, _why_no_map, lambda q, base: map_url(q, base=base)),
+    TIMELINE: _View(dated_count, _why_no_timeline, timeline_url),
+}
+VIEWS: Final = tuple(sorted(_VIEWS))
+
+
+@dataclass(frozen=True)
+class ViewLink:
+    """A view of a result: its URL and size, or why it cannot be drawn."""
+
+    url: str | None
+    reason: str | None
+    count: int
+
+
+def assess(
     taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str, base: str | None = None
-) -> tuple[str | None, str | None]:
-    """``(url, unavailable_reason)`` for opening *result* as *view*.
+) -> ViewLink:
+    """How *result* would look as *view*: a link with a count, or a reason.
 
     *base* is the server address a request arrived on. A request that arrived
     proves the server is up, so the running check is only for callers with no
     request (the TUI) — asking for the background server alone told every agent
     on ``ster serve``, which starts none, that the server answering it was down.
 
-    Exactly one is ever set. The reason is written for whoever asked — it names
-    what is wrong *and* what would fix it, because "no" without a next step is
-    the answer that gets retried verbatim.
+    The reason is written for whoever asked — it names what is wrong *and* what
+    would fix it, because "no" without a next step is the answer that gets
+    retried verbatim.
     """
-    if view not in VIEWS:
-        return None, f"unknown view {view!r} — expected one of {', '.join(VIEWS)}"
+    spec = _VIEWS.get(view)
+    if spec is None:
+        return ViewLink(None, f"unknown view {view!r} — expected one of {', '.join(VIEWS)}", 0)
     if base is None and not _server_running():
-        return None, "ster's HTTP server is not running — start it with `ster serve <file>`"
-    if view == GRAPH:
-        if not is_graphable(result):
-            return None, (
-                f"{result.query_type} returns rows, not triples — "
-                "use CONSTRUCT or DESCRIBE to draw a graph"
-            )
-        return graph_url(sparql, base=base), None
-    if not mappable_count(taxonomy, result):
-        return None, (
-            "no row carries coordinates, and no entity named in one does either — "
-            "return a place, or a lat/long pair, to map this"
-        )
-    return map_url(sparql, base=base), None
+        reason = "ster's HTTP server is not running — start it with `ster serve <file>`"
+        return ViewLink(None, reason, 0)
+    count = spec.count(taxonomy, result)
+    if not count:
+        return ViewLink(None, spec.why_empty(result), 0)
+    return ViewLink(spec.url(sparql, base), None, count)
+
+
+def link_for(
+    taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str, base: str | None = None
+) -> tuple[str | None, str | None]:
+    """``(url, unavailable_reason)`` for opening *result* as *view*; exactly one is set."""
+    link = assess(taxonomy, result, sparql, view, base)
+    return link.url, link.reason
 
 
 def _server_running() -> bool:
@@ -129,7 +207,7 @@ def annotate(
     view: str | None,
     base: str | None = None,
 ) -> dict[str, Any]:
-    """Add ``view_url``/``view_unavailable`` to *payload* when a view was asked for.
+    """Add ``view_url``/``view_unavailable``/``view_count`` when a view was asked for.
 
     The rows are returned either way: a view that cannot be built is not a query
     that failed, and an agent that asked for a nicety should not lose the answer
@@ -137,10 +215,11 @@ def annotate(
     """
     if not view:
         return payload
-    url, reason = link_for(taxonomy, result, sparql, view, base)
-    payload["view_url"] = url
-    payload["view_unavailable"] = reason
-    if url:
+    link = assess(taxonomy, result, sparql, view, base)
+    payload["view_url"] = link.url
+    payload["view_unavailable"] = link.reason
+    payload["view_count"] = link.count
+    if link.url:
         payload["view_hint"] = (
             "Open this URL in a browser. With no browser available, report the URL "
             "as-is — it is reachable for as long as the ster server stays up."

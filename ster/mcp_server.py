@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from . import mcp_context as ctx
+from .mcp_views import ApiPost, open_view
 from .model import Taxonomy
+from .view_links import VIEWS
 
 SERVER_NAME = "ster"
 
@@ -73,6 +75,8 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 _STRING = {"type": "string"}
+_ARG_QUERY: Final = "query"
+_VIEW_ENUM: Final = {**_STRING, "enum": list(VIEWS)}
 _ARG_LIMIT: Final = "limit"
 _LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": 200}
 
@@ -135,8 +139,8 @@ TOOLS: list[dict[str, Any]] = [
             "concepts, classes, individuals, properties and schemes. Use this to resolve a "
             "name the user mentions into a URI before calling get_entity."
         ),
-        {"query": _STRING, _ARG_LIMIT: _LIMIT_SCHEMA, "lang": _STRING},
-        ["query"],
+        {_ARG_QUERY: _STRING, _ARG_LIMIT: _LIMIT_SCHEMA, "lang": _STRING},
+        [_ARG_QUERY],
     ),
     _tool(
         "get_vocabulary",
@@ -172,20 +176,41 @@ TOOLS: list[dict[str, Any]] = [
             "?move): the read-only guard matches those words and will refuse the query."
         ),
         {
-            "query": _STRING,
+            _ARG_QUERY: _STRING,
             "view": {
-                "type": "string",
-                "enum": ["map", "graph"],
+                **_VIEW_ENUM,
                 _DESC: (
-                    "Also return a URL opening these results in ster's map or graph "
-                    "view. 'map' needs rows carrying coordinates, or naming an entity "
-                    "that does; 'graph' needs a CONSTRUCT or DESCRIBE, since it draws "
-                    "triples. When the view cannot be built the rows still come back "
-                    "and 'view_unavailable' says why."
+                    "Also return a URL opening these results in ster's map, graph or "
+                    "timeline view. 'map' needs rows carrying coordinates, or naming an "
+                    "entity that does; 'timeline' needs rows naming dated entities; "
+                    "'graph' needs a CONSTRUCT or DESCRIBE, since it draws triples. When "
+                    "the view cannot be built the rows still come back and "
+                    "'view_unavailable' says why."
                 ),
             },
         },
-        ["query"],
+        [_ARG_QUERY],
+    ),
+    _tool(
+        "open_view",
+        (
+            "Show a SPARQL query's result to the user in one of ster's views: 'map' "
+            "(places), 'timeline' (dated things) or 'graph' (the triples of a CONSTRUCT "
+            "or DESCRIBE). Opens the page in the user's browser when you run on the same "
+            "machine as ster; otherwise returns the link for you to give them. Checks "
+            "the result first and opens nothing when the view would be empty, saying "
+            "why in 'view_unavailable'. Returns the url, whether it was opened, and how "
+            "much the view shows. Build the query as for run_sparql."
+        ),
+        {
+            "view": _VIEW_ENUM,
+            _ARG_QUERY: _STRING,
+            "open": {
+                "type": "boolean",
+                _DESC: "false to get the link without opening a browser (default true).",
+            },
+        },
+        ["view", _ARG_QUERY],
     ),
 ]
 
@@ -202,6 +227,10 @@ class CallContext:
 
     selection: str | None = None
     base_url: str | None = None
+    # ster's own HTTP API, for tools that must go through it (open_view), and
+    # a browser opener — set only when the caller is on this machine.
+    api_post: ApiPost | None = None
+    open_browser: Callable[[str], bool] | None = None
 
 
 def _tool_get_current_context(tax: Taxonomy, call: CallContext, args: dict) -> Any:
@@ -217,7 +246,7 @@ def _tool_get_entity(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
 
 
 def _tool_search_entities(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
-    return ctx.search(tax, args["query"], int(args.get(_ARG_LIMIT, 20)), args.get("lang", "en"))
+    return ctx.search(tax, args[_ARG_QUERY], int(args.get(_ARG_LIMIT, 20)), args.get("lang", "en"))
 
 
 def _tool_get_vocabulary(tax: Taxonomy, _call: CallContext, _args: dict) -> Any:
@@ -229,7 +258,12 @@ def _tool_get_timeline(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
 
 
 def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
-    return ctx.run_sparql(tax, args["query"], args.get("view"), call.base_url)
+    return ctx.run_sparql(tax, args[_ARG_QUERY], args.get("view"), call.base_url)
+
+
+def _tool_open_view(_tax: Taxonomy, call: CallContext, args: dict) -> Any:
+    # No taxonomy: the tool goes through the HTTP API, never the model.
+    return open_view(args, call.api_post, call.open_browser)
 
 
 # name → implementation. A registry, so adding a tool is one row plus one entry
@@ -242,10 +276,15 @@ _IMPLS: dict[str, Callable[[Taxonomy, CallContext, dict], Any]] = {
     "get_vocabulary": _tool_get_vocabulary,
     "get_timeline": _tool_get_timeline,
     "run_sparql": _tool_run_sparql,
+    "open_view": _tool_open_view,
 }
 
-# Required argument per tool, for a clear error before the impl indexes a dict.
-_REQUIRED = {"get_entity": "uri", "search_entities": "query", "run_sparql": "query"}
+# Required arguments per tool, read from the schemas above so the two cannot
+# disagree — a hand-kept copy had to name every tool a second time. Checked for
+# a clear error before the impl indexes a dict.
+_REQUIRED: dict[str, list[str]] = {
+    tool["name"]: list(tool["inputSchema"].get("required", [])) for tool in TOOLS
+}
 
 
 def _ok(msg_id: Any, result: Any) -> dict[str, Any]:
@@ -286,7 +325,9 @@ Zero rows means an assumption was wrong, not that the answer is empty. Re-read
 the vocabulary and drop one triple pattern at a time to find the one that
 matches nothing.
 
-This server is read-only: SELECT and ASK only, and update forms are refused.
+This server never edits the file: SELECT and ASK only, and update forms are
+refused. The one thing it does besides answering is open_view, which can open a
+browser tab on the user's machine to show a result as a map, timeline or graph.
 """
 
 
@@ -313,9 +354,9 @@ def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[s
     if impl is None:
         return _text_result({"error": "unknown_tool", "tool": name}, is_error=True)
     args = params.get("arguments") or {}
-    required = _REQUIRED.get(name)
-    if required and not args.get(required):
-        return _text_result({"error": "missing_argument", "argument": required}, is_error=True)
+    missing = next((arg for arg in _REQUIRED.get(name, []) if not args.get(arg)), None)
+    if missing:
+        return _text_result({"error": "missing_argument", "argument": missing}, is_error=True)
     try:
         return _text_result(impl(tax, call, args))
     # A fault inside one tool is reported as an error result; it must not take
@@ -337,10 +378,13 @@ def handle_message(
     selection: str | None = None,
     *,
     base_url: str | None = None,
+    api_post: ApiPost | None = None,
+    open_browser: Callable[[str], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Turn one decoded JSON-RPC *message* into its reply.
 
-    *base_url* is the address the request arrived on, for links in the reply.
+    *base_url* is the address the request arrived on, for links in the reply;
+    *api_post* and *open_browser* are what ``open_view`` needs (see CallContext).
 
     Returns None for notifications (no ``id``), which take no reply — the caller
     should answer with an empty HTTP 202.
@@ -365,4 +409,5 @@ def handle_message(
         params = {}
     if not isinstance(params, dict):
         return _err(msg_id, INVALID_PARAMS, "params must be an object.")
-    return _ok(msg_id, handler(params, taxonomy, CallContext(selection, base_url)))
+    call = CallContext(selection, base_url, api_post, open_browser)
+    return _ok(msg_id, handler(params, taxonomy, call))
