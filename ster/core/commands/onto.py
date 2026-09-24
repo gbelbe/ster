@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...domain.onto import add_ontology_annotation, remove_ontology_annotation
+from ...domain.onto import add_ontology_annotation, ontology_rename_map, remove_ontology_annotation
 from ...model import Taxonomy
 from ...operations import rename_ontology_uri, set_ontology_metadata, set_ontology_prefix
 
@@ -30,6 +30,10 @@ class OntoRenameUri:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         rename_ontology_uri(taxonomy, self.new_uri, self.new_sep)
         return ()
+
+    def renamed_uris_in(self, before: Taxonomy) -> dict[str, str]:
+        """Every local entity URI this rename moves, read from the model *before* it."""
+        return ontology_rename_map(before, self.new_uri, self.new_sep)
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ from typing import Final
 import typer
 from rich.prompt import Confirm
 
-from .. import operations, store
+from .. import graph_layout, operations, store
 from ..display import console, render_handle_list, render_tree
 from ..model import LabelType, Taxonomy
 
@@ -322,6 +322,7 @@ def cmd_rename(
     _taxonomy_io._run(operations.rename_uri, taxonomy, old_uri, new_uri)
     console.print(f"[green]Renamed[/green]  {old_uri}  →  {new_uri}")
     _taxonomy_io._save(taxonomy, taxonomy_file)
+    graph_layout.rename_nodes(taxonomy_file, {old_uri: new_uri})  # positions follow
 
 
 # ──────────────────────────── handles ────────────────────────────────────────

@@ -37,6 +37,7 @@ from ...operations import (
     set_owl_label,
     set_owl_note,
 )
+from .base import renamed_pair
 
 _LangPairs = tuple[tuple[str, str], ...]  # ((lang, value), …) — frozen-friendly
 
@@ -169,6 +170,9 @@ class OwlSaveClass:
         assign_handles(taxonomy)
         return (uri,)
 
+    def renamed_uris(self) -> dict[str, str]:
+        return renamed_pair(self.old_uri, self.new_uri)
+
 
 @dataclass(frozen=True)
 class OwlSaveProperty:
@@ -198,6 +202,9 @@ class OwlSaveProperty:
             prop.ranges = list(self.ranges)
         assign_handles(taxonomy)
         return (uri,)
+
+    def renamed_uris(self) -> dict[str, str]:
+        return renamed_pair(self.old_uri, self.new_uri)
 
 
 @dataclass(frozen=True)

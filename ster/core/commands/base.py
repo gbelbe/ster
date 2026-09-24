@@ -24,6 +24,43 @@ class Command(Protocol):
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]: ...
 
 
+@runtime_checkable
+class Renames(Protocol):
+    """Optional: a command that can change one entity's URI says which, old → new.
+
+    Anything keyed by URI outside the model — the remembered graph layout — needs
+    telling, or it keeps entries under URIs that no longer exist.
+    """
+
+    def renamed_uris(self) -> dict[str, str]: ...
+
+
+@runtime_checkable
+class RenamesInModel(Protocol):
+    """Optional: a command whose renames depend on the model it was applied to.
+
+    A namespace change moves every local entity, so which URIs moved can only be
+    read from the model *before* it ran. Kept apart from :class:`Renames` so a
+    single-entity rename is not handed a model it has no use for.
+    """
+
+    def renamed_uris_in(self, before: Taxonomy) -> dict[str, str]: ...
+
+
+def renamed_pair(old_uri: str, new_uri: str) -> dict[str, str]:
+    """``{old: new}`` when a single-entity edit really changed the URI, else nothing."""
+    return {old_uri: new_uri} if new_uri and new_uri != old_uri else {}
+
+
+def renames_of(command: object, before: Taxonomy) -> dict[str, str]:
+    """What *command* renamed, when applied to *before*; nothing if it cannot rename."""
+    if isinstance(command, RenamesInModel):
+        return command.renamed_uris_in(before)
+    if isinstance(command, Renames):
+        return command.renamed_uris()
+    return {}
+
+
 @dataclass(frozen=True)
 class ChangeSet:
     """An ordered batch of commands committed as one atomic transaction.
@@ -43,3 +80,10 @@ class ChangeSet:
         for command in self.commands:
             affected.extend(command.apply(taxonomy))
         return tuple(affected)
+
+    def renamed_uris_in(self, before: Taxonomy) -> dict[str, str]:
+        """Everything the batch's commands renamed."""
+        renamed: dict[str, str] = {}
+        for command in self.commands:
+            renamed.update(renames_of(command, before))
+        return renamed

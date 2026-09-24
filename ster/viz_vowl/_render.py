@@ -111,6 +111,10 @@ def render_vowl_html(
         if api_token:
             graph = _detail.collapse_individuals(graph, _viz_limits["individualCollapse"])
     meta = _taxonomy_meta(taxonomy, file_path)
+    # Only the full-file graph remembers where nodes were left (ster.graph_layout):
+    # a focused graph or a query result is a temporary view, and a static page
+    # has no server to remember with.
+    meta["rememberLayout"] = bool(api_token) and not sparql and not root_uri
     treemap = build_taxonomy_treemap(taxonomy) if has_taxonomy(taxonomy) else None
     return (
         _html_template._HTML_TEMPLATE.replace("__TITLE__", _html.escape(title))

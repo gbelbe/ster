@@ -27,6 +27,12 @@ from .model import Label, LabelType, OWLIndividual, Taxonomy
 # ── Pydantic I/O models ───────────────────────────────────────────────────────
 
 
+class LayoutIn(BaseModel):
+    """Node positions from the graph page: URI → [x, y]."""
+
+    positions: dict[str, tuple[float, float]]
+
+
 class LabelIn(BaseModel):
     lang: str
     value: str
@@ -408,6 +414,7 @@ def create_app(
     _register_pages(app, _st, token)
     _register_schema_routes(app, _st, _tax, _check_auth, save_fn, broadcaster)
     _register_graph_routes(app, _tax, _check_auth)
+    _register_layout(app, _st, _tax, _check_auth)
     _register_mutation_routes(app, _st, _check_auth, broadcaster)
     _register_locate(app, _tax, _check_auth)
     _register_timeline(app, _tax, _check_auth)
@@ -768,6 +775,7 @@ def _mutation_backend(_st: dict[str, Any]) -> tuple[Any, Any, Path] | None:
     if cached is not None:
         return cached  # type: ignore[return-value]
 
+    from . import graph_layout
     from .core.adapters import StorePersistence
     from .core.service import TaxonomyService
     from .core.validation import SkosValidatorAdapter
@@ -775,6 +783,7 @@ def _mutation_backend(_st: dict[str, Any]) -> tuple[Any, Any, Path] | None:
 
     workspace = TaxonomyWorkspace.from_taxonomy(_st[_LIT_TAXONOMY], path)
     service = TaxonomyService(workspace, StorePersistence(), SkosValidatorAdapter())
+    service.add_rename_listener(graph_layout.rename_nodes)  # positions follow renames
     backend = (service, workspace, path)
     _st["_mutation_backend"] = backend
     return backend
@@ -1225,6 +1234,61 @@ def _place_record(graph: rdflib.Graph, uri: str, is_result: bool) -> dict[str, A
         # to say, not ster's.
         "icon": image_of(graph, node),
     }
+
+
+_LAYOUT_ROUTE: Final = "/api/layout"
+
+
+def _register_layout(app: FastAPI, _st: dict[str, Any], _tax: Any, _check_auth: Any) -> None:
+    """The graph page reads and saves node positions (see ster.graph_layout).
+
+    Kept in the project rather than the browser: browser storage is per port,
+    and ster serves the graph on a new port each launch.
+    """
+
+    def _layout_source() -> Path | None:
+        return _st[_LIT_FILE_PATH]  # type: ignore[no-any-return]
+
+    @app.get(
+        _LAYOUT_ROUTE,
+        summary="Where the graph's nodes were left, as remembered in the project",
+        tags=[_TAG_VIZ],
+    )
+    def get_layout(_: None = Depends(_check_auth)) -> dict[str, dict[str, list[int]]]:
+        from . import graph_layout  # noqa: PLC0415
+
+        source = _layout_source()
+        if source is None:
+            return {"positions": {}}
+        stored = graph_layout.load_positions(source, graph_layout.ONTOLOGY_VIEW, _tax())
+        return {"positions": {uri: [x, y] for uri, (x, y) in stored.items()}}
+
+    @app.put(
+        _LAYOUT_ROUTE,
+        summary="Remember node positions; merged with what is stored",
+        tags=[_TAG_VIZ],
+    )
+    def put_layout(body: LayoutIn, _: None = Depends(_check_auth)) -> dict[str, int]:
+        from . import graph_layout  # noqa: PLC0415
+
+        source = _layout_source()
+        if source is None:
+            raise HTTPException(status_code=409, detail="No file to remember a layout for")
+        graph_layout.save_positions(source, graph_layout.ONTOLOGY_VIEW, body.positions, _tax())
+        return {"saved": len(body.positions)}
+
+    @app.delete(
+        _LAYOUT_ROUTE,
+        summary="Forget the remembered positions (Reset layout)",
+        tags=[_TAG_VIZ],
+    )
+    def delete_layout(_: None = Depends(_check_auth)) -> dict[str, bool]:
+        from . import graph_layout  # noqa: PLC0415
+
+        source = _layout_source()
+        if source is not None:
+            graph_layout.forget_positions(source, graph_layout.ONTOLOGY_VIEW)
+        return {"cleared": True}
 
 
 def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:

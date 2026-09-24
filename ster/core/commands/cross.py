@@ -18,6 +18,7 @@ from ...operations import (
     tag_individual_with_concept,
     unlink_concept_from_class,
 )
+from .base import renamed_pair
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,9 @@ class RenameEntity:
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
         rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
         return (self.new_uri,)
+
+    def renamed_uris(self) -> dict[str, str]:
+        return renamed_pair(self.old_uri, self.new_uri)
 
 
 @dataclass(frozen=True)

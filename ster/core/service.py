@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,8 +19,12 @@ from typing import Literal
 from ..exceptions import SkostaxError
 from ..model import Taxonomy
 from .commands import Command
+from .commands.base import renames_of
 from .ports import Persistence, Validator, Workspace
 from .validation import ValidationReport
+
+# Told (path, {old URI: new URI}) after a committed command renames entities.
+RenameListener = Callable[[Path, dict[str, str]], None]
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,21 @@ class TaxonomyService:
         self._versions: dict[Path, int] = {}
         self._locks: dict[Path, threading.Lock] = {}
         self._guard = threading.Lock()
+        self._rename_listeners: list[RenameListener] = []
+
+    def add_rename_listener(self, listener: RenameListener) -> None:
+        """Call *listener(path, {old: new})* after a committed command renames URIs.
+
+        The service touches no file itself; this is how state keyed by URI outside
+        the model (the remembered graph layout) follows a rename.
+        """
+        self._rename_listeners.append(listener)
+
+    def _notify_renames(self, command: Command, before: Taxonomy, path: Path) -> None:
+        renamed = renames_of(command, before)
+        if renamed:
+            for listener in self._rename_listeners:
+                listener(path, renamed)
 
     def version(self, path: Path) -> int:
         """Current optimistic-concurrency version for *path* (0 before any commit)."""
@@ -108,6 +128,7 @@ class TaxonomyService:
             self._workspace.taxonomies[path] = working  # atomic swap of the authority
             new_version = current + 1
             self._versions[path] = new_version
+            self._notify_renames(command, taxonomy, path)
             return CommandResult(
                 "ok", version=new_version, affected_uris=affected, validation=report
             )

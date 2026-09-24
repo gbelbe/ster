@@ -28,13 +28,13 @@ def test_the_page_is_veiled_from_first_paint():
 
 
 def test_the_veil_lifts_when_the_first_layout_settles():
-    assert "l.one('layoutstop',()=>{_saveState();hideSpinner();});" in _js()
+    assert "l.one('layoutstop',()=>{_saveLayout();hideSpinner();});" in _js()
 
 
 def test_the_veil_lifts_immediately_when_positions_were_restored():
     """There was no layout to wait for, so waiting for one would hang it
     behind the veil for the full 20-second backstop."""
-    assert "cy.viewport({zoom:s.zoom||1,pan:s.pan||{x:0,y:0}});hideSpinner();return;" in _js()
+    assert "if(newcomers.empty()){cy.fit(undefined,30);hideSpinner();return;}" in _js()
 
 
 def test_the_veil_cannot_outlast_a_layout_that_never_reports():

@@ -109,13 +109,21 @@ def rename_ontology_uri(taxonomy: Taxonomy, new_uri: str, new_sep: str) -> None:
     renamed (external namespaces untouched); cross-reference lists (subClassOf,
     types, domains, ranges, property_values) are updated to match.
     """
-    old_base = (taxonomy.ontology_uri or "").rstrip("#/") + _ontology_separator(taxonomy)
-    new_uri = new_uri.rstrip("#/")
-    new_base = new_uri + new_sep
-    old_to_new = _build_rename_map(taxonomy, old_base, new_base)
+    old_to_new = ontology_rename_map(taxonomy, new_uri, new_sep)
     _relocate_entities(taxonomy, old_to_new)
     _remap_cross_references(taxonomy, old_to_new)
-    taxonomy.ontology_uri = new_uri
+    taxonomy.ontology_uri = new_uri.rstrip("#/")
+
+
+def ontology_rename_map(taxonomy: Taxonomy, new_uri: str, new_sep: str) -> dict[str, str]:
+    """``old URI → new URI`` for every local entity :func:`rename_ontology_uri` moves.
+
+    The rename itself is built from this map, so anyone told what it renamed
+    (the graph layout, for one) hears exactly what happened.
+    """
+    old_base = (taxonomy.ontology_uri or "").rstrip("#/") + _ontology_separator(taxonomy)
+    new_base = new_uri.rstrip("#/") + new_sep
+    return _build_rename_map(taxonomy, old_base, new_base)
 
 
 def count_ontology_rename_changes(

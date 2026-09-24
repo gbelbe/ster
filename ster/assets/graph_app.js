@@ -230,26 +230,35 @@ function makeLayout(){
 // which is both the biggest render cost and the worst of the clutter.
 const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:globalThis.devicePixelRatio||1,textureOnViewport:true,hideEdgesOnViewport:true,minZoomedFontSize:8});
 
-// ── Graph state persistence (positions + viewport, survives browser/ster restart) ──
-// Keyed per-path AND guarded by a signature of the current node set, so a
-// different ontology (or an expanded subgraph) served at the same URL never
-// restores stale positions. The version prefix invalidates any state saved by
-// older builds that persisted the pre-layout pile-up.
-const _stateKey='ster_state_v2_'+location.pathname;
-function _graphSig(){
-  const ids=cy.nodes().map(n=>n.id()).sort().join('|');
-  let h=0;for(let i=0;i<ids.length;i++){h=Math.trunc(h*31+(ids.codePointAt(i)??0));}
-  return cy.nodes().size()+':'+h;
+// ── Remembered layout (see ster/graph_layout.py) ───────────────────────────────
+// Positions are kept in the project (.ster/graph-layout.json), read and saved
+// through /api/layout. They used to live in localStorage, which is per origin,
+// and ster serves the graph on a new port each launch — so every restart began
+// from scratch. Only the full-file view remembers (the server says so in
+// taxoMeta.rememberLayout); a focused graph, a query result or a static page
+// always lays out fresh. The viewport is not remembered: the graph is fitted.
+//
+// Saved: after a drop (debounced) and after a layout settles, so a new node's
+// place is kept from the first time it is placed. Never from inside an explore
+// view — that subgraph is temporary, and its positions are not the layout.
+let _savedGraph=null;  // the full graph while an explore view replaces it (see below)
+// The server's flag already requires a token (_render.py), so it is the one check.
+const _REMEMBER=Boolean(taxoMeta.rememberLayout);
+const _LAYOUT_URL='/api/layout';
+function _currentPositions(){
+  const positions={};
+  for(const n of cy.nodes()){const p=n.position();positions[n.id()]=[p.x,p.y];}
+  return positions;
 }
-function _saveState(){
-  try{
-    const pos=[];
-    for(const n of cy.nodes()){const p=n.position();pos.push({id:n.id(),x:p.x,y:p.y});}
-    localStorage.setItem(_stateKey,JSON.stringify({sig:_graphSig(),pos,zoom:cy.zoom(),pan:cy.pan()}));
-  }catch(err){console.debug('Unable to save graph state:',err);}
+function _saveLayout(){
+  if(!_REMEMBER||_savedGraph)return;
+  fetch(_LAYOUT_URL,{method:'PUT',
+    headers:{'Authorization':'Bearer '+API_TOKEN,'Content-Type':'application/json'},
+    body:JSON.stringify({positions:_currentPositions()})})
+    .catch(err=>console.debug('Unable to save the layout:',err));
 }
 let _saveTimer;
-function _debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(_saveState,400);}
+function _debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(_saveLayout,400);}
 
 // cose is asynchronous: persist positions only once the layout settles,
 // otherwise we'd save the initial origin pile-up and restore clutter next time.
@@ -270,29 +279,54 @@ function showSpinner(message){
 }
 function runLayout(){
   const l=cy.layout(makeLayout());
-  l.one('layoutstop',()=>{_saveState();hideSpinner();});
+  l.one('layoutstop',()=>{_saveLayout();hideSpinner();});
   l.run();
 }
-
-// On load: restore saved state for THIS graph, else run a fresh layout.
-(function(){
-  try{
-    const s=JSON.parse(localStorage.getItem(_stateKey)||'null');
-    if(s?.pos?.length&&s.sig===_graphSig()){
-      const posMap={};
-      for(const p of s.pos){posMap[p.id]={x:p.x,y:p.y};}
-      for(const n of cy.nodes()){if(posMap[n.id()])n.position(posMap[n.id()]);}
-      cy.viewport({zoom:s.zoom||1,pan:s.pan||{x:0,y:0}});
-      hideSpinner();
-      return;
-    }
-  }catch(err){console.debug('Unable to restore graph state:',err);}
+function _layoutFresh(){
   runLayout();
   // fcose does not always emit layoutstop; never leave the page behind a veil
   setTimeout(hideSpinner,20000);
+}
+// Remembered nodes go exactly where they were left. A node the file gained
+// since starts beside a remembered neighbour, then fcose settles the newcomers
+// with every remembered node pinned, so nothing you arranged moves.
+function _placeNewcomers(known,newcomers){
+  for(const n of newcomers){
+    const anchor=n.neighborhood('node').filter(m=>known.has(m));
+    if(anchor.nonempty()){
+      const p=anchor[0].position();
+      n.position({x:p.x+(Math.random()-.5)*120,y:p.y+(Math.random()-.5)*120});  // NOSONAR - cosmetic layout jitter, not a security context
+    }
+  }
+  const pinned=known.map(n=>({nodeId:n.id(),position:{...n.position()}}));
+  const l=cy.layout({...makeLayout(),randomize:false,fixedNodeConstraint:pinned});
+  l.one('layoutstop',()=>{cy.fit(undefined,30);_saveLayout();hideSpinner();});
+  l.run();
+}
+function _restoreLayout(stored){
+  const known=cy.nodes().filter(n=>Boolean(stored[n.id()]));
+  if(known.empty()){_layoutFresh();return;}
+  for(const n of known){const [x,y]=stored[n.id()];n.position({x,y});}
+  const newcomers=cy.nodes().difference(known);
+  if(newcomers.empty()){cy.fit(undefined,30);hideSpinner();return;}
+  _placeNewcomers(known,newcomers);
+}
+function _resetLayout(){
+  if(!_REMEMBER){runLayout();return;}
+  fetch(_LAYOUT_URL,{method:'DELETE',headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .catch(err=>console.debug('Unable to reset the layout:',err))
+    .finally(runLayout);
+}
+
+// On load: the remembered layout for this project, else a fresh one.
+(function(){
+  if(!_REMEMBER){_layoutFresh();return;}
+  fetch(_LAYOUT_URL,{headers:{'Authorization':'Bearer '+API_TOKEN}})
+    .then(r=>r.ok?r.json():{positions:{}})
+    .then(d=>_restoreLayout(d.positions||{}))
+    .catch(()=>_layoutFresh());
 })();
 
-cy.on('viewport',_debouncedSave);
 cy.on('dragfree','node',_debouncedSave);
 
 // A class you have opened owns the individuals on screen beneath it, so dragging
@@ -372,7 +406,7 @@ function applyGraphUpdate(d){
   for(const t of hiddenEdgeTypes){cy.edges('[type="'+t+'"]').addClass('hidden');}
   refreshSuperclassesBtn();
   applySuperclassVis();
-  _saveState();
+  _saveLayout();
 }
 
 function zoomBy(f){const c=cy.container();cy.zoom({level:cy.zoom()*f,renderedPosition:{x:c.clientWidth/2,y:c.clientHeight/2}});}
@@ -670,7 +704,7 @@ function toggleClassIndividuals(node){
   const uri=node.id();
   if(_expanded.has(uri)){
     cy.remove(cy.nodes().filter(n=>n.data('ofClass')===uri));
-    _expanded.delete(uri);node.data('shownCount',0);_saveState();return;
+    _expanded.delete(uri);node.data('shownCount',0);_saveLayout();return;
   }
   if(!API_TOKEN)return;
   _expanded.add(uri);
@@ -862,7 +896,10 @@ document.getElementById('panel-close').addEventListener('click',()=>togglePanel(
 const _offBannerClose=document.getElementById('offline-banner-close');
 if(_offBannerClose)_offBannerClose.addEventListener('click',()=>{const b=document.getElementById('offline-banner');if(b)b.remove();});
 document.getElementById('zoom-in').addEventListener('click',()=>zoomBy(1.3));
-document.getElementById('zoom-fit').addEventListener('click',()=>{try{localStorage.removeItem(_stateKey);}catch(err){console.debug('Unable to clear graph state:',err);}runLayout();});
+// Recenter only fits: with the layout kept in the project, a stray click or 'f'
+// must not throw away an arrangement. Resetting it is its own, explicit button.
+document.getElementById('zoom-fit').addEventListener('click',()=>cy.fit(undefined,30));
+document.getElementById('layout-reset')?.addEventListener('click',_resetLayout);
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
 document.getElementById('ft-first-order').addEventListener('click',toggleFirstOrderClasses);
@@ -907,8 +944,8 @@ globalThis._sterShowPanel=function(){togglePanel(true);};
 // ── Explore: swap in a focused subgraph for a node ────────────────────────────
 // Server-only. Individuals → object-property relations; classes → linked
 // classes (superclasses + object-property domain/range). The previous graph is
-// saved so Escape restores the original view.
-let _savedGraph=null;
+// saved so Escape restores the original view (_savedGraph, declared with the
+// layout above — saving must be able to tell an explore view from the layout).
 // The node type the current exploration started from. When it is 'individual',
 // object properties are shown between individuals, so extending a class brings in
 // only its subClassOf trail (subclass_only) — no redundant T-Box object-property
@@ -1025,7 +1062,7 @@ function _ringAround(centre,nodes){
 // land on — each member steps outward along its own spoke until it clears the
 // existing graph — which preserves the circle while resolving collisions.
 function _settleRing(centre,nodes){
-  if(nodes.empty()){_saveState();return;}
+  if(nodes.empty()){_saveLayout();return;}
   const others=cy.nodes().difference(nodes).difference(centre);
   const cp=centre.position();
   for(const m of nodes){
@@ -1044,10 +1081,10 @@ function _settleRing(centre,nodes){
       m.position({x:q.x+dx*mr*1.2,y:q.y+dy*mr*1.2});
     }
   }
-  _saveState();
+  _saveLayout();
 }
 function _seedAndSpread(addedNodes,fp,preseeded){
-  if(addedNodes.empty()){_saveState();return;}
+  if(addedNodes.empty()){_saveLayout();return;}
   for(const n of preseeded?[]:addedNodes){
     const anchors=n.neighborhood('node').filter(nb=>!addedNodes.contains(nb));
     let x=fp.x,y=fp.y;
@@ -1066,7 +1103,7 @@ function _seedAndSpread(addedNodes,fp,preseeded){
   const l=cy.layout({name:'fcose',animate:false,fit:false,randomize:false,
     quality:'default',nodeRepulsion:12000,idealEdgeLength:180,edgeElasticity:100,
     gravity:50,numIter:600,nodeDimensionsIncludeLabels:true,nodeSeparation:150});
-  l.one('layoutstop',()=>{existing.unlock();_saveState();});
+  l.one('layoutstop',()=>{existing.unlock();_saveLayout();});
   l.run();
 }
 
@@ -1259,7 +1296,7 @@ function toggleSuperclasses(){
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){if(!panelVisible){togglePanel(true);return;}const sb=document.getElementById('search-box');if(sb?.value){clearSearch();return;}if(_savedGraph){restoreGraph();return;}if(highlighted){highlighted=null;applyHighlight();showDefault();}else togglePanel();}
-  if(e.key==='f'){try{localStorage.removeItem(_stateKey);}catch(err){console.debug('Unable to clear graph state:',err);}runLayout();}
+  if(e.key==='f'){cy.fit(undefined,30);}
   if(e.key==='+'){zoomBy(1.3);}
   if(e.key==='-'){zoomBy(.77);}
 });

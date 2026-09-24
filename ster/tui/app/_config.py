@@ -265,12 +265,15 @@ class _ConfigMixin(_AppState):
         """Build the TaxonomyService when editing a real file (None = read-only)."""
         if path is None:
             return None
+        from ster import graph_layout
         from ster.core.service import TaxonomyService
         from ster.core.validation import SkosValidatorAdapter
         from ster.workspace import TaxonomyWorkspace
 
         self._workspace = TaxonomyWorkspace.from_taxonomy(taxonomy, path)
-        return TaxonomyService(self._workspace, _StorePersistence(), SkosValidatorAdapter())
+        service = TaxonomyService(self._workspace, _StorePersistence(), SkosValidatorAdapter())
+        service.add_rename_listener(graph_layout.rename_nodes)  # positions follow renames
+        return service
 
     def action_cycle_theme(self) -> None:
         """Step through the curated theme shortlist (the full list is in the palette)."""
