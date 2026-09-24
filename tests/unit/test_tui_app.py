@@ -2950,11 +2950,16 @@ def test_renaming_a_class_follows_the_entity_regression(tmp_path) -> None:
             assert isinstance(app.screen, ClassModal)
             app.screen._uri.value = ZOO + "Canine"  # rename the URI fragment
             app.screen._submit()
+            # Wait for the detail pane as well as the cursor: moving the cursor is
+            # immediate, but the detail follows only when Textual delivers the
+            # NodeHighlighted message. Waiting on the cursor alone let a loaded
+            # run read the node the rebuilt tree highlighted in between (Person).
             await _settle(
                 pilot,
                 lambda: (
                     ZOO + "Canine" in app._uri_nodes
                     and tree.cursor_node is app._uri_nodes[ZOO + "Canine"]
+                    and app._detail_uri == ZOO + "Canine"
                 ),
             )
             renamed = ZOO + "Canine"
