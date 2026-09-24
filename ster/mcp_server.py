@@ -180,17 +180,21 @@ TOOLS: list[dict[str, Any]] = [
             "view": {
                 **_VIEW_ENUM,
                 _DESC: (
-                    "Also return a URL opening these results in ster's map, graph or "
-                    "timeline view. 'map' needs rows carrying coordinates, or naming an "
-                    "entity that does; 'timeline' needs rows naming dated entities; "
-                    "'graph' needs a CONSTRUCT or DESCRIBE, since it draws triples. When "
-                    "the view cannot be built the rows still come back and "
-                    "'view_unavailable' says why. This one call already carries both the "
-                    "answer and the link — give the URL to the user as a link rather than "
-                    "opening or screenshotting it yourself, which costs far more than the "
-                    "question was worth. Reach for open_view instead only when the user "
-                    "needs the page opened for them, not just linked."
+                    "Show these results in ster's map, graph or timeline view. 'map' needs "
+                    "rows carrying coordinates, or naming an entity that does; 'timeline' "
+                    "needs rows naming dated entities; 'graph' needs a CONSTRUCT or "
+                    "DESCRIBE, since it draws triples. When the view cannot be built the "
+                    "rows still come back and 'view_unavailable' says why. On a caller "
+                    "running on the same machine as ster, the page opens on its own — "
+                    "'opened' says whether it did. Only when it did not (a remote caller, "
+                    "or nothing on a screen anyone is watching) do you need to hand "
+                    "'view_url' to the user as a link, rather than opening or "
+                    "screenshotting it yourself."
                 ),
+            },
+            "open": {
+                "type": "boolean",
+                _DESC: "false to get the link without opening a browser (default true).",
             },
         },
         [_ARG_QUERY],
@@ -262,7 +266,18 @@ def _tool_get_timeline(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
 
 
 def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
-    return ctx.run_sparql(tax, args[_ARG_QUERY], args.get("view"), call.base_url)
+    payload = ctx.run_sparql(tax, args[_ARG_QUERY], args.get("view"), call.base_url)
+    # Opening is an MCP-transport concern (whether *this caller* is on ster's own
+    # machine), so it lives here rather than in the shared sparql_payload/annotate
+    # path the REST endpoint also runs — see test_the_shared_function_is_where_view_is_handled.
+    url = payload.get("view_url")
+    if url:
+        wanted = args.get("open", True) is not False
+        opened = bool(wanted and call.open_browser is not None and call.open_browser(url))
+        payload["opened"] = opened
+        if opened:
+            payload.pop("view_hint", None)
+    return payload
 
 
 def _tool_open_view(_tax: Taxonomy, call: CallContext, args: dict) -> Any:
@@ -330,23 +345,21 @@ the vocabulary and drop one triple pattern at a time to find the one that
 matches nothing.
 
 This server never edits the file: SELECT and ASK only, and update forms are
-refused. The one thing it does besides answering is open_view, which can open a
-browser tab on the user's machine to show a result as a map, timeline or graph.
+refused. The one thing it does besides answering is showing a view — `view` on
+run_sparql, or open_view — as a map, timeline or graph.
 
-Getting a view in front of the user costs three different amounts, in this
-order of preference:
-  1. On the same machine as ster and a display: open it — open_view (it
-     already checks this and opens nothing if it can't), or webbrowser.open()
-     on the URL run_sparql's `view` returned. webbrowser.open() dispatches to
-     the right command for the platform on its own (open / start / xdg-open) —
-     call it directly rather than hard-coding one platform's command.
-  2. Not on that machine, or nothing would be on a screen anyone is looking
-     at: hand back the link as text. Opening would do nothing there.
-  3. Driving a browser to navigate and screenshot the page is the expensive
-     path — real image tokens, several round trips — and earns its cost only
-     when the page itself must be seen: verifying a render, debugging a
-     layout, describing what's on screen. Not for delivering a link that
-     open_view or a plain webbrowser.open() already produced.
+A view opens itself when it can: on a caller running on the same machine as
+ster, `run_sparql`'s `view` and `open_view` open a browser tab on their own and
+report `opened: true`. Nothing further is needed there — do not also open or
+screenshot the page yourself. When `opened` comes back false (a remote caller,
+or nothing on a screen anyone is watching), hand the user `view_url` as a link
+instead; opening would do nothing there.
+
+Driving a browser to navigate and screenshot the page is the expensive path —
+real image tokens, several round trips — and earns its cost only when the page
+itself must be seen: verifying a render, debugging a layout, describing what's
+on screen. Not for delivering a view that already opened itself, or a link
+handed back in its place.
 """
 
 

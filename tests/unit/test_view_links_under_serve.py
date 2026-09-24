@@ -37,8 +37,11 @@ def _taxonomy() -> Taxonomy:
 def client() -> TestClient:
     # Deliberately *not* patching view_links._server_running: under `ster serve`
     # there is no background server, which is the case being reproduced.
+    # `client=("127.0.0.1", ...)` makes TestClient's request look like it came
+    # from this machine, the same way tests/unit/test_api_mcp_open_view.py does,
+    # so `_caller_is_local` (and thus run_sparql's auto-open) sees a local caller.
     app = create_app(_taxonomy(), TOKEN, SSEBroadcaster(), save_fn=lambda _t: None)
-    return TestClient(app, base_url="http://127.0.0.1:9123")
+    return TestClient(app, base_url="http://127.0.0.1:9123", client=("127.0.0.1", 50000))
 
 
 def _auth() -> dict[str, str]:
@@ -54,7 +57,11 @@ def test_view_links_rest_graph_link_under_serve_regression(client) -> None:
     assert body["view_url"].startswith("http://127.0.0.1:9123/viz?q=")
 
 
-def test_view_links_mcp_graph_link_under_serve_regression(client) -> None:
+def test_view_links_mcp_graph_link_under_serve_regression(client, monkeypatch) -> None:
+    # run_sparql opens the view itself for a local caller (see mcp_server); stub
+    # the one function ster's MCP layer touches so this stays a link-building
+    # regression test rather than one that pops a real browser tab.
+    monkeypatch.setattr("ster.mcp_views.open_in_browser", lambda url: True)
     call = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -68,6 +75,7 @@ def test_view_links_mcp_graph_link_under_serve_regression(client) -> None:
 
     assert payload["view_unavailable"] is None
     assert payload["view_url"].startswith("http://127.0.0.1:9123/viz?q=")
+    assert payload["opened"] is True
 
 
 def test_view_links_explicit_base_wins_over_saved_config() -> None:
