@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import Any, BinaryIO, Final
 
 import typer
 from rich.console import Console
@@ -18,7 +18,7 @@ _LIT_DIM: Final = "[/dim]"
 _LIT_PATCH: Final = "patch"
 
 
-from . import _app, _file_picker, _serve
+from . import _app, _serve
 
 
 def _menu_action_for_key(ch: bytes, stream: BinaryIO) -> str:
@@ -234,29 +234,146 @@ def _pause_until_acknowledged(
         console.print()
 
 
+def _probe_server_session(base_url: str, token: str, timeout: float = 3.0) -> dict[str, Any] | None:
+    """The ``overview`` block of ``GET /api/session`` on a (possibly foreign) ster
+    server, or None on any failure.
+
+    Best-effort and silent: used only to tell whether a process already holding
+    the configured server port is a live, healthy ster server — and which file
+    it serves — never to decide whether it is safe to touch.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/session",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+    overview = data.get("overview")
+    return overview if isinstance(overview, dict) else None
+
+
+def _report_unavailable(host: str, port: int) -> None:
+    """Print why the server at *host*:*port* is not something we can use."""
+    from ..viz_vowl import unavailable_reason
+
+    _app.err.print(f"[red]{unavailable_reason(host, port)}[/red]")
+
+
+# Sentinel: the port conflict was resolved (the holder was freed) and the
+# caller should proceed to start a fresh server — distinct from "reuse this
+# URL as-is" (a str) and "give up" (None), neither of which a fresh start
+# should follow.
+_PORT_FREED: Final = object()
+
+
+def _resolve_port_conflict(
+    taxonomy_file: Path, holder: tuple[int, str], base_url: str, host: str, port: int
+) -> str | object | None:
+    """Handle a process already holding the configured server port.
+
+    Returns the base URL to reuse when a healthy server already serves
+    *taxonomy_file*, :data:`_PORT_FREED` once a stale one has been stopped and
+    a fresh server should start, or None when connecting should be abandoned.
+    """
+    from ..api_server import load_token
+    from ..viz_vowl import SERVER, free_port, holder_kind
+
+    pid, command = holder
+    session = _probe_server_session(base_url, load_token())
+    served = session.get("file") if session else None
+    if served is not None and Path(served) == taxonomy_file.resolve():
+        console.print(
+            f"\n  [green]✓[/green] ster is already serving [bold]{taxonomy_file.name}[/bold] "
+            f"at {base_url} (pid {pid}) — reusing it."
+        )
+        return base_url
+    if served is None or holder_kind(command) != SERVER:
+        # Either it didn't answer as ster at all, or it did but restarting it
+        # risks someone's open TUI (see holder_kind) — not ours to touch.
+        _report_unavailable(host, port)
+        return None
+    if not ask.confirm(
+        f"ster (pid {pid}) is already serving {Path(served).name}, not "
+        f"{taxonomy_file.name}. Restart it for this file?",
+        default=False,
+        console=console,
+    ):
+        return None
+    console.print(f"  Stopping the server on port {port}…")
+    if not free_port(pid, host, port):
+        _app.err.print(f"[red]Could not stop the process on port {port}.[/red]")
+        return None
+    return _PORT_FREED
+
+
+def _reuse_or_start_server(taxonomy_file: Path) -> str | None:  # pragma: no cover - interactive tty
+    """The running server's base URL for *taxonomy_file*, starting one if needed.
+
+    Ster's own server is idempotent in-process — a second ``ensure_published_server``
+    call just republishes onto it. But a *separate* ster process — an earlier
+    ``ster serve``, or a previous interactive session that never exited — can
+    already hold the configured port. Binding then fails with "address in use",
+    which used to be reported as a broken fastapi/uvicorn install even though a
+    perfectly good MCP endpoint was sitting right there.
+
+    Detect that case via :func:`_resolve_port_conflict`: a healthy server already
+    serving *taxonomy_file* is reused as-is (nothing to ask), one serving a
+    different file is offered a restart, and anything else falls back to the
+    same accurate reason :func:`ster.viz_vowl.unavailable_reason` gives the
+    graph viewer.
+    """
+    from .. import store
+    from ..api_server import is_running, load_server_config
+    from ..project import Project
+    from ..viz_vowl import ensure_published_server, port_holder
+
+    url, port = load_server_config()
+    host = url.split("://", 1)[-1]
+    base_url = f"{url}:{port}"
+    holder = None if is_running() else port_holder(host, port)
+
+    if holder is not None:
+        outcome = _resolve_port_conflict(taxonomy_file, holder, base_url, host, port)
+        if outcome is not _PORT_FREED:
+            return outcome  # type: ignore[return-value]  # a reused URL, or None (abandoned)
+
+    console.print(f"\n  Starting the ster server for [bold]{taxonomy_file.name}[/bold]…")
+    # An MCP agent queries the whole connected graph, same as the graph viewer —
+    # not just the one writable file. The other files a project already merges
+    # in read-only beside it (ster edit / ster serve -x, remembered per-project
+    # in .ster/project.json) come along here too, or SPARQL against an ontology
+    # or provenance file split out from the taxonomy would silently see nothing.
+    project = Project.load(Path.cwd())
+    context = project.remembered_context(taxonomy_file) if project else []
+    result = ensure_published_server(store.load(taxonomy_file, context=context), taxonomy_file)
+    if not result:
+        _report_unavailable(host, port)
+    return result
+
+
 def _run_mcp_connect_interactive(files: list[Path]) -> None:  # pragma: no cover - interactive tty
     """Start the live server if needed, then show and copy the MCP endpoint.
 
-    The endpoint only exists while the server runs, so this starts it rather
-    than reporting that it is down.
+    The action menu has already narrowed the session to one file — this
+    connects *that* file rather than asking again which one to use.
     """
     from ..api_server import load_token
     from ..tui.clipboard import copy_to_system_clipboard
-    from ..viz_vowl import ensure_published_server
 
     if not files:
         _app.err.print("[red]No taxonomy files found.[/red]")
         return
-    taxonomy_file = _file_picker._pick_file(files)
+    taxonomy_file = files[0]
 
-    from .. import store
-
-    console.print(f"\n  Starting the ster server for [bold]{taxonomy_file.name}[/bold]…")
-    base_url = ensure_published_server(store.load(taxonomy_file), taxonomy_file)
+    base_url = _reuse_or_start_server(taxonomy_file)
     if not base_url:
-        _app.err.print(
-            "[red]The server could not start — reinstall ster so fastapi/uvicorn are present.[/red]"
-        )
         return
 
     endpoint, snippet = mcp_connection_info(base_url, load_token())
