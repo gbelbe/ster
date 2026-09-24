@@ -26,16 +26,19 @@ def launch(
     When *path* is given, edits commit there via ``TaxonomyService``; without it
     the browser is read-only. ``open_query`` opens straight into the SPARQL screen.
     """
+    from ._run import run_app
     from .app import OntologyApp
 
-    OntologyApp(
-        taxonomy,
-        source=source,
-        lang=lang,
-        path=path,
-        open_query=open_query,
-        progressive_startup=progressive_startup,
-    ).run()
+    run_app(
+        OntologyApp(
+            taxonomy,
+            source=source,
+            lang=lang,
+            path=path,
+            open_query=open_query,
+            progressive_startup=progressive_startup,
+        )
+    )
 
 
 def launch_file(
@@ -50,6 +53,7 @@ def launch_file(
     *context* names files merged in read-only, so the connected graph is visible
     while only *path* stays editable.
     """
+    from ._run import run_app
     from .app import OntologyApp
 
     path = Path(path)
@@ -62,5 +66,5 @@ def launch_file(
         progressive_startup=True,
         context=context,
     )
-    app.run()
+    run_app(app)
     return app.tax if app._loaded_successfully else None

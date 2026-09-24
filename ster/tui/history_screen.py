@@ -242,4 +242,6 @@ def _diff_text(text: str) -> Text:
 
 
 def run_history(history: FileHistory) -> None:  # pragma: no cover - interactive tty
-    HistoryScreen(history).run()
+    from ._run import run_app  # noqa: PLC0415
+
+    run_app(HistoryScreen(history))
