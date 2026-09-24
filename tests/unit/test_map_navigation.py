@@ -128,11 +128,19 @@ def test_the_opening_level_counts_only_what_can_be_drawn():
 
 
 def test_one_shape_still_beats_none():
-    """When no level holds two, it falls back rather than showing nothing."""
+    """When no level holds two, it falls back to one that can draw something.
+
+    Regression: the fallback was `levelsOf(pts)[0] ?? 0` — the broadest level
+    among *all* points, including grouping tiers with no geometry of their
+    own. A result whose only ancestors are such tiers (a commune, a lieu-dit,
+    each with no coordinates) landed the fallback on a level with nothing to
+    draw, so the map showed none of the "one shape" this was meant to
+    guarantee — it sat at its hardcoded default view instead.
+    """
     page = _page()
     body = page[page.index("function openingLevel(") :]
 
-    assert "return levelsOf(pts)[0] ?? 0;" in body[: body.index("\n}") + 2]
+    assert "return levelsOf(drawable)[0] ?? levelsOf(pts)[0] ?? 0;" in body[: body.index("\n}") + 2]
 
 
 def test_both_entry_points_use_the_opening_level():

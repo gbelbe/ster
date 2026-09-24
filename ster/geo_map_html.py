@@ -269,14 +269,17 @@ const levelsOf = ps => [...new Set(ps.map(p => p.level ?? 0))].sort((a, b) => a 
 
    Counted over drawable places only — a level of three cities none of which
    carries coordinates draws nothing, and opening there would show a blank map.
-   Falls back to the broadest level when no level has two, since one shape still
-   beats none. */
+   Falls back to the broadest *drawable* level when no level has two, since one
+   shape still beats none — falling back over every level, drawable or not,
+   could land on a grouping tier with no geometry of its own (a commune, say)
+   and draw nothing at all, silently sitting at the map's hardcoded default
+   view instead. */
 function openingLevel(pts) {
   const drawable = pts.filter(p => p.lat !== null && p.long !== null);
   for (const lvl of levelsOf(drawable)) {
     if (drawable.filter(p => (p.level ?? 0) === lvl).length >= 2) return lvl;
   }
-  return levelsOf(pts)[0] ?? 0;
+  return levelsOf(drawable)[0] ?? levelsOf(pts)[0] ?? 0;
 }
 /* fitBounds moves the map itself, and that fires zoomend a tick later. Without
    this the map's own framing reads as the reader zooming, and the level handler
