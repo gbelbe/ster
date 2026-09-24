@@ -185,7 +185,11 @@ TOOLS: list[dict[str, Any]] = [
                     "entity that does; 'timeline' needs rows naming dated entities; "
                     "'graph' needs a CONSTRUCT or DESCRIBE, since it draws triples. When "
                     "the view cannot be built the rows still come back and "
-                    "'view_unavailable' says why."
+                    "'view_unavailable' says why. This one call already carries both the "
+                    "answer and the link — give the URL to the user as a link rather than "
+                    "opening or screenshotting it yourself, which costs far more than the "
+                    "question was worth. Reach for open_view instead only when the user "
+                    "needs the page opened for them, not just linked."
                 ),
             },
         },
@@ -328,6 +332,21 @@ matches nothing.
 This server never edits the file: SELECT and ASK only, and update forms are
 refused. The one thing it does besides answering is open_view, which can open a
 browser tab on the user's machine to show a result as a map, timeline or graph.
+
+Getting a view in front of the user costs three different amounts, in this
+order of preference:
+  1. On the same machine as ster and a display: open it — open_view (it
+     already checks this and opens nothing if it can't), or webbrowser.open()
+     on the URL run_sparql's `view` returned. webbrowser.open() dispatches to
+     the right command for the platform on its own (open / start / xdg-open) —
+     call it directly rather than hard-coding one platform's command.
+  2. Not on that machine, or nothing would be on a screen anyone is looking
+     at: hand back the link as text. Opening would do nothing there.
+  3. Driving a browser to navigate and screenshot the page is the expensive
+     path — real image tokens, several round trips — and earns its cost only
+     when the page itself must be seen: verifying a render, debugging a
+     layout, describing what's on screen. Not for delivering a link that
+     open_view or a plain webbrowser.open() already produced.
 """
 
 
