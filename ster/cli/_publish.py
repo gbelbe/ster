@@ -344,7 +344,6 @@ def _reuse_or_start_server(taxonomy_file: Path) -> str | None:  # pragma: no cov
         if outcome is not _PORT_FREED:
             return outcome  # type: ignore[return-value]  # a reused URL, or None (abandoned)
 
-    console.print(f"\n  Starting the ster server for [bold]{taxonomy_file.name}[/bold]…")
     # An MCP agent queries the whole connected graph, same as the graph viewer —
     # not just the one writable file. The other files a project already merges
     # in read-only beside it (ster edit / ster serve -x, remembered per-project
@@ -352,6 +351,14 @@ def _reuse_or_start_server(taxonomy_file: Path) -> str | None:  # pragma: no cov
     # or provenance file split out from the taxonomy would silently see nothing.
     project = Project.load(Path.cwd())
     context = project.remembered_context(taxonomy_file) if project else []
+    context_note = (
+        f" [dim](+ {', '.join(f.name for f in context)} as read-only context)[/dim]"
+        if context
+        else ""
+    )
+    console.print(
+        f"\n  Starting the ster server for [bold]{taxonomy_file.name}[/bold]{context_note}…"
+    )
     result = ensure_published_server(store.load(taxonomy_file, context=context), taxonomy_file)
     if not result:
         _report_unavailable(host, port)

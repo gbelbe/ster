@@ -8,6 +8,8 @@ bearer token. The menu starts the server, prints both, and copies the endpoint.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 from ster import cli
 
@@ -189,3 +191,163 @@ def test_the_pause_survives_a_closed_stdin():
         raise EOFError
 
     cli._publish._pause_until_acknowledged(read=closed, is_tty=True)  # must not raise
+
+
+# ── reusing (or restarting) a server that already holds the port ──────────────
+#
+# A stray ster process — an earlier `ster serve`, or a previous interactive
+# session that never exited — can already be bound to the configured port by
+# the time "Connect AI Agent" runs. These cover how that is detected and
+# handled, without needing a real second process or a real HTTP server.
+
+
+class _FakeResponse:
+    """A context-manager stand-in for ``urllib.request.urlopen``'s return value."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+def test_probe_reads_the_overview_from_a_healthy_server():
+    body = json.dumps({"overview": {"file": "/tax.ttl"}}).encode()
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(body)) as urlopen:
+        overview = cli._publish._probe_server_session("http://127.0.0.1:8765", "tok")
+
+    assert overview == {"file": "/tax.ttl"}
+    request = urlopen.call_args.args[0]
+    assert request.full_url == "http://127.0.0.1:8765/api/session"
+    assert request.headers["Authorization"] == "Bearer tok"
+
+
+def test_probe_returns_none_when_the_port_holder_is_not_ster():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+
+
+def test_probe_returns_none_on_a_malformed_body():
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(b"not json")):
+        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+
+
+def test_probe_returns_none_when_overview_is_missing_or_not_an_object():
+    body = json.dumps({"focused": None}).encode()
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
+        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+
+
+def test_report_unavailable_prints_the_shared_reason(monkeypatch):
+    import ster.viz_vowl as viz
+
+    monkeypatch.setattr(viz, "unavailable_reason", lambda host, port: f"{host}:{port} is stuck")
+
+    with cli._app.err.capture() as captured:
+        cli._publish._report_unavailable("127.0.0.1", 8765)
+
+    assert "127.0.0.1:8765 is stuck" in captured.get()
+
+
+def _conflict(monkeypatch, *, served: str | None, holder_kind: str, confirm: bool, freed: bool):
+    """Wire the collaborators _resolve_port_conflict reads, and call it once."""
+    import ster.api_server as api_server
+    import ster.viz_vowl as viz
+
+    monkeypatch.setattr(api_server, "load_token", lambda: "tok")
+    monkeypatch.setattr(
+        cli._publish,
+        "_probe_server_session",
+        lambda *_a, **_kw: {"file": served} if served is not None else None,
+    )
+    monkeypatch.setattr(viz, "holder_kind", lambda _command: holder_kind)
+    monkeypatch.setattr(viz, "free_port", lambda *_a, **_kw: freed)
+    with patch("rich.prompt.Confirm.ask", return_value=confirm):
+        return cli._publish._resolve_port_conflict(
+            Path("/project/tax.ttl"),
+            (321, "ster serve tax.ttl"),
+            "http://127.0.0.1:8765",
+            "127.0.0.1",
+            8765,
+        )
+
+
+def test_a_healthy_server_already_on_the_requested_file_is_reused(monkeypatch):
+    with cli.console.capture() as captured:
+        result = _conflict(
+            monkeypatch,
+            served=str(Path("/project/tax.ttl").resolve()),
+            holder_kind="server",
+            confirm=False,
+            freed=False,
+        )
+
+    assert result == "http://127.0.0.1:8765"
+    assert "reusing" in captured.get()
+    assert "tax.ttl" in captured.get()
+
+
+def test_a_holder_that_does_not_answer_as_ster_is_left_alone(monkeypatch):
+    reported: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        cli._publish, "_report_unavailable", lambda host, port: reported.append((host, port))
+    )
+
+    result = _conflict(monkeypatch, served=None, holder_kind="foreign", confirm=True, freed=True)
+
+    assert result is None
+    assert reported == [("127.0.0.1", 8765)]
+
+
+def test_a_foreign_process_on_a_different_file_is_never_offered_a_restart(monkeypatch):
+    """holder_kind FOREIGN (or EDITOR) must not even reach the confirm prompt —
+    restarting someone's open TUI or an unrelated process is never ours to do."""
+    reported: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        cli._publish, "_report_unavailable", lambda host, port: reported.append((host, port))
+    )
+
+    with patch("rich.prompt.Confirm.ask") as confirm_ask:
+        result = _conflict(
+            monkeypatch, served="/other.ttl", holder_kind="editor", confirm=True, freed=True
+        )
+    confirm_ask.assert_not_called()
+
+    assert result is None
+    assert reported == [("127.0.0.1", 8765)]
+
+
+def test_declining_the_restart_leaves_the_other_server_running(monkeypatch):
+    import ster.viz_vowl as viz
+
+    freed_calls: list[int] = []
+    monkeypatch.setattr(viz, "free_port", lambda pid, *_a, **_kw: freed_calls.append(pid) or True)
+
+    result = _conflict(
+        monkeypatch, served="/other.ttl", holder_kind="server", confirm=False, freed=True
+    )
+
+    assert result is None
+    assert freed_calls == []  # never even tried — the user said no
+
+
+def test_accepting_the_restart_frees_the_port_then_signals_a_fresh_start(monkeypatch):
+    result = _conflict(
+        monkeypatch, served="/other.ttl", holder_kind="server", confirm=True, freed=True
+    )
+
+    assert result is cli._publish._PORT_FREED
+
+
+def test_a_restart_that_fails_to_free_the_port_gives_up(monkeypatch):
+    result = _conflict(
+        monkeypatch, served="/other.ttl", holder_kind="server", confirm=True, freed=False
+    )
+
+    assert result is None
