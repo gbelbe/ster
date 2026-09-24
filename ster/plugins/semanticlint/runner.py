@@ -205,8 +205,8 @@ def run_pre_commit_lint(
         return True
 
     if confirm_fn is None:
-        from rich.prompt import Confirm
+        from ster import ask
 
-        confirm_fn = lambda msg: Confirm.ask(msg, default=False)  # noqa: E731
+        confirm_fn = lambda msg: ask.confirm(msg, default=False)  # noqa: E731
 
     return confirm_fn("Issues found. Commit anyway?")

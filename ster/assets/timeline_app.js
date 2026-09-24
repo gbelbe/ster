@@ -162,7 +162,10 @@
       };
     });
     var container = el('tl');
-    if (state.timeline) state.timeline.destroy();
+    if (state.timeline) {
+      state.timeline.off('rangechanged', placeLabels);
+      state.timeline.destroy();
+    }
     state.groups = new vis.DataSet(groups);
     state.data = new vis.DataSet(items);
     state.timeline = new vis.Timeline(container, state.data, state.groups, {

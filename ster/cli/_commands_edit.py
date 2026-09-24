@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Final
 
 import typer
-from rich.prompt import Confirm
 
-from .. import graph_layout, operations, store
+from .. import ask, graph_layout, operations, store
 from ..display import console, render_handle_list, render_tree
 from ..model import LabelType, Taxonomy
+from ._exit import ExitCode
 
 _LIT_FILE: Final = "--file"
 _LIT_LANG: Final = "--lang"
@@ -164,7 +164,7 @@ def cmd_remove(
         n_children = len(c.narrower)
         if cascade and n_children:
             msg += f" and its {n_children} child(ren)"
-        if not Confirm.ask(msg + "?"):
+        if not ask.confirm(msg + "?", hint="Pass --yes to confirm."):
             raise typer.Abort()
 
     removed = _taxonomy_io._run(operations.remove_concept, taxonomy, uri, cascade=cascade)
@@ -358,7 +358,7 @@ def cmd_validate(
         console.print(f"[red]Found {len(issues)} issue(s):[/red]")
         for issue in issues:
             console.print(f"  • {issue}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.PROBLEMS)
     else:
         console.print(
             f"[green]✓ No issues found.[/green]  {len(taxonomy.concepts)} concepts validated."
@@ -424,7 +424,8 @@ def cmd_convert(
         console.print(f"[green]✓[/green] {input_file.name} → {out.name}")
     except ValueError as exc:
         _app.err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
     except Exception as exc:
         _app.err.print(f"[red]Cannot convert {input_file}: {exc}[/red]")
-        raise typer.Exit(1)
+        missing = not input_file.is_file()
+        raise typer.Exit(ExitCode.FILE if missing else ExitCode.INVALID_RDF)

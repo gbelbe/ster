@@ -27,6 +27,16 @@ def _plain_help_output(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _a_terminal_is_present(monkeypatch):
+    """Tests drive prompts by patching Rich, as if someone were typing.
+
+    Under pytest stdin is never a terminal, so ster.ask would refuse every
+    question. Tests of the no-terminal path switch this back off themselves.
+    """
+    monkeypatch.setattr("ster.ask.has_terminal", lambda: True)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
     """Redirect the on-disk analysis cache to a per-test tmp dir and disable binary cache.
 

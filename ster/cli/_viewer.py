@@ -6,9 +6,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rich.prompt import Confirm
-
-from .. import store
+from .. import ask, store
 from ..display import console
 from ..model import Taxonomy
 
@@ -16,6 +14,7 @@ if TYPE_CHECKING:
     from ..git.manager import GitManager
 
 from . import _app, _export, _rdfxml, _state
+from ._exit import ExitCode
 
 # ──────────────────────────── viewer helper ──────────────────────────────────
 
@@ -85,7 +84,7 @@ def _finish_configured_git(gm: GitManager, fetch_event: threading.Event | None) 
 def _offer_git_tracking(gm: GitManager, taxonomy: Taxonomy, taxonomy_file: Path) -> None:
     """Offer to configure git after viewing an otherwise unconfigured taxonomy."""
     try:
-        want_git = Confirm.ask("\nAdd taxonomy to git repository?", default=False)
+        want_git = ask.confirm("\nAdd taxonomy to git repository?", default=False)
     except (KeyboardInterrupt, EOFError):
         want_git = False
     if want_git:
@@ -140,7 +139,9 @@ def _open_viewer(taxonomy_file: Path, lang: str = "en", context: list[Path] | No
             "Run ster directly instead of through a pipe, "
             "or use a non-interactive command such as [bold]ster show --help[/bold]."
         )
-        return
+        # SystemExit, not typer.Exit: the home-screen loop reads typer.Exit as
+        # "quit", which would turn this refusal back into a successful exit 0.
+        raise SystemExit(ExitCode.USAGE)
 
     _prewarm_lint(taxonomy_file)
     pre_hash = store.file_hash(taxonomy_file) if _state.converted_from else ""

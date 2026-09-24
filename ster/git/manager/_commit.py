@@ -71,14 +71,14 @@ class _CommitMixin(_ManagerState):
     def _lint_blocks_commit(self, lint: _LintState | None) -> bool:
         """Prompt when the lint introduces blocking issues; True to *cancel* the commit.
         A no-op returning False when *lint* is None (plugin disabled)."""
-        from rich.prompt import Confirm
+        from ster import ask
 
         from ...plugins.semanticlint.runner import display_violations, has_blocking_violations
 
         if lint is None or not has_blocking_violations(*lint):
             return False
         display_violations(*lint)
-        if Confirm.ask("Issues found. Commit anyway?", default=False, console=_console.console):
+        if ask.confirm("Issues found. Commit anyway?", default=False, console=_console.console):
             return False
         _console.console.print("[dim]Commit cancelled.[/dim]")
         return True
@@ -100,7 +100,7 @@ class _CommitMixin(_ManagerState):
             _console.console.print("[dim]No staged changes — nothing to commit.[/dim]")
             return
 
-        from rich.prompt import Prompt
+        from ster import ask
 
         repo = self._repo()
         if repo is None:
@@ -118,7 +118,7 @@ class _CommitMixin(_ManagerState):
         default_msg = f"Update {self.taxonomy_path.name}"
         _console.console.print()
         try:
-            msg = Prompt.ask(
+            msg = ask.text(
                 "[bold]Commit message[/bold]",
                 default=default_msg,
                 console=_console.console,
@@ -147,7 +147,7 @@ class _CommitMixin(_ManagerState):
         )
         default_choice = "1" if strat == _LIT_DIRECT else "2"
         try:
-            choice = Prompt.ask(
+            choice = ask.text(
                 "Choose", choices=["1", "2"], default=default_choice, console=_console.console
             )
         except (KeyboardInterrupt, EOFError):

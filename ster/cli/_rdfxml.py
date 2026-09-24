@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rich.prompt import Confirm
-
-from .. import store
+from .. import ask, store
 from ..display import console
 from . import _state
 
@@ -22,7 +20,7 @@ def _maybe_prompt_rdfxml_convert(resolved: Path) -> Path:
     _state.rdfxml_checked = True
     original = resolved
     try:
-        want = Confirm.ask(
+        want = ask.confirm(
             f"RDF/XML format detected ({resolved.name}), convert to Turtle (.ttl) to use ster?",
             default=True,
         )
@@ -51,7 +49,7 @@ def _maybe_backconvert(ttl_path: Path, pre_hash: str, original_path: Path) -> No
     if store.file_hash(ttl_path) == pre_hash:
         return
     try:
-        want = Confirm.ask(
+        want = ask.confirm(
             f"Changes detected in [bold]{ttl_path.name}[/bold]. "
             f"Convert back to [bold]{original_path.name}[/bold] and overwrite?",
             default=False,

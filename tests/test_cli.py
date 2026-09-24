@@ -1296,7 +1296,7 @@ def test_cmd_publish_stable_invalid_bump_exits(tmp_path):
     result = _runner.invoke(
         app, ["publish", str(ttl), "--bump", "huge", "--dir", str(tmp_path / "ontology")]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
 
 def test_cmd_publish_dev_writes_dev_dir(tmp_path):
@@ -1312,7 +1312,7 @@ def test_cmd_publish_dev_writes_dev_dir(tmp_path):
 
 def test_cmd_publish_missing_file_exits(tmp_path):
     result = _runner.invoke(app, ["publish", str(tmp_path / "nope.ttl")])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
 
 def test_cmd_publish_blocked_without_ontology_uri(tmp_path):
@@ -1461,13 +1461,13 @@ def test_cmd_export_opens_by_default(tmp_ttl, tmp_path, monkeypatch):
 def test_cmd_export_reports_runtime_error(tmp_ttl):
     with patch("ster.html_export.generate_html", side_effect=RuntimeError("pyLODE missing")):
         result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
 
 
 def test_cmd_export_reports_unexpected_error(tmp_ttl):
     with patch("ster.html_export.generate_html", side_effect=ValueError("boom")):
         result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
 
 
 def test_cmd_export_stops_when_ontology_uri_is_declined(tmp_path):
@@ -1475,7 +1475,7 @@ def test_cmd_export_stops_when_ontology_uri_is_declined(tmp_path):
     bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
     with patch("ster.cli._export._ensure_ontology_uri", return_value=False):
         result = _runner.invoke(app, ["export", "--file", str(bare)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
 
 # ── _ensure_ontology_uri ────────────────────────────────────────────────────────
@@ -1492,9 +1492,7 @@ def test_ensure_ontology_uri_prompts_and_saves_when_missing(tmp_path):
 
     bare = tmp_path / "bare.ttl"
     bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch(
-        "ster.cli._export.Prompt.ask", side_effect=["My Ontology", "https://example.org/onto"]
-    ):
+    with patch("rich.prompt.Prompt.ask", side_effect=["My Ontology", "https://example.org/onto"]):
         assert _ensure_ontology_uri(bare) is True
     from ster import store
 
@@ -1507,7 +1505,7 @@ def test_ensure_ontology_uri_rejects_uri_with_space(tmp_path):
 
     bare = tmp_path / "bare.ttl"
     bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("ster.cli._export.Prompt.ask", side_effect=["Name", "not a valid uri"]):
+    with patch("rich.prompt.Prompt.ask", side_effect=["Name", "not a valid uri"]):
         assert _ensure_ontology_uri(bare) is False
 
 
@@ -1516,7 +1514,7 @@ def test_ensure_ontology_uri_cancelled(tmp_path):
 
     bare = tmp_path / "bare.ttl"
     bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("ster.cli._export.Prompt.ask", side_effect=KeyboardInterrupt):
+    with patch("rich.prompt.Prompt.ask", side_effect=KeyboardInterrupt):
         assert _ensure_ontology_uri(bare) is False
 
 
@@ -1549,7 +1547,7 @@ def test_cmd_init_ci_already_exists_without_force(tmp_path):
 def test_cmd_serve_import_error_exits(tmp_ttl):
     with patch.dict("sys.modules", {"ster.api_server": None}):
         result = _runner.invoke(app, ["serve", str(tmp_ttl)])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
     assert "graph server" in result.output.lower() or "fastapi" in result.output.lower()
 
 
@@ -1631,7 +1629,7 @@ o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
 """
     )
     workspace = TaxonomyWorkspace.from_files([ttl])
-    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=False):
+    with patch("rich.prompt.Confirm.ask", return_value=False):
         cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
     assert other not in workspace.taxonomies
 
@@ -1663,7 +1661,7 @@ o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
 """
     )
     workspace = TaxonomyWorkspace.from_files([ttl])
-    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=True):
+    with patch("rich.prompt.Confirm.ask", return_value=True):
         cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
     assert other in workspace.taxonomies
 
@@ -1686,7 +1684,7 @@ t:A a skos:Concept ; skos:inScheme t:Scheme ; skos:topConceptOf t:Scheme ;
     )
     other.write_text("not a valid taxonomy file at all {{{", encoding="utf-8")
     workspace = TaxonomyWorkspace.from_files([ttl])
-    with patch("ster.cli._workspace_ui.Confirm.ask", return_value=True):
+    with patch("rich.prompt.Confirm.ask", return_value=True):
         cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
     assert other not in workspace.taxonomies
 
@@ -1718,7 +1716,7 @@ o:B a skos:Concept ; skos:inScheme o:Scheme2 ; skos:topConceptOf o:Scheme2 ;
 """
     )
     workspace = TaxonomyWorkspace.from_files([ttl])
-    with patch("ster.cli._workspace_ui.Confirm.ask", side_effect=KeyboardInterrupt):
+    with patch("rich.prompt.Confirm.ask", side_effect=KeyboardInterrupt):
         cli_module._workspace_ui._resolve_broken_mappings_at_load(workspace, [ttl, other])
     assert other not in workspace.taxonomies
 
@@ -1728,7 +1726,7 @@ def test_prompt_for_context_files_cancelled_returns_empty(tmp_path):
 
     a = tmp_path / "a.ttl"
     b = tmp_path / "b.ttl"
-    with patch("ster.cli._workspace_ui.Prompt.ask", side_effect=KeyboardInterrupt):
+    with patch("rich.prompt.Prompt.ask", side_effect=KeyboardInterrupt):
         assert prompt_for_context_files(a, [a, b]) == []
 
 
@@ -1758,13 +1756,13 @@ def test_cmd_add_with_french_label_and_definition(tmp_ttl):
 
 
 def test_cmd_remove_without_yes_declined(tmp_ttl):
-    with patch("ster.cli._commands_edit.Confirm.ask", return_value=False):
+    with patch("rich.prompt.Confirm.ask", return_value=False):
         result = _runner.invoke(app, ["remove", "GRA", "--file", str(tmp_ttl)])
     assert result.exit_code != 0
 
 
 def test_cmd_remove_without_yes_confirmed_cascade_message(tmp_ttl):
-    with patch("ster.cli._commands_edit.Confirm.ask", return_value=True) as confirm:
+    with patch("rich.prompt.Confirm.ask", return_value=True) as confirm:
         result = _runner.invoke(app, ["remove", "CHI", "--cascade", "--file", str(tmp_ttl)])
     assert result.exit_code == 0, result.output
     (msg,), _ = confirm.call_args
@@ -1811,13 +1809,13 @@ def test_cmd_convert_bad_input_reports_value_error(tmp_path):
     bogus = tmp_path / "bogus.unknownext"
     bogus.write_text("not rdf", encoding="utf-8")
     result = _runner.invoke(app, ["convert", str(bogus)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
 
 def test_cmd_convert_missing_file_reports_generic_error(tmp_path):
     missing = tmp_path / "does-not-exist.ttl"
     result = _runner.invoke(app, ["convert", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
 
 # ── _offer_keep_demo_edits (ster/cli/_query_launcher.py) ────────────────────
@@ -1830,7 +1828,7 @@ def test_offer_keep_demo_edits_noop_when_not_a_tty(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     dest = tmp_path / "demo.ttl"
     dest.write_text("edited", encoding="utf-8")
-    with patch("ster.cli._query_launcher.Confirm.ask") as confirm:
+    with patch("rich.prompt.Confirm.ask") as confirm:
         _offer_keep_demo_edits(dest)
     confirm.assert_not_called()
 
@@ -1843,7 +1841,7 @@ def test_offer_keep_demo_edits_declined(tmp_path, monkeypatch):
     dest = tmp_path / "demo.ttl"
     dest.write_text("edited", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    with patch("ster.cli._query_launcher.Confirm.ask", return_value=False):
+    with patch("rich.prompt.Confirm.ask", return_value=False):
         _offer_keep_demo_edits(dest)
     assert not (tmp_path / "my-ontology.ttl").exists()
 
@@ -1857,8 +1855,8 @@ def test_offer_keep_demo_edits_saves_under_chosen_name(tmp_path, monkeypatch):
     dest.write_text("edited content", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._query_launcher.Confirm.ask", return_value=True),
-        patch("ster.cli._query_launcher.Prompt.ask", return_value="mywork"),
+        patch("rich.prompt.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", return_value="mywork"),
     ):
         _offer_keep_demo_edits(dest)
     saved = tmp_path / "mywork.ttl"
@@ -1875,8 +1873,8 @@ def test_offer_keep_demo_edits_blank_name_falls_back_to_default(tmp_path, monkey
     dest.write_text("edited", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with (
-        patch("ster.cli._query_launcher.Confirm.ask", return_value=True),
-        patch("ster.cli._query_launcher.Prompt.ask", return_value=""),
+        patch("rich.prompt.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", return_value=""),
     ):
         _offer_keep_demo_edits(dest)
     assert (tmp_path / "my-ontology.ttl").exists()

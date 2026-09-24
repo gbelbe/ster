@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.console import Console
-from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from . import ask
 from .ontology_imports import (
     _DEFAULT_CACHE_DIR,
     COMMON_ONTOLOGIES,
@@ -85,7 +85,7 @@ def run_ext_ontologies_screen(taxonomy=None) -> None:
         )
         console.print()
 
-        action = Prompt.ask(
+        action = ask.text(
             "Action",
             choices=["N", "n", "R", "r", "D", "d", "Q", "q"],
             default="Q",
@@ -127,7 +127,7 @@ def _action_add(taxonomy) -> None:
         t.add_row(str(i), ont_name, ont_prefix, ont_ns)
     console.print(t)
     console.print()
-    raw = Prompt.ask(
+    raw = ask.text(
         f"  Pick a number (1–{len(COMMON_ONTOLOGIES)}) or enter a namespace URL directly"
         " (empty = cancel)"
     ).strip()
@@ -145,7 +145,7 @@ def _action_add(taxonomy) -> None:
     else:
         ns_url = raw if raw.endswith(("/", "#")) else raw + "/"
         prefix = suggest_prefix(ns_url)
-        custom_prefix = Prompt.ask("  Prefix", default=prefix).strip()
+        custom_prefix = ask.text("  Prefix", default=prefix).strip()
         prefix = custom_prefix or prefix
 
     console.print(f"\n[dim]Fetching[/dim] [cyan]{ns_url}[/cyan] …")
@@ -163,7 +163,7 @@ def _action_add(taxonomy) -> None:
 def _action_refresh(cached: list[tuple[str, Path, int]]) -> None:
     """Re-download and overwrite a specific cached ontology."""
     console.print()
-    raw = Prompt.ask(f"  Refresh which entry (1–{len(cached)}, empty = cancel)").strip()
+    raw = ask.text(f"  Refresh which entry (1–{len(cached)}, empty = cancel)").strip()
     if not raw or not raw.isdigit():
         return
     idx = int(raw) - 1
@@ -186,7 +186,7 @@ def _action_refresh(cached: list[tuple[str, Path, int]]) -> None:
 def _action_delete(cached: list[tuple[str, Path, int]]) -> None:
     """Delete a cached ontology file from disk."""
     console.print()
-    raw = Prompt.ask(f"  Delete which entry (1–{len(cached)}, empty = cancel)").strip()
+    raw = ask.text(f"  Delete which entry (1–{len(cached)}, empty = cancel)").strip()
     if not raw or not raw.isdigit():
         return
     idx = int(raw) - 1
@@ -194,7 +194,7 @@ def _action_delete(cached: list[tuple[str, Path, int]]) -> None:
         console.print(_INVALID_SELECTION)
         return
     ns, path, _ = cached[idx]
-    if Confirm.ask(f"  Delete cache for [cyan]{ns}[/cyan]?"):
+    if ask.confirm(f"  Delete cache for [cyan]{ns}[/cyan]?"):
         path.unlink(missing_ok=True)
         console.print("  [green]✓[/green] Deleted.")
     else:

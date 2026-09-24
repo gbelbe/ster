@@ -50,10 +50,10 @@ class _SetupMixin(_ManagerState):
             return True
 
         # Ask the user if they want git at all
-        from rich.prompt import Confirm
+        from ster import ask
 
         _console.console.print()
-        want = Confirm.ask(
+        want = ask.confirm(
             "[bold]Set up Git version control for this taxonomy?[/bold]",
             default=True,
         )
@@ -63,7 +63,7 @@ class _SetupMixin(_ManagerState):
             return False
 
         # Present options
-        from rich.prompt import Prompt
+        from ster import ask
 
         _console.console.print(
             "\n[bold]Git setup:[/bold]\n"
@@ -71,7 +71,7 @@ class _SetupMixin(_ManagerState):
             "  [cyan]2[/cyan]  Clone from a remote URL (GitHub / GitLab / …)\n"
             "  [cyan]3[/cyan]  Link to an existing local repository"
         )
-        choice = Prompt.ask(_LIT_CHOOSE, choices=["1", "2", "3"], default="1")
+        choice = ask.text(_LIT_CHOOSE, choices=["1", "2", "3"], default="1")
 
         ok = False
         if choice == "1":
@@ -89,7 +89,7 @@ class _SetupMixin(_ManagerState):
 
     def _init_new_repo(self) -> bool:
         """Initialise a brand-new local repository, optionally wiring a remote."""
-        from rich.prompt import Confirm, Prompt
+        from ster import ask
 
         repo_dir = self.taxonomy_path.parent
         r = _subprocess._git("init", cwd=repo_dir)
@@ -104,9 +104,9 @@ class _SetupMixin(_ManagerState):
         _subprocess._git("add", str(gi), cwd=repo_dir)
         _subprocess._git("commit", "-m", "chore: initialise repository", cwd=repo_dir)
 
-        if Confirm.ask("Add a remote (GitHub / GitLab / …)?", default=True):
+        if ask.confirm("Add a remote (GitHub / GitLab / …)?", default=True):
             while True:
-                url = Prompt.ask("Remote URL (https or ssh)")
+                url = ask.text("Remote URL (https or ssh)")
                 if not url:
                     break
                 # Verify connectivity before storing
@@ -116,7 +116,7 @@ class _SetupMixin(_ManagerState):
                     _console.err.print(
                         f"[red]Cannot reach {url}[/red]\n[dim]{ls_r.stderr.strip()}[/dim]"
                     )
-                    if not Confirm.ask("Try a different URL?", default=True):
+                    if not ask.confirm("Try a different URL?", default=True):
                         break
                     continue
                 _subprocess._git(_LIT_REMOTE, "add", _LIT_ORIGIN, url, cwd=repo_dir)
@@ -140,19 +140,19 @@ class _SetupMixin(_ManagerState):
         files (init-in-place + fetch).  Loops until connectivity and sync are
         verified, or the user cancels.
         """
-        from rich.prompt import Confirm, Prompt
+        from ster import ask
 
         repo_dir = self.taxonomy_path.parent
 
         while True:
-            url = Prompt.ask("Repository URL (GitHub https or SSH)")
+            url = ask.text("Repository URL (GitHub https or SSH)")
             if not url:
                 return False
 
             if self._clone_repo_attempt(repo_dir, url):
                 return True
 
-            if not Confirm.ask("Retry?", default=True):
+            if not ask.confirm("Retry?", default=True):
                 return False
 
     def _clone_repo_attempt(self, repo_dir: Path, url: str) -> bool:
@@ -194,7 +194,7 @@ class _SetupMixin(_ManagerState):
 
     def _init_inplace_with_remote(self, repo_dir: Path, url: str) -> bool:
         """Set up git in a non-empty directory and link it to *url*."""
-        from rich.prompt import Prompt
+        from ster import ask
 
         # Init if needed
         already_git = _subprocess._git(_LIT_REV_PARSE, _LIT_GIT_DIR, cwd=repo_dir).returncode == 0
@@ -237,7 +237,7 @@ class _SetupMixin(_ManagerState):
                 f"(overwrites '{main}' on the remote)\n"
                 "  [cyan]3[/cyan]  Skip for now (track manually later)"
             )
-            choice = Prompt.ask(_LIT_CHOOSE, choices=["1", "2", "3"], default="1")
+            choice = ask.text(_LIT_CHOOSE, choices=["1", "2", "3"], default="1")
 
             if choice == "1":
                 return self._pull_remote_into_dir(repo_dir, main)
@@ -285,7 +285,7 @@ class _SetupMixin(_ManagerState):
 
     def _push_local_to_remote(self, repo_dir: Path, main: str, force: bool) -> bool:
         """Stage all local files, commit if needed, and push to remote."""
-        from rich.prompt import Confirm
+        from ster import ask
 
         self._ensure_on_branch(repo_dir, main)
         _subprocess._git("add", ".", cwd=repo_dir)
@@ -305,7 +305,7 @@ class _SetupMixin(_ManagerState):
 
         if push_r.returncode != 0:
             _console.err.print(f"[red]Push failed:[/red] {push_r.stderr.strip()}")
-            if not force and Confirm.ask("Force push? (overwrites remote history)", default=False):
+            if not force and ask.confirm("Force push? (overwrites remote history)", default=False):
                 push_r = _subprocess._git("push", "--force", "-u", _LIT_ORIGIN, main, cwd=repo_dir)
                 if push_r.returncode != 0:
                     _console.err.print(f"[red]Force push failed:[/red] {push_r.stderr.strip()}")
@@ -350,18 +350,18 @@ class _SetupMixin(_ManagerState):
 
     def _link_repo_interactive(self) -> bool:
         """Link to an existing local repository with retry."""
-        from rich.prompt import Confirm, Prompt
+        from ster import ask
 
         while True:
             default = str(self.taxonomy_path.parent)
-            path_str = Prompt.ask("Path to git repository", default=default)
+            path_str = ask.text("Path to git repository", default=default)
             p = Path(path_str).expanduser().resolve()
             if _subprocess._git(_LIT_REV_PARSE, _LIT_GIT_DIR, cwd=p).returncode == 0:
                 self._link_existing_repo(p)
                 _console.console.print(f"[green]✓[/green] Linked to [bold]{p}{_LIT_BOLD}")
                 return True
             _console.err.print(f"[red]Not a git repository: {p}[/red]")
-            if not Confirm.ask("Try a different path?", default=True):
+            if not ask.confirm("Try a different path?", default=True):
                 return False
 
     def _link_existing_repo(self, repo_root: Path) -> None:
@@ -373,14 +373,14 @@ class _SetupMixin(_ManagerState):
         self._persist()
 
     def _ask_branch_strategy(self) -> None:
-        from rich.prompt import Prompt
+        from ster import ask
 
         _console.console.print(
             "\n[bold]Default push strategy:[/bold]\n"
             "  [cyan]1[/cyan]  Direct push to main  (single user, no review)\n"
             "  [cyan]2[/cyan]  Feature branch + Pull Request  (team workflow)"
         )
-        choice = Prompt.ask(_LIT_CHOOSE, choices=["1", "2"], default="1")
+        choice = ask.text(_LIT_CHOOSE, choices=["1", "2"], default="1")
         self._cfg["branch_strategy"] = "direct" if choice == "1" else "pr"
         self._persist()
 

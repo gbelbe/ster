@@ -6,8 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO, Final
 
-from rich.prompt import Confirm, Prompt
-
+from .. import ask
 from ..display import console
 from ..project import Project
 from ..workspace import TaxonomyWorkspace
@@ -238,7 +237,7 @@ def prompt_for_context_files(
     console.print("  [dim]numbers (1,3) · all · none[/dim]")
     last = ",".join(str(options.index(p) + 1) for p in (ticked or ()) if p in options)
     try:
-        answer = Prompt.ask("  Context files", default=last or "none")
+        answer = ask.text("  Context files", default=last or "none")
     except (KeyboardInterrupt, EOFError):
         return []
     return parse_context_choice(answer, options)
@@ -280,7 +279,7 @@ def _select_home_file_numeric(found: list[Path]) -> Path | None:
         f"{_LIT_CYAN_OPEN}{demo_idx}[/cyan]  [green]🎒 Load demo ontology / taxonomy[/green]"
     )
     console.print(f"{_LIT_CYAN_OPEN}{quit_idx}[/cyan]  [red]✕  Quit[/red]")
-    choice = Prompt.ask(f"Select (1–{quit_idx})", default=str(demo_idx if not found else 1))
+    choice = ask.text(f"Select (1–{quit_idx})", default=str(demo_idx if not found else 1))
     try:
         idx = int(choice.strip()) - 1
     except ValueError:
@@ -317,7 +316,7 @@ def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> ob
         console.print(f"{_LIT_CYAN_OPEN}{i}{_LIT_CYAN_CLOSE}{label}")
     console.print()
     open_idx = next((i for i, (s, _) in enumerate(actions) if s is True), 0)
-    choice = Prompt.ask(f"Action (1–{len(actions)})", default=str(open_idx + 1))
+    choice = ask.text(f"Action (1–{len(actions)})", default=str(open_idx + 1))
     try:
         idx = int(choice.strip()) - 1
     except ValueError:
@@ -466,7 +465,7 @@ def _resolve_broken_mappings_at_load(
         console.print(f"  • {f.name}")
 
     try:
-        want = Confirm.ask("Load these files to resolve references?", default=True)
+        want = ask.confirm("Load these files to resolve references?", default=True)
     except (KeyboardInterrupt, EOFError):
         want = False
 
@@ -496,6 +495,6 @@ def ask_include_subfolders(below: list[Path]) -> bool:
     noun = "subfolder" if len(folders) == 1 else "subfolders"
     console.print(f"\n  Found {len(below)} RDF file(s) in {len(folders)} {noun} ({names}).")
     try:
-        return Confirm.ask("  Include them?", default=False)
+        return ask.confirm("  Include them?", default=False)
     except (KeyboardInterrupt, EOFError):
         return False

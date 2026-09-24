@@ -188,6 +188,7 @@ def test_a_period_too_narrow_for_its_label_shows_it_beside_the_box() -> None:
 
 def test_narrow_periods_are_rechecked_after_every_zoom() -> None:
     js = _app_js()
+    assert "state.timeline.off('rangechanged', placeLabels)" in js
     assert "state.timeline.on('rangechanged', placeLabels)" in js
     assert "state.beside[item.id] ? ' beside' : ''" in js
     # Only periods can be narrow: a single date is a point with a free label.

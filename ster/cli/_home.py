@@ -7,10 +7,12 @@ from typing import Final
 
 import typer
 
+from .. import ask
 from ..display import console
 from ..project import Project, _git_root
 from . import _app, _constants, _file_picker, _query_launcher, _state, _viewer, _workspace_ui
 from ._discovery import discover_rdf_files, subfolder_rdf_files
+from ._exit import ExitCode
 
 
 def _launch_place(arg: str) -> tuple[Path, Path | None] | None:
@@ -58,7 +60,39 @@ def _forget_choices(root: Path) -> None:
 
 
 def main() -> None:
-    """Entry point.
+    """Entry point: run the command, and turn what goes wrong into an exit code.
+
+    Two failures would otherwise reach a script or CI log badly: a question
+    with nobody to answer it, and an error nobody planned for (a traceback).
+    Each becomes one line on stderr and a documented exit code instead —
+    ``STER_DEBUG=1`` keeps the traceback for whoever is debugging.
+    """
+    import os
+
+    try:
+        _dispatch()
+    except ask.NeedsAnswer as unanswered:
+        _report_unanswered(unanswered)
+        raise SystemExit(ExitCode.USAGE) from None
+    except Exception as exc:
+        if os.environ.get("STER_DEBUG"):
+            raise
+        typer.echo(f"ster: unexpected error: {type(exc).__name__}: {exc}", err=True)
+        typer.echo("      Run again with STER_DEBUG=1 to see the full traceback.", err=True)
+        raise SystemExit(ExitCode.UNEXPECTED) from None
+
+
+def _report_unanswered(unanswered: ask.NeedsAnswer) -> None:
+    typer.echo(
+        f'ster: this needs an answer ("{unanswered.question}") but there is no terminal to ask.',
+        err=True,
+    )
+    if unanswered.hint:
+        typer.echo(f"      {unanswered.hint}", err=True)
+
+
+def _dispatch() -> None:
+    """Route the command line.
 
     • ``ster``                   — interactive home screen (loops until Ctrl+C)
     • ``ster FOLDER``            — the same, as if launched from inside FOLDER
@@ -133,7 +167,7 @@ def _include_subfolders(root: Path) -> bool:
 def _print_home_intro() -> None:
     """Welcome banner + the one-time CI-workflow prompt."""
     _app._print_welcome()
-    if _state.ci_check_done:
+    if _state.ci_check_done or not ask.has_terminal():
         return
     _state.ci_check_done = True
     from ..init_ci import prompt_if_missing

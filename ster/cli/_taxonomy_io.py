@@ -11,6 +11,7 @@ from .. import operations, store
 from ..display import console
 from ..exceptions import SkostaxError
 from ..model import Taxonomy
+from ._exit import ExitCode
 
 _LIT_RED_CLOSE: Final = "[/red]"
 _LIT_RED_OPEN: Final = "[red]"
@@ -75,9 +76,10 @@ def _load(path: Path, *, diagnose: bool = True) -> Taxonomy:
     """
     taxonomy = _load_safe(path)
     if taxonomy is None:
-        raise typer.Exit(1)
+        # A path that is not there is a different fix from a file that is broken.
+        raise typer.Exit(ExitCode.FILE if not path.is_file() else ExitCode.INVALID_RDF)
     if diagnose and _report_unreadable(path, taxonomy):
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID_RDF)
     return taxonomy
 
 
@@ -87,7 +89,7 @@ def _save(taxonomy: Taxonomy, path: Path) -> None:
         console.print(f"[green]✓ Saved[/green] {path}")
     except Exception as exc:
         _app.err.print(f"[red]Cannot save {path}: {exc}{_LIT_RED_CLOSE}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.FILE)
 
 
 def _resolve(taxonomy: Taxonomy, ref: str) -> str:
@@ -95,7 +97,7 @@ def _resolve(taxonomy: Taxonomy, ref: str) -> str:
         return operations.resolve(taxonomy, ref)
     except SkostaxError as exc:
         _app.err.print(f"{_LIT_RED_OPEN}{exc}{_LIT_RED_CLOSE}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
 
 
 def _run(fn, *args, **kwargs):
@@ -104,4 +106,4 @@ def _run(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except SkostaxError as exc:
         _app.err.print(f"{_LIT_RED_OPEN}{exc}{_LIT_RED_CLOSE}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)

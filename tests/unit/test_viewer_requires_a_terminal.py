@@ -20,7 +20,11 @@ def test_the_viewer_is_skipped_without_a_terminal(tmp_path, monkeypatch, capsys)
 
     src = tmp_path / "o.ttl"
     src.write_text("", encoding="utf-8")
-    cli._viewer._open_viewer(src)
+    with pytest.raises(SystemExit) as exited:
+        cli._viewer._open_viewer(src)
+    # Exit 2, not 0: a CI step running the viewer by mistake must fail, not
+    # "succeed" having shown nothing.
+    assert exited.value.code == 2
 
     assert not launched, "the TUI must not run its event loop without a tty"
     assert "terminal" in capsys.readouterr().err.lower()  # a refusal belongs on stderr

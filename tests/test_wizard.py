@@ -76,8 +76,8 @@ def test_run_happy_path(tmp_path):
         "Alice",  # creator
     ]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 
@@ -96,8 +96,8 @@ def test_run_cancelled_at_confirm(tmp_path):
     out_file = tmp_path / "new.ttl"
     answers = [str(out_file), "en", "My Taxonomy", "", "https://example.org/x/", ""]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=False),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=False),
     ):
         result = run()
 
@@ -107,8 +107,8 @@ def test_run_cancelled_at_confirm(tmp_path):
 def test_run_quit_mid_wizard(tmp_path):
     answers = ["quit"]  # user quits on first prompt
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 
@@ -119,8 +119,8 @@ def test_run_adds_slash_to_base_uri(tmp_path):
     out_file = tmp_path / "new.ttl"
     answers = [str(out_file), "en", "Title", "", "https://example.org/myns", ""]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 
@@ -132,8 +132,8 @@ def test_run_adds_ttl_extension_if_missing(tmp_path):
     out_file = tmp_path / "notaxonomy"  # no extension
     answers = [str(out_file), "en", "Title", "", "https://example.org/x/", ""]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 
@@ -152,8 +152,8 @@ def test_run_skip_optional_fields(tmp_path):
         "skip",  # creator — skip
     ]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 
@@ -166,8 +166,8 @@ def test_run_sets_created_date(tmp_path):
     out_file = tmp_path / "new.ttl"
     answers = [str(out_file), "en", "Title", "", "https://example.org/x/", ""]
     with (
-        patch("ster.wizard.Prompt.ask", side_effect=_mock_prompts(answers)),
-        patch("ster.wizard.Confirm.ask", return_value=True),
+        patch("rich.prompt.Prompt.ask", side_effect=_mock_prompts(answers)),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         result = run()
 

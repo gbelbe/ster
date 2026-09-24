@@ -66,9 +66,9 @@ def prompt_if_missing(
         return False
 
     if ask_fn is None:
-        from rich.prompt import Confirm
+        from . import ask
 
-        ask_fn = lambda msg: Confirm.ask(msg, default=True)  # noqa: E731
+        ask_fn = lambda msg: ask.confirm(msg, default=True)  # noqa: E731
 
     if ask_fn("No taxonomy CI workflow found — add it now?"):
         scaffold(root)

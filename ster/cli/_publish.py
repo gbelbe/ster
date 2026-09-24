@@ -9,9 +9,10 @@ from typing import BinaryIO, Final
 
 import typer
 from rich.console import Console
-from rich.prompt import Prompt
 
+from .. import ask
 from ..display import console
+from ._exit import ExitCode
 
 _LIT_DIM: Final = "[/dim]"
 _LIT_PATCH: Final = "patch"
@@ -104,7 +105,7 @@ def _select_publish_target(files: list[Path]) -> tuple[Path, object] | None:  # 
         for i, f in enumerate(files, 1):
             console.print(f"  [cyan]{i}[/cyan]  {f.name}")
         try:
-            idx = int(Prompt.ask("File number", default="1")) - 1
+            idx = int(ask.text("File number", default="1")) - 1
             taxonomy_file = files[max(0, min(idx, len(files) - 1))]
         except (ValueError, KeyboardInterrupt):
             return None
@@ -133,7 +134,7 @@ def _publish_stable_flow(taxonomy_file: Path, publish_dir: Path) -> None:  # pra
         "  [cyan]patch[/cyan] — backward-compatible bug fixes"
     )
     try:
-        bump = Prompt.ask("Bump", choices=["major", "minor", _LIT_PATCH], default=_LIT_PATCH)
+        bump = ask.text("Bump", choices=["major", "minor", _LIT_PATCH], default=_LIT_PATCH)
     except (KeyboardInterrupt, EOFError):
         return
     result = perform_stable_release(taxonomy_file, publish_dir, bump, GitManager(taxonomy_file))
@@ -345,7 +346,7 @@ def cmd_publish(
 
     if not path.exists():
         _app.err.print(f"[red]File not found:[/red] {path}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.FILE)
 
     taxonomy = load(path)
 
@@ -353,7 +354,7 @@ def cmd_publish(
         pre_flight(taxonomy)
     except PublishError as e:
         _app.err.print(f"[red]Publish blocked:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.PROBLEMS)
 
     if channel == "dev":
         _publish_dev_channel(path, taxonomy, publish_dir, open_pages, _con)
@@ -388,7 +389,7 @@ def _publish_stable_channel(path: Path, bump: str, publish_dir: Path, con: objec
         kind = semver_bump_from_choice(bump)
     except ValueError as e:
         _app.err.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
 
     result = perform_stable_release(path, publish_dir, kind, GitManager(path))
     con.print(  # type: ignore[attr-defined]

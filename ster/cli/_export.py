@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Final
 
 import typer
-from rich.prompt import Prompt
 
-from .. import store
+from .. import ask, store
 from ..display import console
 from ..model import Taxonomy
+from ._exit import ExitCode
 
 _LIT_GREEN: Final = "  [green]✓[/green]  "
 _LIT_BOLD: Final = "[/bold]…"
@@ -70,7 +70,7 @@ def cmd_export(
     languages = [lg.strip() for lg in lang.split(",")] if lang else None
 
     if not _ensure_ontology_uri(taxonomy_file):
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
 
     detected = detect_profile(taxonomy_file)
     chosen_profile = detected if detected != "both" else _LIT_ONTPUB
@@ -90,10 +90,10 @@ def cmd_export(
         )
     except RuntimeError as exc:
         _app.err.print(f"[red]{exc}{_LIT_RED}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.UNEXPECTED)
     except Exception as exc:
         _app.err.print(f"[red]Export failed: {exc}{_LIT_RED}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.UNEXPECTED)
 
     import webbrowser
 
@@ -183,7 +183,7 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
             console.print(f"  [cyan]{i:>2}[/cyan]  {f.name}")
         console.print()
         try:
-            choice = Prompt.ask(
+            choice = ask.text(
                 "File to visualise",
                 default="1",
             )
@@ -240,7 +240,7 @@ def _ensure_pylode() -> bool:
 
     console.print("\n[yellow]pyLODE is not installed.[/yellow]")
     try:
-        answer = Prompt.ask(
+        answer = ask.text(
             "Install it now?  [dim](pip install pylode)[/dim]",
             choices=["y", "n"],
             default="y",
@@ -294,8 +294,8 @@ def _ensure_ontology_uri(taxonomy_file: Path) -> bool:
     default_uri = f"https://example.org/ontology/{stem}"
 
     try:
-        name = Prompt.ask("Ontology name", default=default_name)
-        uri = Prompt.ask("Ontology URI", default=default_uri)
+        name = ask.text("Ontology name", default=default_name)
+        uri = ask.text("Ontology URI", default=default_uri)
     except (KeyboardInterrupt, EOFError):
         console.print(_app._CANCELLED_MESSAGE)
         return False
@@ -351,7 +351,7 @@ def _choose_html_profiles(files: list[Path]) -> dict[Path, str] | None:
             "skos:ConceptScheme and owl:Ontology declarations."
         )
         try:
-            file_profiles[taxonomy_file] = Prompt.ask(
+            file_profiles[taxonomy_file] = ask.text(
                 "  Which profile?", choices=[_LIT_VOCPUB, _LIT_ONTPUB], default=_LIT_ONTPUB
             )
         except (KeyboardInterrupt, EOFError):
@@ -366,7 +366,7 @@ def _choose_html_languages(
     if not any(profile == _LIT_VOCPUB for profile in file_profiles.values()):
         return True, None
     try:
-        lang_input = Prompt.ask(
+        lang_input = ask.text(
             "Languages to export [dim](comma-separated, Enter for all detected)[/dim]",
             default="",
         )
@@ -380,7 +380,7 @@ def _choose_html_output(files: list[Path]) -> Path | None:
     output_dir = files[0].parent / "html"
     console.print()
     try:
-        return Path(Prompt.ask("Output directory", default=str(output_dir)).strip())
+        return Path(ask.text("Output directory", default=str(output_dir)).strip())
     except (KeyboardInterrupt, EOFError):
         console.print(_app._CANCELLED_MESSAGE)
         return None

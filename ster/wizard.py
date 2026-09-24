@@ -9,9 +9,10 @@ from pathlib import Path
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.table import Table
+
+from . import ask
 
 console = Console()
 
@@ -121,7 +122,7 @@ def _ask(prompt: str, default: str = "", optional: bool = False) -> str | None:
     hint = f"  {_OPT_HINT}" if optional else ""
     full_prompt = f"[cyan]{prompt}[/cyan]{hint}"
     try:
-        val = Prompt.ask(full_prompt, default=default, console=console)
+        val = ask.text(full_prompt, default=default, console=console)
     except (KeyboardInterrupt, EOFError):
         console.print()
         return None
@@ -253,7 +254,7 @@ def _step_confirm(ctx: dict) -> bool:
     console.print(table)
     console.print()
     try:
-        return Confirm.ask("[cyan]Create this taxonomy?[/cyan]", default=True, console=console)
+        return ask.confirm("[cyan]Create this taxonomy?[/cyan]", default=True, console=console)
     except (KeyboardInterrupt, EOFError):
         console.print()
         return False

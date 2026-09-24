@@ -60,13 +60,13 @@ class _SyncMixin(_ManagerState):
         if behind == 0:
             return None
 
-        from rich.prompt import Confirm
+        from ster import ask
 
         _console.console.print(
             f"\n[yellow]⚠  {self.taxonomy_path.name} is "
             f"{behind} commit{'s' if behind > 1 else ''} behind the remote.[/yellow]"
         )
-        if not Confirm.ask("Pull latest changes?", default=True):
+        if not ask.confirm("Pull latest changes?", default=True):
             return None
 
         before_r = _subprocess._git(_LIT_REV_PARSE, "HEAD", cwd=repo)
@@ -119,13 +119,13 @@ class _SyncMixin(_ManagerState):
         if behind == 0:
             return None
 
-        from rich.prompt import Confirm
+        from ster import ask
 
         _console.console.print(
             f"\n[yellow]⚠  {self.taxonomy_path.name} is "
             f"{behind} commit{'s' if behind > 1 else ''} behind the remote.[/yellow]"
         )
-        if not Confirm.ask("Pull latest changes?", default=True):
+        if not ask.confirm("Pull latest changes?", default=True):
             return None
 
         # Record HEAD before pull so we can diff

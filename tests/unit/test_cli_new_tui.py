@@ -703,7 +703,7 @@ def test_offer_git_tracking_declined():
     from ster.cli._viewer import _offer_git_tracking
 
     gm = MagicMock()
-    with patch("ster.cli._viewer.Confirm.ask", return_value=False):
+    with patch("rich.prompt.Confirm.ask", return_value=False):
         _offer_git_tracking(gm, MagicMock(), Path("t.ttl"))
     gm.setup.assert_not_called()
 
@@ -715,7 +715,7 @@ def test_offer_git_tracking_accepted_and_configured():
     gm.is_configured.return_value = True
     taxonomy = MagicMock()
     with (
-        patch("ster.cli._viewer.Confirm.ask", return_value=True),
+        patch("rich.prompt.Confirm.ask", return_value=True),
         patch("ster.cli._export._make_taxonomy_commit_msg", return_value="msg"),
     ):
         _offer_git_tracking(gm, taxonomy, Path("t.ttl"))
@@ -727,7 +727,7 @@ def test_offer_git_tracking_cancelled_treated_as_declined():
     from ster.cli._viewer import _offer_git_tracking
 
     gm = MagicMock()
-    with patch("ster.cli._viewer.Confirm.ask", side_effect=KeyboardInterrupt):
+    with patch("rich.prompt.Confirm.ask", side_effect=KeyboardInterrupt):
         _offer_git_tracking(gm, MagicMock(), Path("t.ttl"))
     gm.setup.assert_not_called()
 

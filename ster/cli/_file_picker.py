@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Final
 
 import typer
-from rich.prompt import Confirm, Prompt
 
+from .. import ask
 from ..display import console
+from ._exit import ExitCode
+
+# How a script answers "which file?" without a terminal.
+_FILE_OPTION_HINT = "Pass --file <path>."
 
 _LIT_CYAN: Final = "  [cyan]"
 
@@ -56,7 +60,9 @@ def _resolve_file(path: Path | None) -> Path:
       4. Auto-discovery: single file → confirm; multiple → interactive picker.
     """
 
-    if not _state.ci_check_done:
+    # Offering to scaffold a CI workflow is for a person at a terminal. In CI
+    # itself nobody can answer, and asking first would stop every command there.
+    if not _state.ci_check_done and ask.has_terminal():
         _state.ci_check_done = True
         from ..init_ci import prompt_if_missing
         from ..project import _git_root as _find_git_root
@@ -89,11 +95,11 @@ def _resolve_file(path: Path | None) -> Path:
     if not found:
         _app.err.print("[red]No taxonomy file found in the current directory.[/red]")
         _app.err.print("[dim]Pass --file <path> or run 'ster init' to create one.[/dim]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.FILE)
 
     if len(found) == 1:
         console.print(f"[dim]Auto-detected:[/dim] [bold]{shown(found[0])}[/bold]")
-        if not Confirm.ask("Use this file for this session?", default=True):
+        if not ask.confirm("Use this file for this session?", default=True, hint=_FILE_OPTION_HINT):
             raise typer.Abort()
         found0 = _rdfxml._maybe_prompt_rdfxml_convert(found[0])
         _save_session(found0)
@@ -173,7 +179,7 @@ def _pick_file_prompt_loop(
 ) -> Path | None:
     while True:
         try:
-            choice = Prompt.ask(prompt_text, default=default_num or "")
+            choice = ask.text(prompt_text, default=default_num or "", hint=_FILE_OPTION_HINT)
         except (KeyboardInterrupt, EOFError):
             raise typer.Exit(0)
 

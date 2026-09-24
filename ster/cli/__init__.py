@@ -80,6 +80,7 @@ from ._constants import (
     _QUERY_SENTINEL,
     _QUIT_SENTINEL,
 )
+from ._examples import attach_examples
 from ._export import (
     _choose_html_languages,
     _choose_html_output,
@@ -363,3 +364,7 @@ __all__ = [
     "prompt_for_context_files",
     "store",
 ]
+
+# Every command module above has registered its commands by now, so their
+# --help pages can be given the examples and the app its scripting notes.
+attach_examples(app)

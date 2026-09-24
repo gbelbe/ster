@@ -8,6 +8,7 @@ import typer
 
 from ..display import console
 from . import _app
+from ._exit import ExitCode
 
 
 @_app.app.command("init-ci")
@@ -94,7 +95,7 @@ def cmd_serve(
         _app.err.print(
             "[red]The graph server (fastapi/uvicorn) failed to import — reinstall ster.[/red]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.UNEXPECTED)
     _warn_about_other_servers()
     serve(
         file.resolve(),

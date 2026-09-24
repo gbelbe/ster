@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from rich.prompt import Confirm, Prompt
-
+from .. import ask
 from ..display import console
 from . import _app, _constants, _export, _history, _publish
 
@@ -69,13 +68,13 @@ def _offer_keep_demo_edits(dest: Path) -> None:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
 
-    if not Confirm.ask(
+    if not ask.confirm(
         "The demo has your edits — save them to a new file before resetting?",
         default=True,
         console=console,
     ):
         return
-    name = Prompt.ask("Save your work as", default="my-ontology.ttl", console=console).strip()
+    name = ask.text("Save your work as", default="my-ontology.ttl", console=console).strip()
     if not name or Path(name).name == _constants._DEMO_FILE.name:  # never clobber the demo itself
         name = "my-ontology.ttl"
     if not name.endswith(".ttl"):

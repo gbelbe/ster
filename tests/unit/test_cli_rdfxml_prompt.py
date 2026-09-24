@@ -289,7 +289,7 @@ def test_graph_viz_invalid_choice_prints_error(tmp_path):
     from ster.cli import _run_graph_viz_interactive
 
     files = [tmp_path / "one.ttl", tmp_path / "two.ttl"]
-    with patch("ster.cli._export.Prompt.ask", return_value="not-a-number"):
+    with patch("rich.prompt.Prompt.ask", return_value="not-a-number"):
         _run_graph_viz_interactive(files)  # should return without raising
 
 
@@ -338,7 +338,7 @@ def test_graph_viz_multi_file_numeric_selection(tmp_path, tmp_ttl):
         patch("ster.viz_vowl.open_in_browser", return_value="http://127.0.0.1:8765/vowl") as opener,
         patch("ster.viz_vowl.is_live_server", return_value=True),
         patch("ster.cli._export._free_graph_port"),
-        patch("ster.cli._export.Prompt.ask", return_value="2"),
+        patch("rich.prompt.Prompt.ask", return_value="2"),
     ):
         _run_graph_viz_interactive([tmp_ttl, second])
     opener.assert_called_once()
@@ -393,7 +393,7 @@ def test_html_export_full_run_generates_and_opens_files(tmp_ttl, tmp_path):
     with (
         patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="vocpub"),
-        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("rich.prompt.Prompt.ask", side_effect=["", str(out_dir)]),
         patch("ster.html_export.generate_html", return_value=created),
         patch("webbrowser.open") as browser_open,
     ):
@@ -424,7 +424,7 @@ def test_html_export_stops_when_ontology_uri_declined(tmp_path):
     with (
         patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="vocpub"),
-        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("rich.prompt.Prompt.ask", side_effect=["", str(out_dir)]),
         patch("ster.cli._export._ensure_ontology_uri", return_value=False),
     ):
         _run_html_export_interactive([bare])
@@ -437,7 +437,7 @@ def test_html_export_reports_generate_html_error(tmp_ttl, tmp_path):
     with (
         patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="vocpub"),
-        patch("ster.cli._export.Prompt.ask", side_effect=["", str(out_dir)]),
+        patch("rich.prompt.Prompt.ask", side_effect=["", str(out_dir)]),
         patch("ster.html_export.generate_html", side_effect=RuntimeError("no pylode")),
     ):
         _run_html_export_interactive([tmp_ttl])
@@ -453,7 +453,7 @@ def test_html_export_profile_choice_persists_and_generates(tmp_path):
         patch("ster.cli._export._ensure_pylode", return_value=True),
         patch("ster.html_export.detect_profile", return_value="both"),
         patch(
-            "ster.cli._export.Prompt.ask",
+            "rich.prompt.Prompt.ask",
             side_effect=["ontpub", str(out_dir)],
         ),
         patch("ster.cli._export._ensure_ontology_uri", return_value=True),

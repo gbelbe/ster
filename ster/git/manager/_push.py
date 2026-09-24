@@ -25,12 +25,12 @@ class _PushMixin(_ManagerState):
             _console.err.print(f"[red]Push failed:[/red] {r.stderr.strip()}")
 
     def _push_pr(self, repo: Path, main: str, commit_msg: str) -> None:
-        from rich.prompt import Prompt
+        from ster import ask
 
         # Generate a default branch name
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         default = f"ster/{ts}"
-        fb = Prompt.ask("Feature branch name", default=default)
+        fb = ask.text("Feature branch name", default=default)
 
         # Push HEAD to a new remote branch without switching locally
         push_ref = f"HEAD:refs/heads/{fb}"
@@ -41,8 +41,8 @@ class _PushMixin(_ManagerState):
         _console.console.print(f"[green]✓ Pushed to[/green] [bold]{fb}[/bold]")
 
         # PR details
-        pr_title = Prompt.ask("PR title", default=commit_msg)
-        pr_body = Prompt.ask("PR description (optional)", default="")
+        pr_title = ask.text("PR title", default=commit_msg)
+        pr_body = ask.text("PR description (optional)", default="")
 
         pr_url = self._create_pr(repo, fb, main, pr_title, pr_body)
         if pr_url:
@@ -135,18 +135,18 @@ class _PushMixin(_ManagerState):
             return stored
 
         # 3. Prompt
-        from rich.prompt import Confirm, Prompt
+        from ster import ask
 
         _console.console.print(
             "\n[yellow]GitHub token needed for PR creation.[/yellow]\n"
             "[dim]Create one at github.com/settings/tokens (needs 'repo' scope).[/dim]\n"
             "[dim]Recommended: authenticate via `gh auth login` instead.[/dim]"
         )
-        token = Prompt.ask("Personal Access Token (Enter to skip)", default="")
+        token = ask.text("Personal Access Token (Enter to skip)", default="")
         if not token:
             return None
 
-        if Confirm.ask(
+        if ask.confirm(
             "[yellow]⚠ Save token in plaintext (~/.config/ster/git_repos.json)?[/yellow]",
             default=False,
         ):
