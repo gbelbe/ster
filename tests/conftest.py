@@ -191,6 +191,9 @@ def _isolate_prefs_globally(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(api_server, "_TOKEN_FILE", d / "api_token")
     monkeypatch.setattr(git_config_store, "CONFIG_FILE", d / "git_repos.json")
     monkeypatch.setattr(git_config_store, "CONFIG_DIR", d)
+    from ster.cli import _home
+
+    monkeypatch.setattr(_home, "_RETIRED_CACHE", d / "retired-ontologies-cache")
 
 
 MINIMAL_TURTLE = """\

@@ -70,7 +70,6 @@ from ._constants import (
     _CHANGE_FILE_SENTINEL,
     _DEMO_FILE,
     _DEMO_SENTINEL,
-    _EXT_ONT_SENTINEL,
     _GRAPH_SENTINEL,
     _HTML_SENTINEL,
     _MCP_SENTINEL,
@@ -144,7 +143,6 @@ from ._publish import (
 )
 from ._query_launcher import (
     _dispatch_menu_action,
-    _launch_ext_ontologies,
     _launch_query,
     _load_demo_into_cwd,
     _offer_keep_demo_edits,
@@ -228,7 +226,6 @@ __all__ = [
     "_CLEAR_LINE",
     "_DEMO_FILE",
     "_DEMO_SENTINEL",
-    "_EXT_ONT_SENTINEL",
     "_GRAPH_SENTINEL",
     "_HTML_SENTINEL",
     "_MCP_SENTINEL",
@@ -276,7 +273,6 @@ __all__ = [
     "_html_export_options",
     "_humanize",
     "_is_interactive_terminal",
-    "_launch_ext_ontologies",
     "_launch_query",
     "_load",
     "_load_demo_into_cwd",

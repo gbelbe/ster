@@ -24,7 +24,7 @@ class _ConfigMixin(_AppState):
 
     def action_open_config(self) -> None:
         """Open the global configuration modal (it auto-saves via ConfigModal.Changed)."""
-        from ster.ontology_imports import is_annotation_property
+        from ster.annotation_properties import is_annotation_property
 
         from ..config_modal import ConfigModal
 

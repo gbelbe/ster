@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 from ster import cli, store
 from ster.cli import (
     _CHANGE_FILE_SENTINEL,
-    _EXT_ONT_SENTINEL,
     _MCP_SENTINEL,
     _QUIT_SENTINEL,
     _dispatch_menu_action,
@@ -167,13 +166,6 @@ def test_open_viewer_backconverts_after_a_rdfxml_session(monkeypatch):
 # ── home-menu dispatch ──────────────────────────────────────────────────────--
 
 
-def test_dispatch_ext_ontologies_sentinel():
-    with patch("ster.ext_ontologies_ui.run_ext_ontologies_screen") as run:
-        handled = _dispatch_menu_action(_EXT_ONT_SENTINEL, [])
-    assert handled is True
-    run.assert_called_once()
-
-
 def test_dispatch_non_sentinel_returns_false(tmp_path):
     # A real file selection (not a sentinel) is not handled here.
     assert _dispatch_menu_action(tmp_path / "x.ttl", []) is False
@@ -302,13 +294,6 @@ def test_action_menu_open_returns_the_selected_file(tmp_path, monkeypatch):
     f = tmp_path / "a.ttl"
     with patch("ster.cli.Prompt.ask", return_value="2"):  # 2 = TTL Viewer-Editor
         assert _home_action_menu(f) == [f]
-
-
-def test_action_menu_selects_import_external(tmp_path, monkeypatch):
-    _no_tty(monkeypatch)
-    f = tmp_path / "a.ttl"
-    with patch("ster.cli.Prompt.ask", return_value=_row_number(_EXT_ONT_SENTINEL)):
-        assert _home_action_menu(f) == _EXT_ONT_SENTINEL
 
 
 def _row_number(sentinel: object) -> str:

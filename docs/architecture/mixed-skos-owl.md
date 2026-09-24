@@ -400,11 +400,11 @@ at three layers:
    derive on read instead); puns missing a type; a materialised
    `broaderTransitive`.
 
-3. **Import boundary — never synthesise on the way in.** When importing an
-   external ontology/taxonomy (`ontology_imports.py`, the ext-ontologies
-   screen), import `broader` as `broader` and `subClassOf` as `subClassOf`;
-   **do not auto-generate `subClassOf` from `broader`.** Run the layer-2 checks
-   on the import and surface violations before the file lands.
+3. **Load boundary — never synthesise on the way in.** When loading a file —
+   the one opened, or one given with `--context-files` — keep `broader` as
+   `broader` and `subClassOf` as `subClassOf`; **do not auto-generate
+   `subClassOf` from `broader`.** Run the layer-2 checks on what was loaded and
+   surface violations rather than rewriting them.
 
 Net effect: the tree may *show* a `broader` edge that came from `subClassOf`
 (the `⊂` marker), but the only path from grouping to inheritance is a deliberate,

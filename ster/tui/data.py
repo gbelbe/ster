@@ -173,7 +173,7 @@ def _local_property_buckets(tax: Taxonomy, lang: str) -> dict[str, list[str]]:
 def _external_property_buckets(tax: Taxonomy, lang: str) -> dict[str, list[str]]:
     """Predicates *used* on the ontology header but never declared as properties,
     bucketed by group: annotation predicates → Annotation, the rest → Untyped."""
-    from ster.ontology_imports import is_annotation_property
+    from ster.annotation_properties import is_annotation_property
 
     declared = set(tax.owl_properties)
     seen: set[str] = set()

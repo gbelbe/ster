@@ -12,13 +12,6 @@ from . import _app, _constants, _export, _history, _publish
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
 
-def _launch_ext_ontologies(found: list[Path]) -> None:  # noqa: ARG001
-    """Home-menu action: open the external-ontologies import screen."""
-    from ..ext_ontologies_ui import run_ext_ontologies_screen
-
-    run_ext_ontologies_screen(taxonomy=None)
-
-
 def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
     """Run the home-menu handler for a sentinel selection. True when handled.
 
@@ -29,7 +22,6 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _constants._HTML_SENTINEL: _export._run_html_export_interactive,
         _constants._GRAPH_SENTINEL: _export._run_graph_viz_interactive,
         _constants._QUERY_SENTINEL: _launch_query,
-        _constants._EXT_ONT_SENTINEL: _launch_ext_ontologies,
         _constants._PUBLISH_SENTINEL: _publish._run_publish_interactive,
         _constants._MCP_SENTINEL: _publish._run_mcp_connect_interactive,
         _constants._HISTORY_SENTINEL: _history._run_history_interactive,

@@ -69,7 +69,6 @@ Every capability below is reachable from the home menu, acting on the file you s
 | **SPARQL Query** | In-TUI query editor with autocomplete and a cache-warmed engine (no cold-start delay); export results to CSV |
 | **Graph Viewer** | Opens an interactive [Cytoscape.js](https://js.cytoscape.org) VOWL-style graph in the browser — classes as circles, property edges, per-class individual toggle, drag / zoom / detail panel |
 | **HTML Data Catalog** | Generates browsable [pyLODE](https://github.com/RDFLib/pyLODE) documentation, one page per language |
-| **Import External Ontology** | Fetch and cache external vocabularies, binding their namespaces for reuse |
 | **Linked Data Publish & Version** | Semver-tagged releases served over a local Linked-Data server |
 
 ### In-browser views
@@ -171,7 +170,6 @@ The home screen lists the ontology and taxonomy files in the current directory
      📦 Linked Data Publish & Version
      🌐 HTML Data Catalog
      ◈  Load Graph Viewer
-     📥 Import External Ontology
      ✕  Quit
 ```
 

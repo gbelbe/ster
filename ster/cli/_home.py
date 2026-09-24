@@ -59,6 +59,18 @@ def _forget_choices(root: Path) -> None:
         _workspace_ui._save_quietly(project)
 
 
+# Where the removed "Import External Ontology" screen downloaded vocabularies.
+# Nothing reads it any more; cleared on start so the feature leaves nothing on disk.
+_RETIRED_CACHE: Final = Path.home() / ".cache" / "ster" / "ontologies"
+
+
+def _clear_retired_cache() -> None:
+    """Delete the retired download cache; nothing to do once it is gone."""
+    import shutil  # noqa: PLC0415
+
+    shutil.rmtree(_RETIRED_CACHE, ignore_errors=True)
+
+
 def main() -> None:
     """Entry point: run the command, and turn what goes wrong into an exit code.
 
@@ -104,6 +116,7 @@ def _dispatch() -> None:
     import os
     import sys
 
+    _clear_retired_cache()
     ask_again = _take_flag(ASK_AGAIN)
     args = sys.argv[1:]
     first = args[0] if args else None
