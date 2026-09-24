@@ -1,20 +1,23 @@
-"""Standalone preview HTTP server: port management, the API server bootstrap, and the static-file server used by 'ster show'.
+"""Port management and the API server bootstrap for the VOWL graph viewer.
 
 Note: _listening_pid / _process_name / _port_is_free / port_holder / free_port stay
 together in this module because tests monkeypatch them via module-attribute
 lookup (see tests/unit/test_viz_vowl_port.py) — splitting them apart would
-silently break those patches."""
+silently break those patches.
+
+The graph view requires this live server: it used to fall back to a static,
+read-only HTML snapshot (served by a second, plain http.server) whenever the
+port could not be bound. That fallback is gone — a caller that cannot start
+the server gets ``unavailable_reason()``'s message instead, so the person
+sees an actionable error rather than a silently degraded page."""
 
 from __future__ import annotations
 
-import functools
-import http.server
 import os
 import re
 import signal
 import socket
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Any, Final
@@ -24,8 +27,6 @@ from ..viz import (
     _label_for,  # noqa: F401  (re-exported for potential callers)
 )
 from . import _detail, _render
-
-_LIT_N_127_0_1: Final = "127.0.0.1"
 
 
 def _listening_pid(port: int) -> int | None:
@@ -201,14 +202,34 @@ def free_port(
 
 API_PORT: int = 8765
 
-_out_path: Path | None = None
 
-_file_path: Path | None = None
+def unavailable_reason(host: str | None = None, port: int | None = None) -> str:
+    """Why the graph's live server could not start, in terms the reader can act on.
 
-# One-per-process HTTP server that serves the ster cache directory.
-_http_server: http.server.HTTPServer | None = None
+    Names the port and the process holding it when known — "the server isn't
+    running" alone leaves the reader with no next step. A reason clause, not a
+    full sentence: unlike :func:`ster.tui.query.server_unavailable_reason`
+    (shown to the reader as-is), this one only ever reaches a reader inside a
+    caught ``RuntimeError``'s message, so it carries no "Couldn't open..."
+    prefix of its own — each caller supplies the framing that fits it
+    (``"Couldn't open the graph: "`` in the TUI, ``"Graph error: "`` in the
+    CLI), and composing it twice would read as a doubled sentence.
+    """
+    if port is None:
+        from ..api_server import load_server_config  # noqa: PLC0415
 
-_http_port: int | None = None
+        _cfg_url, port = load_server_config()
+    try:
+        holder = port_holder(host, port)
+    except Exception:  # noqa: BLE001 — a diagnostic must never be the thing that fails
+        holder = None
+    if holder is not None:
+        pid, command = holder
+        return (
+            f"port {port} is held by {command} (pid {pid}), so ster's server "
+            "could not start. Close that process and reopen the file."
+        )
+    return "the ster server isn't running."
 
 
 def _vowl_html(
@@ -243,64 +264,3 @@ def _start_api_server(
 
     _api_file_path = file_path
     return start_background(taxonomy, file_path, html_renderer=_vowl_html, on_change=on_change_fn)
-
-
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    """SimpleHTTPRequestHandler that suppresses access-log noise.
-
-    It also refuses directory listings: the server backs specific ``*_vowl.html``
-    files, so a request for a folder (most visibly ``/``) must 404 rather than
-    expose an index of the whole ``~/.cache/ster`` directory.
-    """
-
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-        pass
-
-    def list_directory(self, path: str) -> None:  # type: ignore[override]
-        self.send_error(404, "Not found")
-        return None
-
-    def end_headers(self) -> None:
-        # The graph page inlines its JS, so a browser-cached page kept serving an
-        # old build until a manual hard-reload. Forbid caching so a plain reload
-        # (or reopening from ster) always gets the current page.
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        super().end_headers()
-
-
-def _ensure_server(directory: Path) -> int:
-    """Start the local HTTP server on first call; return its port on all calls.
-
-    Uses the port from the ster server config so the browser origin is stable
-    across restarts and localStorage graph state is preserved.
-    """
-    global _http_server, _http_port
-    if _http_server is not None:
-        return _http_port  # type: ignore[return-value]
-    from ..api_server import load_server_config  # noqa: PLC0415
-
-    # preferred + 1, never preferred: that port belongs to ster's own API server,
-    # which serves /map, /viz, /onto and /mcp. This static file server used to
-    # try it first and win whenever it started first — one `ster show` left
-    # running took the port, every later TUI session then failed to bind, and
-    # the map opened against *this* handler, which has no /map and answers 404.
-    # A day-old `ster show` did exactly that. Starting one above keeps the two
-    # from ever competing while leaving the origin stable for localStorage.
-    _cfg_url, api_port = load_server_config()
-    preferred = api_port + 1
-    handler = functools.partial(_QuietHandler, directory=str(directory))
-    for port in [preferred + i for i in range(20)]:
-        try:
-            server = http.server.HTTPServer((_LIT_N_127_0_1, port), handler)
-            break
-        except OSError:
-            continue
-    else:
-        with socket.socket() as s:
-            s.bind((_LIT_N_127_0_1, 0))
-            port = s.getsockname()[1]
-        server = http.server.HTTPServer((_LIT_N_127_0_1, port), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    _http_server = server
-    _http_port = port
-    return port

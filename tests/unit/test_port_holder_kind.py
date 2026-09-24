@@ -61,9 +61,9 @@ def test_a_word_merely_containing_ster_is_not_ster():
 
 
 def test_the_reclaim_only_fires_for_a_server():
-    """The behavioural half: anything that is not a `ster serve` is left running
-    and the view falls back to a read-only snapshot, so the graph still appears
-    and nobody else's work ends."""
+    """The behavioural half: anything that is not a `ster serve` is left running,
+    and the graph reports that it could not open rather than touching a process
+    that was never ster's to close."""
     import inspect
 
     from ster.tui.app import _graph

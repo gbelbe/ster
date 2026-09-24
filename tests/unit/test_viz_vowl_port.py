@@ -2,8 +2,8 @@
 
 When the graph's live-server port is already taken, ster identifies the process
 holding it (``port_holder``) and can gracefully free it (``free_port``) so the
-TUI can warn the user and offer to close it — instead of silently degrading to
-a read-only snapshot.
+TUI can reclaim it and open the graph — or, when it cannot, report clearly why
+(see ``unavailable_reason``) rather than silently opening a degraded page.
 """
 
 from __future__ import annotations

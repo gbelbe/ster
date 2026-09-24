@@ -145,16 +145,3 @@ def test_api_graph_no_longer_ships_detail(client):
 
     assert graph["nodes"]
     assert all("detail" not in node for node in graph["nodes"])
-
-
-def test_static_export_writes_a_detail_sidecar(tmp_path, zoo):
-    from ster.viz_vowl import _data_path, _detail_path, _write_data_json
-
-    out = tmp_path / "zoo_vowl.html"
-    _write_data_json(zoo, out)
-
-    polled = json.loads(_data_path(out).read_text(encoding="utf-8"))
-    sidecar = json.loads(_detail_path(out).read_text(encoding="utf-8"))
-
-    assert all("detail" not in node for node in polled["nodes"])
-    assert sidecar == build_detail_map(zoo)

@@ -3298,9 +3298,10 @@ def test_port_conflict_reclaims_the_port_then_opens_no_prompt() -> None:
     _run(scenario)
 
 
-def test_port_conflict_opens_a_snapshot_when_the_port_cannot_be_freed() -> None:
-    """If the holder won't die, the graph still opens (open_graph_now → offline snapshot);
-    the view never hangs waiting on a prompt."""
+def test_port_conflict_reports_it_when_the_port_cannot_be_freed() -> None:
+    """If the holder won't die, ster does not attempt to open the graph — there
+    is no offline snapshot to fall back to — and the view never hangs waiting
+    on a prompt."""
     from unittest.mock import patch
 
     from ster import viz_vowl
@@ -3320,7 +3321,7 @@ def test_port_conflict_opens_a_snapshot_when_the_port_cannot_be_freed() -> None:
             ):
                 app._show_graph(None)
                 await pilot.pause()
-            assert opened == [None]  # opened anyway (snapshot fallback), not blocked
+            assert opened == []  # no snapshot to fall back to — nothing attempted
 
     _run(scenario)
 

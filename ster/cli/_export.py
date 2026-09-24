@@ -202,23 +202,17 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
         return
     console.print(f"\n[dim]Opening graph for[/dim] [bold]{taxonomy_file.name}{_LIT_BOLD}")
     try:
-        _free_graph_port()  # a leftover graph process on the port would force a static snapshot
+        _free_graph_port()  # a leftover graph process on the port would block the live view
         out = _viz.open_in_browser(taxonomy, taxonomy_file)
         console.print(f"{_LIT_GREEN}{out}")
-        if not _viz.is_live_server():
-            console.print(
-                "  [yellow]![/yellow]  The configured port is busy — showing a static "
-                "snapshot (explore-relations disabled). Close the other process or change "
-                "the port in Config, then reopen."
-            )
     except Exception as exc:
         _app.err.print(f"[red]Graph error: {exc}{_LIT_RED}")
 
 
 def _free_graph_port() -> None:
     """Close a previous graph process still holding the live-server port, so the live
-    (interactive) graph can start instead of falling back to a static snapshot. No-op when
-    our own server is already live or the port is free."""
+    (interactive) graph can start. No-op when our own server is already live or the
+    port is free."""
     from .. import viz_vowl as _viz
 
     if _viz.is_live_server():

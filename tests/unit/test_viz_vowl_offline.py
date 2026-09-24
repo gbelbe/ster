@@ -1,17 +1,17 @@
-"""Unit tests for the static-fallback safeguards in viz_vowl.
+"""Unit tests for the token-less (static-export) rendering path in viz_vowl.
 
-Covers scope A of the "graph opens an older/static version" bug:
-  * the static HTTP server must never serve a cache directory listing;
-  * a token-less (static) page must carry an in-page "live server not running"
-    banner so the degraded experience is never silent;
+render_vowl_html(api_token="") is still a real, permanent rendering mode — used
+by static publish/export, which genuinely has no live server behind it, unlike
+the graph-viewer's browser-open path, which now requires one (no more silent
+fallback there — see test_viz_vowl_render_module.py). This file covers:
+  * a token-less page carries an in-page "live server not running" banner, so
+    a static export never looks like a live page;
   * ``is_live_server`` reflects whether the live API backs the page;
   * ``api_server._await_uvicorn_started`` only reports success once *our* uvicorn bound,
     so a stale server squatting the port can't be mistaken for ours.
 """
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import ster.api_server as srv
 import ster.viz_vowl as vv
@@ -61,54 +61,12 @@ def test_render_vowl_html_hides_offline_banner_when_live() -> None:
     assert "__OFFLINE_BANNER__" not in html
 
 
-def test_query_result_html_shows_offline_banner() -> None:
-    # Query-result pages are always static (token=""), so they must warn too.
-    _graph, html = vv._build_query_result_html(_tax(), {NS + "Animal"})
-    assert 'id="offline-banner"' in html
-    assert "__OFFLINE_BANNER__" not in html
-
-
-# ── directory-listing safeguard ────────────────────────────────────────────────
-
-
-def test_quiet_handler_refuses_directory_listing() -> None:
-    """The static server must answer a directory request with 404, never a listing.
-
-    Root cause of the "root page with html files" symptom: the bare
-    SimpleHTTPRequestHandler renders an index of ~/.cache/ster when hit at ``/``.
-    """
-    import http.server
-
-    # It must *override* the base lister (which renders an index page)...
-    assert (
-        vv._QuietHandler.list_directory is not http.server.SimpleHTTPRequestHandler.list_directory
-    )
-
-    # ...and answer with a 404 for an existing directory rather than a listing.
-    handler = vv._QuietHandler.__new__(vv._QuietHandler)
-    handler.send_error = MagicMock()  # type: ignore[method-assign]
-    result = handler.list_directory("/tmp")
-    assert result is None
-    handler.send_error.assert_called_once()
-    assert handler.send_error.call_args[0][0] == 404
-
-
-def test_quiet_handler_sets_no_cache_headers(monkeypatch) -> None:
-    """Static graph pages must not be browser-cached.
-
-    The JS is inlined in the page, so a cached page served a stale build until a
-    manual hard-reload — the recurring "it only works after Ctrl+Shift+R".
-    """
-    import http.server
-
-    handler = vv._QuietHandler.__new__(vv._QuietHandler)
-    handler.send_header = MagicMock()  # type: ignore[method-assign]
-    monkeypatch.setattr(http.server.SimpleHTTPRequestHandler, "end_headers", lambda self: None)
-
-    handler.end_headers()
-
-    sent = {c.args[0]: c.args[1] for c in handler.send_header.call_args_list}
-    assert "no-store" in sent.get("Cache-Control", "")
+def test_render_vowl_html_no_show_all_btn_when_static() -> None:
+    """The 'Show all nodes' button only makes sense against a live /?full=1 —
+    a static export has no server behind it to ask, so it always gets the
+    unscoped graph and needs no button offering one."""
+    html = vv.render_vowl_html(_tax(), file_path=None)
+    assert "Show all nodes" not in html
 
 
 # ── live-server predicate ──────────────────────────────────────────────────────
@@ -179,12 +137,3 @@ def test_render_vowl_html_escapes_title() -> None:
     )
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
-
-
-def test_title_is_escaped_in_query_result_html() -> None:
-    """Query-result pages: the __TITLE__ slot must be HTML-escaped."""
-    tax = _tax()
-    tax.ontology_label = "<b>Injected</b>"
-    _graph, html = vv._build_query_result_html(tax, {NS + "Animal"})
-    assert "<b>Injected</b>" not in html.split("</title>")[0]
-    assert "&lt;b&gt;Injected&lt;/b&gt;" in html

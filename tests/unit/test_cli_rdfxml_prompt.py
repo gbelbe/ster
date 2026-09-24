@@ -305,20 +305,6 @@ def test_graph_viz_single_file_opens_directly(tmp_ttl):
     opener.assert_called_once()
 
 
-def test_graph_viz_static_snapshot_warning_when_not_live(tmp_ttl):
-    from ster.cli import _run_graph_viz_interactive
-
-    with (
-        patch("ster.viz_vowl.open_in_browser", return_value="http://127.0.0.1:8765/vowl"),
-        patch("ster.viz_vowl.is_live_server", return_value=False),
-        patch("ster.cli._export._free_graph_port"),
-        patch("ster.cli._export.console") as mock_console,
-    ):
-        _run_graph_viz_interactive([tmp_ttl])
-    printed = " ".join(str(c) for c in mock_console.print.call_args_list)
-    assert "static" in printed.lower() or "busy" in printed.lower()
-
-
 def test_graph_viz_reports_error_from_viz_backend(tmp_ttl):
     from ster.cli import _run_graph_viz_interactive
 

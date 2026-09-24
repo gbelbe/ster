@@ -63,8 +63,8 @@ class _GraphMixin(_AppState):
         self._open_graph_now(target)
 
     def _open_graph_now(self, target: str | None) -> None:
-        """Open the graph browser tab now (the live server when the port is free, else the
-        static offline snapshot), reporting the URL or any failure."""
+        """Open the graph browser tab now, reporting the URL — or, when the live
+        server cannot start, the reason why, via the notification below."""
         from ster import viz_vowl
 
         try:
@@ -92,8 +92,8 @@ class _GraphMixin(_AppState):
         A process that is not ster was never ours to kill at all.
 
         In both of those cases the port stays taken, and ``_open_graph_now``
-        falls back to a read-only snapshot — so the view still appears, and
-        nobody else's work ends.
+        reports that the graph could not open — there is no snapshot to fall
+        back to, since the graph view requires the live server.
         """
         from ster import viz_vowl
 
@@ -107,17 +107,16 @@ class _GraphMixin(_AppState):
             )
             self.notify(
                 f"Port held by PID {pid} — {what}, so it was left alone. "
-                "Opening a read-only snapshot.",
+                "The graph can't open until that port is free.",
                 severity=_WARN,
             )
-            self._open_graph_now(target)
             return
         if viz_vowl.free_port(pid):
             self.notify(f"Closed the previous graph window (PID {pid}).")
+            self._open_graph_now(target)
         else:
             self.notify(
                 f"Couldn't close the previous graph process (PID {pid}) — "
-                "opening a read-only snapshot instead.",
+                "the graph can't open until that port is free.",
                 severity=_WARN,
             )
-        self._open_graph_now(target)

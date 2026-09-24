@@ -2,23 +2,21 @@
 open_in_browser, push_update, open_focused_in_browser.
 
 The actual HTML rendering, the live FastAPI server, and the browser are all
-mocked out — these tests are about the control flow (live-server vs static
-fallback, is_running vs not) rather than re-testing render_vowl_html or the
-server modules, which have their own coverage.
+mocked out — these tests are about the control flow (live server started vs.
+not, is_running vs not) rather than re-testing render_vowl_html or the server
+modules, which have their own coverage. There is no static, offline fallback
+to test any more: a caller that cannot start the live server gets a clear
+RuntimeError instead.
 """
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from ster.model import Taxonomy
 from ster.viz_vowl import _render, _server
-
-
-def _reset_server_state():
-    _server._out_path = None
-    _server._file_path = None
-
 
 # ── ensure_published_server ───────────────────────────────────────────────────
 
@@ -50,24 +48,17 @@ def test_open_in_browser_uses_live_server_when_available():
     wb_open.assert_called_once_with(url)
 
 
-def test_open_in_browser_falls_back_to_static_server_when_api_unavailable(tmp_path):
-    _reset_server_state()
-    try:
-        with (
-            patch.object(_server, "_start_api_server", return_value=False),
-            patch.object(_render, "_graph_path", return_value=tmp_path / "graph_vowl.html"),
-            patch.object(_render, "_write_html") as write_html,
-            patch.object(_render, "_write_data_json") as write_json,
-            patch.object(_server, "_ensure_server", return_value=9001),
-            patch("ster.viz_vowl._render.webbrowser.open") as wb_open,
-        ):
-            url = _render.open_in_browser(Taxonomy())
-        assert url == "http://127.0.0.1:9001/graph_vowl.html"
-        write_html.assert_called_once()
-        write_json.assert_called_once()
-        wb_open.assert_called_once_with(url)
-    finally:
-        _reset_server_state()
+def test_open_in_browser_raises_clearly_when_api_unavailable():
+    """No fallback: a caller that cannot start the live server gets a clear
+    RuntimeError naming why, and no browser tab opens for a page it does not back."""
+    with (
+        patch.object(_server, "_start_api_server", return_value=False),
+        patch.object(_server, "unavailable_reason", return_value="port 8765 is held by X"),
+        patch("ster.viz_vowl._render.webbrowser.open") as wb_open,
+        pytest.raises(RuntimeError, match="port 8765 is held by X"),
+    ):
+        _render.open_in_browser(Taxonomy())
+    wb_open.assert_not_called()
 
 
 # ── push_update ────────────────────────────────────────────────────────────────
@@ -82,36 +73,10 @@ def test_push_update_pushes_via_live_server_when_running():
     push.assert_called_once()
 
 
-def test_push_update_rewrites_static_files_when_not_running_and_published():
-    _reset_server_state()
-    try:
-        _server._out_path = "sentinel-out.html"
-        _server._file_path = "sentinel-file.ttl"
-        with (
-            patch("ster.api_server.is_running", return_value=False),
-            patch.object(_render, "_write_html") as write_html,
-            patch.object(_render, "_write_data_json") as write_json,
-        ):
-            _render.push_update(Taxonomy())
-        assert write_html.call_args[0][1:] == ("sentinel-file.ttl", "sentinel-out.html")
-        write_json.assert_called_once()
-    finally:
-        _reset_server_state()
-
-
-def test_push_update_is_a_no_op_when_not_running_and_never_published():
-    _reset_server_state()
-    try:
-        with (
-            patch("ster.api_server.is_running", return_value=False),
-            patch.object(_render, "_write_html") as write_html,
-            patch.object(_render, "_write_data_json") as write_json,
-        ):
-            _render.push_update(Taxonomy())
-        write_html.assert_not_called()
-        write_json.assert_not_called()
-    finally:
-        _reset_server_state()
+def test_push_update_is_a_no_op_when_not_running():
+    """Nothing to push to: there is no static page to keep in sync any more."""
+    with patch("ster.api_server.is_running", return_value=False):
+        _render.push_update(Taxonomy())  # must not raise
 
 
 # ── open_focused_in_browser ───────────────────────────────────────────────────
@@ -119,7 +84,7 @@ def test_push_update_is_a_no_op_when_not_running_and_never_published():
 
 def test_open_focused_in_browser_uses_live_server_when_available():
     with (
-        patch("ster.api_server.is_running", return_value=True),
+        patch.object(_server, "_start_api_server", return_value=True),
         patch("ster.api_server.load_server_config", return_value=("http://127.0.0.1", 8765)),
         patch("ster.viz_vowl._render.webbrowser.open") as wb_open,
     ):
@@ -128,14 +93,24 @@ def test_open_focused_in_browser_uses_live_server_when_available():
     wb_open.assert_called_once_with(url)
 
 
-def test_open_focused_in_browser_falls_back_to_static_server(tmp_path):
+def test_open_focused_in_browser_starts_the_server_from_a_cold_start():
+    """Unlike the old is_running()-only check, this must actually try to start
+    the server — a focused graph should open even when nothing started it yet."""
     with (
-        patch("ster.api_server.is_running", return_value=False),
-        patch.object(_render._query_result, "_ster_cache_dir", return_value=tmp_path),
-        patch.object(_render, "render_vowl_html", return_value="<html></html>"),
-        patch.object(_server, "_ensure_server", return_value=9002),
-        patch("ster.viz_vowl._render.webbrowser.open") as wb_open,
+        patch.object(_server, "_start_api_server", return_value=True) as start,
+        patch("ster.api_server.load_server_config", return_value=("http://127.0.0.1", 8765)),
+        patch("ster.viz_vowl._render.webbrowser.open"),
     ):
-        url = _render.open_focused_in_browser(Taxonomy(), "https://ex.org/Root")
-    assert url.startswith("http://127.0.0.1:9002/")
-    wb_open.assert_called_once_with(url)
+        _render.open_focused_in_browser(Taxonomy(), "https://ex.org/Root")
+    start.assert_called_once()
+
+
+def test_open_focused_in_browser_raises_clearly_when_api_unavailable():
+    with (
+        patch.object(_server, "_start_api_server", return_value=False),
+        patch.object(_server, "unavailable_reason", return_value="port 8765 is held by X"),
+        patch("ster.viz_vowl._render.webbrowser.open") as wb_open,
+        pytest.raises(RuntimeError, match="port 8765 is held by X"),
+    ):
+        _render.open_focused_in_browser(Taxonomy(), "https://ex.org/Root")
+    wb_open.assert_not_called()

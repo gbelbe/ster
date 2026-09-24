@@ -4,7 +4,8 @@ Regression: a previous graph window/process holding the port used to pop a
 ChoiceModal, and clicking "Close it" then ran the blocking ``free_port`` on the
 UI thread (freeze / "it bugs"). Desired behaviour — no modal: reclaim the port
 (close the previous process) and open the graph directly; if it can't be freed,
-fall back to the offline snapshot without prompting.
+or it was never ours to close, report why and leave the graph closed — there
+is no offline snapshot to fall back to.
 """
 
 from __future__ import annotations
@@ -74,9 +75,10 @@ def test_port_conflict_reclaims_and_opens_without_a_modal(monkeypatch) -> None:
     _run(scenario)
 
 
-def test_port_that_cannot_be_freed_still_opens_a_snapshot_no_modal(monkeypatch) -> None:
-    """If the holder won't die, open_in_browser (which falls back to a static snapshot
-    when the port is busy) is still called — no prompt, no crash."""
+def test_port_that_cannot_be_freed_reports_it_without_opening(monkeypatch) -> None:
+    """If the holder won't die, ster does not attempt to open the graph — there is
+    no offline snapshot to fall back to, so trying would only raise a second,
+    redundant error on top of the one already reported. No prompt, no crash."""
     rec = _stub_graph(monkeypatch)
     monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **kw: rec["freed"].append(pid) or False)
 
@@ -87,7 +89,7 @@ def test_port_that_cannot_be_freed_still_opens_a_snapshot_no_modal(monkeypatch) 
             await pilot.press("g")
             await pilot.pause()
             assert rec["freed"] == [1234]  # we tried to close it
-            assert rec["opened"] == ["GLOBAL"]  # and still opened (snapshot fallback)
+            assert rec["opened"] == []  # and did not attempt to open — nothing to fall back to
             assert not app.query(ChoiceModal)
 
     _run(scenario)
@@ -131,7 +133,7 @@ def test_another_ster_session_on_the_port_is_left_running(monkeypatch) -> None:
     _run(scenario)
 
     assert rec["freed"] == [], "the other session must survive"
-    assert rec["opened"], "the graph still opens, as a snapshot"
+    assert rec["opened"] == [], "no snapshot to fall back to — the graph stays closed"
 
 
 def test_a_process_that_is_not_ster_is_left_running(monkeypatch) -> None:
@@ -150,4 +152,43 @@ def test_a_process_that_is_not_ster_is_left_running(monkeypatch) -> None:
     _run(scenario)
 
     assert rec["freed"] == []
-    assert rec["opened"]
+    assert rec["opened"] == []
+
+
+def test_a_race_that_still_fails_to_open_is_reported_once_not_twice(monkeypatch) -> None:
+    """Regression: unavailable_reason() used to carry its own "Couldn't open the
+    graph:" prefix, and _open_graph_now's except-handler added a second one on
+    top — so the one path where open_in_browser is actually called and still
+    raises (port looked free/reclaimed, then wasn't by the time it tried to
+    bind) showed the reader "Couldn't open the graph: Couldn't open the graph:
+    ...". The reason clause now carries no framing of its own; each caller
+    supplies exactly one."""
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
+    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)
+
+    def _raise(tax, path=None, on_change_fn=None):
+        raise RuntimeError(viz_vowl._server.unavailable_reason(port=8765))
+
+    monkeypatch.setattr(viz_vowl, "open_in_browser", _raise)
+
+    notified: list[tuple[str, str]] = []
+
+    async def scenario() -> None:
+        app = OntologyApp(store.load(DEMO), source="demo.ttl")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+
+            def _record(message: str, *, severity: str = "information", **_kw) -> None:
+                notified.append((message, severity))
+
+            monkeypatch.setattr(app, "notify", _record)
+            await pilot.press("g")
+            await pilot.pause()
+
+    _run(scenario)
+
+    assert len(notified) == 1
+    message, severity = notified[0]
+    assert severity == "error"
+    assert message.count("Couldn't open the graph:") == 1
+    assert "isn't running" in message

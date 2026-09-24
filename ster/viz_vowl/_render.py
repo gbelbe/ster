@@ -1,10 +1,14 @@
-"""Top-level render/open/push entry points (render_vowl_html, open_in_browser, push_update, open_focused_in_browser, ensure_published_server) and their small path/write helpers."""
+"""Top-level render/open/push entry points: render_vowl_html, open_in_browser,
+push_update, open_focused_in_browser, ensure_published_server.
+
+Every "open" here requires ster's live server. There is no static, read-only
+fallback: a caller that cannot start the server gets a clear error naming why
+(see ``ster.viz_vowl._server.unavailable_reason``) rather than a page that
+silently lost its interactivity."""
 
 from __future__ import annotations
 
 import html as _html
-import json
-import re
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -19,18 +23,9 @@ from ..viz import (
     _ontology_title,
     _taxonomy_meta,
 )
-from . import _detail, _graph_builders, _html_template, _js_assets, _query_result, _server
+from . import _detail, _graph_builders, _html_template, _js_assets, _server
 
 _LIT_UTF_8: Final = "utf-8"
-_LIT_LOCAL_SERVER: Final = (
-    "http://127.0.0.1:"  # NOSONAR - local-only address, not a network destination
-)
-
-
-def _graph_path(file_path: Path | None) -> Path:
-    cache = _query_result._ster_cache_dir()
-    stem = file_path.stem if file_path else "graph"
-    return cache / f"{stem}_vowl.html"
 
 
 # Raises the spinner before navigating: the unscoped graph is the slowest thing
@@ -134,36 +129,6 @@ def render_vowl_html(
     )
 
 
-def _write_html(taxonomy: Taxonomy, file_path: Path | None, out_path: Path) -> None:
-    out_path.write_text(render_vowl_html(taxonomy, file_path), encoding=_LIT_UTF_8)
-
-
-def _data_path(out_path: Path) -> Path:
-    stem = out_path.stem.removesuffix("_vowl")
-    return out_path.with_name(stem + "_data.json")
-
-
-def _detail_path(out_path: Path) -> Path:
-    stem = out_path.stem.removesuffix("_vowl")
-    return out_path.with_name(stem + "_detail.json")
-
-
-def _write_data_json(taxonomy: Taxonomy, out_path: Path) -> None:
-    """Write companion JSON polled by the browser for static-mode live updates.
-
-    Detail is excluded: this file is re-fetched every 2.5s to compare a version
-    stamp, so anything carried here is paid for on every tick.
-    """
-    import time as _t  # noqa: PLC0415
-
-    graph = _detail.strip_detail(_graph_builders.build_vowl_graph(taxonomy))
-    graph["_v"] = str(int(_t.time()))
-    _data_path(out_path).write_text(json.dumps(graph, ensure_ascii=False), encoding=_LIT_UTF_8)
-    _detail_path(out_path).write_text(
-        json.dumps(_detail.build_detail_map(taxonomy), ensure_ascii=False), encoding=_LIT_UTF_8
-    )
-
-
 def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -> str | None:
     """Ensure the live API server is running and return its base URL.
 
@@ -187,65 +152,51 @@ def open_in_browser(
 ) -> str:
     """Open the VOWL graph in the browser.
 
-    Starts the live FastAPI server (SSE push refresh) — ``fastapi``/``uvicorn`` are core
-    deps, so this works unless the configured port is busy, in which case it falls back
-    to a static HTTP server.
+    Starts the live FastAPI server (SSE push refresh) — ``fastapi``/``uvicorn`` are
+    core deps, so this only fails when the configured port is already held by
+    something else. Raises :class:`RuntimeError` in that case, naming what holds
+    the port when known (:func:`ster.viz_vowl._server.unavailable_reason`),
+    rather than opening a read-only copy with no explanation.
 
     *on_change_fn* (optional) is called after any API mutation (e.g. individual
     creation) so the caller can rebuild its display tree.
     """
-    if _server._start_api_server(taxonomy, file_path, on_change_fn):
-        from ..api_server import load_server_config  # noqa: PLC0415
+    if not _server._start_api_server(taxonomy, file_path, on_change_fn):
+        raise RuntimeError(_server.unavailable_reason())
+    from ..api_server import load_server_config  # noqa: PLC0415
 
-        _url, _port = load_server_config()
-        url = f"{_url}:{_port}/"
-        webbrowser.open(url)
-        return url
-    # Fallback: static file server
-    _server._file_path = file_path
-    _server._out_path = _graph_path(file_path)
-    _write_html(taxonomy, file_path, _server._out_path)
-    _write_data_json(taxonomy, _server._out_path)
-    port = _server._ensure_server(_server._out_path.parent)
-    url = f"{_LIT_LOCAL_SERVER}{port}/{_server._out_path.name}"
+    _url, _port = load_server_config()
+    url = f"{_url}:{_port}/"
     webbrowser.open(url)
     return url
 
 
 def push_update(taxonomy: Taxonomy) -> None:
-    """Push an updated taxonomy to all connected viewers."""
+    """Push an updated taxonomy to every connected viewer.
+
+    A no-op when no live server is running — there is nothing to push to.
+    """
     from ..api_server import is_running, push_taxonomy  # noqa: PLC0415
 
     if is_running():
         push_taxonomy(taxonomy)
-        return
-    if _server._out_path is not None:
-        _write_html(taxonomy, _server._file_path, _server._out_path)
-        _write_data_json(taxonomy, _server._out_path)
 
 
 def open_focused_in_browser(
     taxonomy: Taxonomy, root_uri: str, file_path: Path | None = None
 ) -> str:
-    """Open a focused VOWL graph centred on *root_uri* in the browser."""
-    from ..api_server import is_running  # noqa: PLC0415
+    """Open a focused VOWL graph centred on *root_uri* in the browser.
 
-    if is_running():
-        from ..api_server import load_server_config  # noqa: PLC0415
+    Requires ster's live server, exactly like :func:`open_in_browser` — starting
+    it here (rather than only checking whether it already happens to be up)
+    means a focused graph opens from a cold start too, not only when something
+    else already started the server first.
+    """
+    if not _server._start_api_server(taxonomy, file_path):
+        raise RuntimeError(_server.unavailable_reason())
+    from ..api_server import load_server_config  # noqa: PLC0415
 
-        _url, _port = load_server_config()
-        url = f"{_url}:{_port}/?root={urllib.parse.quote(root_uri, safe='')}"
-        webbrowser.open(url)
-        return url
-    # Fallback: static focused file
-    root_cls = taxonomy.owl_classes.get(root_uri)
-    root_label = root_cls.label("en") if root_cls else _local(root_uri)
-    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", root_label)
-    stem = (file_path.stem if file_path else "graph") + f"_focused_{safe_label}"
-    cache = _query_result._ster_cache_dir()
-    out = cache / f"{stem}_vowl.html"
-    out.write_text(render_vowl_html(taxonomy, file_path, root_uri=root_uri), encoding=_LIT_UTF_8)
-    port = _server._ensure_server(out.parent)
-    url = f"{_LIT_LOCAL_SERVER}{port}/{out.name}"
+    _url, _port = load_server_config()
+    url = f"{_url}:{_port}/?root={urllib.parse.quote(root_uri, safe='')}"
     webbrowser.open(url)
     return url

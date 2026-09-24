@@ -1,68 +1,16 @@
-"""ster's two servers must not fight over one port.
+"""The message a blocked user actually sees when ster's server port is taken.
 
-ster runs two: the API server, which serves /map, /viz, /onto and /mcp, and a
-plain static file server that `ster show` uses to hand a generated page to the
-browser. Both read the same configured port, and the static one used to try it
-first.
-
-Whichever started first won. A `ster show` left running from an earlier session
-therefore owned the port, every later TUI failed to bind, and the map opened
-against the static handler — which has no /map and answers 404 to everything.
-That is exactly what happened: a `ster show` process from the previous day,
-still listening, produced a 404 on /map?q= that looked like a broken map.
+ster used to run two servers: the API server (/map, /viz, /onto, /mcp), and a
+plain static file server that a since-removed offline fallback used to hand a
+generated page to the browser when the API port was busy. That second server
+is gone — the live server is now the only one, and a caller that cannot start
+it gets a clear message naming the port and whatever holds it, rather than a
+silently degraded page.
 """
 
 from __future__ import annotations
 
-import socket
-
 from ster.api_server import load_server_config
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-def test_the_static_server_never_takes_the_api_port(tmp_path, monkeypatch):
-    """The whole fix in one assertion: the file server starts above the API."""
-    from ster.viz_vowl import _server
-
-    api_port = _free_port()
-    # Patch at the source: _server imports it inside the function, so the name
-    # never exists as a module attribute to replace.
-    import ster.api_server as api_server
-
-    monkeypatch.setattr(api_server, "load_server_config", lambda: ("http://127.0.0.1", api_port))
-    monkeypatch.setattr(_server, "_http_server", None)
-    monkeypatch.setattr(_server, "_http_port", None)
-
-    port = _server._ensure_server(tmp_path)
-
-    assert port != api_port, "the static server took the port the API server needs"
-    assert port > api_port
-
-
-def test_the_api_port_stays_free_for_the_api(tmp_path, monkeypatch):
-    """Not just a different port — the API's must still be bindable afterwards."""
-    from ster.viz_vowl import _server
-
-    api_port = _free_port()
-    # Patch at the source: _server imports it inside the function, so the name
-    # never exists as a module attribute to replace.
-    import ster.api_server as api_server
-
-    monkeypatch.setattr(api_server, "load_server_config", lambda: ("http://127.0.0.1", api_port))
-    monkeypatch.setattr(_server, "_http_server", None)
-    monkeypatch.setattr(_server, "_http_port", None)
-
-    _server._ensure_server(tmp_path)
-
-    with socket.socket() as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("127.0.0.1", api_port))  # raises if the static server took it
-
 
 # ── the message a blocked user actually sees ────────────────────────────────
 
@@ -121,3 +69,42 @@ def test_the_configured_port_is_what_both_read():
 
     assert isinstance(port, int)
     assert url.startswith("http")
+
+
+# ── the graph view's own version of the same message ────────────────────────
+# The graph view used to have a fallback the map never had (a static, offline
+# snapshot). Now that it is gone, it needs the same clear-message behaviour —
+# these mirror the map's tests above against viz_vowl._server.unavailable_reason.
+
+
+def test_graph_port_taken_names_the_process_holding_it(monkeypatch):
+    from ster.viz_vowl import _server
+
+    monkeypatch.setattr(_server, "port_holder", lambda *_a, **_kw: (90095, "ster show"))
+
+    message = _server.unavailable_reason(port=64383)
+
+    assert "64383" in message
+    assert "ster show" in message
+    assert "90095" in message
+
+
+def test_graph_port_diagnostic_never_becomes_the_failure(monkeypatch):
+    """port_holder shells out to find the pid. If that breaks, the caller must
+    still get a message rather than a traceback."""
+    from ster.viz_vowl import _server
+
+    def _boom(*_a, **_kw):
+        raise OSError("lsof unavailable")
+
+    monkeypatch.setattr(_server, "port_holder", _boom)
+
+    assert "isn't running" in _server.unavailable_reason(port=64383)
+
+
+def test_graph_free_port_gives_the_plain_message(monkeypatch):
+    from ster.viz_vowl import _server
+
+    monkeypatch.setattr(_server, "port_holder", lambda *_a, **_kw: None)
+
+    assert _server.unavailable_reason(port=64383) == "the ster server isn't running."

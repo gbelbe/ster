@@ -1,10 +1,24 @@
-"""SPARQL query-result subgraph + its browser-preview helpers."""
+"""SPARQL query-result subgraph builder and its static HTML renderer.
+
+``open_query_result_in_browser``/``refresh_query_result_in_browser`` used to
+live here too — the functions that served this HTML statically (via the now
+removed ``_server._ensure_server``) whenever the live server was not already
+up. They had no production caller: "explore relations" was rebuilt around the
+live graph page's own in-page API calls (see ``ster.api``'s
+``build_class_links_graph``/``build_concept_relations_graph``/
+``build_individual_relations_graph``), and had no reason to fall back to a
+static copy since it never leaves the live page to begin with. Removed along
+with the rest of the static-preview mechanism.
+
+``build_query_result_graph``/``_build_query_result_html`` stay: they are pure
+data/rendering functions with no serving decision of their own — the same
+category as ``render_vowl_html`` — and are kept for direct use/testing.
+"""
 
 from __future__ import annotations
 
 import html as _html
 import itertools
-import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
@@ -19,11 +33,8 @@ from ..viz import (
     _ontology_title,
     _taxonomy_meta,
 )
-from . import _detail, _html_template, _js_assets, _render, _server
+from . import _detail, _html_template, _js_assets
 
-_LIT_LOCAL_SERVER: Final = (
-    "http://127.0.0.1:"  # NOSONAR - local-only address, not a network destination
-)
 _LIT_LABEL: Final = "label"
 _LIT_SOURCE: Final = "source"
 _LIT_TARGET: Final = "target"
@@ -222,58 +233,11 @@ def _build_query_result_html(
     return graph, html
 
 
-def open_query_result_in_browser(
-    taxonomy: Taxonomy,
-    uris: set[str],
-    file_path: Path | None = None,
-) -> tuple[str, Path]:
-    """Open a VOWL graph of the SPARQL query result nodes in the browser.
-
-    Only taxonomy nodes whose URI appears in *uris* are rendered.
-    Raises ``ValueError`` when none of the URIs match any node.
-    Returns ``(url, out_path)`` so callers can track the file for later refresh.
-    """
-    cache = _ster_cache_dir()
-    # Write the full ontology graph so the "Show all nodes" button has a target.
-    full_path = _render._graph_path(file_path)
-    _render._write_html(taxonomy, file_path, full_path)
-    port = _server._ensure_server(cache)
-    full_graph_link = f"/{full_path.name}"
-    _graph, html = _build_query_result_html(taxonomy, uris, file_path, full_graph_link)
-    stem = (file_path.stem if file_path else "query") + "_sparql_result"
-    out = cache / f"{stem}_vowl.html"
-    out.write_text(html, encoding="utf-8")
-    url = f"{_LIT_LOCAL_SERVER}{port}/{out.name}"
-    webbrowser.open(url)
-    return url, out
-
-
-def refresh_query_result_in_browser(
-    taxonomy: Taxonomy,
-    uris: set[str],
-    out: Path,
-) -> None:
-    """Rewrite an existing query-result viz file and bring the browser tab to front.
-
-    Raises ``ValueError`` when none of the URIs match any taxonomy node.
-    The *out* path must be the file previously returned by
-    ``open_query_result_in_browser``.
-    """
-    stem_guess = out.name.replace("_sparql_result_vowl.html", "_vowl.html")
-    full_candidate = out.parent / stem_guess
-    full_graph_link = f"/{full_candidate.name}" if full_candidate.exists() else ""
-    _graph, html = _build_query_result_html(taxonomy, uris, full_graph_link=full_graph_link)
-    out.write_text(html, encoding="utf-8")
-    port = _server._ensure_server(out.parent)
-    url = f"{_LIT_LOCAL_SERVER}{port}/{out.name}"
-    webbrowser.open(url)
-
-
 def _ster_cache_dir() -> Path:
     """``~/.cache/ster``, created on demand — the one place shared by every
     vendored-library download (:func:`_js_assets._cytoscape_script_tag` and friends) and
-    every generated-file cache (:func:`_render._graph_path` and friends), so the
-    ``".cache"``/``"ster"`` path components live in exactly one spot.
+    every generated-file cache, so the ``".cache"``/``"ster"`` path components live in
+    exactly one spot.
     """
     cache_dir = Path.home() / ".cache" / "ster"
     cache_dir.mkdir(parents=True, exist_ok=True)
