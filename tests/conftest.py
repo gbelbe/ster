@@ -13,6 +13,20 @@ BASE = "https://example.org/test/"
 
 
 @pytest.fixture(autouse=True)
+def _plain_help_output(monkeypatch):
+    """Keep typer's `--help` text free of ANSI escapes on CI as well as locally.
+
+    typer forces Rich into terminal mode when `GITHUB_ACTIONS` (or
+    `FORCE_COLOR` / `PY_COLORS`) is set, read once at import into
+    `FORCE_TERMINAL`. On GitHub every help assertion then searched text laced
+    with escape codes and failed, while passing locally. Patched per test
+    because the value is read when help is rendered, not when typer is imported.
+    See tests/unit/test_help_output_is_plain.py.
+    """
+    monkeypatch.setattr("typer.rich_utils.FORCE_TERMINAL", False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_analysis_cache(tmp_path_factory, monkeypatch):
     """Redirect the on-disk analysis cache to a per-test tmp dir and disable binary cache.
 
