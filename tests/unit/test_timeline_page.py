@@ -147,3 +147,48 @@ def test_the_app_layer_script_parses(tmp_path) -> None:
         [node, "--check", str(script)], capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, f"timeline_app.js does not parse:\n{done.stderr}"
+
+
+def _app_js() -> str:
+    from importlib.resources import files
+
+    return (files("ster") / "assets" / "timeline_app.js").read_text(encoding="utf-8")
+
+
+def test_date_only_events_are_drawn_as_points_and_periods_as_boxes() -> None:
+    """vis-timeline's own item types carry the distinction: a period is a
+    `range` box, a single date a `point` — a dot at the date with its label
+    starting there, where a `box` hung its connecting line from the middle."""
+    js = _app_js()
+    assert "type: i.end ? 'range' : 'point'" in js
+    assert "'box'" not in js
+
+
+def test_date_only_events_have_no_border_or_background() -> None:
+    page = _client().get("/timeline").text
+    # Declared after the instant/provenance colours so it wins on equal specificity.
+    point_rule = ".vis-item.vis-point{background:transparent;border:none}"
+    assert point_rule in page
+    assert page.index(point_rule) > page.index(".vis-item.provenance{")
+
+
+def test_the_dot_keeps_the_colour_of_its_kind() -> None:
+    page = _client().get("/timeline").text
+    assert ".vis-item.vis-dot.instant{" in page
+    assert ".vis-item.vis-dot.provenance{" in page
+
+
+def test_a_period_too_narrow_for_its_label_shows_it_beside_the_box() -> None:
+    """The overflow is vis-timeline's own mode for text wider than its item, so
+    stacking reserves the label's room; the margin moves it past the right edge."""
+    page = _client().get("/timeline").text
+    assert ".vis-item.vis-range.beside .vis-item-overflow{overflow:visible}" in page
+    assert ".vis-item.vis-range.beside .vis-item-content{margin-left:100%}" in page
+
+
+def test_narrow_periods_are_rechecked_after_every_zoom() -> None:
+    js = _app_js()
+    assert "state.timeline.on('rangechanged', placeLabels)" in js
+    assert "state.beside[item.id] ? ' beside' : ''" in js
+    # Only periods can be narrow: a single date is a point with a free label.
+    assert "if (!i.end) return;" in js

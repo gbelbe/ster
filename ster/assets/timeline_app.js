@@ -15,7 +15,10 @@
      opt-out set cannot: the lane leaves the view, the button is rebuilt from
      what is left, and the only control that could bring it back has gone with
      it. Empty means no filter, so the page opens showing everything. */
-  var state = { items: [], lanes: [], chosen: {}, showAuxiliary: false, timeline: null, groups: null, data: null };
+  var state = {
+    items: [], lanes: [], chosen: {}, showAuxiliary: false, timeline: null, groups: null, data: null,
+    beside: {}, widths: {}
+  };
 
   function el(id) { return document.getElementById(id); }
   function esc(s) {
@@ -82,7 +85,48 @@
      a fact rather than the fact itself, and the shape already says which of the
      two it is. */
   function classOf(item) {
-    return item.kind + (item.provenance ? ' provenance' : '');
+    return item.kind + (item.provenance ? ' provenance' : '') + (state.beside[item.id] ? ' beside' : '');
+  }
+
+  /* A label's width on screen, measured once in a hidden item so it picks up
+     the same stylesheet the timeline draws with. */
+  var measurer = null;
+  function labelWidth(item) {
+    if (!(item.id in state.widths)) {
+      if (!measurer) {
+        measurer = document.createElement('div');
+        measurer.className = 'vis-item vis-range';
+        measurer.style.visibility = 'hidden';
+        measurer.innerHTML = '<div class="vis-item-content"></div>';
+        document.body.appendChild(measurer);
+      }
+      measurer.firstChild.innerHTML = content(item);
+      state.widths[item.id] = measurer.firstChild.offsetWidth;
+    }
+    return state.widths[item.id];
+  }
+
+  /* A period too short on screen for its label shows the label just past its
+     right edge. The `beside` class lets the box overflow, which is
+     vis-timeline's own mode for text wider than its item: stacking then
+     reserves the label's room, so it never lands on the next item. Checked
+     again after every zoom, since a box that was too narrow may now fit. */
+  function placeLabels() {
+    var win = state.timeline.getWindow();
+    var panel = el('tl').querySelector('.vis-panel.vis-center');
+    if (!panel) return;
+    var pxPerMs = panel.clientWidth / (win.end - win.start);
+    var changes = [];
+    visible().forEach(function (i) {
+      if (!i.end) return;
+      var span = (vis.moment(i.end).valueOf() - vis.moment(i.start).valueOf()) * pxPerMs;
+      var beside = span < labelWidth(i);
+      if (beside !== Boolean(state.beside[i.id])) {
+        state.beside[i.id] = beside;
+        changes.push({ id: i.id, className: classOf(i) });
+      }
+    });
+    if (changes.length) state.data.update(changes);
   }
 
   function anyChosen() { return Object.keys(state.chosen).length > 0; }
@@ -105,11 +149,14 @@
     visible().forEach(function (i) {
       if (!seen[i.group]) { seen[i.group] = 1; groups.push({ id: i.group, content: esc(i.groupLabel) }); }
     });
+    /* A period is a box spanning its dates; a single date is a `point` — a dot
+       on the date with the label starting beside it. A `box` hung its line from
+       the middle of the label and looked like a period of its own. */
     var items = visible().map(function (i) {
       return {
         id: i.id, group: i.group, start: i.start,
         end: i.end || undefined,
-        type: i.end ? 'range' : 'box',
+        type: i.end ? 'range' : 'point',
         content: content(i), title: tooltip(i),
         className: classOf(i)
       };
@@ -142,7 +189,9 @@
       var hit = state.items.filter(function (i) { return i.id === id; })[0];
       if (hit) detail(hit);
     });
-    if (items.length) state.timeline.fit();
+    state.timeline.on('rangechanged', placeLabels);
+    if (items.length) state.timeline.fit({ animation: false });
+    placeLabels();
     status(items.length + ' moments · ' + groups.length + ' lanes');
   }
 
@@ -206,6 +255,8 @@
       if (!uris.length) { status('no entity in the result'); return; }
       var data = await resolve(uris);
       state.items = data.items || [];
+      state.beside = {};
+      state.widths = {};
       state.lanes = data.lanes || [];
       state.chosen = {};
       state.showAuxiliary = false;

@@ -140,6 +140,14 @@ header button.active{background:#1f5b80;border-color:#1f5b80;color:#fff}
    rather than the fact. */
 .vis-item.provenance{background:#ede9fe;border-color:#a78bfa;color:#3b0764}
 .vis-item.provenance .pred{color:#6d28d9}
+/* A single date is a dot and a bare label, so only periods read as boxes. Last,
+   so it wins over the kind colours above; the dot keeps the colour instead. */
+.vis-item.vis-point{background:transparent;border:none}
+.vis-item.vis-dot.instant{border-color:#f59e0b}
+.vis-item.vis-dot.provenance{border-color:#8b5cf6}
+/* A period too narrow for its label: the label sits past the box's right edge. */
+.vis-item.vis-range.beside .vis-item-overflow{overflow:visible}
+.vis-item.vis-range.beside .vis-item-content{margin-left:100%}
 </style>
 </head>
 <body>
