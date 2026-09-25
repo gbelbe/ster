@@ -226,6 +226,25 @@ def moments_of(graph: rdflib.Graph, node: rdflib.term.Node) -> list[Moment]:
     return moments
 
 
+def _moment_in_range(moment: Moment, after: str | None, before: str | None) -> bool:
+    """Whether *moment* belongs on a timeline bounded by [*after*, *before*].
+
+    Compared as :func:`_sort_key`\\ s of the moment's own values, so a bound of
+    ``"2025"`` reads the way a person means it against a moment of
+    ``"2025-03-01"`` — neither is "shorter, therefore earlier".
+
+    An instant is judged by its one date. An interval is judged by whether it
+    *overlaps* the bound at all, not by whether it sits entirely inside it: a
+    permit running 2024–2026 is still an "event after 2025" for still being open
+    then, and a bound this module invented from scratch — for the same reason
+    the class is called ``Moment`` rather than ``Point`` — is the interval's own
+    ``end`` standing in for an instant's ``start`` at the *after* side.
+    """
+    if after is not None and _sort_key(moment.end or moment.start) < _sort_key(after):
+        return False
+    return not (before is not None and _sort_key(moment.start) > _sort_key(before))
+
+
 def is_dated(graph: rdflib.Graph, node: rdflib.term.Node) -> bool:
     """True when *node* can be put on a time axis."""
     return bool(_temporal_literals(graph, node))
@@ -277,19 +296,33 @@ def _note_of(graph: rdflib.Graph, node: rdflib.term.Node) -> str:
     return str(value) if value is not None else ""
 
 
-def timeline_items(graph: rdflib.Graph, uris: list[str]) -> list[dict[str, object]]:
+def timeline_items(
+    graph: rdflib.Graph,
+    uris: list[str],
+    after: str | None = None,
+    before: str | None = None,
+) -> list[dict[str, object]]:
     """Every moment of every URI, as the timeline page wants them.
 
     One item per moment, not per entity: an entity dated twice appears twice, in
     two lanes. That is the shape of the data and hiding it would be a lie the
     reader cannot see through.
+
+    *after*/*before* filter **moments**, not entities. This is the one thing a
+    caller cannot do by narrowing *uris* instead: an entity dated both in 1977
+    and in 2026 (a document, and the day it was fetched) is one URI with two
+    moments, and a SPARQL query that names it for its 2026 date has no way to
+    say "but not the 1977 one" — the query binds an entity, not a moment. Doing
+    the filtering here, against the resolved :class:`Moment` values, is the only
+    place it can be both correct and generic: it needs no predicate list, so it
+    keeps working for whatever vocabulary the file happens to date things in.
     """
     items: list[dict[str, object]] = []
     for uri in uris:
         node = rdflib.URIRef(uri)
         if (node, None, None) not in graph:
             continue
-        moments = moments_of(graph, node)
+        moments = [m for m in moments_of(graph, node) if _moment_in_range(m, after, before)]
         if not moments:
             continue
         lane_uri, lane_label = lane_of(graph, node)

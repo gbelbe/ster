@@ -28,6 +28,36 @@ It refuses to open on a file with no dates at all, saying so. An empty frieze
 reads as a broken feature, and the reader cannot tell it apart from one that
 failed to load — the rule `anything_located` already applies to the map.
 
+- Two date inputs, **After**/**Before**, bound the frieze to a range — either
+  alone, or both for "between". They filter *moments*, not entities, and they
+  reissue only `POST /api/timeline` for the query's existing rows, not the
+  SPARQL query itself. Set, they also become vis-timeline's own `min`/`max`
+  options, so panning cannot drag past a bound the data has already been
+  trimmed to — one native feature doing what a second custom guard would
+  otherwise have to.
+
+## Why the bound cannot live in the SPARQL query
+
+The obvious way to ask for "events after 2025" is a `FILTER` on the date in the
+query itself. It does not work here, and the reason is structural rather than a
+missing feature: the query's job is to pick *entities* — the rows carry URIs, or
+`?entity`/`?date` pairs where only the URI survives into `timeline_items`. Once
+an entity is picked, every one of its moments is resolved and drawn, because
+that is the one property `timeline_items` promises (`test_one_item_per_moment_
+not_per_entity`). A document approved in 2022 and re-read in 2026 is one entity
+with two moments; a `FILTER(?date >= "2025")` that matches its 2026 moment picks
+the *entity*, and the entity brings its 2022 moment along for free. Narrowing the
+query cannot narrow what a chosen entity shows — only narrowing the moments
+themselves can, which is why `after`/`before` are a separate parameter to
+`timeline_items`, applied after resolution, rather than something expressed in
+SPARQL. See `time_shapes._moment_in_range` and its tests
+(`test_an_entity_dated_twice_can_lose_only_its_earlier_moment` et al.) for the
+case this exists to get right.
+
+An interval is judged by overlap, not containment: kept whole the instant either
+end touches the requested range, never clipped to it — a five-year permit is
+still "in range" for a "since 2025" query even though it started in 2022.
+
 ## The rule that decides what is drawn
 
 `geo_shapes` keys on the literal's **datatype**, and that works because a
@@ -123,7 +153,7 @@ how a selection ends up owning every date in the file.
    ├──────────────────────────────────────────────────────────────────┤
    │ assets/timeline_app.js   fetch → render → filter → detail        │  app
    ├──────────────────────────────────────────────────────────────────┤
-   │ window.__STER_TIMELINE__ = { token }                             │  data
+   │ window.__STER_TIMELINE__ = { token, after, before }              │  data
    └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -135,9 +165,9 @@ neither of them holds ontology data.
 
 | Route | Auth | Returns |
 |---|---|---|
-| `GET /timeline` | open | The page. `q` primes the editor, `focus` makes the server build a query over what that entity stands over |
-| `POST /api/timeline` | bearer | `{items, lanes, span}` for the URIs sent |
-| `POST /api/sparql_query` | bearer | The page's own query runs here, not through `/mcp` — MCP is how an agent talks to the server, and a page is not an agent |
+| `GET /timeline` | open | The page. `q` primes the editor, `focus` makes the server build a query over what that entity stands over, `after`/`before` prime the range inputs |
+| `POST /api/timeline` | bearer | `{items, lanes, span}` for the URIs sent, filtered to `after`/`before` when given |
+| `POST /api/sparql_query` | bearer | The page's own query runs here, not through `/mcp` — MCP is how an agent talks to the server, and a page is not an agent. Also takes `after`/`before`, which bound `view_count`/`view_url` when `view: "timeline"` |
 | `GET /api/node-detail` | bearer | Shared with the graph and map detail panels |
 
 The page is open and embeds its token, exactly as `/viz` and `/map` do: it keeps
@@ -155,6 +185,14 @@ because an agent that can only describe the data makes the reader go looking,
 and one that can only hand over a link cannot reason about what it sent. They
 come from the same resolution the page uses, so a claim the agent makes and a
 bar the reader sees cannot disagree.
+
+`get_timeline`, `run_sparql` and `open_view` all also take optional `after`/
+`before` (any `xsd:date`/`dateTime`/`gYear` form, compared lexically so
+precision may differ on either side). One parameter shape across all three,
+`view_links.DateRange`, so an agent reaches the same range filter whichever tool
+it started from. `open_view`'s returned `url` carries the bound as `&after=`/
+`&before=` query params, so reopening the link later reproduces the same
+bounded view rather than the unbounded one a bare `?q=` would.
 
 ## Dependencies this view adds
 

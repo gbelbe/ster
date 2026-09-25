@@ -160,6 +160,31 @@ def test_a_query_too_long_for_a_link_is_refused(length, refused):
     assert (api.calls == []) is refused
 
 
+def test_after_and_before_ride_along_to_the_api_only_when_given():
+    api = FakeApi(body=_ready("timeline", 1))
+    mcp_views.open_view(
+        {"view": "timeline", "query": "Q", "after": "2025-01-01", "before": "2026-01-01"},
+        api,
+        FakeBrowser(),
+    )
+
+    assert api.calls == [
+        (
+            "/api/sparql_query",
+            {"query": "Q", "view": "timeline", "after": "2025-01-01", "before": "2026-01-01"},
+        )
+    ]
+
+
+def test_no_after_or_before_leaves_the_api_call_unchanged():
+    """Confirms existing callers see no new required field, and nothing is sent
+    for a bound that was never asked for."""
+    api = FakeApi(body=_ready("timeline", 1))
+    mcp_views.open_view({"view": "timeline", "query": "Q"}, api, FakeBrowser())
+
+    assert api.calls == [("/api/sparql_query", {"query": "Q", "view": "timeline"})]
+
+
 def test_without_an_api_the_tool_says_it_needs_the_http_server():
     """Called outside an HTTP request (tests, an embedded use) there is no API
     to go through, and the tool must not fall back to calling ster directly."""

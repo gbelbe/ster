@@ -64,8 +64,15 @@ def _refusal(view: str, query: str, api_post: ApiPost | None) -> dict[str, Any] 
     return None
 
 
-def _ask_api(api_post: ApiPost, view: str, query: str) -> dict[str, Any]:
-    status, body = api_post("/api/sparql_query", {"query": query, "view": view})
+def _ask_api(
+    api_post: ApiPost, view: str, query: str, after: str | None, before: str | None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"query": query, "view": view}
+    if after:
+        payload["after"] = after
+    if before:
+        payload["before"] = before
+    status, body = api_post("/api/sparql_query", payload)
     if status != 200:
         return _error(
             "api_error", f"/api/sparql_query answered {status}: {body.get('detail', body)}"
@@ -86,11 +93,13 @@ def open_view(
     """
     view = str(args.get("view") or "")
     query = str(args.get("query") or "")
+    after = args.get("after") or None
+    before = args.get("before") or None
     refused = _refusal(view, query, api_post)
     if refused is not None:
         return refused
     assert api_post is not None  # _refusal answered for None
-    body = _ask_api(api_post, view, query)
+    body = _ask_api(api_post, view, query, after, before)
     if "error" in body:
         return body
 

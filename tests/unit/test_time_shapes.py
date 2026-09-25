@@ -194,3 +194,70 @@ def test_items_are_ordered_and_span_covers_them() -> None:
 def test_an_unknown_uri_is_skipped_not_invented() -> None:
     graph = _graph('ex:a ex:on "2026-08-18"^^xsd:date .')
     assert time_shapes.timeline_items(graph, ["https://example.org/absent"]) == []
+
+
+# ── after/before filter moments, not the entities a query already picked ──────
+
+
+def test_after_drops_an_earlier_moment_and_keeps_a_later_one() -> None:
+    graph = _graph('ex:old ex:on "1977-09-07"^^xsd:date .\nex:new ex:on "2026-08-18"^^xsd:date .')
+    items = time_shapes.timeline_items(graph, [NS + "old", NS + "new"], after="2025-01-01")
+    assert [item["uri"] for item in items] == [NS + "new"]
+
+
+def test_before_drops_a_later_moment_and_keeps_an_earlier_one() -> None:
+    graph = _graph('ex:old ex:on "1977-09-07"^^xsd:date .\nex:new ex:on "2026-08-18"^^xsd:date .')
+    items = time_shapes.timeline_items(graph, [NS + "old", NS + "new"], before="2000-01-01")
+    assert [item["uri"] for item in items] == [NS + "old"]
+
+
+def test_between_keeps_only_what_falls_inside_both_bounds() -> None:
+    graph = _graph(
+        'ex:early ex:on "2024-01-01"^^xsd:date .\n'
+        'ex:mid ex:on "2025-06-01"^^xsd:date .\n'
+        'ex:late ex:on "2027-01-01"^^xsd:date .'
+    )
+    items = time_shapes.timeline_items(
+        graph, [NS + "early", NS + "mid", NS + "late"], after="2025-01-01", before="2026-01-01"
+    )
+    assert [item["uri"] for item in items] == [NS + "mid"]
+
+
+def test_an_entity_dated_twice_can_lose_only_its_earlier_moment() -> None:
+    """The bug the range filter was built to fix: a document approved in 2022 and
+    read again (by a fetch, or a re-run) in 2026 must not vanish, or reappear
+    with its 1977-style stale moment, when the caller asks for "after 2025"."""
+    graph = _graph(
+        'ex:doc ex:approved "2022-02-01"^^xsd:date ;\n       ex:read "2026-09-15"^^xsd:date .'
+    )
+    items = time_shapes.timeline_items(graph, [NS + "doc"], after="2025-01-01")
+    assert [item["predicate"] for item in items] == [NS + "read"]
+
+
+def test_an_interval_overlapping_the_bound_is_kept_whole() -> None:
+    """A span is one moment, not two instants to test separately — it is kept
+    (not clipped) the instant either of its ends touches the requested range."""
+    graph = _graph(
+        "ex:Delay st:interval [ st:from ex:startsOn ; st:to ex:endsOn ] .\n"
+        'ex:d a ex:Delay ; ex:startsOn "2024-12-01"^^xsd:date ;\n'
+        '     ex:endsOn "2025-01-15"^^xsd:date .'
+    )
+    items = time_shapes.timeline_items(graph, [NS + "d"], after="2025-01-01")
+    assert len(items) == 1
+    assert (items[0]["start"], items[0]["end"]) == ("2024-12-01", "2025-01-15")
+
+
+def test_an_interval_entirely_before_the_bound_is_dropped() -> None:
+    graph = _graph(
+        "ex:Delay st:interval [ st:from ex:startsOn ; st:to ex:endsOn ] .\n"
+        'ex:d a ex:Delay ; ex:startsOn "2020-01-01"^^xsd:date ;\n'
+        '     ex:endsOn "2020-02-01"^^xsd:date .'
+    )
+    assert time_shapes.timeline_items(graph, [NS + "d"], after="2025-01-01") == []
+
+
+def test_a_bound_of_a_bare_year_compares_against_full_dates_by_meaning() -> None:
+    """ "2025" must mean the start of that year, not "shorter, therefore earlier"."""
+    graph = _graph('ex:a ex:on "2025-01-01"^^xsd:date .\nex:b ex:on "2024-12-31"^^xsd:date .')
+    items = time_shapes.timeline_items(graph, [NS + "a", NS + "b"], after="2025")
+    assert [item["uri"] for item in items] == [NS + "a"]

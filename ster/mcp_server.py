@@ -80,6 +80,34 @@ _VIEW_ENUM: Final = {**_STRING, "enum": list(VIEWS)}
 _ARG_LIMIT: Final = "limit"
 _LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": 200}
 
+# The key every tool and every parameter carries. Named once so the ratchet
+# counts one spelling, and so the schema shape stays greppable.
+_DESC: Final = "description"
+
+# Shared by every tool that can bound a timeline: keeps only the *moments* that
+# fall on or after/before these, not the entities a query or a URI names — an
+# entity dated both in 1977 and in 2026 is still named either way, but only one
+# of its two moments belongs on a timeline asked for "after 2025". Any
+# xsd:date/dateTime/gYear form works ("2025", "2025-06", "2025-06-01T10:00:00");
+# looser precision on one side of the comparison is fine.
+_ARG_AFTER: Final = "after"
+_ARG_BEFORE: Final = "before"
+_DATE_RANGE_ARGS: Final[dict[str, Any]] = {
+    _ARG_AFTER: {
+        **_STRING,
+        _DESC: (
+            "Keep only timeline moments on or after this date/dateTime/year "
+            "(e.g. '2025' or '2025-01-01'). Filters moments, not which entities "
+            "are considered — an entity dated both before and after this bound "
+            "still appears, with only its later moment shown."
+        ),
+    },
+    _ARG_BEFORE: {
+        **_STRING,
+        _DESC: "Keep only timeline moments on or before this date. Set both for a between filter.",
+    },
+}
+
 
 def _tool(
     name: str,
@@ -97,10 +125,6 @@ def _tool(
         schema["required"] = required
     return {"name": name, "description": description, "inputSchema": schema}
 
-
-# The key every tool and every parameter carries. Named once so the ratchet
-# counts one spelling, and so the schema shape stays greppable.
-_DESC: Final = "description"
 
 TOOLS: list[dict[str, Any]] = [
     _tool(
@@ -157,9 +181,9 @@ TOOLS: list[dict[str, Any]] = [
         (
             "Everything the file dates, as instants and intervals ready to plot, plus the "
             "URL of ster's timeline page. Pass a URI to narrow it to the dated entities "
-            "that point to it."
+            "that point to it, or 'after'/'before' to keep only moments in a date range."
         ),
-        {"uri": _STRING, _ARG_LIMIT: _LIMIT_SCHEMA},
+        {"uri": _STRING, _ARG_LIMIT: _LIMIT_SCHEMA, **_DATE_RANGE_ARGS},
     ),
     _tool(
         "run_sparql",
@@ -196,6 +220,7 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "boolean",
                 _DESC: "false to get the link without opening a browser (default true).",
             },
+            **_DATE_RANGE_ARGS,
         },
         [_ARG_QUERY],
     ),
@@ -208,7 +233,13 @@ TOOLS: list[dict[str, Any]] = [
             "machine as ster; otherwise returns the link for you to give them. Checks "
             "the result first and opens nothing when the view would be empty, saying "
             "why in 'view_unavailable'. Returns the url, whether it was opened, and how "
-            "much the view shows. Build the query as for run_sparql."
+            "much the view shows. Build the query as for run_sparql. For 'timeline', "
+            "'after'/'before' keep only moments in a date range — pass these instead of "
+            "trying to bound dates in the SPARQL WHERE clause: the view resolves every "
+            "moment of each entity the query names, so a FILTER on the query's own date "
+            "variable narrows which entities are picked but not which of their moments "
+            "are drawn, and a document dated both decades ago and this week would still "
+            "show its old date."
         ),
         {
             "view": _VIEW_ENUM,
@@ -217,6 +248,7 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "boolean",
                 _DESC: "false to get the link without opening a browser (default true).",
             },
+            **_DATE_RANGE_ARGS,
         },
         ["view", _ARG_QUERY],
     ),
@@ -262,11 +294,24 @@ def _tool_get_vocabulary(tax: Taxonomy, _call: CallContext, _args: dict) -> Any:
 
 
 def _tool_get_timeline(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
-    return ctx.timeline(tax, args.get("uri", ""), int(args.get(_ARG_LIMIT, 200)))
+    return ctx.timeline(
+        tax,
+        args.get("uri", ""),
+        int(args.get(_ARG_LIMIT, 200)),
+        args.get(_ARG_AFTER),
+        args.get(_ARG_BEFORE),
+    )
 
 
 def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
-    payload = ctx.run_sparql(tax, args[_ARG_QUERY], args.get("view"), call.base_url)
+    payload = ctx.run_sparql(
+        tax,
+        args[_ARG_QUERY],
+        args.get("view"),
+        call.base_url,
+        args.get(_ARG_AFTER),
+        args.get(_ARG_BEFORE),
+    )
     # Opening is an MCP-transport concern (whether *this caller* is on ster's own
     # machine), so it lives here rather than in the shared sparql_payload/annotate
     # path the REST endpoint also runs — see test_the_shared_function_is_where_view_is_handled.

@@ -17,7 +17,7 @@
      it. Empty means no filter, so the page opens showing everything. */
   var state = {
     items: [], lanes: [], chosen: {}, showAuxiliary: false, timeline: null, groups: null, data: null,
-    beside: {}, widths: {}
+    beside: {}, widths: {}, uris: [], after: CFG.after || '', before: CFG.before || ''
   };
 
   function el(id) { return document.getElementById(id); }
@@ -44,9 +44,16 @@
     return r.json();
   }
 
+  /* after/before travel with every resolution, not just the first: they filter
+     which *moments* of an already-selected entity come back (server-side, in
+     ster.time_shapes — see its docstring for why an entity dated twice cannot
+     be split any other way), so changing the range has to ask again rather
+     than hide rows the client already has. Empty means unbounded, same as the
+     server's own default. */
   async function resolve(uris) {
     var r = await fetch('/api/timeline', {
-      method: 'POST', headers: headers(), body: JSON.stringify({ uris: uris })
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ uris: uris, after: state.after || null, before: state.before || null })
     });
     if (!r.ok) throw new Error('timeline failed: ' + r.status);
     return r.json();
@@ -168,7 +175,12 @@
     }
     state.groups = new vis.DataSet(groups);
     state.data = new vis.DataSet(items);
-    state.timeline = new vis.Timeline(container, state.data, state.groups, {
+    /* min/max are vis-timeline's own bound: past a filtered range, the items
+       are already gone (resolved server-side), but the reader could still drag
+       or zoom the empty space beyond them as if more data were one pan away.
+       Clamping the navigable range to the same bound removes that dead end
+       instead of ster reimplementing what the library already does for it. */
+    var opts = {
       /* vis-timeline sanitises item content and strips attributes it does not
          know, which silently removed every class and left the label and the
          predicate running together. Narrowing the filter rather than disabling
@@ -185,7 +197,10 @@
       tooltip: { followMouse: true, overflowMethod: 'flip' },
       zoomMin: 1000 * 60 * 60,            /* an hour */
       zoomMax: 1000 * 60 * 60 * 24 * 365 * 200  /* two centuries */
-    });
+    };
+    if (state.after) opts.min = state.after;
+    if (state.before) opts.max = state.before;
+    state.timeline = new vis.Timeline(container, state.data, state.groups, opts);
     state.timeline.on('select', function (props) {
       var id = props.items && props.items[0];
       if (!id) return;
@@ -254,9 +269,23 @@
     status('querying…');
     try {
       var result = await runQuery(el('q').value);
-      var uris = urisOf(result);
-      if (!uris.length) { status('no entity in the result'); return; }
-      var data = await resolve(uris);
+      state.uris = urisOf(result);
+      if (!state.uris.length) { status('no entity in the result'); return; }
+      await reresolve();
+    } catch (e) {
+      status('error: ' + e.message);
+    }
+  }
+
+  /* Re-asks /api/timeline for the same entities under the current after/before,
+     without re-running the SPARQL query — the query decided *which* entities;
+     the range decides which of their moments, so only the second needs redoing
+     when a date input changes. */
+  async function reresolve() {
+    if (!state.uris.length) return;
+    status('querying…');
+    try {
+      var data = await resolve(state.uris);
       state.items = data.items || [];
       state.beside = {};
       state.widths = {};
@@ -264,12 +293,21 @@
       state.chosen = {};
       state.showAuxiliary = false;
       el('toggle-auxiliary').classList.remove('active');
-      if (!state.items.length) { status('no temporal data on these entities'); return; }
       lanes(); draw();
     } catch (e) {
       status('error: ' + e.message);
     }
   }
+
+  el('after').value = state.after;
+  el('before').value = state.before;
+  el('after').onchange = function () { state.after = this.value; reresolve(); };
+  el('before').onchange = function () { state.before = this.value; reresolve(); };
+  el('clear-range').onclick = function () {
+    state.after = ''; state.before = '';
+    el('after').value = ''; el('before').value = '';
+    reresolve();
+  };
 
   el('run').onclick = load;
   el('fit').onclick = function () { if (state.timeline) state.timeline.fit(); };

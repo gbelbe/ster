@@ -25,6 +25,23 @@ MAP: Final = "map"
 GRAPH: Final = "graph"
 TIMELINE: Final = "timeline"
 
+
+@dataclass(frozen=True)
+class DateRange:
+    """An optional [*after*, *before*] bound, timeline-only today.
+
+    A plain pair of strings would do the same job; named so ``assess``'s
+    signature reads as intent and a future view (a Gantt export, a "recent
+    changes" filter) has somewhere to receive the same two bounds without
+    inventing its own spelling of them.
+    """
+
+    after: str | None = None
+    before: str | None = None
+
+
+_NO_RANGE: Final = DateRange()
+
 # A SELECT returns columns; the graph view draws triples. Wrapping rows into
 # triples would invent a graph the query never asked for, so the link is refused
 # with a reason rather than handed over to render an empty canvas.
@@ -65,11 +82,22 @@ def graph_url(sparql: str, base: str | None = None) -> str:
     return f"{_base(base)}/viz?q={quote(sparql)}"
 
 
-def timeline_url(sparql: str, base: str | None = None) -> str:
-    """Address of the running server's timeline page, dating *sparql*'s rows."""
+def timeline_url(sparql: str, base: str | None = None, date_range: DateRange = _NO_RANGE) -> str:
+    """Address of the running server's timeline page, dating *sparql*'s rows.
+
+    *date_range* rides in the query string, the same way *sparql* does, so the
+    link is the whole request: opening it later, or handing it to someone else,
+    reproduces the bounded view rather than the unbounded one a bare ``?q=``
+    would reopen.
+    """
     from urllib.parse import quote  # noqa: PLC0415
 
-    return f"{_base(base)}/timeline?q={quote(sparql)}"
+    url = f"{_base(base)}/timeline?q={quote(sparql)}"
+    if date_range.after:
+        url += f"&after={quote(date_range.after)}"
+    if date_range.before:
+        url += f"&before={quote(date_range.before)}"
+    return url
 
 
 def is_graphable(result: QueryResult) -> bool:
@@ -90,18 +118,22 @@ def mappable_count(taxonomy: Taxonomy, result: QueryResult) -> int:
     return located_count(full_graph_rdflib(taxonomy), result)
 
 
-def dated_count(taxonomy: Taxonomy, result: QueryResult) -> int:
+def dated_count(taxonomy: Taxonomy, result: QueryResult, date_range: DateRange = _NO_RANGE) -> int:
     """How many moments the timeline would draw for the entities *result* names.
 
     The same resolution ``POST /api/timeline`` runs for the page, so the count
-    is what the reader will see rather than a guess at it.
+    is what the reader will see rather than a guess at it — *date_range*
+    included, so a bounded query does not get counted as if it were not.
     """
     from .store import full_graph_rdflib  # noqa: PLC0415
     from .time_shapes import timeline_items  # noqa: PLC0415
     from .viz_shared import is_uri  # noqa: PLC0415
 
     uris = list(dict.fromkeys(cell for row in result.rows for cell in row if is_uri(str(cell))))
-    return len(timeline_items(full_graph_rdflib(taxonomy), uris)) if uris else 0
+    if not uris:
+        return 0
+    graph = full_graph_rdflib(taxonomy)
+    return len(timeline_items(graph, uris, date_range.after, date_range.before))
 
 
 def _triple_count(_taxonomy: Taxonomy, result: QueryResult) -> int:
@@ -134,17 +166,30 @@ def _why_no_timeline(_result: QueryResult) -> str:
 @dataclass(frozen=True)
 class _View:
     """What one view needs: how much a result would show in it, why nothing
-    would, and the page that draws it."""
+    would, and the page that draws it.
 
-    count: Callable[[Taxonomy, QueryResult], int]
+    Every view's ``count``/``url`` takes a :class:`DateRange`, even the two that
+    ignore it — one shape for all three, so a fourth view gains the parameter by
+    construction rather than by remembering to add it.
+    """
+
+    count: Callable[[Taxonomy, QueryResult, DateRange], int]
     why_empty: Callable[[QueryResult], str]
-    url: Callable[[str, str | None], str]
+    url: Callable[[str, str | None, DateRange], str]
 
 
 # One row per view, so a new view is a row here rather than another branch.
 _VIEWS: Final[dict[str, _View]] = {
-    GRAPH: _View(_triple_count, _why_no_graph, lambda q, base: graph_url(q, base=base)),
-    MAP: _View(mappable_count, _why_no_map, lambda q, base: map_url(q, base=base)),
+    GRAPH: _View(
+        lambda tax, result, _rng: _triple_count(tax, result),
+        _why_no_graph,
+        lambda q, base, _rng: graph_url(q, base=base),
+    ),
+    MAP: _View(
+        lambda tax, result, _rng: mappable_count(tax, result),
+        _why_no_map,
+        lambda q, base, _rng: map_url(q, base=base),
+    ),
     TIMELINE: _View(dated_count, _why_no_timeline, timeline_url),
 }
 VIEWS: Final = tuple(sorted(_VIEWS))
@@ -160,7 +205,12 @@ class ViewLink:
 
 
 def assess(
-    taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str, base: str | None = None
+    taxonomy: Taxonomy,
+    result: QueryResult,
+    sparql: str,
+    view: str,
+    base: str | None = None,
+    date_range: DateRange = _NO_RANGE,
 ) -> ViewLink:
     """How *result* would look as *view*: a link with a count, or a reason.
 
@@ -179,17 +229,22 @@ def assess(
     if base is None and not _server_running():
         reason = "ster's HTTP server is not running — start it with `ster serve <file>`"
         return ViewLink(None, reason, 0)
-    count = spec.count(taxonomy, result)
+    count = spec.count(taxonomy, result, date_range)
     if not count:
         return ViewLink(None, spec.why_empty(result), 0)
-    return ViewLink(spec.url(sparql, base), None, count)
+    return ViewLink(spec.url(sparql, base, date_range), None, count)
 
 
 def link_for(
-    taxonomy: Taxonomy, result: QueryResult, sparql: str, view: str, base: str | None = None
+    taxonomy: Taxonomy,
+    result: QueryResult,
+    sparql: str,
+    view: str,
+    base: str | None = None,
+    date_range: DateRange = _NO_RANGE,
 ) -> tuple[str | None, str | None]:
     """``(url, unavailable_reason)`` for opening *result* as *view*; exactly one is set."""
-    link = assess(taxonomy, result, sparql, view, base)
+    link = assess(taxonomy, result, sparql, view, base, date_range)
     return link.url, link.reason
 
 
@@ -206,6 +261,7 @@ def annotate(
     sparql: str,
     view: str | None,
     base: str | None = None,
+    date_range: DateRange = _NO_RANGE,
 ) -> dict[str, Any]:
     """Add ``view_url``/``view_unavailable``/``view_count`` when a view was asked for.
 
@@ -215,7 +271,7 @@ def annotate(
     """
     if not view:
         return payload
-    link = assess(taxonomy, result, sparql, view, base)
+    link = assess(taxonomy, result, sparql, view, base, date_range)
     payload["view_url"] = link.url
     payload["view_unavailable"] = link.reason
     payload["view_count"] = link.count

@@ -38,9 +38,39 @@ _VIS_CSS_CDN = (
 _VIS_JS_CACHE = f"vis-timeline-{_VIS_VERSION}.js"
 _VIS_CSS_CACHE = f"vis-timeline-{_VIS_VERSION}.css"
 
+
 # The query the page opens with when none is given. Mirrors the map's default:
 # ask for anything carrying the datatypes that announce a time, and let the
 # server decide what each one means.
+def _safe_json_for_script(data: object) -> str:
+    """*data* as JSON, safe to splice straight into an inline ``<script>`` tag.
+
+    ``json.dumps`` never escapes ``<``, ``>`` or ``&`` — a string value
+    containing ``"</script>"`` would close the tag early and let whatever
+    follows run as markup. *after*/*before* reach here from a query string
+    the API layer already validates against a strict date/dateTime shape
+    (``ster/api.py``'s ``timeline_page``), but that check belongs to one
+    caller; a value that closes a `<script>` tag must be impossible to embed
+    here regardless of who calls this function; a second caller with no such
+    guard must not reopen the hole caught by CodeQL as a reflected XSS on
+    this exact sink. The escapes are valid JSON either way — a JSON string
+    may contain any ``\\uXXXX`` — so this changes nothing about what the page
+    reads back, only what a browser's HTML parser sees on the way there.
+    U+2028/U+2029 are escaped too: legal JSON, but a bare line separator
+    inside a `<script>` block breaks some engines' parsing of the statement.
+    """
+    encoded = json.dumps(data)
+    for unsafe, escaped in (
+        ("<", "\\u003c"),
+        (">", "\\u003e"),
+        ("&", "\\u0026"),
+        (" ", "\\u2028"),
+        (" ", "\\u2029"),
+    ):
+        encoded = encoded.replace(unsafe, escaped)
+    return encoded
+
+
 DEFAULT_TIMELINE_QUERY = """\
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -78,12 +108,20 @@ def _app_js() -> str:
     return (files("ster") / "assets" / "timeline_app.js").read_text(encoding="utf-8")
 
 
-def render_timeline_html(query: str, token: str) -> str:
+def render_timeline_html(
+    query: str, token: str, after: str | None = None, before: str | None = None
+) -> str:
     """The ``/timeline`` page, primed with *query* and able to re-run it.
 
     The token is embedded rather than put in the URL, exactly as the map does:
     it keeps credentials out of browser history while letting the page call the
     server's own endpoints.
+
+    *after*/*before* go into the same data blob rather than into the two
+    ``<input>`` values directly: the app layer owns reading them from
+    ``window.__STER_TIMELINE__``, the same source it reads the token from, so
+    there is one place — not two markup spots plus the JSON — that can drift
+    from what the page actually does with them.
     """
     return (
         _PAGE.replace("__QUERY__", html.escape(query, quote=True))
@@ -91,7 +129,9 @@ def render_timeline_html(query: str, token: str) -> str:
         .replace("__VIS_JS__", _vis_script_tag())
         .replace(
             "__DATA__",
-            "<script>window.__STER_TIMELINE__=" + json.dumps({"token": token}) + ";</script>",
+            "<script>window.__STER_TIMELINE__="
+            + _safe_json_for_script({"token": token, "after": after, "before": before})
+            + ";</script>",
         )
         .replace("__APP_JS__", _app_js())
     )
@@ -110,6 +150,8 @@ body{background:#f1f5f9;color:#1e293b;font-family:system-ui,-apple-system,sans-s
 header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0;flex-wrap:wrap}
 header button{background:#fff;border:1px solid #cbd5e1;color:#475569;cursor:pointer;font-size:12px;padding:4px 10px;border-radius:5px}
 header button:hover{background:#e2e8f0}
+#range{display:flex;align-items:center;gap:5px;font-size:11px;color:#475569}
+#range input{border:1px solid #cbd5e1;border-radius:5px;padding:3px 6px;font:inherit;color:inherit}
 #status{font-size:11px;color:#64748b;margin-left:auto}
 #lanes{display:flex;gap:5px;flex-wrap:wrap;padding:6px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
 .ftbtn{background:transparent;border:1px solid #cbd5e1;color:#1e293b;border-radius:999px;cursor:pointer;font:inherit;font-size:11px;padding:2px 9px}
@@ -157,6 +199,11 @@ header button.active{background:#1f5b80;border-color:#1f5b80;color:#fff}
    <button id="toggle-q">Query</button>
    <button id="toggle-auxiliary">Provenance &amp; annotations</button>
    <button id="run">Run</button>
+   <span id="range">
+     <label>After <input id="after" type="date"></label>
+     <label>Before <input id="before" type="date"></label>
+     <button id="clear-range" type="button">clear</button>
+   </span>
   <span id="status"></span>
 </header>
 <div id="qbox"><textarea id="q">__QUERY__</textarea></div>

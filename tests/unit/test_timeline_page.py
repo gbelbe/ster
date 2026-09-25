@@ -186,6 +186,65 @@ def test_a_period_too_narrow_for_its_label_shows_it_beside_the_box() -> None:
     assert ".vis-item.vis-range.beside .vis-item-content{margin-left:100%}" in page
 
 
+# ── after/before: rejected early, and never reflected unescaped ──────────────
+
+
+def test_an_after_value_that_is_not_date_shaped_is_rejected() -> None:
+    """Caught at the API boundary before it ever reaches the rendered page —
+    the CodeQL/SonarQube-flagged sink this pair of tests exists to close."""
+    response = _client().get("/timeline", params={"after": "</script><script>alert(1)</script>"})
+
+    assert response.status_code == 400
+
+
+def test_a_valid_after_value_is_accepted_and_embedded() -> None:
+    page = _client().get("/timeline", params={"after": "2025-01-01"}).text
+
+    assert '"after": "2025-01-01"' in page
+
+
+def test_a_valid_before_value_is_accepted_and_embedded() -> None:
+    page = _client().get("/timeline", params={"before": "2025-01-01"}).text
+
+    assert '"before": "2025-01-01"' in page
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2025",
+        "2025-06",
+        "2025-06-01",
+        "2025-06-01T10:00",
+        "2025-06-01T10:00+01:00",
+        "2025-06-01T10:00.5Z",
+        "2025-06-01T10:00:00.5Z",
+        "2025-06-01T10:00:00-01:00",
+    ],
+)
+def test_every_shape_time_shapes_recognises_is_accepted(value: str) -> None:
+    """One shape per xsd:gYear/gYearMonth/date/dateTime — see
+    time_shapes.TEMPORAL_DATATYPES, which this validation exists to mirror."""
+    assert _client().get("/timeline", params={"before": value}).status_code == 200
+
+
+@pytest.mark.parametrize("value", ["not-a-date", "2025/06/01", "2025-1-1", "'; DROP--"])
+def test_a_garbled_before_value_is_rejected(value: str) -> None:
+    assert _client().get("/timeline", params={"before": value}).status_code == 400
+
+
+def test_render_timeline_html_never_lets_a_bound_break_out_of_its_script_tag() -> None:
+    """The API's regex guard is one caller. This is the sink itself: even a
+    value that guard would never let through must not be able to close the
+    inline `<script>` tag it is embedded in, so a second caller with no such
+    guard cannot reopen the same reflected-XSS hole."""
+    hostile = '"; </script><script>alert(document.cookie)</script>'
+    page = render_timeline_html(DEFAULT_TIMELINE_QUERY, "tok", after=hostile)
+
+    assert "</script><script>alert" not in page
+    assert "\\u003c/script\\u003e" in page
+
+
 def test_narrow_periods_are_rechecked_after_every_zoom() -> None:
     js = _app_js()
     assert "state.timeline.off('rangechanged', placeLabels)" in js

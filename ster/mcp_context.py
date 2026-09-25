@@ -396,7 +396,12 @@ def is_read_only_sparql(query: str) -> bool:
 
 
 def sparql_payload(
-    taxonomy: Taxonomy, query: str, view: str | None = None, base: str | None = None
+    taxonomy: Taxonomy,
+    query: str,
+    view: str | None = None,
+    base: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
 ) -> dict[str, Any]:
     """Run a read-only SPARQL query and shape the answer for the wire.
 
@@ -425,21 +430,31 @@ def sparql_payload(
     # function exists: a protocol is a way in, not a place where behaviour
     # lives. Putting it in the MCP tool alone would have given the agent a
     # capability the REST endpoint does not have.
-    from .view_links import annotate  # noqa: PLC0415
+    from .view_links import DateRange, annotate  # noqa: PLC0415
 
-    return annotate(payload, taxonomy, result, query, view, base)
+    return annotate(payload, taxonomy, result, query, view, base, DateRange(after, before))
 
 
 def run_sparql(
-    taxonomy: Taxonomy, query: str, view: str | None = None, base: str | None = None
+    taxonomy: Taxonomy,
+    query: str,
+    view: str | None = None,
+    base: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
 ) -> dict[str, Any]:
     """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable.
 
     *view* is advisory: the rows come back whether or not a map or graph can be
     built from them, and an unbuildable view is reported as a reason rather than
     raised. A failed view is not a failed query.
+
+    *after*/*before* only ever narrow the ``timeline`` view — a query naming
+    entities is still what decides *which* entities are on it; these decide
+    which of their moments are, the distinction :func:`ster.time_shapes.timeline_items`
+    exists to make.
     """
-    return sparql_payload(taxonomy, query, view, base)
+    return sparql_payload(taxonomy, query, view, base, after, before)
 
 
 _TIMELINE_ITEM_LIMIT = 200
@@ -461,9 +476,18 @@ def _timeline_url(focus: str = "") -> str:
 
 
 def timeline(
-    taxonomy: Taxonomy, uri: str = "", limit: int = _TIMELINE_ITEM_LIMIT
+    taxonomy: Taxonomy,
+    uri: str = "",
+    limit: int = _TIMELINE_ITEM_LIMIT,
+    after: str | None = None,
+    before: str | None = None,
 ) -> dict[str, Any]:
-    """Moments in the file, or those the optional URI stands over."""
+    """Moments in the file, or those the optional URI stands over.
+
+    *after*/*before* bound which **moments** come back, not which entities are
+    considered — the same rule :func:`sparql_payload` follows, for the same
+    reason: an entity dated twice can be in range on one date and not the other.
+    """
     import rdflib  # noqa: PLC0415
 
     from .store import full_graph_rdflib  # noqa: PLC0415
@@ -495,7 +519,7 @@ def timeline(
             }
         )
     )
-    items = timeline_items(graph, uris)
+    items = timeline_items(graph, uris, after, before)
     return {
         "items": items[: max(1, limit)],
         _LIT_COUNT: len(items),

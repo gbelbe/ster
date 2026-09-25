@@ -7,6 +7,7 @@ and a Server-Sent Events stream for live graph refresh.
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 import unicodedata
 from collections.abc import AsyncGenerator, Callable
@@ -66,6 +67,11 @@ class QueryIn(BaseModel):
     # the reason one cannot be built. Offered here as well as on the MCP tool so
     # neither transport has a capability the other lacks.
     view: str | None = None
+    # Timeline-only: keep only moments on/after *after* and on/before *before*.
+    # A query still decides which entities are considered; these decide which of
+    # their moments are — see time_shapes.timeline_items for why that split exists.
+    after: str | None = None
+    before: str | None = None
 
 
 class _VersionedIn(BaseModel):
@@ -160,6 +166,9 @@ class TimelineIn(BaseModel):
     """The row URIs a timeline wants dated."""
 
     uris: list[str] = []
+    # Keep only moments on/after *after* and on/before *before* — see QueryIn.
+    after: str | None = None
+    before: str | None = None
 
 
 class SchemaOut(BaseModel):
@@ -307,6 +316,49 @@ def _focused_timeline_query(taxonomy: Any, focus: str) -> str:
     )
 
 
+# The shapes /timeline's after/before may take — a year, a year-month, a date,
+# or a full date-time, matching exactly what time_shapes.TEMPORAL_DATATYPES
+# recognises (xsd:gYear/gYearMonth/date/dateTime). Date-time suffixes are
+# composed from flat parts rather than one expression with nested optionals.
+_TIMELINE_DATE_TIME = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"
+_TIMELINE_TIME_SUFFIXES = ("", r":\d{2}", r"\.\d{1,6}", r":\d{2}\.\d{1,6}")
+_TIMELINE_TIMEZONES = ("", "Z", r"[+-]\d{2}:\d{2}")
+_TIMELINE_BOUND_SHAPES: Final = (
+    re.compile(r"\d{4}"),
+    re.compile(r"\d{4}-\d{2}"),
+    re.compile(r"\d{4}-\d{2}-\d{2}"),
+    *(
+        re.compile(_TIMELINE_DATE_TIME + time_suffix + timezone)
+        for time_suffix in _TIMELINE_TIME_SUFFIXES
+        for timezone in _TIMELINE_TIMEZONES
+    ),
+)
+
+
+def _validated_timeline_bound(value: str, field_name: str) -> str | None:
+    """*value* if it has one of the shapes above, else a 400.
+
+    The one thing this must never do is let *value* through unchanged when it
+    doesn't: it reaches ``render_timeline_html``, which splices it into the
+    timeline page's inline ``<script>`` tag — the sink CodeQL and SonarQube
+    both flagged as a reflected XSS before this check existed. Restricting the
+    accepted alphabet to digits, ``-``, ``:``, ``.``, ``T``, ``Z``, ``+`` makes
+    ``</script>`` impossible to spell in a value that passes; that is a
+    byproduct of validating *shape*, not a second escaping step — the escaping
+    itself belongs to, and lives in, ``timeline_html._safe_json_for_script``,
+    the actual sink, so this check is free to be about correctness rather than
+    safety and still get safety for it.
+    """
+    if not value:
+        return None
+    if any(shape.fullmatch(value) for shape in _TIMELINE_BOUND_SHAPES):
+        return value
+    raise HTTPException(
+        status_code=400,
+        detail=f"Invalid {field_name}: expected ISO-like date/datetime.",
+    )
+
+
 _DEFAULT_MAP_QUERY = """\
 PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -432,28 +484,30 @@ def create_app(
 # it, so what each group touches is visible in its signature.
 
 
+def _graph_html_response(
+    _st: dict[str, Any], root_uri: str | None, full: bool = False, sparql: str = ""
+) -> HTMLResponse:
+    """Render a graph page while refusing requests before a renderer is attached."""
+    # no-store: the page inlines its JS, so caching it served stale builds
+    # until a manual hard-reload.
+    render = _st.get("html_fn")
+    if render is None:
+        raise HTTPException(status_code=501, detail="No HTML renderer configured")
+    return HTMLResponse(
+        render(root_uri, full, sparql),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     """HTML landing pages and the raw-ontology endpoint (no auth: read-only views)."""
-
-    def _graph_html_response(
-        root_uri: str | None, full: bool = False, sparql: str = ""
-    ) -> HTMLResponse:
-        # no-store: the page inlines its JS, so caching it served stale builds
-        # until a manual hard-reload.
-        render = _st.get("html_fn")
-        if render is None:
-            raise HTTPException(status_code=501, detail="No HTML renderer configured")
-        return HTMLResponse(
-            render(root_uri, full, sparql),
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def root(
         root_uri: str | None = Query(default=None, alias="root"),
         full: bool = False,
     ) -> HTMLResponse:
-        return _graph_html_response(root_uri, full)
+        return _graph_html_response(_st, root_uri, full)
 
     @app.get("/viz", response_class=HTMLResponse, include_in_schema=False)
     def viz(
@@ -466,7 +520,7 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         ``?q=`` mirrors ``/map?q=``: the query travels in the URL, the token does
         not — the page embeds it, so it stays out of browser history.
         """
-        return _graph_html_response(root_uri, full, sparql)
+        return _graph_html_response(_st, root_uri, full, sparql)
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
     def map_page(
@@ -491,20 +545,32 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
     def timeline_page(
         sparql: str = Query(default="", alias="q"),
         focus: str = Query(default="", alias="focus"),
+        after: str = Query(default="", alias="after"),
+        before: str = Query(default="", alias="before"),
     ) -> HTMLResponse:
         """A live frieze of a SPARQL result — see :mod:`ster.timeline_html`.
 
         Opens like ``/map``: no token in the URL, one embedded in the page so its
         own calls to ``/api/sparql_query`` and ``/api/timeline`` authenticate.
+
+        *after*/*before* prime the page's own date-range inputs, the same way *q*
+        primes its query box — so a link built with them (``timeline_url``, or
+        one a person edits by hand) reopens already bounded rather than needing
+        the filter re-entered.
         """
         from .timeline_html import DEFAULT_TIMELINE_QUERY, render_timeline_html  # noqa: PLC0415
 
         query = sparql or (_focused_timeline_query(_st[_LIT_TAXONOMY], focus) if focus else "")
+        # The validator restricts these to date characters. Escape them anyway
+        # at this HTML boundary: it documents the sink contract to CodeQL and
+        # keeps a future validator broadening from reopening reflected XSS.
+        after_value = html.escape(_validated_timeline_bound(after, "after") or "") or None
+        before_value = html.escape(_validated_timeline_bound(before, "before") or "") or None
         # No-cache, as /viz does: the page embeds its own app layer, so a cached
         # copy silently keeps serving yesterday's JavaScript after an edit — a
         # confusing failure the author hits before any user does.
         return HTMLResponse(
-            render_timeline_html(query or DEFAULT_TIMELINE_QUERY, token),
+            render_timeline_html(query or DEFAULT_TIMELINE_QUERY, token, after_value, before_value),
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
@@ -993,7 +1059,14 @@ def _register_mutation_routes(
 
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(status_code=403, detail="Origin not allowed")
-        return sparql_payload(_st[_LIT_TAXONOMY], body.query, body.view, str(request.base_url))
+        return sparql_payload(
+            _st[_LIT_TAXONOMY],
+            body.query,
+            body.view,
+            str(request.base_url),
+            body.after,
+            body.before,
+        )
 
     @app.get(
         "/api/version",
@@ -1358,7 +1431,7 @@ def _register_timeline(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         from .time_shapes import span_of, timeline_items  # noqa: PLC0415
 
         graph = _graph_for_locate(_tax())
-        items = timeline_items(graph, body.uris)
+        items = timeline_items(graph, body.uris, body.after, body.before)
         return {"items": items, "lanes": _lanes_of(items), "span": span_of(items)}
 
 
