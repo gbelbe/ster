@@ -394,3 +394,18 @@ def test_run_sparql_description_points_at_get_vocabulary():
     desc = next(t for t in ms.TOOLS if t["name"] == "run_sparql")["description"]
     assert "get_vocabulary" in desc
     assert "LIMIT" in desc
+
+
+def test_initialize_instructs_agents_to_project_semantic_graphs(zoo):
+    """Graph guidance must keep default visualizations free of technical metadata."""
+    reply = ms.handle_message(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, zoo
+    )
+    instructions = reply["result"]["instructions"]
+
+    assert "focused\nsemantic neighborhood" in instructions
+    assert "class hierarchy" in instructions
+    assert "object-property links" in instructions
+    assert "Exclude provenance" in instructions
+    assert "images, logos, URLs" in instructions
+    assert "explicit CONSTRUCT\nallowlist" in instructions

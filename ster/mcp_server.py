@@ -393,6 +393,18 @@ This server never edits the file: SELECT and ASK only, and update forms are
 refused. The one thing it does besides answering is showing a view — `view` on
 run_sparql, or open_view — as a map, timeline or graph.
 
+For a graph request, first resolve the named entity and construct a focused
+semantic neighborhood rather than dumping every triple. Include the focus,
+its types, class hierarchy, declared object-property links, the connected
+entities' types, and readable labels. Include the domain and range definitions
+of relationships used when the file is OWL. For SKOS, use its discovered
+broader/narrower and related predicates instead. Keep the neighborhood bounded
+(a few hierarchy levels and one relationship hop by default), and cap large
+instance sets. Exclude provenance, source/build metadata, images, logos, URLs,
+identifiers, coordinates, geometry, and other literal data unless the user
+explicitly asks for them. Build graph queries with an explicit CONSTRUCT
+allowlist; never use an unrestricted `?subject ?predicate ?object` pattern.
+
 A view opens itself when it can: on a caller running on the same machine as
 ster, `run_sparql`'s `view` and `open_view` open a browser tab on their own and
 report `opened: true`. Nothing further is needed there — do not also open or
