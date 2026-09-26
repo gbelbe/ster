@@ -6,7 +6,7 @@ prek SKIP entry fails loudly on the next PR, but forgetting the ratchet job,
 the mypy path, the coverage flag or the Sonar source fails *silently* — the
 package simply is not checked, and nothing says so.
 
-That is not hypothetical. `semanticdiff` shipped 2,527 lines with no complexity
+That is not hypothetical. A second package shipped 2,527 lines with no complexity
 ratchet against the PR base, and it surfaced only because a loud failure
 happened to sit beside the silent one.
 
@@ -112,6 +112,15 @@ def test_every_package_is_analysed_by_sonar(packages) -> None:
     missing = [p for p in packages if p not in listed]
 
     assert not missing, f"not in sonar.sources: {missing}"
+
+
+def test_every_sonar_source_exists() -> None:
+    sources = _read("sonar-project.properties")
+    line = next((ln for ln in sources.splitlines() if ln.startswith("sonar.sources")), "")
+    listed = [s.strip() for s in line.partition("=")[2].split(",") if s.strip()]
+    missing = [path for path in listed if not (ROOT / path).exists()]
+
+    assert not missing, f"sonar.sources lists paths that do not exist: {missing}"
 
 
 def test_every_package_has_a_complexity_ratchet(packages, ci) -> None:

@@ -295,17 +295,21 @@ def _home_actions() -> list[tuple[object, str]]:
     """The home action rows for the selected file, in display order. 'Change file' returns
     to the file list (which now holds the local files *and* the demo); True = the primary
     'open' action (the Textual viewer)."""
-    return [
+    actions = [
         (_constants._CHANGE_FILE_SENTINEL, "🔀 Change file"),
         (True, "🖥  TTL Viewer-Editor"),  # True = "open" sentinel → the Textual viewer
         (_constants._QUERY_SENTINEL, "🔍 SPARQL Query"),
         (_constants._PUBLISH_SENTINEL, "📦 Linked Data Publish & Version"),
         (_constants._HTML_SENTINEL, "🌐 HTML Data Catalog"),
         (_constants._GRAPH_SENTINEL, "◈  Load Graph Viewer"),
-        (_constants._HISTORY_SENTINEL, "🕘 Semantic History"),
         (_constants._MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_constants._QUIT_SENTINEL, "✕  Quit"),
     ]
+    from ster.plugins import semanticdiff
+
+    if semanticdiff.is_active():
+        actions.insert(6, (_constants._HISTORY_SENTINEL, "🕘 Semantic History"))
+    return actions
 
 
 def _home_menu_fallback(selected: Path, actions: list[tuple[object, str]]) -> object:

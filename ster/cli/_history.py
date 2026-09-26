@@ -14,8 +14,8 @@ def _run_history_interactive(files: list[Path]) -> None:  # pragma: no cover - i
     A file outside a git repository has no history to show, and saying so beats
     opening an empty screen the reader then has to interpret.
     """
-    from ..history import open_history
-    from ..tui.history_screen import run_history
+    from ..plugins.semanticdiff.history import open_history
+    from ..plugins.semanticdiff.screen import run_history
 
     if not files:
         _app.err.print("[red]No taxonomy files found.[/red]")

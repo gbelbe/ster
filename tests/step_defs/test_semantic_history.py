@@ -10,8 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from rich.console import Console
 
 from ster.cli import _constants, _workspace_ui
-from ster.history import open_history
-from ster.tui.history_screen import HistoryScreen, _changes, _heading
+from ster.plugins.semanticdiff.history import open_history
+from ster.plugins.semanticdiff.screen import HistoryScreen, _changes, _heading
 from tests._ontology_repo import ONTOLOGY, RepoBuilder
 
 scenarios("../features/tui/semantic_history.feature")
@@ -52,7 +52,8 @@ def given_tagged(ctx, tag):
 
 
 @when("the home action menu is built")
-def when_menu(ctx):
+def when_menu(ctx, monkeypatch):
+    monkeypatch.setattr("ster.plugins.semanticdiff.is_active", lambda: True)
     ctx["actions"] = _workspace_ui._home_actions()
 
 

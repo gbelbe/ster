@@ -119,28 +119,30 @@ dev = [
     "pytest-textual-snapshot>=1.0",
     # The Semantic Lint plugin is optional at runtime, but its checks are tested.
     "semanticlint>=0.6.0",
+    # The Semantic History plugin is optional at runtime, but its UI is tested.
+    "rdfdiff>=0.1",
 ]
 # Optional: the Semantic Lint plugin's dependency. Owned by the plugin, not core —
 # install with `ster[semanticlint]` (or activate the plugin in-app to install it).
 semanticlint = [
     "semanticlint>=0.6.0",
 ]
+rdfdiff = [
+    "rdfdiff>=0.1",
+]
 all = [
     "ster[dev]",
     "ster[semanticlint]",
+    "ster[rdfdiff]",
 ]
 
 # ── Entry points ──────────────────────────────────────────────────────────────
 
 [project.scripts]
 ster = "ster.cli:main"
-semanticdiff = "semanticdiff.cli:main"
 
-# Two top-level packages ship from this repo. semanticdiff is a separate tool
-# that happens to live here; hatchling must be told, since it would otherwise
-# infer only the package named after the project.
 [tool.hatch.build.targets.wheel]
-packages = ["ster", "semanticdiff"]
+packages = ["ster"]
 
 # ── Project URLs ──────────────────────────────────────────────────────────────
 
@@ -162,18 +164,7 @@ markers = [
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
 [tool.coverage.run]
-# One root, not one per package. With source = ["ster", "semanticdiff"] coverage
-# writes each file relative to whichever root contains it, so the 41 modules
-# directly under ster/ came out as bare names — "history.py", not
-# "ster/history.py". SonarQube resolves those against both roots, cannot tell
-# ster/history.py from semanticdiff/history.py (both exist), records no coverage
-# for them, and counts every new line as uncovered: a PR whose new code sits
-# only in a top-level module reads 0% while being fully tested.
-#
-# source_pkgs still names every package, so the registration guard in
-# tests/test_package_registration.py keeps its teeth — a new package must be
-# added here or that test fails.
-source_pkgs = ["ster", "semanticdiff"]
+source_pkgs = ["ster"]
 source = ["."]
 relative_files = true
 omit = [
@@ -254,32 +245,8 @@ pretty                = true
 # Run locally with: uv run lint-imports
 
 [tool.importlinter]
-root_packages = ["ster", "semanticdiff"]
+root_packages = ["ster"]
 include_external_packages = true
-
-# semanticdiff is a guest in this repository, not a part of ster. Keeping the
-# dependency edge at zero is what makes extracting it later a move, not a
-# rewrite — so the contract is checked on every commit rather than remembered.
-# ster reaches the diff engine through one module, so a change of engine — or
-# lifting semanticdiff out into its own distribution — touches one file.
-[[tool.importlinter.contracts]]
-name = "semanticdiff only via ster.history"
-type = "forbidden"
-source_modules = ["ster"]
-forbidden_modules = ["semanticdiff"]
-ignore_imports = [
-    "ster.history -> semanticdiff.git_log",
-    "ster.history -> semanticdiff.history",
-    "ster.history -> semanticdiff.render.rows",
-    "ster.history -> semanticdiff.vocabulary",
-    "ster.history -> semanticdiff.render.text",
-]
-
-[[tool.importlinter.contracts]]
-name = "semanticdiff does not depend on ster"
-type = "forbidden"
-source_modules = ["semanticdiff"]
-forbidden_modules = ["ster"]
 
 [[tool.importlinter.contracts]]
 name = "pyLODE only via ster.html_export"

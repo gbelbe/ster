@@ -149,9 +149,9 @@ def test_a_stuck_tui_is_still_stopped_and_the_terminal_reset(tmp_path) -> None:
 def test_every_tui_entry_point_runs_through_run_app() -> None:
     """A new entry point calling `App.run()` directly would reopen the bug."""
     from ster import tui
-    from ster.tui import history_screen
+    from ster.plugins.semanticdiff import screen
 
-    for function in (tui.launch, tui.launch_file, history_screen.run_history):
+    for function in (tui.launch, tui.launch_file, screen.run_history):
         source = inspect.getsource(function)
         assert "run_app(" in source, f"{function.__qualname__} bypasses run_app"
         assert ".run()" not in source, f"{function.__qualname__} calls App.run() directly"

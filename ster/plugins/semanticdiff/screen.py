@@ -17,6 +17,8 @@ from rich.console import Group
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
+from semanticdiff.render.rows import Row
+from semanticdiff.vocabulary import ChangeKind
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -24,7 +26,7 @@ from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static
 from textual.worker import Worker, get_current_worker
 
-from ster.history import ChangeKind, FileHistory
+from .history import FileHistory
 
 _HIDDEN = "hidden-pane"
 
@@ -209,7 +211,7 @@ def _changes(history: FileHistory, sha: str) -> Table | Text:
     return table
 
 
-def _change_name(row) -> Text:
+def _change_name(row: Row) -> Text:
     """The readable name, the identifier beside it, and what moved."""
     if row.counted:
         where = f"  in {row.of_class}" if row.of_class else ""

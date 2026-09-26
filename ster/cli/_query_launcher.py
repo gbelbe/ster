@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .. import ask
 from ..display import console
-from . import _app, _constants, _export, _history, _publish
+from . import _app, _constants, _export, _publish
 
 # ──────────────────────────── SPARQL query launcher ─────────────────────────
 
@@ -24,8 +24,13 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _constants._QUERY_SENTINEL: _launch_query,
         _constants._PUBLISH_SENTINEL: _publish._run_publish_interactive,
         _constants._MCP_SENTINEL: _publish._run_mcp_connect_interactive,
-        _constants._HISTORY_SENTINEL: _history._run_history_interactive,
     }
+    from ..plugins import semanticdiff
+
+    if semanticdiff.is_active():
+        from . import _history
+
+        actions[_constants._HISTORY_SENTINEL] = _history._run_history_interactive
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:
         return False

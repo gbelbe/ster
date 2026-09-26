@@ -1,6 +1,6 @@
-"""Unit tests for ster's gateway to semanticdiff.
+"""Unit tests for the Semantic History plugin's rdfdiff gateway.
 
-`ster.history` is the only module in ster allowed to import semanticdiff, so a
+The plugin gateway is the only module in ster allowed to import semanticdiff, so a
 change of engine touches one file. An import contract enforces it.
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ster.history import open_history
+from ster.plugins.semanticdiff.history import open_history
 from tests._ontology_repo import ONTOLOGY, RepoBuilder
 
 CLASS_A = "ex:A a owl:Class ."

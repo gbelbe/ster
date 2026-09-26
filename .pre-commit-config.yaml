@@ -70,7 +70,7 @@ repos:
         # rule coverage, no warn_return_any equivalent, missing plugin support.
         # Worth a spike once ty reaches a stable 1.x release.
         name: mypy (type check)
-        entry: uv run mypy ster/ semanticdiff/
+        entry: uv run mypy ster/
         language: system
         types: [python]
         pass_filenames: false
@@ -99,16 +99,6 @@ repos:
         # thing *and* tripped prek's "files were modified" detection on the
         # commit path while passing every other way.
         stages: [manual]
-
-      - id: complexity-ratchet-semanticdiff
-        # Same gate over the second top-level package. The script scans one
-        # directory per run, so the second package gets its own invocation.
-        name: complexity ratchet (semanticdiff)
-        entry: uv run python scripts/check_complexity_ratchet.py --path semanticdiff
-        language: system
-        types: [python]
-        pass_filenames: false
-        stages: [manual]  # see complexity-ratchet above
 
       # ── push gate (pre-push only) ────────────────────────────────────────────
       # Don't re-run tests here: block the push unless the full local gate

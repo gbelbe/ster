@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rdflib import Graph
-
 from semanticdiff.git_log import (
     Commit,
     UnknownRevisionError,

@@ -1468,6 +1468,19 @@ wheels = [
 ]
 
 [[package]]
+name = "rdfdiff"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "rdflib" },
+    { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/32/33af8921a1f38a452c26bb4ed76c79d1a451931b8576856bcae4f8cd3f47/rdfdiff-0.1.0.tar.gz", hash = "sha256:74e2a0777d44482e55d3df7f7210a68b44cda78a909b3799b86069097a5dfbf2", size = 41969, upload-time = "2026-09-25T21:13:13.115Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/95/dc009c74a24b87495ec8c4a8015d99ec6a62fd09f0df19707227489ba9ea/rdfdiff-0.1.0-py3-none-any.whl", hash = "sha256:02fd238695e8a687dd850f1d600ced651dcfb09458a6456468c80f98fc5a2f8a", size = 20095, upload-time = "2026-09-25T21:13:11.943Z" },
+]
+
+[[package]]
 name = "rdflib"
 version = "7.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1683,6 +1696,7 @@ all = [
     { name = "pytest-textual-snapshot" },
     { name = "pytest-xdist" },
     { name = "radon" },
+    { name = "rdfdiff" },
     { name = "requests" },
     { name = "ruff" },
     { name = "semanticlint" },
@@ -1703,10 +1717,14 @@ dev = [
     { name = "pytest-textual-snapshot" },
     { name = "pytest-xdist" },
     { name = "radon" },
+    { name = "rdfdiff" },
     { name = "requests" },
     { name = "ruff" },
     { name = "semanticlint" },
     { name = "types-pyyaml" },
+]
+rdfdiff = [
+    { name = "rdfdiff" },
 ]
 semanticlint = [
     { name = "semanticlint" },
@@ -1752,6 +1770,9 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'all'", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "rdfdiff", marker = "extra == 'all'", specifier = ">=0.1" },
+    { name = "rdfdiff", marker = "extra == 'dev'", specifier = ">=0.1" },
+    { name = "rdfdiff", marker = "extra == 'rdfdiff'", specifier = ">=0.1" },
     { name = "rdflib", specifier = ">=7.0" },
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.32.2" },
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.32.2" },
@@ -1769,7 +1790,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
-provides-extras = ["all", "dev", "semanticlint"]
+provides-extras = ["all", "dev", "rdfdiff", "semanticlint"]
 
 [[package]]
 name = "syrupy"

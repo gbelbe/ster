@@ -8,8 +8,8 @@ a reader is trying to work out what happened in which order.
 
 from __future__ import annotations
 
-from ster.history import HistoryRow
-from ster.tui.history_screen import HistoryScreen, _short_author
+from ster.plugins.semanticdiff.history import HistoryRow
+from ster.plugins.semanticdiff.screen import HistoryScreen, _short_author
 
 
 def _row(**kw) -> HistoryRow:

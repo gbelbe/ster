@@ -11,8 +11,8 @@ import io
 
 from rich.console import Console
 
-from ster.history import open_history
-from ster.tui.history_screen import HistoryScreen, _changes, _diff_text, _heading
+from ster.plugins.semanticdiff.history import open_history
+from ster.plugins.semanticdiff.screen import HistoryScreen, _changes, _diff_text, _heading
 from tests._ontology_repo import ONTOLOGY, RepoBuilder
 
 CLASS_A = 'ex:A a owl:Class ; rdfs:label "Alpha"@en .'
@@ -107,7 +107,8 @@ def test_an_unreadable_revision_says_it_does_not_parse(ontology_repo: RepoBuilde
 def test_bulk_individuals_are_counted_against_their_class() -> None:
     from semanticdiff.render.rows import Row
     from semanticdiff.vocabulary import ChangeKind, EntityKind
-    from ster.tui.history_screen import _change_name
+
+    from ster.plugins.semanticdiff.screen import _change_name
 
     row = Row(
         kind=ChangeKind.ADDED,

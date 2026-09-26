@@ -225,6 +225,12 @@ without a passing run in the last 60 minutes. Coverage is reported to
 
 Release notes live in the [GitHub releases](https://github.com/gbelbe/ster/releases).
 
+## Optional plugins
+
+- `ster[semanticlint]` enables live ontology-quality checks.
+- `ster[rdfdiff]` enables Semantic History, which reads a tracked RDF file's Git
+  history as additions, modifications, renames, deprecations, and removals.
+
 ## License
 
 [MIT](LICENSE)

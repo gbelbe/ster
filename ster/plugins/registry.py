@@ -38,6 +38,15 @@ _PLUGINS: tuple[PluginSpec, ...] = (
         ),
         dependency="semanticlint>=0.2",
     ),
+    PluginSpec(
+        id="semanticdiff",
+        name="Semantic History",
+        description=(
+            "Read a tracked RDF file's Git history as additions, changes, renames, "
+            "deprecations, and removals rather than as raw text."
+        ),
+        dependency="rdfdiff>=0.1",
+    ),
 )
 
 
