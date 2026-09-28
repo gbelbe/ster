@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Tidy First ratchet — see the tidy-first skill for the tidying catalog.
+# Tidy First ratchet — see CRAFTSMANSHIP.md for the catalog and commit
+# convention this checks the discipline of, not the content of.
 #
-# Fails when the commit range has no tidy(<type>): commit and no Tidy-Exempt:
-# trailer. This only checks the *discipline* of recording a tidying (or an
-# explicit exemption) as its own commit, separate from the feature/fix — it
-# cannot judge whether the right tidying was picked, or whether a commit
+# Fails when the commit range has no tidy(<type>): commit, no
+# test(characterize): commit (the legacy-code prerequisite move — see
+# CRAFTSMANSHIP.md's "Working with legacy code"), and no Tidy-Exempt:
+# trailer. This only checks the *discipline* of recording one of these (or
+# an explicit exemption) as its own commit, separate from the feature/fix —
+# it cannot judge whether the right tidying was picked, or whether a commit
 # tagged tidy(...) actually preserved behavior. That's on the author/reviewer.
 #
 # Usage:
@@ -41,17 +44,20 @@ COMMITS="$(git log --format='%s%n%b%n===' "$RANGE" 2>/dev/null || true)"
 # Nothing in range (e.g. base == head, or an empty/no-op push) — nothing to check.
 [[ -z "$COMMITS" ]] && exit 0
 
-if echo "$COMMITS" | grep -qE '^(tidy\([a-z0-9-]+\):|Tidy-Exempt:)'; then
+if echo "$COMMITS" | grep -qE '^(tidy\([a-z0-9-]+\):|test\(characterize\):|Tidy-Exempt:)'; then
   exit 0
 fi
 
 cat >&2 <<MSG
-✗ Tidy First ratchet: no tidy(<type>): commit found in ${RANGE}, and no
-  Tidy-Exempt: trailer.
+✗ Tidy First ratchet: no tidy(<type>): commit, no test(characterize): commit,
+  and no Tidy-Exempt: trailer found in ${RANGE}.
 
-  Before the feature/fix commit, tidy the code you're about to touch (see the
-  tidy-first skill for the catalog) and commit it on its own:
+  Before the feature/fix commit, tidy the code you're about to touch (see
+  CRAFTSMANSHIP.md for the catalog) and commit it on its own:
     tidy(<type>): <what and where>
+
+  Touching untested (legacy) code? Pin its current behavior first:
+    test(characterize): <what behavior is pinned>
 
   If nothing genuinely needed tidying, commit with a one-line explanation
   instead of skipping silently:

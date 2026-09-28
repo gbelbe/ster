@@ -1,0 +1,214 @@
+# Machine-readable mirror of CRAFTSMANSHIP.md's catalog table.
+# kind: tidying (Beck, structural-only, existing code)
+#       smell-fix (Fowler, existing or new code)
+#       principle (Martin/Beck-XP, new-code design, not a commit type)
+#       workflow (Feathers, legacy-code prerequisite)
+#
+# `id` is the tidy(<id>): commit-type slug for kind in {tidying, smell-fix}.
+# Kept in sync with CRAFTSMANSHIP.md by hand — it's the smaller, denser
+# artifact; CRAFTSMANSHIP.md is the one to actually read.
+
+- id: guard-clauses
+  name: Guard Clauses
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Deeply nested conditionals hide the common case
+  action: Replace nested conditionals with early returns
+
+- id: dead-code
+  name: Dead Code
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Code nothing calls
+  action: Delete it
+
+- id: normalize-symmetries
+  name: Normalize Symmetries
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Equivalent code expressed in different styles, hiding which differences are real
+  action: Make the style consistent so real differences stand out
+
+- id: new-interface-old-implementation
+  name: New Interface, Old Implementation
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: You need to change a function's calling shape
+  action: Introduce the calling shape you want, delegating to the existing implementation
+
+- id: reading-order
+  name: Reading Order
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Declarations aren't in the order a reader needs them
+  action: Reorder for the reader, not the writer
+
+- id: cohesion-order
+  name: Cohesion Order
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Things that change together live far apart
+  action: Put them physically together
+
+- id: move-declaration-init
+  name: Move Declaration and Initialization Together
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: A variable's declaration is far from its use
+  action: Relocate it next to where it's set/used
+
+- id: explaining-variable
+  name: Explaining Variable
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: An expression's meaning isn't obvious
+  action: Extract part of it into a well-named variable
+
+- id: explaining-constant
+  name: Explaining Constant
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: A magic literal
+  action: Replace it with a named constant
+
+- id: explicit-parameters
+  name: Explicit Parameters
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: A function reaches into shared/ambient state
+  action: Turn the implicit dependency into an explicit parameter
+
+- id: chunk-statements
+  name: Chunk Statements
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: An undifferentiated wall of statements
+  action: Group related statements before extracting
+
+- id: extract-helper
+  name: Extract Helper
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: A coherent chunk of logic embedded inline
+  action: Pull it into a named function
+
+- id: one-pile
+  name: One Pile
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: Related elements scattered with no visible shape
+  action: Temporarily collapse them to see the whole shape before re-splitting sensibly
+
+- id: explaining-comment
+  name: Explaining Comment
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: The why isn't inferable from the code
+  action: Add a comment — but only for the why, never the what
+
+- id: delete-redundant-comment
+  name: Delete Redundant Comment
+  kind: tidying
+  source: "Kent Beck, Tidy First? (2023)"
+  smell: A comment just restates the code
+  action: Remove it
+
+- id: extract-class
+  name: Large Class / God Class / Divergent Change
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: A class doing too much, or changing for many unrelated reasons
+  action: Split it along its actual responsibilities
+
+- id: move-method
+  name: Feature Envy / Data Class
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: A method more interested in another object's data than its own; or a class that's all data, no behavior
+  action: Move the method to the data (or the behavior into the data class)
+
+- id: introduce-parameter-object
+  name: Data Clumps
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: The same group of parameters travels together across call sites
+  action: Give the group its own type
+
+- id: replace-primitive-with-object
+  name: Primitive Obsession
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: A raw string/int stands in for a real domain concept
+  action: Give the concept its own type
+
+- id: hide-delegate
+  name: Message Chains
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: "a.getB().getC().getD() reaches through several objects (Law of Demeter)"
+  action: Hide the chain behind a method on the first object
+
+- id: replace-conditional-with-polymorphism
+  name: Repeated Switches
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: The same type-based branching logic scattered across the codebase
+  action: Replace it with dispatch (polymorphism, a strategy, a registry)
+
+- id: collapse-hierarchy
+  name: Speculative Generality
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: Abstraction or a hook built for a future that hasn't arrived
+  action: Collapse it back to what's actually used
+
+- id: replace-inheritance-with-delegation
+  name: Refused Bequest
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: A subclass uses only a fraction of what it inherits
+  action: Prefer composition over the ill-fitting inheritance
+
+- id: consolidate-duplicate-conditional
+  name: Shotgun Surgery (conditional form)
+  kind: smell-fix
+  source: "Martin Fowler (with Kent Beck), Refactoring, 2nd ed. (2018)"
+  smell: One logical decision is duplicated as near-identical conditionals in several places
+  action: Consolidate into one decision point
+
+- id: function-does-one-thing
+  name: Function does one thing, stays small
+  kind: principle
+  source: "Robert C. Martin, Clean Code (2008)"
+
+- id: few-arguments
+  name: Prefer 0-2 arguments, no flag arguments
+  kind: principle
+  source: "Robert C. Martin, Clean Code (2008)"
+
+- id: command-query-separation
+  name: Command-Query Separation
+  kind: principle
+  source: "Robert C. Martin, Clean Code (2008)"
+
+- id: solid
+  name: SOLID (esp. Single Responsibility, Dependency Inversion)
+  kind: principle
+  source: "Robert C. Martin, Agile Software Development (2002)"
+
+- id: simple-design
+  name: Four rules of simple design (priority order)
+  kind: principle
+  source: "Kent Beck, Extreme Programming Explained (1999/2004)"
+
+- id: metzs-rules
+  name: "Classes <=100 lines, methods <=5 lines, <=4 params (optional, stricter)"
+  kind: principle
+  source: "Sandi Metz"
+
+- id: characterization-test
+  name: Characterization Test
+  kind: workflow
+  source: "Michael Feathers, Working Effectively with Legacy Code (2004)"
+  smell: Existing code has no tests, so a structural change has nothing to confirm behavior against
+  action: "Write a test pinning current (possibly buggy) behavior, commit as test(characterize):, then tidy under that safety net"
