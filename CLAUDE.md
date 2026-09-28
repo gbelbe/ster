@@ -75,6 +75,12 @@ The `tidy-ratchet` check (`scripts/check_tidy_ratchet.sh`, wired into
 `Tidy-Exempt:` trailer in range. It's a text check on commit messages only, so
 it costs milliseconds; it cannot judge whether the right tidying was picked.
 
+The catalog above is also a checklist for **new** code, not just a pre-touch
+ritual: Beck's four rules of simple design (pass the tests, reveal intention,
+no duplication, fewest elements) are the acceptance bar for anything written
+from scratch — there's nothing to "tidy" in code that doesn't exist yet, but
+there's everything to get right the first time.
+
 ## BDD conventions
 
 - Feature files live in `tests/features/<domain>/` (e.g. `ci/`, `model/`)

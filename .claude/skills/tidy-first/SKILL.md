@@ -109,3 +109,25 @@ git log --pretty=format:'%ad %s' --date=format:'%Y-%m' --grep='^tidy(' -E \
   | sed -E 's/^([0-9-]+) tidy\(([a-z-]+)\).*/\1 \2/' \
   | sort | uniq -c | sort -rn
 ```
+
+## Don't let the exemption become the rule
+
+`Tidy-Exempt:` trusts the author's judgment, which is exactly the kind of
+thing that erodes under deadline pressure. Check the ratio periodically,
+don't just trust the gate exists:
+
+```bash
+git log --grep='^tidy(' --oneline | wc -l
+git log --grep='^Tidy-Exempt:' --oneline | wc -l
+```
+
+If exemptions start dominating tidyings, that's a signal the discipline
+slipped — the response is to look at *why*, not to remove the check.
+
+The same caution applies to any other diff-aware skip heuristic added to this
+repo (e.g. a CI job that skips a slow test tier based on changed paths): only
+widen what it trusts from evidence — an actual import-graph check, a real
+dependency trace — never from a hunch, and keep an unconditional full run on
+a schedule independent of what any single change skipped. A heuristic that
+quietly gets more permissive over time is the same failure mode as a rubber-
+stamped exemption, just automated.
