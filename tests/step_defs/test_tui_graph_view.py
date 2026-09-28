@@ -19,6 +19,8 @@ from ster import store, viz_vowl
 from ster.tui import detail
 from ster.tui.app import OntologyApp
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/graph_view.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"

@@ -6,11 +6,15 @@ the annotation catalog helpers — no Textual app needed, just plain Python.
 
 from __future__ import annotations
 
+import pytest
+
 from ster.model import OntologyAnnotation, RDFClass, Taxonomy
 from ster.nav.logic import (
     build_tui_ontology_overview_fields,
     build_tui_taxonomy_overview_fields,
 )
+
+pytestmark = pytest.mark.tui
 
 ONT = "https://example.org/onto"
 DCT = "http://purl.org/dc/terms/"

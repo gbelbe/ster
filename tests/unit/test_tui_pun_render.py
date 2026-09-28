@@ -19,6 +19,8 @@ from ster import store
 from ster.tui import data, detail
 from ster.tui.app import OntologyApp
 
+pytestmark = pytest.mark.tui
+
 E = "https://ex.org/"
 
 MIXED = """\

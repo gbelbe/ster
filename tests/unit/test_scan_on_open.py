@@ -15,6 +15,8 @@ from ster.plugins.semanticlint import config
 from ster.tui.app import OntologyApp
 from ster.tui.plugins.semanticlint_ui.problems_modal import ProblemRow, ProblemsModal
 
+pytestmark = pytest.mark.tui
+
 # A concept whose value is both prefLabel and altLabel → semanticlint SKO003 (error).
 SKO003_TTL = """\
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .

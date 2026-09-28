@@ -13,6 +13,8 @@ from ster.tui.app import OntologyApp
 from ster.tui.context_menu import ContextMenu
 from ster.tui.individual_modal import IndividualModal
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/individual_modal.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"

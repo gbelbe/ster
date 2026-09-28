@@ -14,6 +14,8 @@ from ster import store
 from ster.model import Concept, ConceptScheme, Definition, Label, LabelType, Taxonomy
 from ster.tui.app import OntologyApp
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/new_tui.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"

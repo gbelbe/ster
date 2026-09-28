@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from textual.app import App
 from textual.widgets import DataTable, TextArea
 
 from ster.model import Label, RDFClass, Taxonomy
 from ster.tui import query
 from ster.tui.query_screen import QueryScreen
+
+pytestmark = pytest.mark.tui
 
 BASE = "https://example.org/onto/"
 

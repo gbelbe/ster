@@ -23,6 +23,8 @@ from ster import store
 from ster.tui import clipboard as _clipboard
 from ster.tui.app import OntologyApp
 
+pytestmark = pytest.mark.tui
+
 
 @pytest.fixture(autouse=True)
 def _isolated_clipboard(monkeypatch: pytest.MonkeyPatch) -> None:

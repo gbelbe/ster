@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ster.model import Definition, Label, RDFClass, Taxonomy
 from ster.nav.logic import (
     _ontology_stats_fields,
     build_rdf_class_detail,
 )
+
+pytestmark = pytest.mark.tui
 
 NS = "https://ex.org/onto#"
 

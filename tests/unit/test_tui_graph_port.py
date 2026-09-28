@@ -20,6 +20,8 @@ from ster import store, viz_vowl
 from ster.tui.app import OntologyApp
 from ster.tui.choice_modal import ChoiceModal
 
+pytestmark = pytest.mark.tui
+
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 
 

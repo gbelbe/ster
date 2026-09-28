@@ -20,6 +20,8 @@ from ster.tui.app import EntitySearch, OntologyApp
 
 from .test_tui_data import DEMO, ZOO
 
+pytestmark = pytest.mark.tui
+
 
 @pytest.fixture(autouse=True)
 def _isolate_prefs(tmp_path, monkeypatch):

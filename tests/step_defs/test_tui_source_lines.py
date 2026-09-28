@@ -16,6 +16,8 @@ from ster import store
 from ster.tui.app import OntologyApp
 from ster.tui.source_view import SourceView
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/source_pane_lines_and_prefixes.feature")
 
 NS = "https://example.org/agri#"

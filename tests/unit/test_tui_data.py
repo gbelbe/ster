@@ -12,6 +12,8 @@ import pytest
 from ster import store
 from ster.tui import data
 
+pytestmark = pytest.mark.tui
+
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 ZOO = "https://example.org/zoo/"
 

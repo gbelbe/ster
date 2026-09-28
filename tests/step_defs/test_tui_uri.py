@@ -13,6 +13,8 @@ from ster.nav.logic import DetailField
 from ster.tui.app import OntologyApp
 from ster.tui.uri_modal import FragmentInput, UriModal
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/uri_editing.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"

@@ -20,6 +20,8 @@ from ster.tui import query
 from ster.tui.app import OntologyApp
 from ster.tui.query_screen import QueryScreen
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/sparql_query.feature")
 
 DEMO = Path(__file__).resolve().parents[1].parent / "ster" / "tui" / "demo.ttl"

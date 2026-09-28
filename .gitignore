@@ -10,6 +10,8 @@ venv/
 .coverage
 *.pickle
 *.cache
+.craftcov_cache.json
+.craftcov_last_report.json
 *.nt
 coverage.xml
 htmlcov/

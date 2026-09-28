@@ -10,6 +10,11 @@
 #   scripts/ci.sh            # full gate: prek + eslint + npm/pip audit + tests + diff-cover
 #   scripts/ci.sh --fast     # skip the patch-coverage gate (quick dev check)
 #   scripts/ci.sh --fix      # let prek's hooks auto-fix, then re-run to verify
+#   scripts/ci.sh --no-tui   # skip the `tui`-marked tests (462 Textual-pilot
+#                            # tests, 78% of runtime) — only safe when your
+#                            # change can't reach ster/tui or ster/nav; CI's
+#                            # own path-filter (see ci.yml's 'changes' job)
+#                            # decides this per-PR rather than trusting a flag
 
 set -euo pipefail
 
@@ -19,12 +24,16 @@ rm -f "$SENTINEL"
 
 FAST=0
 FIX=0
+NO_TUI=0
 for arg in "$@"; do
   case "$arg" in
-    --fast) FAST=1 ;;
-    --fix)  FIX=1  ;;
+    --fast)   FAST=1 ;;
+    --fix)    FIX=1 ;;
+    --no-tui) NO_TUI=1 ;;
   esac
 done
+MARKER_ARGS=()
+[[ $NO_TUI -eq 1 ]] && MARKER_ARGS=(-m "not tui")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 PASS="${GREEN}✓${NC}"; FAIL="${RED}✗${NC}"
@@ -123,6 +132,17 @@ else
   warn "origin/main not found — skipping ratchet (run: git fetch origin main)"
 fi
 
+# ── 2a2. Tidy First ratchet — run directly, exactly as CI does ──────────────
+# Same reason as the complexity ratchet: diff-aware, needs --base, prek can't
+# supply one. Text-only check on commit messages, no test run — milliseconds.
+step "Tidy First ratchet (vs origin/main)"
+if git rev-parse --verify --quiet origin/main >/dev/null; then
+  bash scripts/check_tidy_ratchet.sh --base origin/main
+  ok "tidy ratchet"
+else
+  warn "origin/main not found — skipping tidy ratchet (run: git fetch origin main)"
+fi
+
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
 # eslint needs node_modules, and node_modules needs the Node the project asks
 # for. A machine on an older Node cannot install it — npm refuses with EBADENGINE
@@ -181,10 +201,10 @@ ok "pip-audit"
 #             keeps it for the diff-cover patch-coverage check.
 step "Tests (current Python $(uv run python --version | awk '{print $2}'))"
 if [[ $FAST -eq 1 ]]; then
-  uv run pytest tests/ -q --tb=short -n auto
+  uv run pytest tests/ -q --tb=short -n auto ${MARKER_ARGS[@]+"${MARKER_ARGS[@]}"}
   ok "pytest (fast, no coverage)"
 else
-  uv run pytest tests/ -q --tb=short -n auto \
+  uv run pytest tests/ -q --tb=short -n auto ${MARKER_ARGS[@]+"${MARKER_ARGS[@]}"} \
     --cov=ster --cov=semanticdiff --cov-report=term-missing --cov-report=xml
   ok "pytest"
 fi

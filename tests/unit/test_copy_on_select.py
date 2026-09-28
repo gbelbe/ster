@@ -12,6 +12,7 @@ import asyncio
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import pytest
 from textual.geometry import Offset
 from textual.screen import ModalScreen
 from textual.widgets import Static
@@ -20,6 +21,8 @@ from ster import store
 from ster.tui.app import OntologyApp
 from ster.tui.app import _copy_on_select as copy_on_select
 from ster.tui.app._copy_on_select import CopiedFlash
+
+pytestmark = pytest.mark.tui
 
 DEMO = """
 @prefix ex:   <https://ex.org/s#> .

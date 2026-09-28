@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ster import store
 from ster.nav.logic import DetailField, build_rdf_class_detail
 from ster.tui.detail import (
@@ -21,6 +23,8 @@ from ster.tui.detail import (
     group_sections,
     render_detail,
 )
+
+pytestmark = pytest.mark.tui
 
 _DEMO = Path(__file__).parents[2] / "ster" / "tui" / "demo.ttl"
 _ZOO = "https://example.org/zoo/"

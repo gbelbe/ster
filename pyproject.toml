@@ -120,7 +120,7 @@ dev = [
     # The Semantic Lint plugin is optional at runtime, but its checks are tested.
     "semanticlint>=0.6.0",
     # The Semantic History plugin is optional at runtime, but its UI is tested.
-    "rdfdiff>=0.1",
+    "rdfdiff>=0.1.1",
 ]
 # Optional: the Semantic Lint plugin's dependency. Owned by the plugin, not core —
 # install with `ster[semanticlint]` (or activate the plugin in-app to install it).
@@ -128,7 +128,16 @@ semanticlint = [
     "semanticlint>=0.6.0",
 ]
 rdfdiff = [
-    "rdfdiff>=0.1",
+    "rdfdiff>=0.1.1",
+]
+# craft-gate's craftCov scan (scripts/craftcov.py) and the Refactor First CI
+# gate built on it (scripts/check_refactor_first.py) — see CRAFTSMANSHIP.md.
+# ruff is already in `dev`, listed again here so `uv sync --extra craftcov`
+# alone is enough to run either script, without also pulling in `dev`.
+craftcov = [
+    "ruff>=0.13",
+    "pylint>=3.3",
+    "vulture>=2.14",
 ]
 all = [
     "ster[dev]",
@@ -159,6 +168,7 @@ addopts      = "--tb=short --strict-markers --strict-config"
 asyncio_mode = "auto"
 markers = [
     "integration: end-to-end test that exercises real I/O (deselect with -m 'not integration')",
+    "tui: drives the Textual app through its async pilot (mount + render + input) — ~800ms/test vs ~100ms for the rest of the suite, 78% of total test time in 9% of the tests. Deselect with -m 'not tui' for fast local iteration; CI runs this tier unconditionally on push to main and on any PR diff not provably confined to ster/assets, kai-extension, or docs (see .github/workflows/ci.yml's 'changes' job).",
 ]
 
 # ── Coverage ──────────────────────────────────────────────────────────────────

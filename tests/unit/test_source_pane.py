@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from textual.widgets import ContentSwitcher, Tree
 
 from ster import store
 from ster.tui.app import OntologyApp
 from ster.tui.source_view import PLACEHOLDER, SourceView
+
+pytestmark = pytest.mark.tui
 
 DEMO = """
 @prefix ex:   <https://ex.org/s#> .

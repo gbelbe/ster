@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import io
 
+import pytest
 from rich.console import Console
 
 from ster.plugins.semanticdiff.history import open_history
 from ster.plugins.semanticdiff.screen import HistoryScreen, _changes, _diff_text, _heading
 from tests._ontology_repo import ONTOLOGY, RepoBuilder
+
+pytestmark = pytest.mark.tui
 
 CLASS_A = 'ex:A a owl:Class ; rdfs:label "Alpha"@en .'
 CLASS_AB = 'ex:A a owl:Class ; rdfs:label "Alpha"@en . ex:B a owl:Class .'

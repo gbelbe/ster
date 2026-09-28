@@ -20,6 +20,8 @@ from ster import store
 from ster.tui.app import OntologyApp
 from ster.tui.app._copy_on_select import CopiedFlash
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/copy_on_select.feature")
 
 DEMO = """

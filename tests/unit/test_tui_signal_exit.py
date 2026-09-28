@@ -27,6 +27,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.tui
+
 pty = pytest.importorskip("pty")  # POSIX only: the bug and the fix are about POSIX signals
 
 MOUSE_ON = re.compile(rb"\x1b\[\?100[036]h")

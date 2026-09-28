@@ -12,6 +12,8 @@ from ster import operations, store
 from ster.tui.app import OntologyApp
 from ster.tui.detail_view import DetailRow
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/configured_languages.feature")
 
 ZOO = "https://example.org/zoo/"

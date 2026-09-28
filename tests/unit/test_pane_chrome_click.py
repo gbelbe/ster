@@ -19,6 +19,8 @@ from textual.widgets import Tree
 from ster import store
 from ster.tui.app import OntologyApp
 
+pytestmark = pytest.mark.tui
+
 TTL = """\
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .

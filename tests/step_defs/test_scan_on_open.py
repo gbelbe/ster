@@ -14,6 +14,8 @@ from ster.plugins.semanticlint import config
 from ster.tui.app import OntologyApp
 from ster.tui.plugins.semanticlint_ui.problems_modal import ProblemRow, ProblemsModal
 
+pytestmark = pytest.mark.tui
+
 scenarios("../features/tui/scan_on_open.feature")
 
 DUP_LABEL_TTL = """\

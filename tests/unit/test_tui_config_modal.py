@@ -15,6 +15,8 @@ from ster.nav.prefs import _load_prefs, load_configured_langs, save_configured_l
 from ster.tui.app import OntologyApp
 from ster.tui.config_modal import ConfigModal
 
+pytestmark = pytest.mark.tui
+
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 
 

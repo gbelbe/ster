@@ -100,6 +100,20 @@ repos:
         # commit path while passing every other way.
         stages: [manual]
 
+      - id: tidy-ratchet
+        # Tidy First discipline (see the tidy-first skill): the commit range
+        # must contain a tidy(<type>): commit or a Tidy-Exempt: trailer.
+        # Text-only check on commit messages — no test run, so it costs
+        # milliseconds. manual, same reason as complexity-ratchet: it's
+        # diff-aware and needs --base, which prek has no way to supply.
+        # scripts/ci.sh runs it directly against origin/main; CI runs it
+        # directly against the PR's base ref.
+        name: "tidy ratchet (tidy(<type>): commit or Tidy-Exempt: trailer)"
+        entry: bash scripts/check_tidy_ratchet.sh
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
       # ── push gate (pre-push only) ────────────────────────────────────────────
       # Don't re-run tests here: block the push unless the full local gate
       # (scripts/ci.sh — tests, pip-audit, eslint, diff-cover) passed < 60 min

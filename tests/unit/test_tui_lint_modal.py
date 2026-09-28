@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from textual.app import App
 from textual.widgets import OptionList
 
 from ster.tui.lint_modal import LintModal, _issue_text, _short
+
+pytestmark = pytest.mark.tui
 
 
 def test_short_takes_local_name() -> None:

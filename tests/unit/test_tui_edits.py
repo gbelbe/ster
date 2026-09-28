@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ster.core.commands import (
     AddSchemaMedia,
     OntoRenameUri,
@@ -57,6 +59,8 @@ from ster.tui.edits import (
     ontology_rename_command,
     relation_command,
 )
+
+pytestmark = pytest.mark.tui
 
 
 def _field(type_: str, **meta) -> DetailField:

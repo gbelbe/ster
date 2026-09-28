@@ -13,6 +13,8 @@ import pytest
 import ster.api_server as srv
 from ster.tui.app import _publish_selection, _start_context_server
 
+pytestmark = pytest.mark.tui
+
 NS = "https://example.org/zoo#"
 
 

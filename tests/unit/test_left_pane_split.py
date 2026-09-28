@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from textual.widgets import Tree
 
 from ster import store
 from ster.tui import data, detail
 from ster.tui.app import OntologyApp
+
+pytestmark = pytest.mark.tui
 
 PURE_TAX = """\
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .

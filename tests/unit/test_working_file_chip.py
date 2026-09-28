@@ -17,6 +17,8 @@ from ster import store
 from ster.tui.app import OntologyApp
 from ster.tui.working_file_chip import WorkingFileChip, WorkingFileMenu, truncate_name
 
+pytestmark = pytest.mark.tui
+
 NS = "https://example.org/t#"
 
 GEAR = f"""\

@@ -25,6 +25,8 @@ from ster.cli import (
     app,
 )
 
+pytestmark = pytest.mark.tui
+
 
 @pytest.fixture(autouse=True)
 def _pretend_there_is_a_terminal(monkeypatch):

@@ -13,6 +13,8 @@ from textual.widgets import Tree
 from ster import store
 from ster.tui.app import OntologyApp, _parse_cta
 
+pytestmark = pytest.mark.tui
+
 DEMOMIX = Path(__file__).resolve().parents[2] / "ster" / "tui" / "mixed-gear-demo.ttl"
 
 EMPTY = """\

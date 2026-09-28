@@ -10,9 +10,20 @@ so local and CI can't drift.
 /ci          # full local gate: prek checks + eslint + pip-audit + tests + diff-cover
 /ci --fast   # current Python, skips the patch-coverage gate (quick iteration)
 /ci --fix    # let prek auto-fix (ruff lint/format), then re-run to verify
+/ci --no-tui # skip the `tui`-marked tests (462 Textual-pilot tests, 78% of
+             # runtime) — only when your change can't reach ster/tui or
+             # ster/nav (see the `tui` marker in pyproject.toml)
 ```
 
 Or invoke the script directly: `bash scripts/ci.sh`
+
+CI itself mirrors this: the `test` job always runs the full suite on push to
+main, but on a PR it runs `-m "not tui"` when the diff is provably confined to
+`ster/assets/`, `kai-extension/`, or `docs/` (see the `changes` job in
+`.github/workflows/ci.yml`) — everything else still gets the full suite,
+because `ster/tui` and `ster/nav` import nearly all of `ster/core`, `store`,
+`operations`, and `plugins`, so a narrower path filter would silently skip
+real coverage.
 
 **Tests run on the current Python only locally** (fast feedback). GitHub Actions
 runs the **3.12 / 3.13 matrix** on every PR — multi-version support is enforced
@@ -92,6 +103,58 @@ When a change modifies existing code, leave it cleaner than you found it:
 - **Do not dodge the ratchet to keep the number flat.** Widening an `isinstance` tuple, relocating branches into a helper dispatcher, splitting one action into many rows, or otherwise shuffling complexity around so the count stays the same is **not** a refactor — the touched function must end up **structurally simpler**. Prefer generic dispatch (dispatch tables / registries / polymorphism / strategy) over long `if/elif` chains.
 - Surface the refactor proposal (with its trade-off) to the user before implementing. YAGNI still applies — prefer the simplest structure; don't over-abstract.
 - After refactoring, **update the unit tests to match** the new structure: rename/move/retarget existing tests and add tests for any newly extracted unit. Tests must track the refactor, never lag it.
+
+## Tidy First & craftsmanship (mandatory before every feature/fix commit)
+
+Before writing a feature or fix, check the file(s)/function(s)/class(es) it
+touches against the catalog in **`CRAFTSMANSHIP.md`** (Kent Beck's *Tidy
+First?*, Fowler's *Refactoring* smells, *Clean Code*, and Feathers'
+legacy-code method — see also the `tidy-first` skill, which is a thin
+wrapper around that same file). If a tidying applies, do it alone, verify
+the suite is unchanged, and commit it separately, naming the source:
+
+```
+tidy(<type>): <what and where>
+
+Tidy-Type: <type>
+Tidy-Source: <author, book>
+```
+
+Only then commit the feature/fix. If nothing applies, don't invent one —
+commit with a `Tidy-Exempt: <reason>` trailer instead.
+
+This is distinct from the complexity ratchet above: that ratchet blocks a
+function from getting *structurally worse*; Tidy First is about proactively
+making the surrounding code clearer *before* adding to it, and keeping that
+cleanup in its own reviewable commit rather than folded into the feature diff.
+
+The `tidy-ratchet` check (pre-push hook / CI, `scripts/check_tidy_ratchet.sh`)
+enforces the discipline — it fails a push/PR with no `tidy(...)` commit, no
+`test(characterize):` commit, and no `Tidy-Exempt:` trailer in range. It's a
+text check on commit messages only, so it costs milliseconds; it cannot judge
+whether the right tidying was picked.
+
+For the 8 catalog heuristics craftCov can detect mechanically (`uv run
+scripts/craftcov.py --list-detectors`), skip the judgment call: `uv run
+scripts/craftcov.py --file <path>` before touching a file, fix one instance
+of every heuristic it finds present, bundle it all into one `tidy(multi):`
+commit (see `CRAFTSMANSHIP.md`'s "Refactor First"). CI's `refactor-first` job
+(`scripts/check_refactor_first.py`) enforces the *outcome* — a touched
+file's total across those heuristics must go down, or stay at 0 —
+`Tidy-Exempt:` bypasses it the same way it bypasses the ratchet above.
+
+The catalog is also a checklist for **new** code, not just a pre-touch
+ritual: Beck's four rules of simple design (pass the tests, reveal intention,
+no duplication, fewest elements) and Clean Code's function-size/SOLID
+principles are the acceptance bar for anything written from scratch, the
+same way the complexity ratchet applies to a brand-new function exactly as
+it does to a touched one — there's nothing to "tidy" in code that doesn't
+exist yet, but there's everything to get right the first time.
+
+Touching code with no tests? It's legacy by Feathers' definition regardless
+of age — write a `test(characterize):` commit pinning its current behavior
+first, *then* tidy under that safety net. See `CRAFTSMANSHIP.md`'s "Working
+with legacy code."
 
 ## BDD conventions
 

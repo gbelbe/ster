@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ster.tui.picker_modal import rank_options
+
+pytestmark = pytest.mark.tui
 
 _OPTS = [
     ("Cat", "c"),

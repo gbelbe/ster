@@ -5,6 +5,12 @@ on:
     branches: ["master", "main"]
   pull_request:
     branches: ["master", "main"]
+  # Backstop for the TUI-tier path-filter in the 'changes' job below: a PR
+  # that skips the tui tier is validated again here regardless, so a wrong
+  # skip decision can't go unnoticed just because main stays quiet between
+  # merges. Not a pull_request event, so 'changes' runs the full suite.
+  schedule:
+    - cron: "0 3 * * *"
 
 # Cancel any in-progress run for the same branch / PR
 concurrency:
@@ -39,7 +45,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: prek — lint, format, types, security, imports, hygiene
-        run: SKIP=complexity-ratchet uvx prek run --all-files
+        run: SKIP=complexity-ratchet,tidy-ratchet uvx prek run --all-files
 
   # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
   js:
@@ -97,6 +103,44 @@ jobs:
       - name: Complexity ratchet — no function may grow worse past 15
         run: uv run python scripts/check_complexity_ratchet.py --base "origin/${{ github.base_ref }}"
 
+  # ── 1d. Tidy First ratchet (diff-aware) ──────────────────────────────────────
+  # Text-only check on commit messages — no deps to install, no build. Kept as
+  # its own job (not folded into 'checks') for the same reason as complexity:
+  # it needs the PR base ref, which the 'checks' job's --all-files run has no
+  # way to supply.
+  tidy:
+    name: Tidy First ratchet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # need the base branch and full commit history
+
+      - name: "Tidy First ratchet: a tidy(<type>) commit or Tidy-Exempt trailer"
+        run: bash scripts/check_tidy_ratchet.sh --base "origin/${{ github.base_ref }}"
+
+  # Mechanical companion to the ratchet above: for the 8 catalog heuristics
+  # craftCov can detect (scripts/craftcov.py --list-detectors), a touched
+  # .py file's total across them must go down (or stay at 0) vs. where the
+  # branch diverged from main. See CRAFTSMANSHIP.md's "Refactor First".
+  refactor-first:
+    name: Refactor First gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: uv sync --extra craftcov
+        run: uv sync --extra craftcov
+
+      - name: "Refactor First: touched files' detectable-heuristic total must go down (or stay 0)"
+        run: uv run python3 scripts/check_refactor_first.py --base "origin/${{ github.base_ref }}"
+
   # ── 2. pip-audit (dependency CVEs) ──────────────────────────────────────────
   # Kept as its own job (not in the prek 'checks' job) so a CVE advisory failure
   # is easy to spot and doesn't block the faster lint/type feedback.
@@ -114,9 +158,48 @@ jobs:
       - name: pip-audit — dependency CVEs
         run: uv run pip-audit --skip-editable
 
+  # ── 3b. Detect whether this diff needs the TUI test tier ────────────────────
+  # The `tui` marker (pytest.ini_options.markers) covers 462 Textual-pilot
+  # tests that are 9% of the suite but 78% of its runtime (~380s of ~488s
+  # measured call time). ster/tui and ster/nav import nearly all of
+  # ster/core, ster/store, ster/operations, ster/plugins and friends, so a
+  # "run TUI tests only if ster/tui/** changed" rule would silently drop
+  # coverage for most Python changes. Instead this only SKIPS the tier when
+  # every changed file is provably outside what the TUI can ever import:
+  # browser JS/assets, the browser extension, and docs — anything else runs
+  # it. On push (merge to main) this always runs full, unconditionally, since
+  # that's also the input to Sonar and the release gate.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      run_tui: ${{ steps.filter.outputs.run_tui }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run_tui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)
+          if [ -z "$CHANGED" ]; then
+            echo "run_tui=false" >> "$GITHUB_OUTPUT"
+          elif echo "$CHANGED" | grep -qvE '^(ster/assets/|kai-extension/|docs/|\.github/|.*\.(md|txt)$|README|LICENSE)'; then
+            # at least one changed file is outside the safe-skip list
+            echo "run_tui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_tui=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── 4. Tests + coverage ──────────────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }})
+    needs: [changes]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -146,9 +229,20 @@ jobs:
         # parsing is serialised — sparql_query._SPARQL_LOCK).
         # COVERAGE_CORE=sysmon uses Python 3.12+'s low-overhead sys.monitoring
         # backend — every version in the matrix has it.
+        # RUN_TUI=false (see the 'changes' job): this PR's diff is provably
+        # confined to paths the TUI can't reach, so skip the 462 Textual-pilot
+        # tests (78% of runtime) — diff-cover below only checks coverage of
+        # the changed lines, which by construction aren't in ster/tui|nav, so
+        # this can't hide a real patch-coverage gap.
         env:
           COVERAGE_CORE: sysmon
-        run: uv run pytest --tb=short -q -n auto --cov=. --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+          RUN_TUI: ${{ needs.changes.outputs.run_tui }}
+        run: |
+          if [ "$RUN_TUI" = "false" ]; then
+            uv run pytest --tb=short -q -n auto -m "not tui" --cov=. --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+          else
+            uv run pytest --tb=short -q -n auto --cov=. --cov-report=xml --cov-report=term-missing --junitxml=pytest-report.xml
+          fi
 
       - name: 📤 Archive coverage reports
         if: matrix.python-version == '3.13'
