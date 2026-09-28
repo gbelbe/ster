@@ -63,6 +63,18 @@ else
   uv run ruff format --check . && ok "ruff format"
 fi
 
+# ── 2a. Tidy First ratchet — run directly, exactly as CI does ────────────────
+# Diff-aware (needs a base to compare the commit range against), so it's run
+# directly rather than through a pre-commit/prek hook. Text-only check on
+# commit messages — no test run, so it costs milliseconds.
+step "Tidy First ratchet (vs origin/master)"
+if git rev-parse --verify --quiet origin/master >/dev/null; then
+  bash scripts/check_tidy_ratchet.sh --base origin/master
+  ok "tidy ratchet"
+else
+  warn "origin/master not found — skipping tidy ratchet (run: git fetch origin master)"
+fi
+
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
 step "JS lint (eslint + node --check)"
 if command -v npm >/dev/null 2>&1; then

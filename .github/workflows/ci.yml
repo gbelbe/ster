@@ -35,6 +35,21 @@ jobs:
       - name: ruff — check formatting
         run: uv run ruff format --check .
 
+  # ── 1a. Tidy First ratchet (diff-aware) ──────────────────────────────────────
+  # Text-only check on commit messages — no deps to install, no build. Only
+  # meaningful against a PR's base branch.
+  tidy:
+    name: Tidy First ratchet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need the base branch and full commit history
+
+      - name: "Tidy First ratchet: a tidy(<type>) commit or Tidy-Exempt trailer"
+        run: bash scripts/check_tidy_ratchet.sh --base "origin/${{ github.base_ref }}"
+
   # ── 1b. JavaScript lint & syntax ─────────────────────────────────────────────
   js:
     name: Lint JS (eslint + node --check)

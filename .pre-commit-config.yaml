@@ -19,3 +19,16 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: debug-statements   # catch leftover breakpoint() / pdb calls
+
+  # Tidy First discipline (see the tidy-first skill): the commit range must
+  # contain a tidy(<type>): commit or a Tidy-Exempt: trailer. manual stage:
+  # it's diff-aware and needs --base, which pre-commit/prek has no way to
+  # supply per-hook — scripts/ci.sh and CI invoke it directly with a base ref.
+  - repo: local
+    hooks:
+      - id: tidy-ratchet
+        name: "tidy ratchet (tidy(<type>): commit or Tidy-Exempt: trailer)"
+        entry: bash scripts/check_tidy_ratchet.sh
+        language: system
+        pass_filenames: false
+        stages: [manual]
