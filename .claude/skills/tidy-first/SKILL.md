@@ -7,11 +7,11 @@ description: Before writing a feature or fix, check the code you're about to tou
 
 This is a thin wrapper. **The actual content — the full catalog, the
 procedure, the commit convention, the legacy-code workflow — lives in
-[`CRAFTSMANSHIP.md`](../../../CRAFTSMANSHIP.md) at the repo root.** It's
-written to be read by a human contributor or any other tool too, not just
-here. Sourced from [craft-gate](https://github.com/gbelbe/craft-gate) —
-`bootstrap.sh` there re-syncs `CRAFTSMANSHIP.md`, `catalog.yaml`, and the
-ratchet scripts when the catalog gets updated upstream.
+`CRAFTSMANSHIP.md` at the repo root** (no relative link here on purpose:
+this file's own depth changes when copied — e.g. `bootstrap.sh` deploys it
+to `.claude/skills/tidy-first/SKILL.md` in a consuming repo — so "repo root"
+stays correct regardless of where this copy lives). It's written to be read
+by a human contributor or any other tool too, not just here.
 
 Read `CRAFTSMANSHIP.md` in full before acting on this skill. What follows is
 only the Claude-Code-specific part: how to run its procedure in this tool.

@@ -1,0 +1,81 @@
+# Add as .github/workflows/craft-gate-update.yml in the consuming repo.
+#
+# Weekly, checks whether a newer craft-gate release exists; if so, runs
+# bootstrap.sh against this repo and opens (or updates) a PR with the diff.
+# Never auto-merges — review it like any other dependency bump. Needs no
+# new credentials: the default GITHUB_TOKEN already has contents/PR write
+# on this repo, and craft-gate is only ever read from, never written to.
+#
+# Manual run any time: Actions tab -> "craft-gate update check" -> Run workflow.
+
+name: craft-gate update check
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare local vs latest craft-gate release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT="$(cat .craft-gate-version 2>/dev/null || echo none)"
+          LATEST="$(gh api repos/gbelbe/craft-gate/releases/latest --jq .tag_name)"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already on $LATEST." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "On $CURRENT, latest is $LATEST." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Pull the latest craft-gate and run bootstrap.sh
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          git clone --branch "${{ steps.check.outputs.latest }}" --depth 1 \
+            https://github.com/gbelbe/craft-gate /tmp/craft-gate
+          bash /tmp/craft-gate/bootstrap.sh .
+
+      - name: Open or update a PR if anything changed
+        if: steps.check.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          if git diff --quiet; then
+            echo "Version bumped but nothing actually changed — no PR needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          BRANCH="craft-gate-update"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add CRAFTSMANSHIP.md catalog.yaml scripts/check_tidy_ratchet.sh \
+            scripts/report_tidy_history.sh .claude/skills/tidy-first/SKILL.md \
+            .craft-gate-version
+          git commit -m "$(printf 'chore(craft-gate): update to %s\n\nTidy-Exempt: automated dependency sync, see craft-gate'"'"'s CHANGELOG\n' "$LATEST")"
+          git push -u origin "$BRANCH" --force
+
+          EXISTING="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number // empty')"
+          if [ -z "$EXISTING" ]; then
+            gh pr create --title "chore: update craft-gate to $LATEST" \
+              --body "Automated craft-gate sync. See https://github.com/gbelbe/craft-gate/blob/main/CHANGELOG.md for what changed. Review like any other dependency bump — nothing here auto-merges." \
+              --head "$BRANCH"
+            echo "Opened a PR for $LATEST." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Updated existing PR #$EXISTING for $LATEST." >> "$GITHUB_STEP_SUMMARY"
+          fi
