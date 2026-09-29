@@ -6,8 +6,8 @@ tables here directly (see the repo's CONTRIBUTING.md, "Adding a heuristic
 or rule").
 This file does not assume any particular AI tool or editor — a human
 contributor, a CI script, or an agent can all read it directly. Tool-specific
-wrappers (a Claude Code skill, a pre-commit hook, a CI job) point back here
-rather than re-stating it.
+wrappers (an agent guidance file, a pre-commit hook, a CI job) point back
+here rather than re-stating it.
 
 Two separate concerns, on purpose:
 
@@ -353,14 +353,17 @@ this," and these don't). `scripts/check_complexity_ratchet.py`:
 - **Duplicated String Literal** (S1192) — the same literal (5+ characters)
   repeated 3+ times in one file, scoped per file rather than per function.
 
-**The ratchet rule**: a function/literal is a violation when its metric
-exceeds the threshold *and* increased versus the base ref (a brand-new
-function has base complexity 0) — blocking a new function over threshold,
-an already-complex function made worse, and a simple function pushed over,
-while allowing untouched complex functions and ones refactored *down*.
-Grandfathered, not retroactive: this is about not making things worse from
-here, the same spirit as Refactor First, not a demand to fix everything
-that already exists.
+**The ratchet rule**: a brand-new function over threshold is always a
+violation (base complexity 0). An *existing* function/literal already over
+threshold that this change's diff actually reaches (matched by line range
+against `git diff`) must come out **lower** than it went in — left
+unchanged is not enough, only a genuine decrease passes. One the diff
+never reaches at all is grandfathered regardless of its number. This is
+stricter than "never worse": touching a bad function obligates you to
+improve it, at least a little — it doesn't have to reach the threshold in
+one PR, just move the right direction. Not retroactive, though: nothing
+here forces anyone to go looking for complexity to fix in code nobody's
+touching.
 
 ```bash
 uv sync --extra complexity                                    # radon + cognitive-complexity
@@ -371,9 +374,69 @@ Wired into CI as the `complexity` job, PR-only, alongside `tidy` and
 `refactor-first`. `Tidy-Exempt:` bypasses it the same way it bypasses the
 other two — one exemption mechanism for all three gates.
 
+## Patch coverage — new code must be tested, not just committed
+
+A fourth gate, orthogonal to everything above: none of the other three
+check whether a change has *tests* at all, only whether its structure is
+sound. [`diff-cover`](https://github.com/Bachmann1234/diff_cover)
+(third-party, not a craft-gate script) reads a coverage report and a git
+diff together, and fails when the lines the diff actually *changed* are
+under-covered — untouched parts of the repo don't count, so this isn't a
+whole-repo coverage floor (which a well-tested old codebase can clear while
+a brand-new untested file quietly drags the average down only slightly).
+
+```bash
+uv run pytest --cov=<your_package> --cov-report=xml
+uv run diff-cover coverage.xml --compare-branch origin/main --fail-under 90
+```
+
+Wired into CI as the `patch-coverage` job, PR-only. **No `Tidy-Exempt:`
+bypass** — deliberately, unlike the three gates above: this ports the exact
+mechanism an existing, well-tested project (kai-ster) already runs
+unconditionally, and diff-cover itself has no concept of a commit-trailer
+exemption to hook into. If a real exception is needed (a generated file,
+a vendored import), exclude it from coverage measurement itself
+(`--cov=<your_package>` / a `[tool.coverage.run] omit` entry), not from
+this gate.
+
+**90% is kai-ster's own number, not a mandated one** — CRAFTSMANSHIP.md
+ships the pattern; the threshold is yours to set per repo.
+
+## Mutation ratchet — coverage measures execution, not assertion
+
+Patch coverage answers "did a test run this line?" A test with no
+assertion, or one asserting the wrong thing, still counts as covering the
+line — coverage can't tell tested from merely-executed apart. Mutation
+testing can: [`mutmut`](https://github.com/boxed/mutmut) changes one small
+thing about your code (a `>` to a `>=`, a `+` to a `-`) and reruns your
+tests — if they all still pass, that mutant *survived*, meaning nothing
+actually checks the behavior that changed. `scripts/check_mutation_ratchet.py`
+fails when a function **this change's diff touches** has a mutation score
+(killed / (killed + survived), mutmut's own metric) below `--threshold`.
+
+```bash
+uv sync --extra mutation                                      # mutmut
+uv run mutmut run                                              # generates + runs mutants
+uv run python3 scripts/check_mutation_ratchet.py --base origin/main --threshold 80
+```
+
+**Optional, not one of the four default gates** — mutation testing reruns
+your whole test suite once per mutant, which is a different cost order
+than everything above; see `templates/mutation-ratchet-job.yml` (not
+`templates/ci-job.yml`) and DESIGN.md's "Mutation ratchet" for the full
+rationale, including why this checks a flat floor on the current tree
+rather than a base-vs-head comparison like the complexity ratchet.
+
+**A genuinely equivalent mutant** (code where no test *could* tell the
+difference because the behavior really is identical) gets mutmut's own
+`# pragma: no mutate` — the same idea as coverage.py's `# pragma: no
+cover`. This fixes the false positive at its source; don't reach for
+`Tidy-Exempt:` for a single surviving mutant, save it for skipping the
+gate entirely on a PR where that's the right call.
+
 ## Reporting — visible, not just enforced
 
-Two optional, non-blocking mechanisms make craftCov's findings visible
+Two default, non-blocking mechanisms make craftCov's findings visible
 without gating anything: a sticky PR comment showing what changed in this
 PR (`scripts/craftcov_pr_comment.py`), and a GitHub code-scanning SARIF
 export showing the repo's current state overall

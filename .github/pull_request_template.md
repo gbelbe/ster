@@ -1,5 +1,5 @@
 <!--
-  ster PR checklist — see CLAUDE.md for the mandatory development workflow.
+  ster PR checklist — see AGENTS.md for the mandatory development workflow.
   CI enforces the mechanical parts (patch coverage, complexity ratchet, import
   contracts, feature bindings, signed commits). The boxes below cover the parts
   CI can't see — tick what applies, delete what doesn't.

@@ -59,7 +59,7 @@ it, while its own body was one `def`.
 The fix is almost never to shuffle branches around. Look for a function doing
 two jobs and give each its own name — `_locate_row` was "place from coordinate
 columns" and "resolve a URI through the graph", and its own docstring already
-said so. Per CLAUDE.md, the touched function must end up **structurally
+said so. Per AGENTS.md, the touched function must end up **structurally
 simpler**, not merely renumbered.
 
 **Invariant return** (S3516) fires when every `return` hands back the same name

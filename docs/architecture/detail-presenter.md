@@ -178,7 +178,7 @@ Textual ships `DataTable`, `Sparkline`, `ProgressBar`, `Digits` and `Collapsible
 and `textual-plotext` would add real charts. For now we **stay with text
 `DetailField` rows** (color-coded block bars, navigable issue rows): it reuses
 the whole existing render/focus/action pipeline, adds nothing to the dependency
-list (CLAUDE.md: keep deps minimal), and the Presenter base makes a later swap to
+list (AGENTS.md: keep deps minimal), and the Presenter base makes a later swap to
 richer widgets a one-place change (replace `render()`'s row emission) without
 touching any subclass. Charts via `textual-plotext` are a deferred, opt-in
 follow-up (e.g. a class-depth histogram in `StructurePresenter`).

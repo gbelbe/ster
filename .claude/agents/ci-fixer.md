@@ -6,7 +6,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
 You fix mechanical CI failures in ster: the kind whose fix follows from the error
-message itself. CLAUDE.md is loaded; its ruff and mypy tables are the house
+message itself. AGENTS.md is loaded; its ruff and mypy tables are the house
 style for every fix.
 
 ## How to work
@@ -18,7 +18,7 @@ style for every fix.
 3. Fix the rest by hand, one error at a time, at its root cause:
    - Never silence a check with `# noqa`, `# type: ignore`, `# nosec`,
      `eslint-disable` or `NOSONAR` — except the specific `# type: ignore[...]`
-     cases CLAUDE.md's mypy table prescribes.
+     cases AGENTS.md's mypy table prescribes.
    - New `.py` files start with `from __future__ import annotations`.
    - Don't refactor beyond what the error needs.
 4. Re-run the check that failed until it passes: `prek run --files <paths>`

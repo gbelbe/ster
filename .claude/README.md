@@ -6,7 +6,7 @@ needs is checked in — clone the repo, open Claude Code in it, and the setup
 below is active automatically.
 
 > First read [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (setup, branches, PRs) and
-> [`../CLAUDE.md`](../CLAUDE.md) (the engineering rules). This file explains the
+> [`../AGENTS.md`](../AGENTS.md) (the engineering rules). This file explains the
 > Claude-specific tooling that ties them together.
 
 ---
@@ -27,11 +27,12 @@ committed, so every contributor gets them.
 
 ---
 
-## `CLAUDE.md` — the rules Claude follows
+## `AGENTS.md` — the rules Claude follows
 
-[`../CLAUDE.md`](../CLAUDE.md) at the repo root is **loaded into Claude's context
-automatically** at the start of every session. It is the source of truth for how
-we build ster, and Claude treats it as binding. The essentials it enforces:
+[`../AGENTS.md`](../AGENTS.md) at the repo root is **loaded into Claude's context
+automatically** at the start of every session (`CLAUDE.md` is a symlink to it,
+for Claude Code's own file-lookup). It is the source of truth for how we build
+ster, and Claude treats it as binding. The essentials it enforces:
 
 - **Confirm before coding.** For a new feature, Claude will rephrase your
   request, ask the questions that change the design, apply **YAGNI**, then lay
@@ -43,10 +44,10 @@ we build ster, and Claude treats it as binding. The essentials it enforces:
 - **Refactor on touch + the complexity ratchet.** New functions stay ≤ 15
   cyclomatic complexity; changes must not increase complexity above 15.
   When the ratchet triggers, Claude refactors first, then builds.
-- **Dependency isolation, prompt/style conventions** — see `CLAUDE.md` for the
+- **Dependency isolation, prompt/style conventions** — see `AGENTS.md` for the
   full ruff/mypy tables and project conventions.
 
-Humans should read `CLAUDE.md` too: it *is* the coding standard the PR review and
+Humans should read `AGENTS.md` too: it *is* the coding standard the PR review and
 the gate check against, whether or not you used Claude to write the change.
 
 ---
@@ -108,7 +109,7 @@ It encodes the common root causes of local-vs-CI divergence and how to fix them.
 
 ## Where to go next
 
-- [`../CLAUDE.md`](../CLAUDE.md) — the full engineering rulebook.
+- [`../AGENTS.md`](../AGENTS.md) — the full engineering rulebook.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — setup, branching, commits, PRs, releases.
 - [`../docs/architecture/`](../docs/architecture/) — design docs: `module-layout.md`
   (the package/shim-contract pattern used for every oversized-file split —

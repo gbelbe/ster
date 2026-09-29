@@ -173,14 +173,14 @@ Then open the PR on GitHub. In the description:
 
 ## Coding conventions
 
-See [CLAUDE.md](CLAUDE.md) for the full style guide used in this project,
+See [AGENTS.md](AGENTS.md) for the full style guide used in this project,
 including ruff rules, mypy patterns, and the mandatory TDD+BDD workflow for
 new features.
 
 ### Development rules (mandatory)
 
 These apply to everyone. Most are enforced automatically by CI (and surfaced by
-the pull-request checklist); see [CLAUDE.md](CLAUDE.md) for the full version.
+the pull-request checklist); see [AGENTS.md](AGENTS.md) for the full version.
 
 1. **Clarify & simplify first** — restate the request, ask the questions that
    change the design, and apply **YAGNI** to cut scope to the simplest thing

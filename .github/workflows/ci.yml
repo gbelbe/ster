@@ -150,7 +150,8 @@ jobs:
       - name: "Refactor First: touched files' detectable-heuristic total must go down (or stay 0)"
         run: uv run python3 scripts/check_refactor_first.py --base "origin/${{ github.base_ref }}"
 
-  # Optional reporting, not a gate — see DESIGN.md's Reporting section.
+  # Reporting, not a gate, but part of the default setup — see DESIGN.md's
+  # Reporting section.
   craftcov-pr-comment:
     name: craftCov PR report
     runs-on: ubuntu-latest
@@ -177,11 +178,11 @@ jobs:
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}"
 
-  # Optional reporting, not a gate. UNLIKE the other repos this job's been
-  # rolled out to, this one is PRIVATE (adeo/kai-ster) -- GitHub code
-  # scanning needs either a public repo or GitHub Advanced Security.
-  # Confirmed GHAS is enabled for this org, so this runs like any other
-  # repo's copy of this job, no continue-on-error escape hatch needed.
+  # Reporting, not a gate, but part of the default setup. UNLIKE the other
+  # repos this job's been rolled out to, this one is PRIVATE (adeo/kai-ster)
+  # -- GitHub code scanning needs either a public repo or GitHub Advanced
+  # Security. Confirmed GHAS is enabled for this org, so this runs like any
+  # other repo's copy of this job, no continue-on-error escape hatch needed.
   craftcov-sarif:
     name: Upload craftCov SARIF
     runs-on: ubuntu-latest
