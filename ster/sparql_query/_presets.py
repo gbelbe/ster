@@ -1,7 +1,9 @@
 """Built-in preset SPARQL queries and editor keyword list.
 
 Extend ``PRESET_QUERIES`` to add domain-specific or AI-generated queries to
-the preset menu; ``SPARQL_KEYWORDS`` feeds editor autocomplete.
+the preset menu; ``SPARQL_KEYWORDS`` feeds editor autocomplete, and is also
+the one place :mod:`ster.tui.sparql_highlight` gets its token set from — see
+that module for why deriving beats a second hand-copied list.
 """
 
 from __future__ import annotations
@@ -36,8 +38,11 @@ SPARQL_KEYWORDS: list[str] = [
     "FILTER",
     "BIND",
     "VALUES",
+    "GROUP",
+    "BY",
     "GROUP BY",
     "HAVING",
+    "ORDER",
     "ORDER BY",
     "DESC",
     "ASC",
@@ -50,6 +55,7 @@ SPARQL_KEYWORDS: list[str] = [
     "SILENT",
     "AS",
     "IN",
+    "NOT",
     "NOT IN",
     "EXISTS",
     "NOT EXISTS",
@@ -69,7 +75,10 @@ SPARQL_KEYWORDS: list[str] = [
     "ADD",
     "MOVE",
     "COPY",
+    "INTO",
+    "TO",
     "NAMED",
+    "DEFAULT",
     "ALL",
     "UNDEF",
     # Built-in functions

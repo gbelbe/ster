@@ -40,8 +40,45 @@ class Definition:
     value: str
 
 
+class _HasLocalName:
+    """Mixin: the part of a URI after its last ``#`` or ``/``, or the whole URI
+    when neither separator appears. Every entity kind here is identified by a
+    URI and reads its local name the same way, so it lives once rather than
+    once per dataclass. No fields of its own — ``uri`` is declared only for
+    the type checker, and composes with ``@dataclass`` without conflict since
+    this class is never itself decorated."""
+
+    uri: str
+
+    @property
+    def local_name(self) -> str:
+        for sep in ("#", "/"):
+            if sep in self.uri:
+                return self.uri.rsplit(sep, 1)[-1]
+        return self.uri
+
+
+class _HasLabel(_HasLocalName):
+    """Mixin for the OWL/RDFS layer's shared "pick a display label" rule: the
+    first ``rdfs:label`` in the requested language, else the first label at
+    all, else the local name. SKOS's :class:`Concept` has its own richer
+    pref/alt-label distinction (see :meth:`Concept.pref_label`) and does not
+    use this — the two are related but not the same rule, which is why they
+    stayed separate methods rather than being merged into one."""
+
+    labels: list[Label]
+
+    def label(self, lang: str = "en") -> str:
+        for lbl in self.labels:
+            if lbl.lang == lang:
+                return lbl.value
+        if self.labels:
+            return self.labels[0].value
+        return self.local_name
+
+
 @dataclass
-class Concept:
+class Concept(_HasLocalName):
     uri: str
     labels: list[Label] = field(default_factory=list)
     definitions: list[Definition] = field(default_factory=list)
@@ -68,13 +105,6 @@ class Concept:
     # properties and schemes have always had this; without it a concept lost every
     # unmodelled predicate on save, silently.
     annotations: list[OntologyAnnotation] = field(default_factory=list)
-
-    @property
-    def local_name(self) -> str:
-        for sep in ("#", "/"):
-            if sep in self.uri:
-                return self.uri.rsplit(sep, 1)[-1]
-        return self.uri
 
     def pref_label(self, lang: str = "en") -> str:
         for lbl in self.labels:
@@ -103,7 +133,7 @@ class Concept:
 
 
 @dataclass
-class OWLProperty:
+class OWLProperty(_HasLabel):
     """An owl:ObjectProperty / owl:DatatypeProperty / rdfs:Property."""
 
     uri: str
@@ -122,24 +152,9 @@ class OWLProperty:
     # captured generically so metadata quality can be assessed and round-tripped.
     annotations: list[OntologyAnnotation] = field(default_factory=list)
 
-    @property
-    def local_name(self) -> str:
-        for sep in ("#", "/"):
-            if sep in self.uri:
-                return self.uri.rsplit(sep, 1)[-1]
-        return self.uri
-
-    def label(self, lang: str = "en") -> str:
-        for lbl in self.labels:
-            if lbl.lang == lang:
-                return lbl.value
-        if self.labels:
-            return self.labels[0].value
-        return self.local_name
-
 
 @dataclass
-class OWLIndividual:
+class OWLIndividual(_HasLabel):
     """An owl:NamedIndividual (or instance typed as a known OWL class)."""
 
     uri: str
@@ -156,24 +171,9 @@ class OWLIndividual:
     schema_urls: list[str] = field(default_factory=list)  # schema:url URLs
     note: str = ""  # ns1:note markdown annotation
 
-    @property
-    def local_name(self) -> str:
-        for sep in ("#", "/"):
-            if sep in self.uri:
-                return self.uri.rsplit(sep, 1)[-1]
-        return self.uri
-
-    def label(self, lang: str = "en") -> str:
-        for lbl in self.labels:
-            if lbl.lang == lang:
-                return lbl.value
-        if self.labels:
-            return self.labels[0].value
-        return self.local_name
-
 
 @dataclass
-class RDFClass:
+class RDFClass(_HasLabel):
     """An rdfs:Class or owl:Class node — the OWL/RDFS layer of a graph."""
 
     uri: str
@@ -189,21 +189,6 @@ class RDFClass:
     # Any *other* predicate used on the class (skos:note, rdfs:seeAlso, …), captured
     # generically so metadata quality can be assessed and the triple round-trips.
     annotations: list[OntologyAnnotation] = field(default_factory=list)
-
-    @property
-    def local_name(self) -> str:
-        for sep in ("#", "/"):
-            if sep in self.uri:
-                return self.uri.rsplit(sep, 1)[-1]
-        return self.uri
-
-    def label(self, lang: str = "en") -> str:
-        for lbl in self.labels:
-            if lbl.lang == lang:
-                return lbl.value
-        if self.labels:
-            return self.labels[0].value
-        return self.local_name
 
 
 @dataclass

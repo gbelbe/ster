@@ -54,6 +54,41 @@ def _set_localized(taxonomy: Taxonomy, uri: str, pairs: _LangPairs, *, kind: str
             remove_fn(taxonomy, uri, lang)
 
 
+def _rename_and_relabel(
+    taxonomy: Taxonomy, old_uri: str, new_uri: str, labels: _LangPairs, comments: _LangPairs
+) -> str:
+    """Rename an entity when *new_uri* differs, then apply its label/comment
+    desired-state. Returns the URI to report as touched — the new one when a
+    rename happened. Shared by every "save an existing entity" command; a
+    command with more state to apply afterward (OwlSaveProperty's domain/
+    range) just does that after calling this, rather than repeating the
+    rename-then-relabel sequence inline."""
+    uri = old_uri
+    if new_uri and new_uri != old_uri:
+        rename_entity_uri(taxonomy, old_uri, new_uri)
+        uri = new_uri
+    _set_localized(taxonomy, uri, labels, kind="label")
+    _set_localized(taxonomy, uri, comments, kind="comment")
+    return uri
+
+
+def _ensure_class_and_link(taxonomy: Taxonomy, class_uri: str, parent_uri: str | None) -> None:
+    """Create *class_uri* if absent, then link it under *parent_uri* — a circular
+    or missing-parent link is swallowed, not raised (the inline handler this
+    replaced did the same). Shared by every command that creates a class
+    optionally parented; OwlCreateClass applies labels/comments afterward,
+    OwlCreateSubclass does nothing more."""
+    if class_uri not in taxonomy.owl_classes:
+        if taxonomy.uri_taken(class_uri):  # a concept/individual/property owns it
+            raise URIAlreadyExistsError(class_uri)
+        taxonomy.owl_classes[class_uri] = RDFClass(uri=class_uri)
+    if parent_uri:
+        try:
+            add_subclass_of(taxonomy, class_uri, parent_uri)
+        except (CircularHierarchyError, ClassNotFoundError):
+            pass
+
+
 @dataclass(frozen=True)
 class OwlMoveClass:
     """Reparent an OWL class via ``rdfs:subClassOf``.
@@ -104,15 +139,7 @@ class OwlCreateSubclass:
     parent_uri: str | None
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        if self.class_uri not in taxonomy.owl_classes:
-            if taxonomy.uri_taken(self.class_uri):  # a concept/individual/property owns it
-                raise URIAlreadyExistsError(self.class_uri)
-            taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
-        if self.parent_uri:
-            try:
-                add_subclass_of(taxonomy, self.class_uri, self.parent_uri)
-            except (CircularHierarchyError, ClassNotFoundError):
-                pass
+        _ensure_class_and_link(taxonomy, self.class_uri, self.parent_uri)
         assign_handles(taxonomy)
         return (self.class_uri,)
 
@@ -129,15 +156,7 @@ class OwlCreateClass:
     comments: _LangPairs = ()
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        if self.class_uri not in taxonomy.owl_classes:
-            if taxonomy.uri_taken(self.class_uri):  # a concept/individual/property owns it
-                raise URIAlreadyExistsError(self.class_uri)
-            taxonomy.owl_classes[self.class_uri] = RDFClass(uri=self.class_uri)
-        if self.parent_uri:
-            try:
-                add_subclass_of(taxonomy, self.class_uri, self.parent_uri)
-            except (CircularHierarchyError, ClassNotFoundError):
-                pass
+        _ensure_class_and_link(taxonomy, self.class_uri, self.parent_uri)
         for lang, value in self.labels:
             if value:
                 set_owl_label(taxonomy, self.class_uri, lang, value)
@@ -161,12 +180,7 @@ class OwlSaveClass:
     comments: _LangPairs = ()
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        uri = self.old_uri
-        if self.new_uri and self.new_uri != self.old_uri:
-            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
-            uri = self.new_uri
-        _set_localized(taxonomy, uri, self.labels, kind="label")
-        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        uri = _rename_and_relabel(taxonomy, self.old_uri, self.new_uri, self.labels, self.comments)
         assign_handles(taxonomy)
         return (uri,)
 
@@ -190,12 +204,7 @@ class OwlSaveProperty:
     ranges: tuple[str, ...] = ()
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        uri = self.old_uri
-        if self.new_uri and self.new_uri != self.old_uri:
-            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
-            uri = self.new_uri
-        _set_localized(taxonomy, uri, self.labels, kind="label")
-        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        uri = _rename_and_relabel(taxonomy, self.old_uri, self.new_uri, self.labels, self.comments)
         prop = taxonomy.owl_properties.get(uri)
         if prop is not None:
             prop.domains = list(self.domains)
@@ -277,12 +286,7 @@ class OwlSaveIndividual:
     comments: _LangPairs = ()
 
     def apply(self, taxonomy: Taxonomy) -> tuple[str, ...]:
-        uri = self.old_uri
-        if self.new_uri and self.new_uri != self.old_uri:
-            rename_entity_uri(taxonomy, self.old_uri, self.new_uri)
-            uri = self.new_uri
-        _set_localized(taxonomy, uri, self.labels, kind="label")
-        _set_localized(taxonomy, uri, self.comments, kind="comment")
+        uri = _rename_and_relabel(taxonomy, self.old_uri, self.new_uri, self.labels, self.comments)
         assign_handles(taxonomy)
         return (uri,)
 
