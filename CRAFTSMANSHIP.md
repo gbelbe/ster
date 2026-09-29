@@ -2,7 +2,8 @@
 
 This is the source of truth for everything except the two catalog tables
 below, which are generated from `catalog.yaml` — edit that file, not the
-tables here directly (see the repo's README, "How to add a new heuristic").
+tables here directly (see the repo's CONTRIBUTING.md, "Adding a heuristic
+or rule").
 This file does not assume any particular AI tool or editor — a human
 contributor, a CI script, or an agent can all read it directly. Tool-specific
 wrappers (a Claude Code skill, a pre-commit hook, a CI job) point back here
@@ -51,9 +52,16 @@ unrelated things (Feature Envy, Fowler)" is a specific, checkable claim.
 ### Before writing new code
 
 Run it past the **new-code checklist** below *before* declaring it done —
-this is a design pass, not a commit type. There's no ratchet for it because
-"is this well-designed" isn't mechanically checkable the way a diff is; it's
-on the author and the reviewer.
+this is a design pass, not a commit type. Most of it (SOLID, the four rules
+of simple design, Command-Query Separation) genuinely isn't mechanically
+checkable the way a diff is; that part stays on the author and the
+reviewer. A meaningful subset of it *is* mechanically checkable, though,
+with exact numbers — see **The mechanical floor** below — and staying
+inside those numbers while writing is what makes `refactor-first` and
+`complexity` pass on the first push instead of a flag-then-fix cycle.
+Before calling new code done, run both locally against it: `uv run
+python3 scripts/craftcov.py --file <path>` and `uv run python3
+scripts/check_complexity_ratchet.py --path <dir> --base origin/main`.
 
 ### Before refactoring code with no tests (legacy code)
 
@@ -135,9 +143,11 @@ Design checklist, not a commit ritual — apply while writing, not after.
 
 - **A function does one thing, and stays small.** If you're reaching for
   "and" to describe what it does, it's two functions.
-- **Prefer 0–2 arguments; 3 is a smell, more needs restructuring** — often
-  `introduce-parameter-object` (above) is the fix, before the function is
-  even written.
+- **Prefer 0–2 arguments; 3 is a smell, more needs restructuring.** Stricter
+  than the mechanical gate below (which allows up to 5) on purpose — this is
+  the *design* bar, the gate is the *floor* it won't let you fall under.
+  Often `introduce-parameter-object` (above) is the fix, before the function
+  is even written.
 - **No flag arguments.** A boolean parameter that makes a function silently
   do one of two different things should be two functions.
 - **Command-Query Separation.** A function either does something or answers
@@ -165,6 +175,41 @@ Deliberately extreme, meant to provoke a conversation rather than be taken
 literally: classes ≤100 lines, methods ≤5 lines, ≤4 parameters. Useful when
 a project's own complexity ceiling feels too permissive and the team wants a
 sharper target to aim for — not a gate.
+
+### The mechanical floor — the exact numbers the gates check
+
+Everything above is design judgment; these are the literal thresholds
+`refactor-first` and `complexity` enforce. Stay under them while writing
+and CI passes on the first push instead of a flag-then-fix round trip —
+that's the entire point of knowing them in advance rather than only
+reactively, after craftCov or the complexity ratchet report something.
+
+| Heuristic | Exact threshold | Checked by |
+|---|---|---|
+| `introduce-parameter-object` | > 5 parameters | ruff `PLR0913` |
+| `extract-helper` | > 50 statements in one function | ruff `PLR0915` |
+| `replace-conditional-with-polymorphism` | > 12 branches (`if`/`elif`/`for`/`except`/`match` combined) | ruff `PLR0912` |
+| `extract-class` | > 7 instance attributes, or > 20 public methods | pylint `R0902` / `R0904` |
+| `explaining-constant` | any numeric literal outside `{-1, 0, 1}` used in a comparison | ruff `PLR2004` |
+| `consolidate-duplicate-conditional` | ≥ 8 consecutive lines duplicated elsewhere (exact match, comments/imports/blanks excluded) | `dupes` (calibrated against PMD CPD — see DESIGN.md) |
+| `guard-clauses`, `dead-code` | pattern-based, not a count — see the catalog table above | ruff `RET505` / `F401`/`F811`/`F841` + vulture |
+| High cyclomatic / cognitive complexity (CG032/CG033) | > 15 (both measures, same threshold, reported separately) | `radon` / `cognitive-complexity` |
+| Invariant return (CG034) | pattern-based: every `return` in a function hands back the same never-rebound name | AST check, own logic |
+| Duplicated string literal (CG035) | same literal (5+ chars) repeated > 2 times in one file | AST check, own logic |
+
+These are ruff/pylint's **own defaults** (unless a repo's own config
+overrides them — check `[tool.ruff.lint.pylint]`/`.pylintrc` before
+assuming) — craft-gate didn't invent them, and doesn't second-guess them,
+the same "reuse a reference implementation" principle **craftCov** and
+**The complexity ratchet** already apply to the tools they wrap.
+
+**Before considering a change done**, not just before touching existing
+code: `uv run python3 scripts/craftcov.py --file <path>` and
+`uv run python3 scripts/check_complexity_ratchet.py --path <dir> --base
+origin/main` both run cleanly against *new* code too, not only against
+what Refactor First already tracked before you started. A clean local run
+of both is the actual precondition for "CI will pass" — running them is
+cheaper and faster than finding out from a failed push.
 
 ---
 
@@ -241,7 +286,7 @@ that the discipline (or an explicit, reviewable exemption) was followed.
 
 ## Refactor First — a mechanically-enforced instance of the procedure above
 
-For any heuristic craftCov can detect (see the README's craftCov section, or
+For any heuristic craftCov can detect (see DESIGN.md's craftCov section, or
 `scripts/craftcov.py --list-detectors` — 8 of the 35 entries above as of
 this writing), the "which tidying, ask the developer" judgment call in step
 3 of the procedure becomes fully mechanical instead:
@@ -325,6 +370,16 @@ uv run python3 scripts/check_complexity_ratchet.py --base origin/main
 Wired into CI as the `complexity` job, PR-only, alongside `tidy` and
 `refactor-first`. `Tidy-Exempt:` bypasses it the same way it bypasses the
 other two — one exemption mechanism for all three gates.
+
+## Reporting — visible, not just enforced
+
+Two optional, non-blocking mechanisms make craftCov's findings visible
+without gating anything: a sticky PR comment showing what changed in this
+PR (`scripts/craftcov_pr_comment.py`), and a GitHub code-scanning SARIF
+export showing the repo's current state overall
+(`craftcov.py --format sarif`). Neither is a ratchet — nothing here fails
+a build. See DESIGN.md's **Reporting** section for the full detail and
+the CI wiring.
 
 ## Don't let the exemption become the rule
 

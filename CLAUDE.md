@@ -151,6 +151,15 @@ same way the complexity ratchet applies to a brand-new function exactly as
 it does to a touched one — there's nothing to "tidy" in code that doesn't
 exist yet, but there's everything to get right the first time.
 
+**Write within these limits from the start**: CRAFTSMANSHIP.md's "The
+mechanical floor" table has the exact numbers `refactor-first`/`complexity`
+check (≤5 params, ≤50 statements, ≤12 branches, ≤7 instance attributes, ≤15
+cyclomatic/cognitive complexity, no repeated 5+ char literal more than twice
+per file, etc.) — know them while writing, not only when a gate flags
+something after the fact. Before calling a change done, run both locally
+against what you touched: `uv run scripts/craftcov.py --file <path>` and
+`uv run scripts/check_complexity_ratchet.py --path ster --base origin/main`.
+
 Touching code with no tests? It's legacy by Feathers' definition regardless
 of age — write a `test(characterize):` commit pinning its current behavior
 first, *then* tidy under that safety net. See `CRAFTSMANSHIP.md`'s "Working

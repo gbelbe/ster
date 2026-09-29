@@ -102,6 +102,7 @@ import subprocess
 import sys
 import time
 import tokenize
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -776,7 +777,8 @@ def print_text_report(
     )
     if timing.get("dupes_elapsed", 0) > 0:
         print(
-            f"Duplicate-code pass: {timing['dupes_elapsed']:.2f}s (always full-corpus — see README)"
+            f"Duplicate-code pass: {timing['dupes_elapsed']:.2f}s "
+            "(always full-corpus — see DESIGN.md)"
         )
     if scope_label:
         print(
@@ -845,6 +847,71 @@ def print_text_report(
     )
 
 
+def format_sarif(by_file: dict[str, list[dict]], catalog: list[dict]) -> dict:
+    """A SARIF 2.1.0 document for `by_file`'s findings, for `github/codeql-
+    action/upload-sarif` — feeds GitHub's own code-scanning dashboard
+    (history, per-finding tracking, a native alert count) rather than a
+    hand-rolled report needing its own hosting. See DESIGN.md's Reporting
+    section for the CI wiring.
+
+    Rules cover every detectable catalog entry (`detectors` present),
+    whether or not it fired this run — SARIF's `rules` array is the tool's
+    rule catalog, not a per-run fired-list, the same distinction
+    `--list-detectors` already draws. All findings are `level: warning`:
+    none of these are security issues, but they're not mere style notes
+    either — matches how GitHub surfaces them by default (a `note`-level
+    result is filtered out of the default alerts view).
+    """
+    detectable = [e for e in catalog if e.get("detectors")]
+    rules = [
+        {
+            "id": e["id"],
+            "name": e["id"],
+            "shortDescription": {"text": e.get("smell", e["name"])},
+            "help": {"text": e.get("action", "")},
+            "properties": {"tags": ["craftsmanship", e.get("code", "")]},
+        }
+        for e in detectable
+    ]
+
+    results = []
+    for rel, findings in sorted(by_file.items()):
+        for f in findings:
+            hid, hcode = f["heuristic_id"], f["heuristic_code"]
+            results.append(
+                {
+                    "ruleId": hid,
+                    "level": "warning",
+                    "message": {"text": f"{hid} ({hcode})"},
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": rel},
+                                "region": {"startLine": max(f["line"], 1)},
+                            }
+                        }
+                    ],
+                }
+            )
+
+    return {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "craftCov",
+                        "informationUri": "https://github.com/gbelbe/craft-gate",
+                        "rules": rules,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
+
+
 def print_detector_list(catalog: list[dict]) -> None:
     for e in catalog:
         detectors = e.get("detectors")
@@ -895,6 +962,69 @@ def merge_corpus_findings(
         )
 
 
+@dataclass
+class ScanResults:
+    """What the scan produced. Split from RunContext below on purpose, not
+    just to satisfy extract-class (CG016 — a first version bundling both
+    into one 8-field object tripped pylint's too-many-instance-attributes,
+    ironic given the fix right above it was CG018,
+    introduce-parameter-object): these four are what got *found*, the four
+    in RunContext are how *this run* differs from the last one. Genuinely
+    two concerns, not one struct split in half to dodge a linter."""
+
+    agg: dict
+    by_file: dict[str, list[dict]]
+    catalog: list[dict]
+    catalog_by_id: dict[str, dict]
+
+
+@dataclass
+class RunContext:
+    """How this run relates to the one before it — see ScanResults above."""
+
+    timing: dict
+    prev_snapshot: dict | None
+    diff_active: bool
+    scope_label: str | None
+
+
+def print_report(args: argparse.Namespace, scan: ScanResults, ctx: RunContext) -> None:
+    """--format's three branches, pulled out of main() to keep main() itself
+    from creeping back over the complexity ratchet's own threshold every
+    time a format gets added — CG032, this file dogfeeds its own catalog."""
+    if args.format == "json":
+        payload = {
+            "summary": scan.agg,
+            "findings": scan.by_file,
+            "timing": ctx.timing,
+            "scope": ctx.scope_label,
+        }
+        if ctx.diff_active:
+            payload["diff"] = {
+                "previous_generated_at": (ctx.prev_snapshot or {}).get("generated_at"),
+                "by_heuristic": [
+                    {"heuristic_id": hid, "old": old_count, "new": new_count}
+                    for hid, old_count, new_count in diff_by_heuristic(
+                        (ctx.prev_snapshot or {}).get("by_heuristic"), scan.agg["by_heuristic"]
+                    )
+                ],
+            }
+        print(json.dumps(payload, indent=2))
+    elif args.format == "sarif":
+        print(json.dumps(format_sarif(scan.by_file, scan.catalog), indent=2))
+    else:
+        print_text_report(
+            scan.agg,
+            scan.catalog_by_id,
+            scan.by_file,
+            args.verbose,
+            ctx.timing,
+            ctx.prev_snapshot,
+            show_diff=ctx.diff_active,
+            scope_label=ctx.scope_label,
+        )
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
@@ -918,7 +1048,7 @@ def main() -> int:
         help="don't print the 'changes since last run' section "
         "(the snapshot still updates for next time)",
     )
-    parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser.add_argument("--format", choices=["text", "json", "sarif"], default="text")
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="list every finding, not just the summary"
     )
@@ -1030,30 +1160,11 @@ def main() -> int:
         "dupes_elapsed": dupes_elapsed,
     }
 
-    if args.format == "json":
-        payload = {"summary": agg, "findings": by_file, "timing": timing, "scope": scope_label}
-        if diff_active:
-            payload["diff"] = {
-                "previous_generated_at": (prev_snapshot or {}).get("generated_at"),
-                "by_heuristic": [
-                    {"heuristic_id": hid, "old": old_count, "new": new_count}
-                    for hid, old_count, new_count in diff_by_heuristic(
-                        (prev_snapshot or {}).get("by_heuristic"), agg["by_heuristic"]
-                    )
-                ],
-            }
-        print(json.dumps(payload, indent=2))
-    else:
-        print_text_report(
-            agg,
-            catalog_by_id,
-            by_file,
-            args.verbose,
-            timing,
-            prev_snapshot,
-            show_diff=diff_active,
-            scope_label=scope_label,
-        )
+    print_report(
+        args,
+        ScanResults(agg, by_file, catalog, catalog_by_id),
+        RunContext(timing, prev_snapshot, diff_active, scope_label),
+    )
 
     if not args.file:
         save_report_snapshot(snapshot_path, agg)

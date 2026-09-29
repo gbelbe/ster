@@ -41,8 +41,8 @@ is evaluated exactly like new code and must meet the threshold on its own,
 not compared against an identically-named entry that happened to live
 somewhere else in the base ref.
 
-Needs the `complexity` extra (`radon`, `cognitive-complexity`) — see
-README's craftCov section for the exact versions this release expects.
+Needs the `complexity` extra (`radon`, `cognitive-complexity`) — see the
+README's Install section for the exact versions this release expects.
 
 Usage:
     python scripts/check_complexity_ratchet.py [--base origin/main] [--path .]

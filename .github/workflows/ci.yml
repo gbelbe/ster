@@ -93,8 +93,10 @@ jobs:
   complexity:
     name: Complexity ratchet
     runs-on: ubuntu-latest
-    # Diff-aware: only meaningful against a PR's base branch.
-    if: github.event_name == 'pull_request'
+    # Diff-aware: only meaningful against a PR's base branch. Skips
+    # bot-authored PRs (dependabot, etc.) — they can't write a
+    # Tidy-Exempt: trailer, and a dependency bump has no complexity to fix.
+    if: github.event_name == 'pull_request' && !endsWith(github.actor, '[bot]')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,7 +118,8 @@ jobs:
   tidy:
     name: Tidy First ratchet
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Skips bot-authored PRs (dependabot, etc.) — see the complexity job's comment.
+    if: github.event_name == 'pull_request' && !endsWith(github.actor, '[bot]')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -132,7 +135,8 @@ jobs:
   refactor-first:
     name: Refactor First gate
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Skips bot-authored PRs (dependabot, etc.) — see the complexity job's comment.
+    if: github.event_name == 'pull_request' && !endsWith(github.actor, '[bot]')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,6 +149,61 @@ jobs:
 
       - name: "Refactor First: touched files' detectable-heuristic total must go down (or stay 0)"
         run: uv run python3 scripts/check_refactor_first.py --base "origin/${{ github.base_ref }}"
+
+  # Optional reporting, not a gate — see DESIGN.md's Reporting section.
+  craftcov-pr-comment:
+    name: craftCov PR report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: uv sync --extra craftcov
+        run: uv sync --extra craftcov
+
+      - name: Post/update the craftCov PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run python3 scripts/craftcov_pr_comment.py \
+            --base "origin/${{ github.base_ref }}" \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}"
+
+  # Optional reporting, not a gate. UNLIKE the other repos this job's been
+  # rolled out to, this one is PRIVATE (adeo/kai-ster) -- GitHub code
+  # scanning needs either a public repo or GitHub Advanced Security.
+  # Confirmed GHAS is enabled for this org, so this runs like any other
+  # repo's copy of this job, no continue-on-error escape hatch needed.
+  craftcov-sarif:
+    name: Upload craftCov SARIF
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: uv sync --extra craftcov
+        run: uv sync --extra craftcov
+
+      - name: Generate craftCov SARIF
+        run: uv run python3 scripts/craftcov.py --format sarif --no-cache --no-diff > craftcov.sarif
+
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: craftcov.sarif
+          category: craftcov
 
   # ── 2. pip-audit (dependency CVEs) ──────────────────────────────────────────
   # Kept as its own job (not in the prek 'checks' job) so a CVE advisory failure

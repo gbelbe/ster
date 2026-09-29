@@ -1,6 +1,6 @@
 # The actual catalog data — edit this, not CRAFTSMANSHIP.md's tables
-# directly (those are generated: scripts/render_catalog.py). See README's
-# "How to add a new heuristic / rule."
+# directly (those are generated: scripts/render_catalog.py). See
+# CONTRIBUTING.md's "Adding a heuristic or rule."
 #
 # kind: tidying (Beck, structural-only, existing code)
 #       smell-fix (Fowler, existing or new code)
@@ -255,7 +255,7 @@
       # own minimum-tokens=50 (a common value in its examples) does NOT
       # flag standalone. min_lines=8 (~40-45 tokens on this codebase, ~5.2
       # tokens/line measured directly) landed closest to PMD@50's finding
-      # count of the values tried. See README's craftCov section for the
+      # count of the values tried. See DESIGN.md's craftCov section for the
       # full comparison (both tools agree on the same real duplicates;
       # only the noise floor differed).
       min_lines: 8
