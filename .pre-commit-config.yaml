@@ -100,6 +100,20 @@ repos:
         # commit path while passing every other way.
         stages: [manual]
 
+      - id: refactor-first
+        # Diff-aware gate: a touched .py file's total across craftCov's 8
+        # detectable heuristics must go down (or stay at 0). manual, same
+        # reason as complexity-ratchet — needs --base, prek has no way to
+        # supply one. Was only wired into the GitHub Actions job when first
+        # added, never here or into scripts/ci.sh — discovered the hard way
+        # when a real PR failed this gate with no local warning at all.
+        name: refactor-first gate (craftCov total must go down, or stay 0)
+        entry: uv run python scripts/check_refactor_first.py
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [manual]
+
       - id: tidy-ratchet
         # Tidy First discipline (see the tidy-first skill): the commit range
         # must contain a tidy(<type>): commit or a Tidy-Exempt: trailer.

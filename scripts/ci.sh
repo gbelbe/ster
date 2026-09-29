@@ -142,6 +142,20 @@ else
   warn "origin/main not found — skipping tidy ratchet (run: git fetch origin main)"
 fi
 
+# ── 2a3. Refactor First gate — run directly, exactly as CI does ─────────────
+# Same reason as the complexity ratchet: diff-aware, needs --base, prek can't
+# supply one. Was only wired into the GitHub Actions job when first added,
+# never here — meaning a full local `ci.sh` pass could go green while the PR
+# still failed on this specific gate, discovered the hard way. Never again:
+# every diff-aware gate CI runs gets a matching step here too.
+step "Refactor First gate (vs origin/main)"
+if git rev-parse --verify --quiet origin/main >/dev/null; then
+  uv run python scripts/check_refactor_first.py --base origin/main
+  ok "refactor-first gate"
+else
+  warn "origin/main not found — skipping refactor-first gate (run: git fetch origin main)"
+fi
+
 # ── 2b. JavaScript lint & syntax ──────────────────────────────────────────────
 # eslint needs node_modules, and node_modules needs the Node the project asks
 # for. A machine on an older Node cannot install it — npm refuses with EBADENGINE
