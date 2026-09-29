@@ -45,7 +45,7 @@ _PLUGINS: tuple[PluginSpec, ...] = (
             "Read a tracked RDF file's Git history as additions, changes, renames, "
             "deprecations, and removals rather than as raw text."
         ),
-        dependency="rdfdiff>=0.1",
+        dependency="rdfdiff>=0.1.1",
     ),
 )
 
