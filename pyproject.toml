@@ -139,6 +139,15 @@ craftcov = [
     "pylint>=3.3",
     "vulture>=2.14",
 ]
+# craft-gate's complexity ratchet (scripts/check_complexity_ratchet.py) —
+# see CRAFTSMANSHIP.md's "The complexity ratchet". radon/cognitive-
+# complexity are already in `dev` (this project's own complexity ratchet
+# predates craft-gate's port of it), listed again here so `uv sync --extra
+# complexity` alone is enough to run the script, without also pulling `dev`.
+complexity = [
+    "radon>=6.0",
+    "cognitive-complexity>=1.3",
+]
 all = [
     "ster[dev]",
     "ster[semanticlint]",

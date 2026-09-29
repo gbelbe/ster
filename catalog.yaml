@@ -303,3 +303,43 @@
   source: "Michael Feathers, Working Effectively with Legacy Code (2004)"
   smell: Existing code has no tests, so a structural change has nothing to confirm behavior against
   action: "Write a test pinning current (possibly buggy) behavior, commit as test(characterize):, then tidy under that safety net"
+
+# The four below are enforced by scripts/check_complexity_ratchet.py, a
+# diff-aware gate like Refactor First — not by craftcov.py (no `detectors`
+# field: that key means "craftcov.py's own scan covers this," which these
+# deliberately aren't part of). See CRAFTSMANSHIP.md's "The complexity
+# ratchet" for the actual enforcement, and craftcov.py --list-detectors'
+# own output will correctly show these as "needs judgment" from *its*
+# point of view, since it genuinely doesn't scan for them.
+
+- id: high-cyclomatic-complexity
+  code: CG032
+  name: High Cyclomatic Complexity
+  kind: smell-fix
+  source: "Thomas J. McCabe, \"A Complexity Measure\", IEEE Transactions on Software Engineering (1976)"
+  smell: A function has too many independent linear paths through it to reason about or test exhaustively
+  action: Extract cohesive chunks into named helpers, or replace branching with dispatch (polymorphism, a strategy, a registry)
+
+- id: high-cognitive-complexity
+  code: CG033
+  name: High Cognitive Complexity
+  kind: smell-fix
+  source: "G. Ann Campbell, \"Cognitive Complexity\", SonarSource whitepaper (2018) — SonarQube rule S3776"
+  smell: A function's nesting and branching make it hard for a human to hold its logic in mind, even when cyclomatic complexity alone looks fine
+  action: Flatten nesting with guard clauses, extract nested blocks into named helpers
+
+- id: invariant-return
+  code: CG034
+  name: Invariant Return
+  kind: smell-fix
+  source: "SonarSource, SonarQube rule S3516"
+  smell: Every return in a function hands back the same never-rebound name, reading as multiple outcomes when it is really one
+  action: Collapse to a single exit point, reached by break or fall-through, instead of returning the same name from several places
+
+- id: duplicated-string-literal
+  code: CG035
+  name: Duplicated String Literal
+  kind: smell-fix
+  source: "SonarSource, SonarQube rule S1192"
+  smell: The same string literal (5+ characters) is repeated 3 or more times in one file
+  action: Extract it to a named constant so the values can't silently drift apart

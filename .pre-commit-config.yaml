@@ -88,7 +88,7 @@ repos:
         # cognitive complexity (SonarQube S3776) plus invariant returns (S3516),
         # so the rules the PR gate rejects fail here instead of after a push.
         name: complexity ratchet (cyclomatic · cognitive · invariant return)
-        entry: uv run python scripts/check_complexity_ratchet.py
+        entry: uv run python scripts/check_complexity_ratchet.py --path ster
         language: system
         types: [python]
         pass_filenames: false

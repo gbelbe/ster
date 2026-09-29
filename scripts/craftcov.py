@@ -2,8 +2,13 @@
 """craftCov — a coverage-report-style scan of the craftsmanship catalog.
 
 Honest about its limits before anything else: only the entries in
-catalog.yaml that carry `detectors` (8 of 31 as of this writing — see
-`--list-detectors`) have a real mechanical proxy. Three engines reused, one
+catalog.yaml that carry `detectors` (8 of 35 as of this writing — see
+`--list-detectors`) have a real mechanical proxy here. Four more
+(cyclomatic/cognitive complexity, invariant return, duplicated literal)
+are covered by a separate script, `check_complexity_ratchet.py` — this
+module has no awareness of it, so they show as "needs judgment" below even
+though they are, in fact, mechanically checked elsewhere; see
+CRAFTSMANSHIP.md's "The complexity ratchet". Three engines reused, one
 technique ported rather than reimplemented from scratch:
 
   - `ruff` (Rust, already a dependency in every repo this ships to, ships
@@ -437,8 +442,9 @@ def run_ruff(root: Path, rel_files: list[str], rules: list[str]) -> list[dict]:
         )
     except FileNotFoundError:
         raise SystemExit(
-            "✗ craftcov needs `ruff` on PATH for this catalog's ruff-mapped entries — pip install ruff."
-        )
+            "✗ craftcov needs `ruff` on PATH for this catalog's ruff-mapped entries — "
+            "pip install ruff."
+        ) from None
     if proc.returncode not in (0, 1):
         raise SystemExit(f"✗ ruff failed:\n{proc.stderr}")
     items = []
@@ -479,11 +485,13 @@ def run_pylint(root: Path, rel_files: list[str], rules: list[str]) -> list[dict]
         raise SystemExit(
             "✗ craftcov needs `pylint` on PATH for this catalog's pylint-mapped entries "
             "(extract-class) — pip install pylint, or drop that entry's detector in catalog.yaml."
-        )
+        ) from None
     try:
         raw = json.loads(proc.stdout or "[]")
     except json.JSONDecodeError:
-        raise SystemExit(f"✗ pylint produced unparseable output:\n{proc.stdout}\n{proc.stderr}")
+        raise SystemExit(
+            f"✗ pylint produced unparseable output:\n{proc.stdout}\n{proc.stderr}"
+        ) from None
     items = []
     for item in raw:
         rel = _normalize_path(root, item["path"])
@@ -529,13 +537,15 @@ def run_vulture(root: Path, rel_files: list[str], min_confidence: int) -> list[d
     except FileNotFoundError:
         raise SystemExit(
             "✗ craftcov needs `vulture` on PATH for this catalog's vulture-mapped entries "
-            "(dead-code) — pip install vulture, or drop that entry's vulture detector in catalog.yaml."
-        )
+            "(dead-code) — pip install vulture, or drop that entry's vulture detector "
+            "in catalog.yaml."
+        ) from None
     items = []
     for line in proc.stdout.splitlines():
         m = _VULTURE_LINE.match(line)
         if not m:
-            continue  # vulture has no machine-readable format; skip anything that doesn't parse rather than crash
+            # vulture has no machine-readable format; skip anything that doesn't parse
+            continue
         rel = _normalize_path(root, m.group("path"))
         if rel is None:
             continue
@@ -770,7 +780,8 @@ def print_text_report(
         )
     if scope_label:
         print(
-            f"Reporting scope: {scope_label} only (full corpus was still scanned — see --file's help)"
+            f"Reporting scope: {scope_label} only "
+            "(full corpus was still scanned — see --file's help)"
         )
     print()
 
@@ -819,7 +830,8 @@ def print_text_report(
                     else ""
                 )
                 print(
-                    f"  {rel}:{f['line']}  {f['heuristic_code']} {f['heuristic_id']} ({rule}){scope}{dup}"
+                    f"  {rel}:{f['line']}  {f['heuristic_code']} {f['heuristic_id']} "
+                    f"({rule}){scope}{dup}"
                 )
 
     n_detectable = sum(1 for e in catalog_by_id.values() if e.get("detectors"))
@@ -903,7 +915,8 @@ def main() -> int:
     parser.add_argument(
         "--no-diff",
         action="store_true",
-        help="don't print the 'changes since last run' section (the snapshot still updates for next time)",
+        help="don't print the 'changes since last run' section "
+        "(the snapshot still updates for next time)",
     )
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument(
@@ -917,25 +930,28 @@ def main() -> int:
     parser.add_argument(
         "--file",
         default=None,
-        help="report only findings in this one file (a REPORT filter, applied after the full corpus scan — "
-        "dupes still needs every file scanned to find a match's other half, so this never restricts what "
-        "gets scanned, only what gets shown/counted). Path relative to --path, or absolute.",
+        help="report only findings in this one file (a REPORT filter, applied after the "
+        "full corpus scan — dupes still needs every file scanned to find a match's "
+        "other half, so this never restricts what gets scanned, only what gets "
+        "shown/counted). Path relative to --path, or absolute.",
     )
     parser.add_argument(
         "--class",
         dest="cls",
         default=None,
-        help="further restrict --file to one enclosing class (module-level findings excluded). Ignored without --file.",
+        help="further restrict --file to one enclosing class (module-level findings "
+        "excluded). Ignored without --file.",
     )
     parser.add_argument(
         "--vulture-min-confidence",
         type=int,
         default=0,
         metavar="N",
-        help="vulture's own confidence floor (0-100, default 0 = vulture's default: report everything). "
-        "On a real codebase this tends to cluster at 60%% (functions/classes/methods, vulture's own "
-        "'fairly sure but could be wrong' tier) and 100%% (unused variables, redundant with ruff's own "
-        "F841). The cache doesn't know about this flag — changing it between runs needs --no-cache "
+        help="vulture's own confidence floor (0-100, default 0 = vulture's default: "
+        "report everything). On a real codebase this tends to cluster at 60%% "
+        "(functions/classes/methods, vulture's own 'fairly sure but could be wrong' "
+        "tier) and 100%% (unused variables, redundant with ruff's own F841). The cache "
+        "doesn't know about this flag — changing it between runs needs --no-cache "
         "to actually take effect.",
     )
     args = parser.parse_args()
@@ -996,7 +1012,8 @@ def main() -> int:
         target = _normalize_path(root, args.file)
         if target is None or target not in files:
             raise SystemExit(
-                f"✗ --file {args.file!r} not found among this repo's tracked .py files (relative to {root})"
+                f"✗ --file {args.file!r} not found among this repo's tracked "
+                f".py files (relative to {root})"
             )
         findings = by_file.get(target, [])
         if args.cls:

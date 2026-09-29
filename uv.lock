@@ -1786,6 +1786,10 @@ all = [
     { name = "semanticlint" },
     { name = "types-pyyaml" },
 ]
+complexity = [
+    { name = "cognitive-complexity" },
+    { name = "radon" },
+]
 craftcov = [
     { name = "pylint" },
     { name = "ruff" },
@@ -1822,6 +1826,7 @@ semanticlint = [
 [package.metadata]
 requires-dist = [
     { name = "cognitive-complexity", marker = "extra == 'all'", specifier = ">=1.3" },
+    { name = "cognitive-complexity", marker = "extra == 'complexity'", specifier = ">=1.3" },
     { name = "cognitive-complexity", marker = "extra == 'dev'", specifier = ">=1.3" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'all'", specifier = ">=7.0" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -1859,6 +1864,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.31" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'all'", specifier = ">=6.0" },
+    { name = "radon", marker = "extra == 'complexity'", specifier = ">=6.0" },
     { name = "radon", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "rdfdiff", marker = "extra == 'all'", specifier = ">=0.1.1" },
     { name = "rdfdiff", marker = "extra == 'dev'", specifier = ">=0.1.1" },
@@ -1882,7 +1888,7 @@ requires-dist = [
     { name = "vulture", marker = "extra == 'craftcov'", specifier = ">=2.14" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
-provides-extras = ["all", "craftcov", "dev", "rdfdiff", "semanticlint"]
+provides-extras = ["all", "complexity", "craftcov", "dev", "rdfdiff", "semanticlint"]
 
 [[package]]
 name = "syrupy"

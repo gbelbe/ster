@@ -39,12 +39,21 @@ every heuristic it finds present, bundle all of it into one `tidy(multi):`
 commit. No judgment call needed there: presence (count > 0) *is* the
 decision, and CI's `refactor-first` gate checks the outcome mechanically.
 
+**Same exception** for cyclomatic/cognitive complexity, invariant return,
+and duplicated string literal (CG032-CG035) — `scripts/
+check_complexity_ratchet.py` (CI's `complexity` gate) checks these
+mechanically too, independent of craftCov; see CRAFTSMANSHIP.md's "The
+complexity ratchet."
+
 ## Where the mechanical parts live
 
 - `scripts/check_tidy_ratchet.sh` — the pre-push/CI ratchet (commit-message
   pattern check, covers the whole catalog).
 - `scripts/check_refactor_first.py` — the pre-push/CI count-based gate for
-  just the 8 detectable heuristics (see "Refactor First" above).
+  just the 8 craftCov-detectable heuristics (see "Refactor First" above).
+- `scripts/check_complexity_ratchet.py` — the pre-push/CI diff-aware gate
+  for complexity/invariant-return/duplicated-literal (see "The complexity
+  ratchet" above) — independent of craftCov.
 - `scripts/craftcov.py --file <path> [--class <name>]` — what heuristics
   (and how many) are currently present in one file, to work through.
 - `scripts/report_tidy_history.sh` — the periodic exemption-ratio and

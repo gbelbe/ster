@@ -85,6 +85,11 @@ jobs:
           done
 
   # ── 1c. Complexity ratchet (diff-aware) ──────────────────────────────────────
+  # scripts/check_complexity_ratchet.py is now craft-gate's canonical copy
+  # (this repo's own version predates craft-gate's port of it) — see
+  # CRAFTSMANSHIP.md's "The complexity ratchet". Its --path default changed
+  # from "ster" to "." upstream (a whole-repo default makes sense there,
+  # not here), so --path is now explicit rather than relying on it.
   complexity:
     name: Complexity ratchet
     runs-on: ubuntu-latest
@@ -97,11 +102,11 @@ jobs:
 
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
-      - name: Install deps
-        run: uv sync --extra dev
+      - name: uv sync --extra complexity
+        run: uv sync --extra complexity
 
       - name: Complexity ratchet — no function may grow worse past 15
-        run: uv run python scripts/check_complexity_ratchet.py --base "origin/${{ github.base_ref }}"
+        run: uv run python scripts/check_complexity_ratchet.py --path ster --base "origin/${{ github.base_ref }}"
 
   # ── 1d. Tidy First ratchet (diff-aware) ──────────────────────────────────────
   # Text-only check on commit messages — no deps to install, no build. Kept as

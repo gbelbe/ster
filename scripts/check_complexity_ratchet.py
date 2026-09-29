@@ -1,5 +1,13 @@
 """Diff-aware complexity ratchet — cyclomatic and cognitive.
 
+Covers catalog.yaml's high-cyclomatic-complexity, high-cognitive-complexity,
+invariant-return, and duplicated-string-literal entries (CG032-CG035) — the
+mechanical enforcement CRAFTSMANSHIP.md's "The complexity ratchet" section
+documents. These four aren't part of craftCov's own scan (craftcov.py
+--list-detectors won't show them) — they're diff-aware ratchets like
+Refactor First, not a whole-repo report, so they live in their own script
+and their own catalog entries have no `detectors` field.
+
 Fails a change that makes complexity *worse*, while grandfathering functions
 that are already over the threshold:
 
@@ -11,8 +19,8 @@ This blocks: new functions over the threshold, an already-complex function
 made more complex, and a simple function pushed over the threshold. It allows:
 untouched complex functions, and complex functions refactored *down*.
 
-Two further checks mirror the SonarQube rules that this project keeps tripping
-over, so they fail here rather than after a push:
+Two further checks mirror SonarQube rules many teams already gate on, so
+they fail here rather than after a push:
 
     Cognitive complexity (S3776), same ratchet, same threshold. It is a
     different measure from cyclomatic — it charges for *nesting*, so a function
@@ -33,8 +41,11 @@ is evaluated exactly like new code and must meet the threshold on its own,
 not compared against an identically-named entry that happened to live
 somewhere else in the base ref.
 
+Needs the `complexity` extra (`radon`, `cognitive-complexity`) — see
+README's craftCov section for the exact versions this release expects.
+
 Usage:
-    python scripts/check_complexity_ratchet.py [--base origin/main] [--path ster]
+    python scripts/check_complexity_ratchet.py [--base origin/main] [--path .]
 """
 
 from __future__ import annotations
@@ -90,12 +101,44 @@ def _functions(blocks: object) -> list[object]:
     return out
 
 
+def _discover_python_files(root: Path) -> list[Path]:
+    """Every *.py file under root git doesn't ignore, sorted — tracked or
+    not, since this is a "head" scan of the current working tree and a
+    brand-new function in a file you haven't `git add`ed yet is exactly
+    the case this ratchet needs to catch, not skip.
+
+    Not `root.rglob("*.py")`: with `--path` defaulting to `.` (the whole
+    repo, not a pre-scoped source subdirectory the way kai-ster's own
+    `--path ster` happened to be), an unfiltered rglob walks straight into
+    `.venv/`/`node_modules/`/caches and reports hundreds of violations in
+    vendored code that was never this repo's to fix.
+
+    Not plain `git ls-files` either (tracked-only, unlike craftcov.py's own
+    `discover_python_files`, which scans a committed cache/snapshot flow
+    where that's the right call): `--others --exclude-standard` adds every
+    untracked file git *wouldn't* ignore, so a new file still fails the
+    ratchet before its first `git add`. Falls back to a plain rglob outside
+    a git repo.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.py"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        return sorted(root / line for line in out.splitlines() if line)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return sorted(root.rglob("*.py"))
+
+
 def compute_functions(root: Path) -> dict[str, tuple[int, int, int]]:
     """Map ``<relpath>::<qualified function name>`` → (complexity, lineno, endline)."""
     from radon.complexity import cc_visit  # lazy: keeps find_violations import-light
 
     result: dict[str, tuple[int, int, int]] = {}
-    for path in sorted(root.rglob("*.py")):
+    for path in _discover_python_files(root):
         try:
             source = path.read_text(encoding="utf-8")
             blocks = cc_visit(source)
@@ -143,7 +186,7 @@ def compute_cognitive(root: Path) -> dict[str, int]:
     from cognitive_complexity.api import get_cognitive_complexity  # lazy, as above
 
     result: dict[str, int] = {}
-    for path in sorted(root.rglob("*.py")):
+    for path in _discover_python_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, SyntaxError):
@@ -196,7 +239,7 @@ def _encloses(func: ast.AST, stmt: ast.AST) -> bool:
 def compute_invariant_returns(root: Path) -> dict[str, str]:
     """Map ``<relpath>::<qualified function name>`` → the invariantly returned name."""
     result: dict[str, str] = {}
-    for path in sorted(root.rglob("*.py")):
+    for path in _discover_python_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, SyntaxError):
@@ -257,7 +300,7 @@ def compute_duplicate_literals(
     left out entirely — the ratchet only ever cares about repeats.
     """
     result: dict[str, int] = {}
-    for path in sorted(root.rglob("*.py")):
+    for path in _discover_python_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, SyntaxError):
@@ -326,11 +369,31 @@ def _complexity_at_ref(ref: str, path: str) -> dict[str, int]:
     return _measure_at_ref(ref, path)[0]
 
 
+def has_tidy_exempt(base_ref: str) -> bool:
+    """True when a `Tidy-Exempt:` trailer appears anywhere in `base_ref..HEAD`.
+
+    Same bypass, same trailer, as check_tidy_ratchet.sh and
+    check_refactor_first.py — one exemption mechanism for every gate this
+    project ships, not a separate one per script.
+    """
+    out = subprocess.run(
+        ["git", "log", "--format=%B", f"{base_ref}..HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    return any(line.startswith("Tidy-Exempt:") for line in out.splitlines())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main", help="git ref to compare against")
-    parser.add_argument("--path", default="ster", help="source directory to scan")
+    parser.add_argument("--path", default=".", help="source directory to scan")
     args = parser.parse_args(argv)
+
+    if has_tidy_exempt(args.base):
+        print(f"Complexity ratchet: Tidy-Exempt: trailer found in {args.base}..HEAD — skipping.")
+        return 0
 
     root = Path(args.path)
     head_funcs = compute_functions(root)

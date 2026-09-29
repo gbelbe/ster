@@ -113,6 +113,10 @@ to touch *and* are worth watching for while writing new code.
 | CG022 | `collapse-hierarchy` | Speculative Generality | Abstraction or a hook built for a future that hasn't arrived | Collapse it back to what's actually used — this is YAGNI already sitting in the code |
 | CG023 | `replace-inheritance-with-delegation` | Refused Bequest | A subclass uses only a fraction of what it inherits | Prefer composition over the ill-fitting inheritance |
 | CG024 | `consolidate-duplicate-conditional` | Shotgun Surgery (conditional form) | One logical decision is duplicated as near-identical conditionals in several places | Consolidate into one decision point |
+| CG032 | `high-cyclomatic-complexity` | High Cyclomatic Complexity | A function has too many independent linear paths through it to reason about or test exhaustively | Extract cohesive chunks into named helpers, or replace branching with dispatch (polymorphism, a strategy, a registry) |
+| CG033 | `high-cognitive-complexity` | High Cognitive Complexity | A function's nesting and branching make it hard for a human to hold its logic in mind, even when cyclomatic complexity alone looks fine | Flatten nesting with guard clauses, extract nested blocks into named helpers |
+| CG034 | `invariant-return` | Invariant Return | Every return in a function hands back the same never-rebound name, reading as multiple outcomes when it is really one | Collapse to a single exit point, reached by break or fall-through, instead of returning the same name from several places |
+| CG035 | `duplicated-string-literal` | Duplicated String Literal | The same string literal (5+ characters) is repeated 3 or more times in one file | Extract it to a named constant so the values can't silently drift apart |
 <!-- END GENERATED: smell-fix -->
 
 *Comments as a smell* (Fowler, and independently Martin below): a comment
@@ -238,7 +242,7 @@ that the discipline (or an explicit, reviewable exemption) was followed.
 ## Refactor First — a mechanically-enforced instance of the procedure above
 
 For any heuristic craftCov can detect (see the README's craftCov section, or
-`scripts/craftcov.py --list-detectors` — 8 of the 31 entries above as of
+`scripts/craftcov.py --list-detectors` — 8 of the 35 entries above as of
 this writing), the "which tidying, ask the developer" judgment call in step
 3 of the procedure becomes fully mechanical instead:
 
@@ -281,9 +285,46 @@ accurate "before" count for one file). `Tidy-Exempt:` bypasses it the same
 way it bypasses the message-pattern ratchet below — one exemption
 mechanism, not two.
 
-This only covers the 8 mechanically-detectable heuristics. The other 23
-keep the judgment-call procedure above, backed only by the message-pattern
-ratchet below, not this count-based gate.
+This only covers the 8 craftCov-detectable heuristics. Four more (CG032-
+CG035) have their own separate mechanical gate — see "The complexity
+ratchet" below. The remaining 23 keep the judgment-call procedure above,
+backed only by the message-pattern ratchet below, not a count-based gate.
+
+## The complexity ratchet — cyclomatic, cognitive, invariant return, duplicated literal
+
+A second diff-aware gate, independent of craftCov and Refactor First above
+(different tools, different catalog entries — CG032-CG035 — no `detectors`
+field, since that key specifically means "craftcov.py's own scan covers
+this," and these don't). `scripts/check_complexity_ratchet.py`:
+
+- **High Cyclomatic Complexity** (McCabe) and **High Cognitive Complexity**
+  (SonarQube S3776 — a different measure: it charges for *nesting*, so a
+  function radon calls simple can still be over) — same threshold (15),
+  same ratchet rule as below, reported separately since a refactor can fix
+  one without the other.
+- **Invariant Return** (S3516) — every `return` in a function hands back
+  the same never-rebound name, reading as several outcomes when it's
+  really one.
+- **Duplicated String Literal** (S1192) — the same literal (5+ characters)
+  repeated 3+ times in one file, scoped per file rather than per function.
+
+**The ratchet rule**: a function/literal is a violation when its metric
+exceeds the threshold *and* increased versus the base ref (a brand-new
+function has base complexity 0) — blocking a new function over threshold,
+an already-complex function made worse, and a simple function pushed over,
+while allowing untouched complex functions and ones refactored *down*.
+Grandfathered, not retroactive: this is about not making things worse from
+here, the same spirit as Refactor First, not a demand to fix everything
+that already exists.
+
+```bash
+uv sync --extra complexity                                    # radon + cognitive-complexity
+uv run python3 scripts/check_complexity_ratchet.py --base origin/main
+```
+
+Wired into CI as the `complexity` job, PR-only, alongside `tidy` and
+`refactor-first`. `Tidy-Exempt:` bypasses it the same way it bypasses the
+other two — one exemption mechanism for all three gates.
 
 ## Don't let the exemption become the rule
 

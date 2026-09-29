@@ -125,7 +125,7 @@ fi
 # still fail the PR.
 step "Complexity ratchet (vs origin/main)"
 if git rev-parse --verify --quiet origin/main >/dev/null; then
-  uv run python scripts/check_complexity_ratchet.py --base origin/main
+  uv run python scripts/check_complexity_ratchet.py --path ster --base origin/main
   uv run python scripts/check_complexity_ratchet.py --path semanticdiff --base origin/main
   ok "complexity ratchet"
 else

@@ -40,7 +40,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from craftcov import (  # noqa: E402
+from craftcov import (
     aggregate,
     build_detector_index,
     discover_python_files,
@@ -139,7 +139,8 @@ def main() -> int:
     )
     if verify.returncode != 0:
         print(
-            f"⚠ refactor-first gate: '{args.base}' not found locally — skipping (git fetch it first)",
+            f"⚠ refactor-first gate: '{args.base}' not found locally — "
+            "skipping (git fetch it first)",
             file=sys.stderr,
         )
         return 0
@@ -152,7 +153,8 @@ def main() -> int:
 
     if has_tidy_exempt(repo, merge_base, args.head):
         print(
-            f"refactor-first gate: Tidy-Exempt: trailer found in {merge_base[:8]}..{args.head} — skipping."
+            f"refactor-first gate: Tidy-Exempt: trailer found in "
+            f"{merge_base[:8]}..{args.head} — skipping."
         )
         return 0
 
