@@ -162,6 +162,11 @@ const CY_STYLE=[
   // boxed draw — so it goes first, and the shapes stay navigable.
   {selector:'edge.lod-quiet',style:{'label':'','target-arrow-shape':'none'}},
   {selector:'node.lod-quiet',style:{'label':'','width':20,'height':20,'border-width':1}},
+  // A class expansion past _INDIVIDUAL_COMPACT_ABOVE, independent of the global
+  // node-count LOD above: the ring is the point at that size, not any one
+  // member's name. Smaller than .lod-quiet's dot because these already sit
+  // packed edge-to-edge in a ring rather than spread across the whole canvas.
+  {selector:'node.compact',style:{'label':'','width':14,'height':14,'border-width':1}},
   // Whatever you point at is still worth reading. The label is hoisted above the
   // shrunken node rather than centred in it, because at 20px nothing fits inside.
   {selector:'node.lod-reveal',style:{'label':'data(label)','text-valign':'top',
@@ -531,6 +536,54 @@ function toggleEdgeType(t){
   else{hiddenEdgeTypes.add(t);btn?.classList.remove('active');}
   for(const e of cy.edges('[type="'+t+'"]')){if(hiddenEdgeTypes.has(t))e.addClass('hidden');else e.removeClass('hidden');}
 }
+// ── Blunt overlays: every edge, every datatype value node ──────────────────────
+// The per-type filters above (rdf:type, superclasses, inScheme, datatype) stay
+// for picking one relation out of the crowd; these are for when every edge, or
+// every literal value box (string/integer/boolean/...), is the clutter.
+// Turning one back on only restores what no other active filter still wants
+// hidden, the same way the per-class individual toggles already check before
+// un-hiding a shared edge.
+let allEdgesHidden=false;
+function toggleAllEdges(){
+  allEdgesHidden=!allEdgesHidden;
+  for(const e of cy.edges()){
+    if(allEdgesHidden)e.addClass('hidden');
+    else if(!hiddenEdgeTypes.has(e.data('type'))&&!(datatypeNodesHidden&&e.data('type')==='datatypeProperty'))e.removeClass('hidden');
+  }
+  const btn=document.getElementById('ft-hide-edges');
+  if(btn){if(allEdgesHidden)btn.classList.remove('active');else btn.classList.add('active');}
+}
+let datatypeNodesHidden=false;
+function toggleDatatypeNodes(){
+  datatypeNodesHidden=!datatypeNodesHidden;
+  const nodes=cy.nodes('[type="datatype"]');
+  if(datatypeNodesHidden)nodes.addClass('hidden');else nodes.removeClass('hidden');
+  for(const e of cy.edges('[type="datatypeProperty"]')){
+    if(datatypeNodesHidden)e.addClass('hidden');
+    else if(!allEdgesHidden&&!hiddenEdgeTypes.has('datatypeProperty'))e.removeClass('hidden');
+  }
+  const btn=document.getElementById('ft-hide-datatypes');
+  if(btn){if(datatypeNodesHidden)btn.classList.remove('active');else btn.classList.add('active');}
+}
+// toggleAllIndividuals (above) only knows about individuals classIndMap saw at
+// page load — for most ontologies that is none, since a class's individuals
+// normally arrive later through "show individuals" (see toggleClassIndividuals),
+// which is exactly why that legacy button hides itself when classIndMap is
+// empty. This is the toolbar's blunt switch: it snapshots every individual
+// actually on screen at the moment it is clicked, however it got there,
+// instead of relying on a map built once before any expansion happened.
+let individualNodesHidden=false;
+function toggleIndividualNodes(){
+  individualNodesHidden=!individualNodesHidden;
+  const nodes=cy.nodes('[type="individual"]');
+  if(individualNodesHidden)nodes.addClass('hidden');else nodes.removeClass('hidden');
+  for(const e of cy.edges('[type="instanceOf"]')){
+    if(individualNodesHidden)e.addClass('hidden');
+    else if(!allEdgesHidden&&!hiddenEdgeTypes.has('instanceOf'))e.removeClass('hidden');
+  }
+  const btn=document.getElementById('ft-hide-individuals');
+  if(btn){if(individualNodesHidden)btn.classList.remove('active');else btn.classList.add('active');}
+}
 
 // ── Highlight ─────────────────────────────────────────────────────────────────
 let highlighted=null;
@@ -700,10 +753,17 @@ function activateNode(uri){
 // Expansions accumulate: opening a second class keeps the first open, so two can
 // be compared. Clicking an open class puts it away again.
 const _expanded=new Set();
+// Past this many individuals in one expansion, a name on every node stops
+// helping — the ring is the point, not any one member — so they go on small
+// and unlabelled. The label is one tap away (see .lod-reveal, which already
+// overrides this for whatever is selected) and the search box still matches
+// it either way, since it reads data('label') and never the rendered style.
+const _INDIVIDUAL_COMPACT_ABOVE=50;
 function toggleClassIndividuals(node){
   const uri=node.id();
   if(_expanded.has(uri)){
     cy.remove(cy.nodes().filter(n=>n.data('ofClass')===uri));
+    _restoreRoom(uri);
     _expanded.delete(uri);node.data('shownCount',0);_saveLayout();return;
   }
   if(!API_TOKEN)return;
@@ -719,14 +779,23 @@ function toggleClassIndividuals(node){
                   .map(e=>({group:'edges',data:{id:e.id+'@'+uri,source:e.source,target:e.target,type:e.type,label:'',cardinality:''}})),
       ]);
       node.data('shownCount',d.shown);
+      const addedNodes=added.nodes();
+      // Sized before positioning: a compact node is drawn far smaller than a
+      // full individual, so marking it compact first is what lets the ring
+      // (and the room cleared for it below) stay tight instead of planning
+      // for nodes three times the size actually drawn.
+      if(addedNodes.length>_INDIVIDUAL_COMPACT_ABOVE)addedNodes.addClass('compact');
       // Past a handful, the instanceOf spokes stop telling you anything you
       // cannot already see — every member of the disc belongs to the class at
       // its centre — and they cost a line each across the densest part of the
       // picture. The nodes keep their `ofClass`, so dragging the class still
       // carries them and collapsing still finds them.
-      if(added.nodes().length>_RING_EDGES_UP_TO)added.edges().addClass('hidden');
-      _ringAround(node,added.nodes());
-      _settleRing(node,added.nodes());
+      if(addedNodes.length>_RING_EDGES_UP_TO)added.edges().addClass('hidden');
+      let widest=0;
+      for(const m of addedNodes)widest=Math.max(widest,Math.max(m.width(),m.height()));
+      _makeRoomFor(node,addedNodes.length,widest);
+      _ringAround(node,addedNodes);
+      _settleRing(node,addedNodes);
     })
     .catch(err=>{console.debug('Unable to expand class:',err);_expanded.delete(uri);});
 }
@@ -902,6 +971,9 @@ document.getElementById('zoom-fit').addEventListener('click',()=>cy.fit(undefine
 document.getElementById('layout-reset')?.addEventListener('click',_resetLayout);
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
+document.getElementById('ft-hide-individuals')?.addEventListener('click',toggleIndividualNodes);
+document.getElementById('ft-hide-edges')?.addEventListener('click',toggleAllEdges);
+wireHideDatatypesBtn();
 document.getElementById('ft-first-order').addEventListener('click',toggleFirstOrderClasses);
 document.getElementById('ft-second-order').addEventListener('click',toggleSecondOrderClasses);
 // A named function rather than an inline loop, because the containing IIFE is
@@ -919,6 +991,15 @@ function wireEdgeTypeFilters(){
   }
 }
 wireEdgeTypeFilters();
+// Split out for the same reason as wireEdgeTypeFilters above: an unrelated
+// branch inline in the containing function's body is what pushed its
+// cognitive complexity over the ratchet.
+function wireHideDatatypesBtn(){
+  const btn=document.getElementById('ft-hide-datatypes');
+  if(!btn)return;
+  if(cy.nodes('[type="datatype"]').length===0){btn.style.display='none';return;}
+  btn.addEventListener('click',toggleDatatypeNodes);
+}
 const _scBtn=document.getElementById('ft-superclasses');
 if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);
 refreshSuperclassesBtn();
@@ -1082,6 +1163,116 @@ function _settleRing(centre,nodes){
     }
   }
   _saveLayout();
+}
+// Same ring geometry as _ringAround, but only the radius it will finally reach
+// — used to clear space before anything is placed, so the ring never has to
+// fight the rest of the graph for room afterwards.
+function _ringRadius(centreRadius,widest,n){
+  if(!n)return centreRadius;
+  const step=widest*1.05;
+  let placed=0,ring=0,radius=centreRadius;
+  while(placed<n){
+    radius=centreRadius+widest/2+ring*step;
+    const capacity=Math.max(1,Math.floor((2*Math.PI*radius)/step));
+    placed+=Math.min(capacity,n-placed);
+    ring++;
+  }
+  return radius;
+}
+// Whatever already sits closer to the centre than the ring is about to reach
+// gets pushed straight out along its own line from the centre, clear of the
+// ring's outer edge — widening the graph instead of letting the ring buckle to
+// fit whatever gap happened to be there (which is what _settleRing's per-node
+// nudge would otherwise do to the newcomers themselves).
+//
+// Pushed as a whole group, not node by node: an obstacle that is itself an
+// expanded class's ring moves as one rigid disc, keeping its own members'
+// relative positions. Pushing such members individually — each along its own
+// angle from *this* centre, regardless of the others — was what could tear a
+// tidy ring apart into a stray arc stranded far from its own class.
+//
+// A group can be pushed by more than one open expansion at once (two classes
+// sharing a crowded neighbour), so only a member's first push is remembered as
+// the position to come back to, and it is not restored until the last
+// expansion holding it open collapses — see _restoreRoom.
+const _originalPos=new Map();    // nodeId -> {x,y} from before its first push
+const _pusherCount=new Map();    // nodeId -> number of open expansions pushing it
+const _pushedByClass=new Map();  // classUri -> Set(nodeId) this expansion pushed
+const _ROOM_MARGIN=20;
+// The node whose position decides whether/how far a node's group must move:
+// its own class if it is one of that class's shown individuals, itself
+// otherwise. Individuals ring around their class, so the class is what a
+// group's distance-from-*centre* and eventual shift are measured from.
+function _groupAnchor(node){
+  const ofClass=node.data('ofClass');
+  if(!ofClass)return node;
+  const owner=cy.getElementById(ofClass);
+  return owner.length?owner:node;
+}
+// Every node that must move together with *anchor*: its own shown
+// individuals if it is a class currently expanded, or just itself.
+function _groupMembers(anchor){
+  const kin=cy.nodes().filter(n=>n.data('ofClass')===anchor.id());
+  return kin.length?kin.union(anchor):anchor;
+}
+// How far *members* actually reach from *refPos* right now — measured from
+// their real current positions, not re-derived from ring math, so this stays
+// correct even for a group that is not a perfect ring (already nudged by
+// _settleRing, or dragged by hand).
+function _groupRadius(refPos,members){
+  let r=0;
+  for(const m of members.toArray()){
+    const p=m.position();
+    r=Math.max(r,Math.hypot(p.x-refPos.x,p.y-refPos.y)+Math.max(m.width(),m.height())/2);
+  }
+  return r;
+}
+function _makeRoomFor(centre,plannedCount,widest){
+  const cp=centre.position();
+  const centreRadius=Math.max(centre.width(),centre.height())/2;
+  const required=_ringRadius(centreRadius,widest,plannedCount);
+  const pushed=new Set();
+  const handled=new Set([centre.id()]);
+  for(const o of cy.nodes().difference(centre).toArray()){
+    const anchor=_groupAnchor(o);
+    if(handled.has(anchor.id()))continue;
+    handled.add(anchor.id());
+    const members=_groupMembers(anchor);
+    const refPos=anchor.position();
+    const dx=refPos.x-cp.x,dy=refPos.y-cp.y;
+    const dist=Math.hypot(dx,dy);
+    const clearance=required+_groupRadius(refPos,members)+_ROOM_MARGIN;
+    if(dist>=clearance)continue;
+    const angle=dist>1?Math.atan2(dy,dx):Math.random()*2*Math.PI; // NOSONAR - cosmetic tie-break angle, not a security context
+    const shiftX=cp.x+clearance*Math.cos(angle)-refPos.x;
+    const shiftY=cp.y+clearance*Math.sin(angle)-refPos.y;
+    for(const m of members.toArray()){
+      const p=m.position();
+      if(!_originalPos.has(m.id()))_originalPos.set(m.id(),{x:p.x,y:p.y});
+      m.position({x:p.x+shiftX,y:p.y+shiftY});
+      _pusherCount.set(m.id(),(_pusherCount.get(m.id())||0)+1);
+      pushed.add(m.id());
+    }
+  }
+  _pushedByClass.set(centre.id(),pushed);
+}
+// Undoes exactly what _makeRoomFor did for one collapsing class: each node it
+// pushed loses one pusher, and only a node with none left moves back — to the
+// position recorded before the *first* expansion that ever displaced it.
+function _restoreRoom(classUri){
+  const pushed=_pushedByClass.get(classUri);
+  if(!pushed)return;
+  _pushedByClass.delete(classUri);
+  for(const id of pushed){
+    const remaining=(_pusherCount.get(id)||1)-1;
+    if(remaining>0){_pusherCount.set(id,remaining);continue;}
+    _pusherCount.delete(id);
+    const pos=_originalPos.get(id);
+    _originalPos.delete(id);
+    if(!pos)continue;
+    const n=cy.getElementById(id);
+    if(n.length)n.position(pos);
+  }
 }
 function _seedAndSpread(addedNodes,fp,preseeded){
   if(addedNodes.empty()){_saveLayout();return;}
