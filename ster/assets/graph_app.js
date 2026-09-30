@@ -228,12 +228,33 @@ function makeLayout(){
     gravity:60,numIter:1000,packComponents:true,
     nodeDimensionsIncludeLabels:true,nodeSeparation:150};
 }
+// ── WebGL renderer (default; ?webgl=0 opts back out to plain canvas) ───────
+// Cytoscape's WebGL renderer (preview since 3.31, see docs/architecture/
+// graph-view-renderer-swap.md) is a construction-time-only option — nothing
+// in its API lets you flip it on a live `cy` instance — so the "Deactivate
+// WebGL" button below just toggles a URL param and reloads, the same way
+// this page already re-renders from `?q=` rather than mutating in place.
+// showFps mirrors Cytoscape's own on-canvas counter, kept from the original
+// spike so a regression is visible on-canvas, not just suspected.
+//
+// textureOnViewport/hideEdgesOnViewport (bitmap-caching tricks for the plain
+// canvas renderer) are left out under WebGL — they optimise a rendering
+// strategy WebGL doesn't use, and the preview docs don't say they're
+// harmless to pass. Known WebGL-preview limitations, not yet worked around
+// here: dashed/dotted edges (datatypeProperty/instanceOf/inScheme styling)
+// and overlay/underlay effects render as their closest solid-line/no-overlay
+// equivalent instead of erroring. ?webgl=0 is the escape hatch for anyone
+// who hits one of these and needs the exact line styles back meanwhile.
+const _webglOn=new URLSearchParams(location.search).get('webgl')!=='0';
+// Split out purely to keep this branch out of initSterRelationsGraph's own
+// cognitive complexity — see wireWebglToggle below for the fuller reasoning.
+function _webglRendererOpts(){
+  return _webglOn
+    ?{name:'canvas',webgl:true,showFps:true}
+    :{name:'canvas',textureOnViewport:true,hideEdgesOnViewport:true,minZoomedFontSize:8};
+}
 // Create cy without running any layout — positions applied below
-// textureOnViewport / hideEdgesOnViewport keep pan+zoom smooth on big graphs by
-// drawing a cached bitmap instead of re-rendering every element per frame;
-// minZoomedFontSize stops Cytoscape laying out text that is too small to read,
-// which is both the biggest render cost and the worst of the clutter.
-const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:globalThis.devicePixelRatio||1,textureOnViewport:true,hideEdgesOnViewport:true,minZoomedFontSize:8});
+const cy=cytoscape({container:document.getElementById('cy'),elements:buildElements(graphData),style:CY_STYLE,layout:{name:'preset',animate:false},wheelSensitivity:0.3,minZoom:0.05,maxZoom:8,pixelRatio:globalThis.devicePixelRatio||1,renderer:_webglRendererOpts()});
 
 // ── Remembered layout (see ster/graph_layout.py) ───────────────────────────────
 // Positions are kept in the project (.ster/graph-layout.json), read and saved
@@ -969,6 +990,7 @@ document.getElementById('zoom-in').addEventListener('click',()=>zoomBy(1.3));
 // must not throw away an arrangement. Resetting it is its own, explicit button.
 document.getElementById('zoom-fit').addEventListener('click',()=>cy.fit(undefined,30));
 document.getElementById('layout-reset')?.addEventListener('click',_resetLayout);
+wireWebglToggle();
 document.getElementById('zoom-out').addEventListener('click',()=>zoomBy(0.77));
 document.getElementById('ft-individuals').addEventListener('click',toggleAllIndividuals);
 document.getElementById('ft-hide-individuals')?.addEventListener('click',toggleIndividualNodes);
@@ -999,6 +1021,22 @@ function wireHideDatatypesBtn(){
   if(!btn)return;
   if(cy.nodes('[type="datatype"]').length===0){btn.style.display='none';return;}
   btn.addEventListener('click',toggleDatatypeNodes);
+}
+// Same reasoning, same fix, for the WebGL toggle button.
+//
+// See the construction-site comment above `_webglOn` for why the click
+// handler reloads instead of mutating the live `cy` instance. Deleting the
+// param (rather than writing `webgl=1`) when re-activating keeps the URL
+// clean, since "on" is the default the page already renders with.
+function wireWebglToggle(){
+  const btn=document.getElementById('webgl-toggle');
+  if(!btn)return;
+  btn.textContent=_webglOn?'Deactivate WebGL':'Activate WebGL';
+  btn.addEventListener('click',function(){
+    const params=new URLSearchParams(location.search);
+    if(_webglOn)params.set('webgl','0');else params.delete('webgl');
+    location.search=params.toString();
+  });
 }
 const _scBtn=document.getElementById('ft-superclasses');
 if(_scBtn)_scBtn.addEventListener('click',toggleSuperclasses);

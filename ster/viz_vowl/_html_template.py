@@ -46,7 +46,7 @@ body[data-active-view="taxonomy"] #tm-subbar{display:flex}
 #panel-close:hover{background:#e2e8f0;color:#0f172a}
 #stats{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);font-size:11px;color:#64748b;background:#f8fafc;padding:4px 12px;border-radius:20px;border:1px solid #e2e8f0;pointer-events:none}
 #hint{position:fixed;bottom:10px;left:12px;font-size:10px;color:#94a3b8;background:#f8fafc;padding:3px 8px;border-radius:10px;border:1px solid #e2e8f0}
-#zoom-ctrl{position:fixed;bottom:10px;right:12px;display:flex;gap:4px;z-index:10}
+#zoom-ctrl{position:fixed;bottom:10px;right:12px;display:flex;gap:4px;align-items:center;z-index:10}
 #zoom-ctrl button{background:#f8fafc;border:1px solid #e2e8f0;color:#475569;cursor:pointer;font-size:14px;min-width:28px;height:28px;border-radius:4px;line-height:1;padding:0 6px}
 #zoom-ctrl button:hover{background:#e2e8f0}
 /* Shown from first paint and taken down once the first layout settles. A large
@@ -176,7 +176,7 @@ __OFFLINE_BANNER__
 <div id="stats" class="view-relations"></div>
 <div id="hint" class="view-relations">drag\xb7pan\xb7scroll\u2192zoom \xb7 f: layout \xb7 click: details \xb7 esc: close<span style="color:#cbd5e1"> │ </span><button class="ftbtn active" id="ft-edge-labels">Hide edge labels</button><button class="ftbtn active" id="ft-node-labels">Hide node labels</button><button class="ftbtn active" id="ft-hide-edges">Hide edges</button><button class="ftbtn active" id="ft-hide-individuals">Hide individuals</button><button class="ftbtn active" id="ft-hide-datatypes">Hide datatypes</button>__SHOW_ALL_BTN__<span id="ft-legacy" style="display:none"><button class="ftbtn active" id="ft-individuals">individuals</button><button class="ftbtn active" id="ft-first-order">1st order</button><button class="ftbtn active" id="ft-second-order">2nd order</button><button class="ftbtn active" id="ft-instanceOf">rdf:type</button><button class="ftbtn active" id="ft-superclasses">superclasses</button><button class="ftbtn active" id="ft-inScheme">inScheme</button><button class="ftbtn active" id="ft-datatypeProperty">datatype</button></span></div>
 <button id="explore-btn" class="view-relations">&#8857; explore relations</button><button id="individuals-btn" class="view-relations">&#8853; show individuals</button>
-<div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button><button id="layout-reset" title="Forget the remembered positions and lay the graph out afresh">Reset layout</button></div>
+<div id="zoom-ctrl" class="view-relations"><button id="zoom-in" title="Zoom in (+)">+</button><button id="zoom-out" title="Zoom out (−)">&#8722;</button><button id="zoom-fit" title="Fit all (f)">Recenter</button><button id="layout-reset" title="Forget the remembered positions and lay the graph out afresh">Reset layout</button><button id="webgl-toggle" title="Cytoscape's WebGL renderer preview (3.31+) — on by default; see docs/architecture/graph-view-renderer-swap.md">Deactivate WebGL</button></div>
 <div id="tip" class="view-relations"></div>
 __CY_SCRIPT__
 __LAYOUT_BASE_SCRIPT__
