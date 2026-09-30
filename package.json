@@ -12,7 +12,7 @@
     "check": "node --check ster/assets/graph_app.js && node --check ster/assets/taxonomy_app.js && node --check ster/assets/timeline_app.js && node --check kai-extension/popup.js"
   },
   "overrides": {
-    "brace-expansion": "5.0.9"
+    "brace-expansion": "5.0.12"
   },
   "dependencies": {
     "cose-base": "2.2.0",
