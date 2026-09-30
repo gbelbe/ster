@@ -402,7 +402,16 @@ this gate.
 **90% is kai-ster's own number, not a mandated one** — CRAFTSMANSHIP.md
 ships the pattern; the threshold is yours to set per repo.
 
-## Mutation ratchet — coverage measures execution, not assertion
+**Embed it in an existing coverage-producing job when you have one — don't
+duplicate the test run.** `templates/ci-job.yml`'s `patch-coverage` job is
+a full standalone job because it has to assume nothing else exists; but if
+your repo already has a job running `pytest --cov ... --cov-report=xml`
+(a lint-and-test job, a version-matrix job), add the diff-cover step to
+*that* job instead. A separate job means a second full test run just to
+get a second `coverage.xml` — real CI time for no new information. Every
+consumer this gate has actually been wired into so far needed this: two
+had an existing coverage-producing job (the step went there, no second
+job), one had none (the standalone job was the right shape as-is).
 
 Patch coverage answers "did a test run this line?" A test with no
 assertion, or one asserting the wrong thing, still counts as covering the
@@ -420,12 +429,20 @@ uv run mutmut run                                              # generates + run
 uv run python3 scripts/check_mutation_ratchet.py --base origin/main --threshold 80
 ```
 
-**Optional, not one of the four default gates** — mutation testing reruns
-your whole test suite once per mutant, which is a different cost order
-than everything above; see `templates/mutation-ratchet-job.yml` (not
-`templates/ci-job.yml`) and DESIGN.md's "Mutation ratchet" for the full
-rationale, including why this checks a flat floor on the current tree
-rather than a base-vs-head comparison like the complexity ratchet.
+**One of the five default gates (`templates/ci-job.yml`), but a verified
+no-op until you opt in.** Mutation testing reruns your whole test suite
+once per mutant — a different cost order than everything above — so the
+CI job's first step checks for a `[tool.mutmut]` (or `setup.cfg`'s
+`[mutmut]`) section and skips every remaining step when it's absent.
+Confirmed against a real mutmut run, not assumed: with no config, `mutmut
+run` either guesses a source directory from a common layout and mutates it
+without asking, or crashes outright — neither is acceptable to run
+unannounced on every repo that adopts craft-gate, hence the explicit
+config check rather than trusting mutmut's own guessing. Add
+`[tool.mutmut]` with your `source_paths` to activate it for real. See
+DESIGN.md's "Mutation ratchet" for the full rationale, including why this
+checks a flat floor on the current tree rather than a base-vs-head
+comparison like the complexity ratchet.
 
 **A genuinely equivalent mutant** (code where no test *could* tell the
 difference because the behavior really is identical) gets mutmut's own

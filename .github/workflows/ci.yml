@@ -110,6 +110,56 @@ jobs:
       - name: Complexity ratchet — no function may grow worse past 15
         run: uv run python scripts/check_complexity_ratchet.py --path ster --base "origin/${{ github.base_ref }}"
 
+  # scripts/check_mutation_ratchet.py -- craft-gate's fifth default gate,
+  # on by default but a verified no-op without a [tool.mutmut] section (see
+  # its first step) -- not yet configured here, so this currently just
+  # confirms it stays a no-op every PR. Add [tool.mutmut] with
+  # source_paths = ["ster"] to actually activate it; see CRAFTSMANSHIP.md's
+  # "Mutation ratchet" before doing that, since it reruns the whole test
+  # suite once per mutant.
+  mutation-ratchet:
+    name: Mutation ratchet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && !endsWith(github.actor, '[bot]')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # need the base branch for the diff
+
+      - name: Check for a [tool.mutmut] / [mutmut] config (this repo's opt-in)
+        id: configured
+        run: |
+          if grep -qE '^\[tool\.mutmut\]' pyproject.toml 2>/dev/null \
+             || grep -qE '^\[mutmut\]' setup.cfg 2>/dev/null; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+            echo "No [tool.mutmut] config found — skipping (see CRAFTSMANSHIP.md's 'Mutation ratchet' to opt in)."
+          fi
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        if: steps.configured.outputs.yes == 'true'
+
+      - name: uv sync --extra mutation --extra dev
+        if: steps.configured.outputs.yes == 'true'
+        run: uv sync --extra mutation --extra dev
+
+      - name: Cache mutmut results
+        if: steps.configured.outputs.yes == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants
+          key: mutmut-${{ runner.os }}-${{ hashFiles('**/*.py') }}
+          restore-keys: mutmut-${{ runner.os }}-
+
+      - name: mutmut run
+        if: steps.configured.outputs.yes == 'true'
+        run: uv run mutmut run
+
+      - name: "Mutation ratchet: touched functions' mutation score"
+        if: steps.configured.outputs.yes == 'true'
+        run: uv run python3 scripts/check_mutation_ratchet.py --base "origin/${{ github.base_ref }}" --threshold 80
+
   # ── 1d. Tidy First ratchet (diff-aware) ──────────────────────────────────────
   # Text-only check on commit messages — no deps to install, no build. Kept as
   # its own job (not folded into 'checks') for the same reason as complexity:
