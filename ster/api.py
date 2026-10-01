@@ -245,6 +245,25 @@ class SSEBroadcaster:
 # ── App factory ───────────────────────────────────────────────────────────────
 
 
+def _labelled_things_query(things: Any) -> str:
+    """SELECT each of *things* with its label, or "" when there is none to ask about.
+
+    Shared by the focused map and timeline queries: they differ only in which
+    IRIs *focus* reaches, never in how those IRIs are asked for.
+    """
+    if not things:
+        return ""
+    values = " ".join(f"<{uri}>" for uri in things)
+    return (
+        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\n"
+        "SELECT DISTINCT ?thing ?name\n"
+        "WHERE {\n"
+        f"  VALUES ?thing {{ {values} }}\n"
+        "  OPTIONAL { ?thing rdfs:label ?name }\n"
+        "}"
+    )
+
+
 # Starter query for GET /map when none is supplied: anything with WGS84
 # coordinates, in any vocabulary.
 # Used when the map is opened without a query of its own — the TUI's "open map"
@@ -279,17 +298,7 @@ def _focused_map_query(taxonomy: Any, focus: str) -> str:
 
     graph = _graph_for_locate(taxonomy)
     reachable = located_from(graph, rdflib.URIRef(focus))
-    if not reachable:
-        return ""
-    values = " ".join(f"<{uri}>" for uri in reachable)
-    return (
-        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\n"
-        "SELECT DISTINCT ?thing ?name\n"
-        "WHERE {\n"
-        f"  VALUES ?thing {{ {values} }}\n"
-        "  OPTIONAL { ?thing rdfs:label ?name }\n"
-        "}"
-    )
+    return _labelled_things_query(reachable)
 
 
 def _focused_timeline_query(taxonomy: Any, focus: str) -> str:
@@ -303,17 +312,7 @@ def _focused_timeline_query(taxonomy: Any, focus: str) -> str:
 
     graph = _graph_for_locate(taxonomy)
     reachable = dated_from(graph, rdflib.URIRef(focus))
-    if not reachable:
-        return ""
-    values = " ".join(f"<{uri}>" for uri in reachable)
-    return (
-        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\n"
-        "SELECT DISTINCT ?thing ?name\n"
-        "WHERE {\n"
-        f"  VALUES ?thing {{ {values} }}\n"
-        "  OPTIONAL { ?thing rdfs:label ?name }\n"
-        "}"
-    )
+    return _labelled_things_query(reachable)
 
 
 # The shapes /timeline's after/before may take — a year, a year-month, a date,
@@ -1064,8 +1063,8 @@ def _register_mutation_routes(
             body.query,
             body.view,
             str(request.base_url),
-            body.after,
-            body.before,
+            after=body.after,
+            before=body.before,
         )
 
     @app.get(
@@ -1511,7 +1510,12 @@ def _register_mcp(
         The protocol logic lives in :mod:`ster.mcp_server`; this route only does
         auth, JSON decoding and the notification/response distinction.
         """
-        from .mcp_server import PARSE_ERROR, handle_message, origin_allowed  # noqa: PLC0415
+        from .mcp_server import (  # noqa: PLC0415
+            PARSE_ERROR,
+            CallContext,
+            handle_message,
+            origin_allowed,
+        )
 
         # MCP spec: servers MUST validate Origin, or a page the user visits could
         # script requests against their local ster server (DNS rebinding).
@@ -1542,10 +1546,12 @@ def _register_mcp(
             handle_message,
             message,
             _tax(),
-            _st.get("selection"),
-            base_url=base_url,
-            api_post=_in_process_api(app, token, base_url),
-            open_browser=mcp_views.open_in_browser if _caller_is_local(request) else None,
+            call=CallContext(
+                selection=_st.get("selection"),
+                base_url=base_url,
+                api_post=_in_process_api(app, token, base_url),
+                open_browser=mcp_views.open_in_browser if _caller_is_local(request) else None,
+            ),
         )
         if reply is None:  # a notification takes no response body
             return Response(status_code=202)

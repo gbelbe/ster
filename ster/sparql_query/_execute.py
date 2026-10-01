@@ -109,7 +109,9 @@ def _fmt_oxigraph_term(term: object) -> str:
     return getattr(term, "value", None) or str(term)
 
 
-def run_query_on_taxonomy(taxonomy: object, sparql_text: str) -> QueryResult:
+def run_query_on_taxonomy(
+    taxonomy: object, sparql_text: str, timeout: float | None = None
+) -> QueryResult:
     """Execute *sparql_text* against the session's model.
 
     The one entry point both transports use — ``POST /api/sparql_query`` and the MCP
@@ -120,6 +122,11 @@ def run_query_on_taxonomy(taxonomy: object, sparql_text: str) -> QueryResult:
     already a core dependency; rdflib when the native engine is missing, which
     returns the same rows from the same graph, only slower. The choice is made
     here and nowhere else, so a caller never has to know which engine answered.
+
+    With *timeout* (seconds) the query runs in a killable child process
+    (:mod:`._sandbox`) and comes back ``timed_out`` past the deadline. Without
+    it — the map, the TUI, the REST page — it runs in-process, as before. The
+    rdflib fallback has no deadline: it is only reached without pyoxigraph.
     """
     if not sparql_text.strip():
         return QueryResult(columns=[], rows=[], error="Empty query.")
@@ -129,6 +136,15 @@ def run_query_on_taxonomy(taxonomy: object, sparql_text: str) -> QueryResult:
     store = full_graph_oxigraph(taxonomy)  # type: ignore[arg-type]
     if store is None:
         return run_query_on_graph(full_graph_rdflib(taxonomy), sparql_text)  # type: ignore[arg-type]
+    if timeout is not None:
+        from ._sandbox import run_with_timeout  # noqa: PLC0415
+
+        try:
+            return run_with_timeout(store, sparql_text, timeout)
+        # No child process available (a locked-down host): answering without a
+        # deadline beats not answering, and the trace says it happened.
+        except (OSError, RuntimeError) as exc:
+            _trace(f"sparql sandbox unavailable, running in-process: {exc}")
     try:
         t0 = time.time()
         raw = store.query(sparql_text)  # type: ignore[attr-defined]

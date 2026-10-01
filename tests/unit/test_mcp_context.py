@@ -73,8 +73,8 @@ def zoo() -> Taxonomy:
 def test_get_overview_reports_counts_and_base_uri(zoo):
     out = mc.overview(zoo)
     assert out["ontology_uri"] == "https://example.org/zoo"
-    assert out["counts"]["concepts"] == 4
-    assert out["counts"]["classes"] == 2
+    assert out["counts"]["concepts"] == len(zoo.concepts)
+    assert out["counts"]["classes"] == len(zoo.owl_classes)
     assert out["counts"]["individuals"] == 1
 
 
@@ -419,3 +419,62 @@ def test_timeline_limit_truncates_and_says_it():
     payload = mc.timeline(_dated_taxonomy(), limit=1)
     assert payload["truncated"] is False
     assert len(payload["items"]) == 1
+
+
+# ── run_sparql row cap ────────────────────────────────────────────────────────
+
+
+def _many_classes(tmp_path, n: int) -> Taxonomy:
+    lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> ."]
+    lines += [f"<https://example.org/c#C{i}> a owl:Class ." for i in range(n)]
+    ttl = tmp_path / "many.ttl"
+    ttl.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return store.load(ttl)
+
+
+_ALL_CLASSES = "SELECT ?s WHERE { ?s a <http://www.w3.org/2002/07/owl#Class> }"
+
+
+_PAGE = 5  # a cap smaller than the result, to force a cut
+_MATCHES = 12  # more rows than _PAGE
+
+
+def test_run_sparql_caps_rows_but_reports_the_full_count(tmp_path):
+    """An agent gets a bounded page, yet still learns how many rows matched."""
+    out = mc.run_sparql(_many_classes(tmp_path, _MATCHES), _ALL_CLASSES, limit=_PAGE)
+
+    assert len(out["rows"]) == _PAGE
+    assert out["row_count"] == _MATCHES
+    assert out["truncated"] is True
+    assert f"{_MATCHES} rows matched" in out["truncation_hint"]
+
+
+def test_run_sparql_under_the_cap_is_not_flagged_truncated(tmp_path):
+    fits = _PAGE - 2
+    out = mc.run_sparql(_many_classes(tmp_path, fits), _ALL_CLASSES, limit=_PAGE)
+
+    assert len(out["rows"]) == fits
+    assert "truncated" not in out
+    assert "truncation_hint" not in out
+
+
+def test_run_sparql_defaults_to_the_documented_cap(tmp_path):
+    out = mc.run_sparql(_many_classes(tmp_path, mc.SPARQL_ROW_LIMIT + 1), _ALL_CLASSES)
+
+    assert len(out["rows"]) == mc.SPARQL_ROW_LIMIT
+    assert out["row_count"] == mc.SPARQL_ROW_LIMIT + 1
+
+
+def test_run_sparql_clamps_an_out_of_range_limit(tmp_path):
+    tax = _many_classes(tmp_path, 4)
+
+    assert len(mc.run_sparql(tax, _ALL_CLASSES, limit=0)["rows"]) == 1
+    assert "truncated" not in mc.run_sparql(tax, _ALL_CLASSES, limit=10**9)
+
+
+def test_sparql_payload_without_limit_returns_every_row(tmp_path):
+    """The REST endpoint's own page shows the whole table: no cap, no new keys."""
+    out = mc.sparql_payload(_many_classes(tmp_path, mc.SPARQL_ROW_LIMIT + 5), _ALL_CLASSES)
+
+    assert len(out["rows"]) == mc.SPARQL_ROW_LIMIT + 5
+    assert "truncated" not in out

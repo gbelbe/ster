@@ -19,6 +19,7 @@ class QueryResult:
     rows: list[list[str]]  # every cell is a plain string
     error: str = ""
     query_type: str = "SELECT"  # SELECT | ASK | CONSTRUCT | DESCRIBE
+    timed_out: bool = False  # stopped by a deadline (see _sandbox), not a bad query
 
 
 @dataclass

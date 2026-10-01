@@ -72,7 +72,6 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
-INTERNAL_ERROR = -32603
 
 _STRING = {"type": "string"}
 _ARG_QUERY: Final = "query"
@@ -193,8 +192,12 @@ TOOLS: list[dict[str, Any]] = [
             "Use this for questions the other tools cannot answer directly, such as counting "
             "or filtering by an arbitrary predicate.\n"
             "Call get_vocabulary first and build the query from the predicates it reports — "
-            "do not assume a vocabulary. Always include a LIMIT: results are not capped and "
-            "there is no timeout. If a query returns zero rows, re-check the vocabulary "
+            "do not assume a vocabulary. At most 'limit' rows come back (default 200); "
+            "'row_count' is always the full count and 'truncated' "
+            "says when rows were cut — then aggregate (COUNT, GROUP BY), filter or add a "
+            "LIMIT rather than listing. A query is stopped after 10 seconds and returns a "
+            "'timeout' error: avoid unbounded joins and paths. If a "
+            "query returns zero rows, re-check the vocabulary "
             "rather than guessing again; drop one triple pattern at a time to find the "
             "empty one. Avoid naming a variable after a write keyword (?add, ?copy, ?create, "
             "?move): the read-only guard matches those words and will refuse the query."
@@ -219,6 +222,15 @@ TOOLS: list[dict[str, Any]] = [
             "open": {
                 "type": "boolean",
                 _DESC: "false to get the link without opening a browser (default true).",
+            },
+            _ARG_LIMIT: {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": ctx.SPARQL_ROW_LIMIT_MAX,
+                _DESC: (
+                    f"Most rows to return (default {ctx.SPARQL_ROW_LIMIT}, at most "
+                    f"{ctx.SPARQL_ROW_LIMIT_MAX}). Does not change row_count."
+                ),
             },
             **_DATE_RANGE_ARGS,
         },
@@ -307,10 +319,11 @@ def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
     payload = ctx.run_sparql(
         tax,
         args[_ARG_QUERY],
-        args.get("view"),
-        call.base_url,
-        args.get(_ARG_AFTER),
-        args.get(_ARG_BEFORE),
+        view=args.get("view"),
+        base=call.base_url,
+        after=args.get(_ARG_AFTER),
+        before=args.get(_ARG_BEFORE),
+        limit=int(args.get(_ARG_LIMIT, ctx.SPARQL_ROW_LIMIT)),
     )
     # Opening is an MCP-transport concern (whether *this caller* is on ster's own
     # machine), so it lives here rather than in the shared sparql_payload/annotate
@@ -466,14 +479,13 @@ def handle_message(
     taxonomy: Taxonomy,
     selection: str | None = None,
     *,
-    base_url: str | None = None,
-    api_post: ApiPost | None = None,
-    open_browser: Callable[[str], bool] | None = None,
+    call: CallContext | None = None,
 ) -> dict[str, Any] | None:
     """Turn one decoded JSON-RPC *message* into its reply.
 
-    *base_url* is the address the request arrived on, for links in the reply;
-    *api_post* and *open_browser* are what ``open_view`` needs (see CallContext).
+    *call* carries what the transport knows about this call — the address it
+    arrived on, and what ``open_view`` needs (see CallContext). Without it (tests,
+    the TUI) the call knows only *selection*.
 
     Returns None for notifications (no ``id``), which take no reply — the caller
     should answer with an empty HTTP 202.
@@ -498,5 +510,4 @@ def handle_message(
         params = {}
     if not isinstance(params, dict):
         return _err(msg_id, INVALID_PARAMS, "params must be an object.")
-    call = CallContext(selection, base_url, api_post, open_browser)
-    return _ok(msg_id, handler(params, taxonomy, call))
+    return _ok(msg_id, handler(params, taxonomy, call or CallContext(selection)))

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from functools import lru_cache
-from typing import Any, Final
+from typing import Any, Final, TypedDict, Unpack
 
 from .model import Taxonomy, is_builtin_uri
 
@@ -395,13 +395,37 @@ def is_read_only_sparql(query: str) -> bool:
     return not any(re.search(rf"\b{kw}\b", stripped, flags=re.IGNORECASE) for kw in _WRITE_KEYWORDS)
 
 
+# How many rows run_sparql hands an agent by default, and the most it may ask
+# for. Every row lands in the model's context window: an unbounded SELECT over
+# a real export (tens of thousands of rows) floods it, so the agent is given a
+# page and told the total instead — enough to see it should aggregate.
+SPARQL_ROW_LIMIT: Final = 200
+SPARQL_ROW_LIMIT_MAX: Final = 1000
+# How long an agent's query may run. A normal query on a real export answers in
+# milliseconds; this is a thousand times that, so only a runaway join reaches it,
+# and the agent gets an error it can act on instead of a server that hangs.
+SPARQL_TIMEOUT_S: Final = 10.0
+
+
+class PayloadOptions(TypedDict, total=False):
+    """How a SPARQL answer is bounded: the timeline's dates, the row cap, the deadline.
+
+    A parameter object so each new bound lands here, typed and named, rather
+    than as one more positional every caller has to place in the right slot.
+    """
+
+    after: str | None
+    before: str | None
+    limit: int | None
+    timeout: float | None
+
+
 def sparql_payload(
     taxonomy: Taxonomy,
     query: str,
     view: str | None = None,
     base: str | None = None,
-    after: str | None = None,
-    before: str | None = None,
+    **options: Unpack[PayloadOptions],
 ) -> dict[str, Any]:
     """Run a read-only SPARQL query and shape the answer for the wire.
 
@@ -410,6 +434,13 @@ def sparql_payload(
     place where behaviour lives. Anything that should hold for one — the
     read-only guard, and whatever access control is layered on later — holds for
     the other by construction rather than by being remembered twice.
+
+    *limit* caps the rows returned, not the rows computed: ``row_count`` stays
+    the full count and any view is built from the full result. ``None`` (the
+    REST endpoint, whose own page shows the table) returns every row.
+
+    *timeout* (seconds) runs the query where it can be stopped; past it the
+    answer is a ``timeout`` error. ``None`` runs it in-process, without a deadline.
     """
     if not is_read_only_sparql(query):
         return {"error": "read_only", "message": "This server accepts SELECT/ASK queries only."}
@@ -417,32 +448,52 @@ def sparql_payload(
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
     from .sparql_query import run_query_on_taxonomy  # noqa: PLC0415
 
-    result = run_query_on_taxonomy(taxonomy, query)
+    result = run_query_on_taxonomy(taxonomy, query, options.get("timeout"))
     if result.error:
-        return {"error": "query_error", "message": result.error}
-    payload = {
+        return {"error": "timeout" if result.timed_out else "query_error", "message": result.error}
+    payload: dict[str, Any] = {
         "columns": result.columns,
         "rows": result.rows,
         "row_count": len(result.rows),
         "query_type": result.query_type,
     }
+    limit = options.get("limit")
+    if limit is not None:
+        _cap_rows(payload, limit)
     # *view* is handled here rather than in either caller, for the reason this
     # function exists: a protocol is a way in, not a place where behaviour
     # lives. Putting it in the MCP tool alone would have given the agent a
     # capability the REST endpoint does not have.
     from .view_links import DateRange, annotate  # noqa: PLC0415
 
-    return annotate(payload, taxonomy, result, query, view, base, DateRange(after, before))
+    dates = DateRange(options.get("after"), options.get("before"))
+    return annotate(payload, taxonomy, result, query, view, base, dates)
 
 
-def run_sparql(
-    taxonomy: Taxonomy,
-    query: str,
-    view: str | None = None,
-    base: str | None = None,
-    after: str | None = None,
-    before: str | None = None,
-) -> dict[str, Any]:
+def _cap_rows(payload: dict[str, Any], limit: int) -> None:
+    """Keep the first *limit* rows (clamped to 1..SPARQL_ROW_LIMIT_MAX) and say so."""
+    limit = max(1, min(limit, SPARQL_ROW_LIMIT_MAX))
+    total = payload["row_count"]
+    # Keys appear only when rows were cut, so an answer that fits is identical
+    # to the REST endpoint's — the two transports must keep agreeing.
+    if total > limit:
+        payload["truncated"] = True
+        payload["rows"] = payload["rows"][:limit]
+        payload["truncation_hint"] = (
+            f"{total} rows matched; only the first {limit} are returned. Narrow the "
+            "query with filters, or aggregate (COUNT, GROUP BY) instead of listing — "
+            f"or pass a larger limit (at most {SPARQL_ROW_LIMIT_MAX})."
+        )
+
+
+class SparqlOptions(PayloadOptions, total=False):
+    """Everything about a run_sparql call but the taxonomy and the query."""
+
+    view: str | None
+    base: str | None
+
+
+def run_sparql(taxonomy: Taxonomy, query: str, **options: Unpack[SparqlOptions]) -> dict[str, Any]:
     """MCP's name for :func:`sparql_payload` — kept so the tool schema is stable.
 
     *view* is advisory: the rows come back whether or not a map or graph can be
@@ -453,8 +504,15 @@ def run_sparql(
     entities is still what decides *which* entities are on it; these decide
     which of their moments are, the distinction :func:`ster.time_shapes.timeline_items`
     exists to make.
+
+    *limit* defaults to SPARQL_ROW_LIMIT: an agent always gets a bounded answer,
+    with ``truncated`` and the full ``row_count`` telling it when there is more.
+    *timeout* defaults to SPARQL_TIMEOUT_S, for the same reason: an agent's query
+    must not be able to hold the server.
     """
-    return sparql_payload(taxonomy, query, view, base, after, before)
+    defaults = SparqlOptions(limit=SPARQL_ROW_LIMIT, timeout=SPARQL_TIMEOUT_S)
+    with_default: SparqlOptions = {**defaults, **options}
+    return sparql_payload(taxonomy, query, **with_default)
 
 
 _TIMELINE_ITEM_LIMIT = 200

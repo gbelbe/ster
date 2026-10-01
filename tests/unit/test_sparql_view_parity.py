@@ -44,7 +44,7 @@ def test_the_shared_function_is_where_view_is_handled():
     assert "view" in inspect.signature(mcp_context.sparql_payload).parameters
     body = inspect.getsource(mcp_context.run_sparql)
 
-    assert "sparql_payload(taxonomy, query, view, base, after, before)" in body
+    assert "sparql_payload(taxonomy, query, **" in body
     assert "annotate" not in body, "the alias must not grow logic of its own"
 
 

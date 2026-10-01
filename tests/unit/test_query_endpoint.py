@@ -67,9 +67,10 @@ def _query(client, sparql, **kw):
 def test_a_select_returns_columns_and_rows(client):
     body = _query(client, SELECT_CLASSES).json()
 
+    expected = {E + "Shop", E + "Paint"}
     assert body["columns"] == ["s"]
-    assert body["row_count"] == 2
-    assert {r[0] for r in body["rows"]} == {E + "Shop", E + "Paint"}
+    assert body["row_count"] == len(expected)
+    assert {r[0] for r in body["rows"]} == expected
 
 
 def test_an_ask_returns_a_boolean(client):
@@ -138,6 +139,10 @@ def test_the_endpoint_and_the_mcp_tool_agree(client):
     ).json()
     via_mcp = json.loads(mcp["result"]["content"][0]["text"])
 
+    # Same answer, compared as a set of rows: without ORDER BY, SPARQL leaves the
+    # order unspecified, and the MCP tool runs in a sandboxed copy of the graph
+    # (see ster.sparql_query._sandbox) whose internal order may differ.
+    assert sorted(via_api.pop("rows")) == sorted(via_mcp.pop("rows"))
     assert via_api == via_mcp
 
 

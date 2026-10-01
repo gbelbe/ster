@@ -108,9 +108,10 @@ def test_notification_gets_no_reply(zoo):
 
 
 def test_unknown_method_returns_method_not_found(zoo):
-    reply = ms.handle_message({"jsonrpc": "2.0", "id": 7, "method": "nope"}, zoo)
+    request_id = 7
+    reply = ms.handle_message({"jsonrpc": "2.0", "id": request_id, "method": "nope"}, zoo)
     assert reply["error"]["code"] == ms.METHOD_NOT_FOUND
-    assert reply["id"] == 7
+    assert reply["id"] == request_id
 
 
 def test_non_object_message_is_an_invalid_request(zoo):
@@ -201,7 +202,7 @@ def test_every_tool_declares_a_description_and_schema():
 
 def test_call_get_overview_returns_counts(zoo):
     payload, _ = _call(zoo, "get_overview")
-    assert payload["counts"]["concepts"] == 2
+    assert payload["counts"]["concepts"] == len(zoo.concepts)
 
 
 def test_call_get_entity_returns_the_entity(zoo):
@@ -234,6 +235,23 @@ def test_call_missing_required_argument_reports_it(zoo):
     payload, result = _call(zoo, "get_entity", {})
     assert result["isError"] is True
     assert payload["argument"] == "uri"
+
+
+def test_call_run_sparql_passes_limit_through(zoo):
+    payload, _ = _call(zoo, "run_sparql", {"query": "SELECT ?s WHERE { ?s ?p ?o }", "limit": 1})
+    assert len(payload["rows"]) == 1
+    assert payload["truncated"] is True
+    assert payload["row_count"] > 1
+
+
+def test_run_sparql_schema_advertises_the_limit():
+    schema = next(t for t in ms.TOOLS if t["name"] == "run_sparql")["inputSchema"]
+    assert schema["properties"]["limit"]["maximum"] == ms.ctx.SPARQL_ROW_LIMIT_MAX
+    # The description spells the default out (an f-string there trips the SQL
+    # lint): keep it in step with the constant.
+    desc = next(t for t in ms.TOOLS if t["name"] == "run_sparql")["description"]
+    assert f"(default {ms.ctx.SPARQL_ROW_LIMIT})" in desc
+    assert f"after {ms.ctx.SPARQL_TIMEOUT_S:g} seconds" in desc
 
 
 def test_call_run_sparql_refuses_updates(zoo):
