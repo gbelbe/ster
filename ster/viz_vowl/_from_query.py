@@ -38,6 +38,7 @@ _LIT_LABEL: Final = "label"
 _LIT_NODES: Final = "nodes"
 _LIT_EDGES: Final = "edges"
 _LIT_LAYOUT: Final = "layout"
+_TRIPLE: Final = 3  # subject, predicate, object
 
 _CLASS_TYPES = frozenset(
     {
@@ -110,8 +111,17 @@ def graph_from_triples(
         for uri in sorted(subjects)
     ]
     eid = itertools.count()
+    # The edge says which relation it is: a subgraph of unlabelled arrows asks
+    # the reader to guess what joins "a project" to "a component". subClassOf
+    # keeps its silent styling, as on the model walk.
     edges = [
-        {"id": f"q{next(eid)}", "source": s, "target": t, "type": kind, _LIT_LABEL: ""}
+        {
+            "id": f"q{next(eid)}",
+            "source": s,
+            "target": t,
+            "type": kind,
+            _LIT_LABEL: "" if kind == "subClassOf" else kind,
+        }
         for s, t, kind in links
         if s in subjects and t in subjects
     ]
@@ -146,12 +156,65 @@ def _name_from_model(graph: dict, taxonomy: Any) -> None:
     thought to ask. Only nodes still showing their local name are touched: a
     label the query *did* return is the one it meant.
     """
+    unnamed = []
     for node in graph[_LIT_NODES]:
         if node[_LIT_LABEL] != _local(node["id"]):
             continue  # the query supplied a name; keep it
         label = _model_label(taxonomy, node["id"])
         if label:
             node[_LIT_LABEL] = label
+        else:
+            unnamed.append(node)
+    _describe_from_graph(graph[_LIT_NODES], unnamed, taxonomy)
+
+
+# Above this many nodes the extra lookup is skipped: a VALUES clause that long
+# costs more than the names are worth, and the page would draw dots anyway.
+_DESCRIBE_AT_MOST: Final = 2000
+
+_DESCRIBE_QUERY: Final = (
+    "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "  # NOSONAR - prefix IRI
+    "PREFIX skos: <http://www.w3.org/2004/02/skos/core#> "  # NOSONAR - prefix IRI
+    "PREFIX owl: <http://www.w3.org/2002/07/owl#> "  # NOSONAR - prefix IRI
+    "SELECT ?s ?name ?kind WHERE {{ VALUES ?s {{ {values} }} "
+    "OPTIONAL {{ ?s rdfs:label|skos:prefLabel ?name }} "
+    "OPTIONAL {{ ?s a ?type . FILTER(?type NOT IN (owl:NamedIndividual, owl:Thing)) "
+    "OPTIONAL {{ ?type rdfs:label ?typeName }} "
+    "BIND(COALESCE(STR(?typeName), REPLACE(STR(?type), '^.*[/#]', '')) AS ?kind) }} }}"
+)
+
+
+def _describe_from_graph(nodes: list[dict], unnamed: list[dict], taxonomy: Any) -> None:
+    """Name what the model could not, and say what kind of thing each node is.
+
+    The model holds only the main file's entities, so a subgraph drawn over
+    context files — reference data loaded read-only beside the model — came
+    back as a wall of identifiers. The graph itself knows their labels and
+    their types; one lookup asks it. The kind lets the page tell a product
+    from a component at a glance, instead of drawing every individual alike.
+    """
+    individuals = [n for n in nodes if n["type"] == "individual"]
+    if not individuals or len(individuals) > _DESCRIBE_AT_MOST:
+        return
+    from ..sparql_query import run_query_on_taxonomy  # noqa: PLC0415
+
+    values = " ".join(f"<{n['id']}>" for n in individuals)
+    result = run_query_on_taxonomy(taxonomy, _DESCRIBE_QUERY.format(values=values))
+    if result.error:
+        return
+    names: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    for subject, name, kind in result.rows:
+        if name:
+            names.setdefault(subject, _plain(name))
+        if kind:
+            kinds.setdefault(subject, _plain(kind))
+    waiting = {id(n) for n in unnamed}
+    for node in individuals:
+        if id(node) in waiting and node["id"] in names:
+            node[_LIT_LABEL] = names[node["id"]]
+        if node["id"] in kinds:
+            node["kind"] = kinds[node["id"]]
 
 
 def _model_label(taxonomy: Any, uri: str) -> str:
@@ -170,8 +233,8 @@ def _split(line: str) -> tuple[str, str, str] | None:
     URI subjects and predicates make a graph; a blank node has nothing to draw
     and a malformed line is skipped rather than guessed at.
     """
-    parts = line.split(None, 2)
-    if len(parts) != 3:
+    parts = line.split(None, _TRIPLE - 1)
+    if len(parts) != _TRIPLE:
         return None
     subject, predicate, obj = (p.strip() for p in parts)
     obj = obj.rstrip(" .").strip()

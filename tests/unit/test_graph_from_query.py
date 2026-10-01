@@ -47,6 +47,7 @@ CLASSES = (
     "CONSTRUCT { ?s a owl:Class ; rdfs:label ?l } "
     "WHERE { ?s a owl:Class OPTIONAL { ?s rdfs:label ?l } }"
 )
+COMPETITORS = ("alpha", "Rival")  # the two ends of the one competesWith in the fixtures
 COMPETES = (
     "PREFIX ex: <https://example.org/#> "
     "CONSTRUCT { ?a ex:competesWith ?b } WHERE { ?a ex:competesWith ?b }"
@@ -142,7 +143,7 @@ def test_a_query_replaces_the_model_walk(client):
     from_model = client.get("/api/graph", headers=AUTH).json()
     from_query = client.get("/api/graph", params={"q": COMPETES}, headers=AUTH).json()
 
-    assert len(from_query["nodes"]) == 2
+    assert len(from_query["nodes"]) == len(COMPETITORS)
     assert len(from_query["nodes"]) != len(from_model["nodes"])
 
 
@@ -161,3 +162,46 @@ def test_a_write_query_is_refused_here_too(client):
 
     assert body["nodes"] == []
     assert "error" in body
+
+
+# ── naming what the model does not hold ─────────────────────────────────────
+
+CTX_PEOPLE = """
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <https://example.org/#> .
+ex:Team rdfs:label "Team"@en .
+ex:red a ex:Team ; rdfs:label "Red team"@en .
+ex:red ex:runs ex:alpha .
+"""
+RUNS = "PREFIX ex: <https://example.org/#> CONSTRUCT { ?t ex:runs ?s } WHERE { ?t ex:runs ?s }"
+
+
+@pytest.fixture
+def with_people(tmp_path):
+    main, ctx = tmp_path / "main.ttl", tmp_path / "people.ttl"
+    main.write_text(MAIN, encoding="utf-8")
+    ctx.write_text(CTX_PEOPLE, encoding="utf-8")
+    return store.load(main, context=[ctx])
+
+
+def test_a_context_individual_is_named_from_the_graph(with_people):
+    """The model holds only the main file's entities; a node from reference data
+    loaded beside it would otherwise read as an identifier."""
+    labels = {n["label"] for n in graph_from_query(with_people, RUNS)["nodes"]}
+
+    assert labels == {"Red team", "Alpha"}
+
+
+def test_an_individual_says_what_kind_of_thing_it_is(with_people):
+    """So the page can tell a team from a shop without opening each node."""
+    nodes = {n["label"]: n for n in graph_from_query(with_people, RUNS)["nodes"]}
+
+    assert nodes["Red team"]["kind"] == "Team"
+
+
+def test_an_edge_is_labelled_with_its_relation(tax):
+    loaded, _m, _c = tax
+
+    g = graph_from_query(loaded, COMPETES)
+
+    assert [e["label"] for e in g["edges"]] == ["competesWith"]

@@ -103,7 +103,7 @@ function el(tag,props,children){
 function buildElements(data){
   return[
     // No `detail` here: it is fetched per node on click (see loadDetail).
-    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0,individualCount:n.individualCount||0,shownCount:0}})),
+    ...data.nodes.map(n=>({group:'nodes',data:{id:n.id,label:n.label,type:n.type,readOnly:n.readOnly||0,rootClass:n.rootClass||0,superclass:n.superclass||0,individualCount:n.individualCount||0,shownCount:0,...(n.kind?{kind:n.kind}:{})}})),
     ...data.edges.map(e=>({group:'edges',data:{id:e.id,source:e.source,target:e.target,type:e.type,label:e.label||'',cardinality:e.cardinality||''}})),
   ];
 }
@@ -111,6 +111,25 @@ function buildElements(data){
 // holds — or, once expanded against the cap, how many of them are actually
 // drawn. Spelled out rather than nested in a ternary, because "200 of 1027" and
 // "(17)" are two different statements and read better as two.
+// A queried subgraph mixes kinds of things — products, components, epics — that
+// the model walk would have drawn as separate classes. Each kind gets its own
+// colour and its name under the node's, so a product reads as a product without
+// opening the side panel. Colours are handed out in order of first sight, so two
+// kinds on one page never share one until the palette runs out. A long name is
+// cut: the side panel has it whole, and twenty full epic titles bury the graph.
+const KIND_PALETTE=['#fde68a','#a5f3fc','#bbf7d0','#fecaca','#c7d2fe','#fed7aa','#fbcfe8','#d9f99d','#e9d5ff','#99f6e4','#fca5a5','#cbd5e1'];
+const KIND_COLOURS=new Map();
+function kindColour(ele){
+  const kind=ele.data('kind')||'';
+  if(!KIND_COLOURS.has(kind))KIND_COLOURS.set(kind,KIND_PALETTE[KIND_COLOURS.size%KIND_PALETTE.length]);
+  return KIND_COLOURS.get(kind);
+}
+const KIND_NAME_MAX=34;
+function kindLabel(ele){
+  const name=ele.data('label')||'';
+  const shown=name.length>KIND_NAME_MAX?name.slice(0,KIND_NAME_MAX-1)+'…':name;
+  return shown+'\n['+ele.data('kind')+']';
+}
 function classCountLabel(ele){
   const held=ele.data('individualCount');
   const shown=ele.data('shownCount');
@@ -132,6 +151,7 @@ const CY_STYLE=[
     'border-style':'dashed','border-width':3,'label':classCountLabel}},
   {selector:'node[type="class"][rootClass=1]',style:{'width':104,'height':104,'background-color':'#93b8e4','border-color':'#2f5896','border-width':5,'font-size':13,'text-max-width':'92px'}},
   {selector:'node[type="individual"]',style:{'shape':'ellipse','width':68,'height':68,'background-color':'#c6e2f5','border-color':'#4a90c4','border-width':1.5}},
+  {selector:'node[type="individual"][kind]',style:{'background-color':kindColour,'border-color':'#475569','label':kindLabel,'text-max-width':'120px'}},
   {selector:'node[type="scheme"]',style:{'shape':'ellipse','width':88,'height':88,'background-color':'#cbb8f9','border-color':'#7c3aed','border-width':2,'font-weight':600}},
   {selector:'node[type="topconcept"]',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#8fd6ef','border-color':'#0e7490','border-width':2}},
   {selector:'node[type="concept"]',style:{'shape':'ellipse','width':56,'height':56,'background-color':'#9fe3b6','border-color':'#166534','border-width':1.5}},
@@ -147,6 +167,9 @@ const CY_STYLE=[
   {selector:'node.hovered',style:{'opacity':1,'overlay-color':'#2563eb','overlay-opacity':.25,'overlay-padding':6,'z-index':999}},
   {selector:'node.hidden',style:{'display':'none'}},
   {selector:'edge',style:{'curve-style':'bezier','width':1.5,'target-arrow-shape':'triangle'}},
+  // A queried subgraph's edges are typed by their predicate, so none of the
+  // per-kind rules below match them; this one names the relation instead.
+  {selector:'edge[label != ""]',style:{'label':'data(label)','font-size':9,'color':'#334155','text-background-color':'white','text-background-opacity':1,'text-background-padding':'2px','line-color':'#94a3b8','target-arrow-color':'#94a3b8'}},
   {selector:'edge[type="subClassOf"]',style:{'line-color':'#94a3b8','target-arrow-color':'#94a3b8','target-arrow-fill':'hollow'}},
   {selector:'edge[type="objectProperty"]',style:{'line-color':'#818cf8','target-arrow-color':'#818cf8','label':'data(label)','font-size':10,'color':'#4f46e5','text-background-color':'white','text-background-opacity':1,'text-background-padding':'3px','text-border-width':1,'text-border-color':'#818cf8','text-border-opacity':1}},
   {selector:'edge[type="datatypeProperty"]',style:{'line-color':'#f59e0b','target-arrow-color':'#f59e0b','line-style':'dashed','line-dash-pattern':[4,3],'label':'data(label)','font-size':10,'color':'#92400e','text-background-color':'white','text-background-opacity':1,'text-background-padding':'3px','text-border-width':1,'text-border-color':'#f59e0b','text-border-opacity':1}},
