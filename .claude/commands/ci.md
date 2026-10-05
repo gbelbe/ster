@@ -25,7 +25,7 @@ merge.
 
 **This MUST be run and pass before every `git push`.** The git pre-push hook
 (installed via prek) runs `scripts/pre-push.sh`, which blocks any push unless
-this gate passed in the last 60 minutes. Install the hooks once with:
+this gate passed in the last 24 hours. Install the hooks once with:
 `bash scripts/install-hooks.sh` (installs prek's pre-commit + pre-push hooks).
 
 ## Usage
@@ -48,7 +48,7 @@ Invoke directly as: `bash scripts/ci.sh [--fast|--fix]`
 | Tests + coverage | `pytest --cov=ster` (current Python) |
 | Patch coverage | `diff-cover` vs `origin/main` (full mode) |
 
-On success, writes `.ci-passed` (gitignored sentinel, expires 60 min).
+On success, writes `.ci-passed` (gitignored sentinel, expires 24 h for push, 60 min for release).
 The prek pre-push hook reads this file and blocks any `git push` that
 would bypass the gate — this works for all developers, not just Claude.
 

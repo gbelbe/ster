@@ -99,7 +99,7 @@ flakiness measure too.
 
 ## The gate answers the wrong question — and the obvious fix does not work
 
-`scripts/pre-push.sh` accepts any sentinel less than 60 minutes old. That
+`scripts/pre-push.sh` accepts any sentinel less than 24 hours old. That
 answers *"did a run happen recently?"*, not *"was this content checked?"* — so
 one can run the gate, edit code, and push inside the window with nothing
 rechecked. The banner promises a guarantee the hook does not give.

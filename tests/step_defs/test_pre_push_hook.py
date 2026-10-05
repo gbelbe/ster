@@ -32,16 +32,16 @@ def no_sentinel(ctx: dict[str, Any]) -> None:
     pass  # tmp_path is empty by default
 
 
-@given("the CI sentinel file was written less than 60 minutes ago")
+@given("the CI sentinel file was written less than 24 hours ago")
 def fresh_sentinel(ctx: dict[str, Any]) -> None:
     (ctx["root"] / ".ci-passed").write_text("2026-05-24T16:00:00Z\n")
 
 
-@given("the CI sentinel file was written more than 60 minutes ago")
+@given("the CI sentinel file was written more than 24 hours ago")
 def stale_sentinel(ctx: dict[str, Any]) -> None:
     sentinel = ctx["root"] / ".ci-passed"
     sentinel.write_text("2026-05-24T16:00:00Z\n")
-    stale_mtime = time.time() - 7200
+    stale_mtime = time.time() - 2 * 86400
     os.utime(sentinel, (stale_mtime, stale_mtime))
 
 

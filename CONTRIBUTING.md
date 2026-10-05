@@ -86,7 +86,7 @@ not locally. After pushing, check `gh pr checks` to confirm every version is
 green.
 
 On success `scripts/ci.sh` writes a `.ci-passed` sentinel. The pre-push hook reads
-it and blocks `git push` if the gate has not passed in the last 60 minutes.
+it and blocks `git push` if the gate has not passed in the last 24 hours.
 
 ### Faster iteration during development
 
@@ -147,7 +147,7 @@ git push -u origin feat/my-feature
 ```
 
 The pre-push hook will block the push if `bash scripts/ci.sh` has not been
-run and passed within the last 60 minutes. If blocked, run CI first:
+run and passed within the last 24 hours. If blocked, run CI first:
 
 ```bash
 bash scripts/ci.sh
@@ -212,7 +212,7 @@ All of the above run via `bash scripts/ci.sh` and GitHub Actions; commits must b
 
 **`git push` is blocked even after CI passes**
 
-The sentinel expires after 60 minutes. Re-run `bash scripts/ci.sh`.
+The sentinel expires after 24 hours (60 minutes for `scripts/release.sh`). Re-run `bash scripts/ci.sh`.
 
 **Hook not installed on a fresh clone**
 

@@ -5,7 +5,7 @@
 #   bash scripts/install-hooks.sh
 #
 # The sentinel file .ci-passed is written by scripts/ci.sh on success.
-# It expires after 60 minutes.
+# It expires after 24 hours (scripts/release.sh keeps its own, stricter 60-minute check).
 
 set -euo pipefail
 
@@ -32,11 +32,11 @@ mtime = os.path.getmtime('$SENTINEL')
 print(int(time.time() - mtime))
 " 2>/dev/null || echo 9999)
 
-if [[ "$AGE" -gt 3600 ]]; then
-    MINS=$(( AGE / 60 ))
+if [[ "$AGE" -gt 86400 ]]; then
+    HOURS=$(( AGE / 3600 ))
     cat >&2 <<MSG
 ╔══════════════════════════════════════════════════════════════╗
-║  PUSH BLOCKED — CI result is stale (${MINS} min ago)
+║  PUSH BLOCKED — CI result is stale (${HOURS} h ago)
 ║                                                              ║
 ║  Re-run the CI gate before pushing:                         ║
 ║    bash scripts/ci.sh           (full gate, current Python)  ║

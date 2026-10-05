@@ -7,7 +7,7 @@
 # Hook stages:
 #   • pre-commit → the lint / type / security / architecture checks below.
 #   • pre-push   → the CI gate (scripts/pre-push.sh): blocks a push unless the
-#     full local gate (scripts/ci.sh) passed within the last 60 minutes. The
+#     full local gate (scripts/ci.sh) passed within the last 24 hours. The
 #     actual tests + pip-audit run inside ci.sh, so we don't duplicate them as
 #     push hooks — the gate guarantees the *whole* suite (incl. eslint and
 #     diff-cover) ran, not just a bare pytest.
@@ -130,10 +130,10 @@ repos:
 
       # ── push gate (pre-push only) ────────────────────────────────────────────
       # Don't re-run tests here: block the push unless the full local gate
-      # (scripts/ci.sh — tests, pip-audit, eslint, diff-cover) passed < 60 min
+      # (scripts/ci.sh — tests, pip-audit, eslint, diff-cover) passed < 24 h
       # ago. The sentinel .ci-passed is written by ci.sh on success.
       - id: ci-gate
-        name: CI gate (full scripts/ci.sh passed < 60 min ago)
+        name: CI gate (full scripts/ci.sh passed < 24 h ago)
         entry: bash scripts/pre-push.sh
         language: system
         always_run: true

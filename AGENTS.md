@@ -32,7 +32,7 @@ every version is green.
 
 The git pre-push hook (prek runs `scripts/pre-push.sh`, installed via
 `bash scripts/install-hooks.sh`) blocks any `git push` that does not have a
-fresh local-gate pass within the last 60 minutes.
+fresh local-gate pass within the last 24 hours.
 
 **Never push while CI is red. Fix every failure before marking a feature done.**
 

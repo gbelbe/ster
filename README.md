@@ -220,7 +220,7 @@ bash scripts/ci.sh              # full local gate: lint · types · security · 
 
 The local gate mirrors GitHub Actions (ruff · mypy · bandit + pip-audit ·
 pytest on Python 3.12 / 3.13), and a pre-push hook blocks any push
-without a passing run in the last 60 minutes. Coverage is reported to
+without a passing run in the last 24 hours. Coverage is reported to
 [Codecov](https://codecov.io/gh/gbelbe/ster).
 
 Release notes live in the [GitHub releases](https://github.com/gbelbe/ster/releases).

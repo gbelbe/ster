@@ -30,7 +30,7 @@ def test_allowed_when_fresh_sentinel(tmp_path: Path) -> None:
 def test_blocked_when_stale_sentinel(tmp_path: Path) -> None:
     sentinel = tmp_path / ".ci-passed"
     sentinel.write_text("2026-05-24T16:00:00Z\n")
-    stale_mtime = time.time() - 7200
+    stale_mtime = time.time() - 2 * 86400
     os.utime(sentinel, (stale_mtime, stale_mtime))
 
     result = _run(tmp_path)
