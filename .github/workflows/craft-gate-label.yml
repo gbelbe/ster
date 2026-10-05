@@ -1,0 +1,94 @@
+# Add as .github/workflows/craft-gate-label.yml in the consuming repo.
+#
+# Makes craft-gate's work reviewable the way Dependabot's is: every PR that
+# carries a craftsmanship commit gets a label, so
+#   gh pr list --label tidy-first --state all      # tidy / characterization work
+#   gh pr list --label tidy-exempt --state all     # every bypass of the gates
+#   gh pr list --label craft-gate --state all      # automated version syncs
+# is the whole review queue. `tidy-exempt` is the one worth auditing: a
+# `Tidy-Exempt:` trailer skips the Tidy First and Refactor First gates.
+#
+# Labels follow the PR's commits, so they are added and removed as it changes.
+# The reasons given in `Tidy-Exempt:` trailers go to the run summary.
+#
+# Squash merging keeps the signal on the base branch only if the squash commit
+# body lists the PR's commits, so the run also warns when the repo setting for
+# that isn't on. One-time fix (needs admin):
+#   gh api -X PATCH repos/<owner>/<repo> \
+#     -f squash_merge_commit_title=PR_TITLE \
+#     -f squash_merge_commit_message=COMMIT_MESSAGES
+
+name: craft-gate label
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    # Bot PRs (dependabot, the craft-gate sync) are labelled elsewhere.
+    # Fork PRs get a read-only token, so labelling can't work there.
+    if: >-
+      !endsWith(github.actor, '[bot]') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Label the PR from its commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        run: |
+          gh label create tidy-first --color 0e8a16 --force \
+            --description "Has tidy(<type>) or test(characterize) commits"
+          gh label create tidy-exempt --color d93f0b --force \
+            --description "Uses a Tidy-Exempt trailer to skip the craftsmanship gates"
+
+          sync_label() {  # name, present(true|false)
+            if [ "$2" = true ]; then
+              gh pr edit "$PR" --add-label "$1"
+            else
+              gh pr edit "$PR" --remove-label "$1" 2>/dev/null || true
+            fi
+          }
+
+          SUBJECTS="$(git log --format=%s "$RANGE")"
+          EXEMPTIONS="$(git log --format=%B "$RANGE" | grep -E '^Tidy-Exempt:' || true)"
+
+          TIDY=false
+          if grep -qE '^(tidy\([a-z-]+\)|test\(characterize\)):' <<<"$SUBJECTS"; then TIDY=true; fi
+          EXEMPT=false
+          [ -n "$EXEMPTIONS" ] && EXEMPT=true
+
+          sync_label tidy-first "$TIDY"
+          sync_label tidy-exempt "$EXEMPT"
+
+          {
+            echo "### craft-gate labels for #$PR"
+            echo "- tidy-first: $TIDY"
+            echo "- tidy-exempt: $EXEMPT"
+            if [ -n "$EXEMPTIONS" ]; then
+              echo
+              echo "Exemption reasons:"
+              echo '```'
+              echo "$EXEMPTIONS"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Warn if squash merges would drop the commit list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MODE="$(gh api "repos/${{ github.repository }}" --jq .squash_merge_commit_message 2>/dev/null || true)"
+          if [ -n "$MODE" ] && [ "$MODE" != "COMMIT_MESSAGES" ]; then
+            echo "::warning::squash_merge_commit_message is $MODE, so tidy(...) commits and Tidy-Exempt trailers vanish from the base branch on squash. See the comment at the top of this workflow."
+          fi
