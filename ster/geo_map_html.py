@@ -1117,7 +1117,7 @@ async function locate(cols, data) {
   const li = cols.findIndex(c => ['lat','latitude'].includes(c.toLowerCase()));
   const gi = cols.findIndex(c => ['long','lon','lng','longitude'].includes(c.toLowerCase()));
   if (li >= 0 && gi >= 0) {
-    return data.map((r, i) => {
+    const points = data.map((r, i) => {
       /* Keep the row's URI: it names the point when no plain label is present,
          and lets the cluster control exclude the column that located it. */
       const uri = r.find(isUri) || null;
@@ -1125,6 +1125,19 @@ async function locate(cols, data) {
       return { row:i, lat:num(r[li]), long:num(r[gi]),
                label: named ? plain(named) : (uri ? short(uri) : `row ${i + 1}`), uri };
     }).filter(p => p.lat !== null && p.long !== null);
+    /* The coordinates came from the columns, but what a place *is* — its picture, the filters it
+       belongs to, the logos it carries — is the ontology's to say. Ask the server about the rows that
+       name an entity, and keep the columns' coordinates. Without this a query selecting ?lat ?long drew
+       plain dots, however much the ontology said about each store. */
+    const named = [...new Set(points.map(p => p.uri).filter(Boolean))];
+    if (named.length) {
+      const known = new Map((await locateOnServer(named)).map(p => [p.uri, p]));
+      for (const p of points) {
+        const found = known.get(p.uri);
+        if (found) Object.assign(p, { icon: found.icon || '', facets: found.facets || {}, badges: found.badges || [] });
+      }
+    }
+    return points;
   }
   const uris = [...new Set(data.flat().filter(isUri))];
   if (!uris.length) return [];
