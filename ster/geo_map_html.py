@@ -55,6 +55,12 @@ __FAVICON__
 /* The attribute has to beat the class: a UA's [hidden]{display:none} loses to
    any rule that sets display, so .seg stayed laid out while "hidden". */
 [hidden] { display:none !important; }
+/* The number a place stands for, printed on it. The span is centred on its point; a dark pill keeps
+   it readable on a pale shape and on a dark one alike. */
+.figure-label { pointer-events:none; }
+.figure-label span { position:absolute; transform:translate(-50%,-50%); white-space:nowrap;
+                     font:700 13px system-ui,sans-serif; color:#fff; background:rgba(0,0,0,.62);
+                     border-radius:9px; padding:1px 7px; box-shadow:0 1px 3px rgba(0,0,0,.4); }
 .badge-row { display:flex; flex-wrap:wrap; gap:3px; align-items:center;
              justify-content:center; pointer-events:none; }
 .badge-row img { object-fit:contain; background:#fff; border:1px solid rgba(0,0,0,.25);
@@ -349,6 +355,7 @@ let badgeVisible = [];
 /* Kept within a narrow band so a mark on Cyprus and a mark on Ukraine read as
    the same kind of thing. Below the floor they are unrecognisable; above the
    ceiling they start to cover the country they sit on. */
+const FIGURE_LIFT = 36;  // px above the centre of a shape, clear of its two rows of logos
 const PIN = 18;          // a store icon, big enough to read at street zoom
 const BADGE_MIN = 11;
 const BADGE_MAX = 22;
@@ -1098,6 +1105,12 @@ function measureLine(total) {
   return `<br>${MEASURE_NAME()} ${fmt.format(total)}`;
 }
 
+/* The figure printed on a place: what it totals, when that says something. A lone row with no
+   measure chosen would only print "1", a label for a number that counts nothing (see measureLine). */
+function figureOf(total, measured) {
+  return (!measured && total <= 1) ? null : fmt.format(total);
+}
+
 /* Coordinates come from bare lat/long columns, else by asking the graph about a
    URI in the row. Only WGS84 — nothing here knows what the data is about. */
 async function locate(cols, data) {
@@ -1203,11 +1216,26 @@ function draw(fit = true) {
   const sizes = [...groups.values()].map(m => m.reduce((a, p) => a + valueOf(p), 0));
   const lo = Math.min(...sizes, 1), hi = Math.max(...sizes, 1);
 
+  const figures = [];   // the number printed on each place, drawn above the shapes and dots
   const marks = [...groups.entries()].map(([key, members]) => {
     const lat = members.reduce((a, p) => a + p.lat, 0) / members.length;
     const long = members.reduce((a, p) => a + p.long, 0) / members.length;
     const name = grouped ? short(key) : members[0].label;
     const total = members.reduce((a, p) => a + valueOf(p), 0);
+    const figure = figureOf(total, measureCol !== null);
+    /* A lone place with a picture is drawn as that picture, unless it is drawn as its outline (a
+       country has a flag *and* a shape; the shape wins, so the number goes on it). */
+    const lone = !grouped && members.length === 1 ? members[0] : null;
+    const drawnAsPicture = lone !== null && !!lone.icon && !(shapeMode && lone.shape);
+    if (figure !== null && !drawnAsPicture) {
+      /* A place that carries logos has them centred on the same point: lift the number clear of them. */
+      const lift = members.some(m => (m.badges || []).length > 0) ? FIGURE_LIFT : 0;
+      figures.push(L.marker([lat, long], {
+        icon: L.divIcon({ className: 'figure-label', html: `<span>${figure}</span>`,
+                         iconSize: [0, 0], iconAnchor: [0, lift] }),
+        interactive: false, keyboard: false,
+      }));
+    }
     const mark = L.circleMarker([lat, long], {
       renderer: dotCanvas,
       radius: 6 + Math.sqrt(total) * 4, color:'#fff', weight:2,
@@ -1261,7 +1289,7 @@ function draw(fit = true) {
     }
     return mark;
   });
-  layer = L.featureGroup(marks).addTo(map);
+  layer = L.featureGroup([...marks, ...figures]).addTo(map);
   addBadges(visible);
   /* Only on a real redraw: refitting from the zoom handler would move the map
      the reader just moved, and re-fire the handler. */
