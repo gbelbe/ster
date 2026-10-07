@@ -143,6 +143,12 @@ class _LifecycleMixin(_AppState):
         self._folded_panels: set[str] = set()  # left panes folded to their title bar
         self._activity_cache: dict | None = None  # lazily-computed git activity (per session)
         self._activity_computed = False
+        self._coverage_cache: tuple | None = (
+            None  # (taxonomy, key, coverage); see _metadata_coverage
+        )
+        self._pending_show: tuple | None = None  # a detail draw waiting for the cursor to stop
+        self._show_timer = None
+        self._last_highlight = 0.0
         # Semanticlint result (counts, issues) + a uri→worst-severity index for O(1)
         # per-entity lookups (icon colours, detail annotations). Recomputed in the
         # background after edits when the plugin is active.
@@ -481,7 +487,7 @@ class _LifecycleMixin(_AppState):
         yield ContextMenu(id="ctx-menu")  # hidden overlay; shown on right-click
         yield WorkingFileMenu(id="working-file-menu")  # hidden overlay; shown from the header chip
 
-    def on_mount(self) -> None:
+    def on_mount(self) -> None:  # noqa: V105
         from ster._version import __version__ as _version  # noqa: PLC0415
 
         # The filename lives in the working-file chip now; repeating it here
@@ -555,6 +561,6 @@ class _LifecycleMixin(_AppState):
         self._rebuild_tree()
         self._show(detail.OVERVIEW_URI)
 
-    def on_unmount(self) -> None:
+    def on_unmount(self) -> None:  # noqa: V105
         """Flush a pending background save when the app closes."""
         self._flush_save()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
@@ -9,6 +11,7 @@ from ster.nav.logic import DetailField
 
 from .. import detail
 from ._constants import _PROP_CREATE_ACTIONS
+from ._detail import DETAIL_SETTLE_S
 from ._helpers import _parse_add_prop, _parse_cta
 from ._state import _AppState
 
@@ -30,9 +33,15 @@ class _TreeEventsMixin(_AppState):
             # after a mutation) must not rebuild the detail — that would drop the focus
             # _restore_focus just placed on a row. The explicit _show already refreshed it.
             return
-        self._show(uri)
+        now = time.monotonic()
+        sweeping = now - self._last_highlight < DETAIL_SETTLE_S  # a key held down, or tapped fast
+        self._last_highlight = now
+        if sweeping:
+            self._defer_show(uri)  # the panel is drawn once, where the cursor stops
+        else:
+            self._show(uri)
 
-    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:  # noqa: V105
         """Activating (Enter / click) an empty-section call-to-action runs its create flow."""
         action = _parse_cta(event.node.data)
         if action is not None:

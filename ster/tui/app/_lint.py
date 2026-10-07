@@ -127,6 +127,9 @@ class _LintMixin(_AppState):
 
     def _invalidate_lint(self) -> None:
         """Drop the cached lint so the next access (or the async worker) recomputes."""
+        self._coverage_cache = (
+            None  # the overview's coverage depends on the same model and settings
+        )
         self._lint_cache = None
         self._lint_computed = False
         self._lint_index = {}

@@ -17,6 +17,8 @@ from ster.nav.logic import prop_comment
 
 from ._constants import _DETAIL_SELECTOR
 
+_RIGHT_BUTTON = 3  # the mouse button Textual numbers 3
+
 
 class OntologyTree(Tree):
     """The left-pane tree. In the panel layer (cursor on the header) Tab and the arrows move
@@ -38,8 +40,12 @@ class OntologyTree(Tree):
         # entered, the head is a selected item and keeps its normal highlight.
         pid = self.id or "tree"
         entered = self.app._entered_pid == pid  # type: ignore[attr-defined]
-        self.set_class(self._cursor_on_main(pid) and not entered, "panel-layer")
-        self.app._update_nav_hint()  # type: ignore[attr-defined]  # panel↔item layer changed
+        layer = self._cursor_on_main(pid) and not entered
+        if (
+            self.has_class("panel-layer") != layer
+        ):  # most moves stay in the same layer: change nothing
+            self.set_class(layer, "panel-layer")
+            self.app._update_nav_hint()  # type: ignore[attr-defined]  # panel↔item layer changed
 
     def _light_branch_column(self) -> None:
         """Keep the guide column at the cursor's own level lit as it moves.
@@ -89,7 +95,7 @@ class OntologyTree(Tree):
         if rows:
             rows[0].focus()  # first actionable row (info-only rows are skipped)
 
-    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:  # noqa: V105
         """Materialize deferred collections and hierarchy children when opened."""
         self.app._load_deferred_individuals(event.node)  # type: ignore[attr-defined]
         self.app._load_deferred_tree_node(event.node)  # type: ignore[attr-defined]
@@ -127,7 +133,7 @@ class OntologyTree(Tree):
         entered = self.app._entered_pid == pid  # type: ignore[attr-defined]
         return (self._cursor_on_main(pid) or self.has_class("folded")) and not entered
 
-    def on_key(self, event: events.Key) -> None:
+    def on_key(self, event: events.Key) -> None:  # noqa: V105
         pid = self.id or "tree"
         panel = self._in_panel_layer(pid)
         handler = self._PANE_KEYS.get(event.key)
@@ -189,7 +195,7 @@ class OntologyTree(Tree):
         * Any other left-click keeps the default select / expand-collapse behaviour."""
         line = self._clicked_line(event)
         node = self.get_node_at_line(line) if line is not None and line >= 0 else None
-        if event.button == 3:  # right-click → context menu
+        if event.button == _RIGHT_BUTTON:  # right-click → context menu
             self._open_context_menu_at(node, line, event)
         # A click on the pane's own chrome — its border, its border title, or the
         # empty space below the last row — lands on no node at all, so it used to
