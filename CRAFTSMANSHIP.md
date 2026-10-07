@@ -429,18 +429,15 @@ uv run mutmut run                                              # generates + run
 uv run python3 scripts/check_mutation_ratchet.py --base origin/main --threshold 80
 ```
 
-**One of the five default gates (`templates/ci-job.yml`), but a verified
-no-op until you opt in.** Mutation testing reruns your whole test suite
-once per mutant — a different cost order than everything above — so the
-CI job's first step checks for a `[tool.mutmut]` (or `setup.cfg`'s
-`[mutmut]`) section and skips every remaining step when it's absent.
-Confirmed against a real mutmut run, not assumed: with no config, `mutmut
-run` either guesses a source directory from a common layout and mutates it
-without asking, or crashes outright — neither is acceptable to run
-unannounced on every repo that adopts craft-gate, hence the explicit
-config check rather than trusting mutmut's own guessing. Add
-`[tool.mutmut]` with your `source_paths` to activate it for real. See
-DESIGN.md's "Mutation ratchet" for the full rationale, including why this
+**One of the five default gates (`templates/ci-job.yml`).** Mutation testing
+reruns a focused behavioral test suite once per mutant. Configure
+`[tool.mutmut]` with `source_paths` and
+`pytest_add_cli_args_test_selection` listing the unit-test files marked
+`@pytest.mark.mutation`; the normal test job still runs the complete suite.
+The focused selection prevents mutmut from collecting unrelated integration,
+TUI, and helper modules that make mutation runs needlessly slow or fragile.
+The local runner and CI reuse the `mutants/` cache. See DESIGN.md's
+"Mutation ratchet" for the full rationale, including why this
 checks a flat floor on the current tree rather than a base-vs-head
 comparison like the complexity ratchet.
 
@@ -450,6 +447,13 @@ difference because the behavior really is identical) gets mutmut's own
 cover`. This fixes the false positive at its source; don't reach for
 `Tidy-Exempt:` for a single surviving mutant, save it for skipping the
 gate entirely on a PR where that's the right call.
+
+**Test-quality rule.** A new or changed behavioral test should be designed to
+kill a meaningful mutation: assert the observable result, cover the relevant
+boundary/error branch, and avoid merely executing the line. Mutation selection
+is diff-scoped and per function. A changed function passes at 80% mutation
+score, or, below 80%, only when it improves at least 20% over its first recorded
+per-function score in `.mutation-baseline.json`.
 
 ## Reporting — visible, not just enforced
 
