@@ -19,6 +19,7 @@ below is active automatically.
 | `commands/fix-ci-gap.md` | ✅ committed | the **`/fix-ci-gap`** slash command — diagnose "local green, GitHub red" |
 | `agents/ci-fixer.md` | ✅ committed | a **Sonnet subagent** that fixes mechanical CI failures (ruff, mypy, eslint, prek) |
 | `skills/sonar-parity/` | ✅ committed | the Sonar rules the PR gate enforces, and how to fix each finding |
+| `skills/ci-gates/` | ✅ committed | what the local gate and the PR checks do before you push — new-file rules, patch coverage, flaky tests, CodeQL patterns, stacked PRs |
 | `settings.local.json` | ❌ gitignored | your personal tool-permission allowlist (do not commit) |
 
 The two `commands/*.md` files are **project slash commands**: type `/ci` or
