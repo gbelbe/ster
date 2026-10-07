@@ -16,6 +16,8 @@ from ster.store import taxonomy_to_graph
 from .sparql_complete import EntityIndex
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import rdflib
 
 # Well-known local names to offer under the standard prefixes even when unused in the file.
@@ -252,6 +254,26 @@ def server_is_running() -> bool:
     return is_running()
 
 
+def ensure_server(tax: Taxonomy, path: Path | None) -> str:
+    """Make sure a server is up for the map/timeline pages; "" on success, else why not.
+
+    The TUI starts its server at launch, but that is best-effort: a port held then
+    (an earlier ``ster serve``) leaves nothing for the map to open on. Retrying
+    here, with the same port claim the graph uses, means the map and timeline work
+    whenever the graph would — a stale ``ster serve`` is replaced, a same-file one
+    reused, and an open ster session or foreign process is named, never closed.
+    """
+    if server_is_running():
+        return ""
+    from ster.viz_vowl import ensure_live_server  # noqa: PLC0415
+
+    try:
+        ensure_live_server(tax, path)
+    except RuntimeError as exc:
+        return f"Couldn't open the map: {exc}"
+    return ""
+
+
 def server_unavailable_reason() -> str:
     """Why the map cannot open, in terms the reader can act on.
 
@@ -273,11 +295,9 @@ def server_unavailable_reason() -> str:
     except Exception:  # noqa: BLE001 — a diagnostic must never be the thing that fails
         holder = None
     if holder is not None:
-        pid, command = holder
-        return (
-            f"Couldn't open the map: port {port} is held by {command} (pid {pid}), "
-            "so ster's server could not start. Close that process and reopen the file."
-        )
+        from ster.viz_vowl import holder_message  # noqa: PLC0415
+
+        return f"Couldn't open the map: {holder_message(holder[0], holder[1], port)}"
     return "Couldn't open the map: the ster server isn't running."
 
 

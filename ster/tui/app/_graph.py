@@ -100,14 +100,11 @@ class _GraphMixin(_AppState):
         pid, command = holder
         kind = viz_vowl.holder_kind(command)
         if kind != viz_vowl.SERVER:
-            what = (
-                "another ster session is open there"
-                if kind == viz_vowl.EDITOR
-                else "it is not a ster process"
-            )
+            from ster.api_server import load_server_config
+
+            port = load_server_config()[1]
             self.notify(
-                f"Port held by PID {pid} — {what}, so it was left alone. "
-                "The graph can't open until that port is free.",
+                f"Couldn't open the graph: {viz_vowl.holder_message(pid, command, port)}",
                 severity=_WARN,
             )
             return

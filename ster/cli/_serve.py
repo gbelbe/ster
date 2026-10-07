@@ -66,6 +66,27 @@ def _warn_about_other_servers() -> None:
     console.print("     [dim]Stop them with:[/dim] pkill -f 'ster serve'")
 
 
+def _claim_serve_port(file: Path, host: str | None, port: int | None) -> None:
+    """Refuse to start over a process that holds the port, rather than crash in uvicorn.
+
+    A previous ``ster serve`` is closed only if the reader agrees; one already
+    showing this file at this build is simply pointed to; an interactive ster
+    session or a foreign process is never closed — the reason is printed and
+    the command exits.
+    """
+    from ..viz_vowl import claim_port
+    from ..viz_vowl._claim import BLOCKED, REUSE
+    from ._publish import _confirm_replace
+
+    claim = claim_port(file, _confirm_replace, host, port)
+    if claim.outcome == REUSE:
+        console.print(f"  [green]✓[/green] ster is already serving {file.name} at {claim.url}")
+        raise typer.Exit(ExitCode.OK)
+    if claim.outcome == BLOCKED:
+        _app.err.print(f"[red]Can't start: {claim.message}[/red]")
+        raise typer.Exit(ExitCode.UNEXPECTED)
+
+
 def _require_explicit_context(file: Path, context_files: list[Path] | None) -> None:
     """Reject ambiguous project loads unless serve names the context explicitly."""
     if context_files:
@@ -115,6 +136,7 @@ def cmd_serve(
     _mcp_option.apply(mcp)
     _warn_about_other_servers()
     _require_explicit_context(file.resolve(), context_files)
+    _claim_serve_port(file.resolve(), host, port)
     serve(
         file.resolve(),
         host=host,

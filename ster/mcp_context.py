@@ -100,26 +100,6 @@ def children_of(taxonomy: Taxonomy, uri: str, kind: str) -> list[str]:
     return []
 
 
-def ancestors_of(taxonomy: Taxonomy, uri: str) -> list[str]:
-    """Root-first ancestor chain for *uri*, excluding *uri* itself.
-
-    Cycle-safe: a taxonomy with a broader-loop stops instead of hanging.
-    """
-    chain: list[str] = []
-    seen: set[str] = {uri}
-    current = uri
-    while True:
-        kind = kind_of(taxonomy, current)
-        parents = parents_of(taxonomy, current, kind) if kind else []
-        nxt = next((p for p in parents if p not in seen), None)
-        if nxt is None:
-            break
-        chain.append(nxt)
-        seen.add(nxt)
-        current = nxt
-    return list(reversed(chain))
-
-
 def _texts(items: list[Any], lang: str) -> list[str]:
     """Values of Label/Definition entries, preferring *lang* but never empty-handed."""
     preferred = [i.value for i in items if i.lang == lang and i.value]
@@ -179,36 +159,6 @@ def search(
                 if len(hits) >= limit:
                     return hits
     return hits
-
-
-def current_context(
-    taxonomy: Taxonomy, selected_uri: str | None, lang: str = "en"
-) -> dict[str, Any]:
-    """What the user is looking at right now.
-
-    With no live selection — no TUI attached, or nothing focused yet — this
-    degrades to the file overview rather than erroring, so the tool is always
-    answerable.
-    """
-    if selected_uri is None or kind_of(taxonomy, selected_uri) is None:
-        return {"focused": None, "overview": overview(taxonomy, lang)}
-    return {
-        "focused": entity(taxonomy, selected_uri, lang),
-        "ancestors": [_ref(taxonomy, a, lang) for a in ancestors_of(taxonomy, selected_uri)],
-        "siblings": [_ref(taxonomy, s, lang) for s in siblings_of(taxonomy, selected_uri)],
-        "overview": overview(taxonomy, lang),
-    }
-
-
-def siblings_of(taxonomy: Taxonomy, uri: str) -> list[str]:
-    """Entities sharing a parent with *uri* (excluding *uri*)."""
-    kind = kind_of(taxonomy, uri)
-    if kind is None:
-        return []
-    out: list[str] = []
-    for parent in parents_of(taxonomy, uri, kind):
-        out.extend(s for s in children_of(taxonomy, parent, kind) if s != uri and s not in out)
-    return out
 
 
 # ── Vocabulary probe ─────────────────────────────────────────────────────────

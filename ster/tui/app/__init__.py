@@ -51,7 +51,7 @@ through the MRO either way), so it was chosen for readability.
 Every name that used to live directly in ``ster/tui/app.py`` — including the
 module-level helpers several tests import or patch directly (``EntitySearch``,
 ``_add_prop_uri``, ``_nav_hint``, ``_parse_add_prop``, ``_parse_cta``,
-``_prop_section_key``, ``_publish_selection``, ``_start_context_server``,
+``_prop_section_key``, ``_start_context_server``,
 ``_READ_ONLY_MESSAGE``) — is re-exported here unchanged, so
 ``from ster.tui.app import X`` and ``ster.tui.app.X`` keep working. A patch
 aimed at one of these names should target the submodule that actually defines
@@ -76,12 +76,12 @@ from ._entity_search import EntitySearch
 from ._graph import _GraphMixin
 from ._helpers import (
     _add_prop_uri,
+    _context_server_notice,
     _cta_uri,
     _nav_hint,
     _parse_add_prop,
     _parse_cta,
     _prop_section_key,
-    _publish_selection,
     _start_context_server,
 )
 from ._lifecycle import _LifecycleMixin
@@ -111,7 +111,7 @@ __all__ = [
     "_parse_add_prop",
     "_parse_cta",
     "_prop_section_key",
-    "_publish_selection",
+    "_context_server_notice",
     "_start_context_server",
 ]
 

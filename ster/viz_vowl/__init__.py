@@ -4,6 +4,7 @@ Every name that used to live directly in ster/viz_vowl.py (including the
 underscore-prefixed helpers tests import directly) is re-exported here
 unchanged, so `from ster.viz_vowl import X` keeps working."""
 
+from ._claim import claim_port
 from ._detail import (
     INDIVIDUAL_COLLAPSE_LIMIT,
     _data_script,
@@ -77,6 +78,7 @@ from ._relations import (
     class_individuals,
 )
 from ._render import (
+    ensure_live_server,
     ensure_published_server,
     open_focused_in_browser,
     open_in_browser,
@@ -99,6 +101,7 @@ from ._server import (
     _vowl_html,
     free_port,
     holder_kind,
+    holder_message,
     other_ster_servers,
     port_holder,
     unavailable_reason,
@@ -171,6 +174,9 @@ __all__ = [
     "FOREIGN",
     "SERVER",
     "holder_kind",
+    "holder_message",
+    "claim_port",
+    "ensure_live_server",
     "port_holder",
     "_port_is_free",
     "free_port",

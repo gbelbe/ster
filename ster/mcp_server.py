@@ -130,16 +130,6 @@ def _tool(
 
 TOOLS: list[dict[str, Any]] = [
     _tool(
-        "get_current_context",
-        (
-            "What the user is looking at right now in ster: the focused entity with its "
-            "labels, descriptions, parents and children, plus its ancestor chain, its "
-            "siblings, and an overview of the whole file. When nothing is focused (no TUI "
-            "attached), returns the file overview alone. Call this first to orient yourself."
-        ),
-        {"lang": _STRING},
-    ),
-    _tool(
         "get_overview",
         (
             "Orientation for the whole ontology/taxonomy: its URI and title, the number of "
@@ -303,13 +293,12 @@ TOOLS: list[dict[str, Any]] = [
 class CallContext:
     """What one MCP call knows beyond its arguments.
 
-    *selection* is the entity focused in an attached TUI. *base_url* is the
-    server address the request arrived on — the only address a link handed back
-    to the caller is sure to reach, since ``ster serve --port`` never reaches
-    the saved config. None when the call did not come over HTTP (tests, TUI).
+    *base_url* is the server address the request arrived on — the only address
+    a link handed back to the caller is sure to reach, since ``ster serve --port``
+    never reaches the saved config. None when the call did not come over HTTP
+    (tests, TUI).
     """
 
-    selection: str | None = None
     base_url: str | None = None
     # ster's own HTTP API, for tools that must go through it (open_view), and
     # a browser opener — set only when the caller is on this machine.
@@ -319,10 +308,6 @@ class CallContext:
     agent_question: str | None = None
     agent_session_question: str | None = None
     token_usage: dict[str, int] | None = None
-
-
-def _tool_get_current_context(tax: Taxonomy, call: CallContext, args: dict) -> Any:
-    return ctx.current_context(tax, call.selection, args.get("lang", "en"))
 
 
 def _tool_get_overview(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
@@ -405,7 +390,6 @@ def _tool_export_query_trace(_tax: Taxonomy, _call: CallContext, args: dict) -> 
 # name → implementation. A registry, so adding a tool is one row plus one entry
 # in TOOLS rather than another branch.
 _IMPLS: dict[str, Callable[[Taxonomy, CallContext, dict], Any]] = {
-    "get_current_context": _tool_get_current_context,
     "get_overview": _tool_get_overview,
     "get_entity": _tool_get_entity,
     "search_entities": _tool_search_entities,
@@ -673,7 +657,6 @@ _METHODS: dict[str, Callable[[dict, Taxonomy, CallContext], dict[str, Any]]] = {
 def handle_message(
     message: Any,
     taxonomy: Taxonomy,
-    selection: str | None = None,
     *,
     call: CallContext | None = None,
 ) -> dict[str, Any] | None:
@@ -681,7 +664,7 @@ def handle_message(
 
     *call* carries what the transport knows about this call — the address it
     arrived on, and what ``open_view`` needs (see CallContext). Without it (tests,
-    the TUI) the call knows only *selection*.
+    the TUI) the call knows nothing beyond its arguments.
 
     Returns None for notifications (no ``id``), which take no reply — the caller
     should answer with an empty HTTP 202.
@@ -718,7 +701,7 @@ def handle_message(
         agent_session_question = None
     token_usage = _normalise_token_usage(metadata.get("com.adeo/token-usage"))
     call = replace(
-        call or CallContext(selection),
+        call or CallContext(),
         agent_session_id=agent_session_id,
         agent_question=agent_question,
         agent_session_question=agent_session_question,

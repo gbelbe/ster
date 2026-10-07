@@ -36,7 +36,9 @@ class _ActionsMixin(_AppState):
         browser behind it is painted (it may have been deferred when we opened into query)."""
         from ..query_screen import QueryScreen
 
-        self.push_screen(QueryScreen(self.tax), lambda _result: self._ensure_browser_ready())
+        self.push_screen(
+            QueryScreen(self.tax, self._path), lambda _result: self._ensure_browser_ready()
+        )
 
     def action_help(self) -> None:
         """Open the keys-and-actions help overlay."""
@@ -133,8 +135,9 @@ class _ActionsMixin(_AppState):
 
         from .. import query as _query
 
-        if not _query.server_is_running():
-            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
+        problem = _query.ensure_server(self.tax, self._path)
+        if problem:
+            self.notify(problem, severity=_WARNING)
             return
 
         # The session as one graph, not the file on disk: the same view the map
@@ -171,8 +174,9 @@ class _ActionsMixin(_AppState):
 
         from .. import query as _query
 
-        if not _query.server_is_running():
-            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
+        problem = _query.ensure_server(self.tax, self._path)
+        if problem:
+            self.notify(problem, severity=_WARNING)
             return
 
         graph = full_graph_rdflib(self.tax)

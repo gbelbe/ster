@@ -91,7 +91,7 @@ one can place before you try.
 
 ster exposes a **read-only [MCP](https://modelcontextprotocol.io) endpoint**, so
 whichever AI agent you already use can answer questions about the ontology you
-are editing — including *what you are looking at right now*. ster provides the
+are editing. ster provides the
 context; you bring your own agent, your own model and your own keys. No AI
 provider is bundled, and nothing is sent anywhere by ster itself.
 
@@ -108,7 +108,6 @@ HTTP, guarded by the same bearer token as the rest of the API.
 
 | Tool | Answers |
 |---|---|
-| `get_current_context` | "What am I looking at?" — the focused entity, its ancestors and siblings |
 | `get_overview` | "What is in this file?" — counts, schemes, languages |
 | `get_entity` | Full detail for one URI (SKOS concepts *and* OWL classes) |
 | `search_entities` | Resolve a name you mention into a URI |

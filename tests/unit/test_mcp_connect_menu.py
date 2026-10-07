@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ster import cli
+from ster.viz_vowl._claim import server_overview
 
 
 def test_endpoint_is_the_mcp_path_on_the_running_server():
@@ -218,30 +219,38 @@ class _FakeResponse:
 
 
 def test_probe_reads_the_overview_from_a_healthy_server():
-    body = json.dumps({"overview": {"file": "/tax.ttl"}}).encode()
+    body = json.dumps({"file": "/tax.ttl"}).encode()
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)) as urlopen:
-        overview = cli._publish._probe_server_session("http://127.0.0.1:8765", "tok")
+        overview = server_overview("http://127.0.0.1:8765", "tok")
 
     assert overview == {"file": "/tax.ttl"}
     request = urlopen.call_args.args[0]
-    assert request.full_url == "http://127.0.0.1:8765/api/session"
+    assert request.full_url == "http://127.0.0.1:8765/api/overview"
     assert request.headers["Authorization"] == "Bearer tok"
 
 
 def test_probe_returns_none_when_the_port_holder_is_not_ster():
     with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
-        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+        assert server_overview("http://127.0.0.1:8765", "tok") is None
+
+
+def test_probe_returns_none_when_the_connection_is_refused_as_a_urlerror():
+    """urlopen raises URLError (an OSError) for a refused connection — still None."""
+    import urllib.error
+
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+        assert server_overview("http://127.0.0.1:8765", "tok") is None
 
 
 def test_probe_returns_none_on_a_malformed_body():
     with patch("urllib.request.urlopen", return_value=_FakeResponse(b"not json")):
-        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+        assert server_overview("http://127.0.0.1:8765", "tok") is None
 
 
-def test_probe_returns_none_when_overview_is_missing_or_not_an_object():
-    body = json.dumps({"focused": None}).encode()
+def test_probe_returns_none_when_the_body_is_not_an_object():
+    body = json.dumps(["not", "an", "object"]).encode()
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        assert cli._publish._probe_server_session("http://127.0.0.1:8765", "tok") is None
+        assert server_overview("http://127.0.0.1:8765", "tok") is None
 
 
 def test_report_unavailable_prints_the_shared_reason(monkeypatch):
@@ -255,99 +264,63 @@ def test_report_unavailable_prints_the_shared_reason(monkeypatch):
     assert "127.0.0.1:8765 is stuck" in captured.get()
 
 
-def _conflict(monkeypatch, *, served: str | None, holder_kind: str, confirm: bool, freed: bool):
-    """Wire the collaborators _resolve_port_conflict reads, and call it once."""
-    import ster.api_server as api_server
+def _conflict(monkeypatch, claim):
+    """Stub claim_port with *claim* and call _resolve_port_conflict once.
+
+    Returns ``(result, confirm_passed)`` — the confirm callable the CLI handed
+    to claim_port, which is how "ask first" is wired.
+    """
     import ster.viz_vowl as viz
 
-    monkeypatch.setattr(api_server, "load_token", lambda: "tok")
-    monkeypatch.setattr(
-        cli._publish,
-        "_probe_server_session",
-        lambda *_a, **_kw: {"file": served} if served is not None else None,
+    seen: list = []
+
+    def _claim(taxonomy_file, confirm=None, host=None, port=None):
+        seen.append(confirm)
+        return claim
+
+    monkeypatch.setattr(viz, "claim_port", _claim)
+    result = cli._publish._resolve_port_conflict(
+        Path("/project/tax.ttl"), "http://127.0.0.1:8765", "127.0.0.1", 8765
     )
-    monkeypatch.setattr(viz, "holder_kind", lambda _command: holder_kind)
-    monkeypatch.setattr(viz, "free_port", lambda *_a, **_kw: freed)
-    with patch("rich.prompt.Confirm.ask", return_value=confirm):
-        return cli._publish._resolve_port_conflict(
-            Path("/project/tax.ttl"),
-            (321, "ster serve tax.ttl"),
-            "http://127.0.0.1:8765",
-            "127.0.0.1",
-            8765,
-        )
+    return result, seen[0]
 
 
 def test_a_healthy_server_already_on_the_requested_file_is_reused(monkeypatch):
+    from ster.viz_vowl._claim import REUSE, Claim
+
     with cli.console.capture() as captured:
-        result = _conflict(
-            monkeypatch,
-            served=str(Path("/project/tax.ttl").resolve()),
-            holder_kind="server",
-            confirm=False,
-            freed=False,
-        )
+        result, _ = _conflict(monkeypatch, Claim(REUSE, url="http://127.0.0.1:8765"))
 
     assert result == "http://127.0.0.1:8765"
     assert "reusing" in captured.get()
     assert "tax.ttl" in captured.get()
 
 
-def test_a_holder_that_does_not_answer_as_ster_is_left_alone(monkeypatch):
-    reported: list[tuple[str, int]] = []
-    monkeypatch.setattr(
-        cli._publish, "_report_unavailable", lambda host, port: reported.append((host, port))
-    )
+def test_a_blocked_port_prints_the_reason_and_gives_up(monkeypatch):
+    from ster.viz_vowl._claim import BLOCKED, Claim
 
-    result = _conflict(monkeypatch, served=None, holder_kind="foreign", confirm=True, freed=True)
-
-    assert result is None
-    assert reported == [("127.0.0.1", 8765)]
-
-
-def test_a_foreign_process_on_a_different_file_is_never_offered_a_restart(monkeypatch):
-    """holder_kind FOREIGN (or EDITOR) must not even reach the confirm prompt —
-    restarting someone's open TUI or an unrelated process is never ours to do."""
-    reported: list[tuple[str, int]] = []
-    monkeypatch.setattr(
-        cli._publish, "_report_unavailable", lambda host, port: reported.append((host, port))
-    )
-
-    with patch("rich.prompt.Confirm.ask") as confirm_ask:
-        result = _conflict(
-            monkeypatch, served="/other.ttl", holder_kind="editor", confirm=True, freed=True
+    with cli._app.err.capture() as captured:
+        result, _ = _conflict(
+            monkeypatch, Claim(BLOCKED, "another ster session is open (x) and holds port 8765.")
         )
-    confirm_ask.assert_not_called()
 
     assert result is None
-    assert reported == [("127.0.0.1", 8765)]
+    assert "Another ster session is open" in captured.get()
 
 
-def test_declining_the_restart_leaves_the_other_server_running(monkeypatch):
-    import ster.viz_vowl as viz
+def test_a_usable_port_signals_a_fresh_start(monkeypatch):
+    from ster.viz_vowl._claim import FREE, Claim
 
-    freed_calls: list[int] = []
-    monkeypatch.setattr(viz, "free_port", lambda pid, *_a, **_kw: freed_calls.append(pid) or True)
+    result, _ = _conflict(monkeypatch, Claim(FREE))
 
-    result = _conflict(
-        monkeypatch, served="/other.ttl", holder_kind="server", confirm=False, freed=True
-    )
-
-    assert result is None
-    assert freed_calls == []  # never even tried — the user said no
+    assert result is cli._publish._START_FRESH
 
 
-def test_accepting_the_restart_frees_the_port_then_signals_a_fresh_start(monkeypatch):
-    result = _conflict(
-        monkeypatch, served="/other.ttl", holder_kind="server", confirm=True, freed=True
-    )
+def test_the_cli_asks_before_replacing_another_server(monkeypatch):
+    """Regression: the restart prompt must stay wired through claim_port — it is
+    the only thing between `ster connect` and silently closing someone's view."""
+    from ster.viz_vowl._claim import FREE, Claim
 
-    assert result is cli._publish._PORT_FREED
+    _, confirm = _conflict(monkeypatch, Claim(FREE))
 
-
-def test_a_restart_that_fails_to_free_the_port_gives_up(monkeypatch):
-    result = _conflict(
-        monkeypatch, served="/other.ttl", holder_kind="server", confirm=True, freed=False
-    )
-
-    assert result is None
+    assert confirm is cli._publish._confirm_replace

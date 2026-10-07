@@ -209,16 +209,7 @@ def test_vocabulary_is_reachable_over_http(client):
     assert any(p["prefixed"] == "rdfs:label" for p in body["predicates"])
 
 
-def test_the_session_view_degrades_to_the_overview_with_nothing_attached(client):
-    """No TUI selection is the ordinary case for a bare server; it must answer
-    rather than error, or a caller needs a special case for the common path."""
-    body = client.get("/api/session", headers=LOCAL).json()
-
-    assert body["focused"] is None
-    assert body["overview"]["counts"]["classes"] == 2
-
-
-@pytest.mark.parametrize("endpoint", ["/api/overview", "/api/vocabulary", "/api/session"])
+@pytest.mark.parametrize("endpoint", ["/api/overview", "/api/vocabulary"])
 def test_the_read_views_need_a_token(client, endpoint):
     assert client.get(endpoint).status_code == 401
 

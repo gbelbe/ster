@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final, Literal
 
 from textual.app import ComposeResult
@@ -68,9 +69,10 @@ class QueryScreen(Screen[None]):
         Binding("escape", "close", "Close"),
     ]
 
-    def __init__(self, tax: Taxonomy) -> None:
+    def __init__(self, tax: Taxonomy, path: Path | None = None) -> None:
         super().__init__()
         self._tax = tax
+        self._path = path
         # Build the graph once and reuse it for the index and every run — a large ontology
         # is otherwise re-serialised on each query. The screen is modal (no editing while
         # open), so the graph stays valid for the session.
@@ -87,7 +89,9 @@ class QueryScreen(Screen[None]):
         self._open: Callable[[str], object] = webbrowser.open
         # Indirected for the same reason as _open: tests drive both without a
         # live server or a browser.
-        self._server_ok: Callable[[], bool] = query.server_is_running
+        # The default also retries a server that failed to start with the TUI, so the
+        # map and timeline open whenever the graph would (see query.ensure_server).
+        self._server_ok: Callable[[], bool] = lambda: not query.ensure_server(self._tax, self._path)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="query-box"):

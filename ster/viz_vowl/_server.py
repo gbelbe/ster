@@ -158,6 +158,31 @@ def port_holder(host: str | None = None, port: int | None = None) -> tuple[int, 
     return (pid, _process_name(pid))
 
 
+def holder_message(pid: int, command: str, port: int) -> str:
+    """What to tell the reader about a process holding *port*, by who it is.
+
+    A clause (no capital, no full stop framing of its own): it is read after a
+    caller's own prefix such as "Couldn't open the graph: ". Each kind gets its
+    own next step, because "close that process" is wrong advice for all but one
+    of them — see :func:`holder_kind`.
+    """
+    kind = holder_kind(command)
+    if kind == EDITOR:
+        return (
+            f"another ster session is open ({command}, pid {pid}) and holds port {port}. "
+            "Please close it first to release the port, then try again."
+        )
+    if kind == SERVER:
+        return (
+            f"port {port} is held by {command} (pid {pid}), so ster's server "
+            "could not start. Close that process and reopen the file."
+        )
+    return (
+        f"port {port} is held by {command} (pid {pid}), which is not ster, so it "
+        "was left alone. Free that port, then try again."
+    )
+
+
 def _port_is_free(host: str, port: int) -> bool:
     """True when *host*:*port* can be bound (nothing is holding it)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -224,11 +249,7 @@ def unavailable_reason(host: str | None = None, port: int | None = None) -> str:
     except Exception:  # noqa: BLE001 — a diagnostic must never be the thing that fails
         holder = None
     if holder is not None:
-        pid, command = holder
-        return (
-            f"port {port} is held by {command} (pid {pid}), so ster's server "
-            "could not start. Close that process and reopen the file."
-        )
+        return holder_message(holder[0], holder[1], port)
     return "the ster server isn't running."
 
 

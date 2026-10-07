@@ -1089,26 +1089,6 @@ def _register_mutation_routes(
 
         return vocabulary(_st[_LIT_TAXONOMY])
 
-    @app.get(
-        "/api/session",
-        summary="What the attached editor is looking at right now",
-        tags=[_TAG_VIZ],
-    )
-    def get_session_endpoint(
-        lang: str = Query(default="en", description="Language for labels."),
-        _: None = Depends(_check_auth),
-    ) -> dict[str, Any]:
-        """The one view that is not a function of the ontology.
-
-        The focused entity comes from the live TUI's selection, not from the
-        graph, so no query can recover it — which is exactly why it needs an
-        endpoint of its own rather than being derivable from /api/sparql_query. With
-        nothing attached it degrades to the overview instead of erroring.
-        """
-        from .mcp_context import current_context  # noqa: PLC0415
-
-        return current_context(_st[_LIT_TAXONOMY], _st.get("selection"), lang)
-
     @app.post(
         "/api/sparql_query",
         summary="Run a read-only SPARQL query against the loaded ontology",
@@ -1669,7 +1649,6 @@ def _register_mcp(
             message,
             _tax(),
             call=CallContext(
-                selection=_st.get("selection"),
                 base_url=base_url,
                 api_post=_in_process_api(app, token, base_url),
                 open_browser=mcp_views.open_in_browser if _caller_is_local(request) else None,

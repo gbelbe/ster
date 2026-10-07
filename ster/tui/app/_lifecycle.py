@@ -35,7 +35,7 @@ from ._constants import (
     _PROPERTY_TREE_SELECTOR,
     _TREE_SELECTOR,
 )
-from ._helpers import _start_context_server
+from ._helpers import _context_server_notice, _start_context_server
 from ._state import _AppState
 from ._tree_widget import OntologyTree
 
@@ -353,6 +353,13 @@ class _LifecycleMixin(_AppState):
             return
         self._browser_mounted = True
 
+    def _start_context_server_and_report(self) -> None:
+        """Start the API server (on a worker thread), then say so if the port was taken."""
+        notice = _context_server_notice(_start_context_server(self.tax, self._path), self._path)
+        if notice is not None:
+            message, severity = notice
+            self.call_from_thread(self.notify, message, severity=severity)
+
     def _initialize_browser(self) -> None:
         """Start browser work after its widgets have had a chance to paint."""
         if not self._browser_mounted or self._browser_ready:
@@ -363,8 +370,7 @@ class _LifecycleMixin(_AppState):
         self._set_loading_progress(_LIT_PREPARING, 75, "Configuring browser")
         if not self._context_server_started:
             threading.Thread(
-                target=_start_context_server,
-                args=(self.tax, self._path),
+                target=self._start_context_server_and_report,
                 daemon=True,
                 name="ster-context-server",
             ).start()
@@ -388,8 +394,7 @@ class _LifecycleMixin(_AppState):
     def _initialize_browser_direct(self) -> None:
         """Keep the historical synchronous path for callers with a ready taxonomy."""
         threading.Thread(
-            target=_start_context_server,
-            args=(self.tax, self._path),
+            target=self._start_context_server_and_report,
             daemon=True,
             name="ster-context-server",
         ).start()

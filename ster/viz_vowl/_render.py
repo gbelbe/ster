@@ -12,6 +12,7 @@ import html as _html
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
@@ -145,6 +146,34 @@ def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -
     return f"{url}:{port}"
 
 
+def ensure_live_server(
+    taxonomy: Taxonomy,
+    file_path: Path | None = None,
+    on_change_fn: Any = None,
+    confirm: Callable[[str], bool] | None = None,
+) -> None:
+    """Make sure a live server shows *taxonomy*, resolving a held port if it is ours to.
+
+    Starting is tried first, so the common case costs nothing. Only when that
+    fails is the port claimed (:func:`ster.viz_vowl._claim.claim_port`): a server
+    already showing this file is reused, a stale ``ster serve`` is replaced, and
+    an interactive session or foreign process is left alone. Raises
+    :class:`RuntimeError` with the reason when no server can be had.
+    """
+    if _server._start_api_server(taxonomy, file_path, on_change_fn):
+        return
+    from . import _claim  # noqa: PLC0415
+
+    claim = _claim.claim_port(file_path, confirm)
+    if claim.outcome == _claim.REUSE:
+        return
+    if claim.outcome == _claim.FREE and _server._start_api_server(
+        taxonomy, file_path, on_change_fn
+    ):
+        return
+    raise RuntimeError(claim.message or _server.unavailable_reason())
+
+
 def open_in_browser(
     taxonomy: Taxonomy,
     file_path: Path | None = None,
@@ -161,8 +190,7 @@ def open_in_browser(
     *on_change_fn* (optional) is called after any API mutation (e.g. individual
     creation) so the caller can rebuild its display tree.
     """
-    if not _server._start_api_server(taxonomy, file_path, on_change_fn):
-        raise RuntimeError(_server.unavailable_reason())
+    ensure_live_server(taxonomy, file_path, on_change_fn)
     from ..api_server import load_server_config  # noqa: PLC0415
 
     _url, _port = load_server_config()
@@ -192,8 +220,7 @@ def open_focused_in_browser(
     means a focused graph opens from a cold start too, not only when something
     else already started the server first.
     """
-    if not _server._start_api_server(taxonomy, file_path):
-        raise RuntimeError(_server.unavailable_reason())
+    ensure_live_server(taxonomy, file_path)
     from ..api_server import load_server_config  # noqa: PLC0415
 
     _url, _port = load_server_config()

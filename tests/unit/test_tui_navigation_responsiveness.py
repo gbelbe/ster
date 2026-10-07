@@ -186,23 +186,32 @@ def test_an_explicit_show_cancels_a_waiting_one(tmp_path):
 
 
 def test_the_selection_moves_at_once_even_while_the_panel_waits(tmp_path):
-    from ster.tui.app import _helpers
-
     app = _app(tmp_path)
-    published: list[str | None] = []
 
     async def scenario():
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
-            real = _helpers._publish_selection
-            _helpers._publish_selection = lambda u: (published.append(u), real(u))[1]  # type: ignore[assignment]
-            try:
-                app._defer_show(ZOO + "Dog")
-                return app._detail_uri
-            finally:
-                _helpers._publish_selection = real
+            app._defer_show(ZOO + "Dog")
+            return app._detail_uri
 
     assert asyncio.run(scenario()) == ZOO + "Dog"
+
+
+from ster.tui.app._constants import _DETAIL_SELECTOR  # noqa: E402
+
+
+def test_a_wait_that_outlives_the_screen_draws_nothing_and_does_not_raise(tmp_path):
+    app = _app(tmp_path)
+
+    async def scenario():
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await app.query_one(_DETAIL_SELECTOR).remove()  # what a closing app leaves behind
+            app._pending_show = (ZOO + "Dog",)
+            app._flush_show()
+            return app._pending_show
+
+    assert asyncio.run(scenario()) is None
 
 
 # ------------------------------------------------------------------ a move within a layer changes no class

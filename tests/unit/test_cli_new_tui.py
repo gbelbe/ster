@@ -248,30 +248,53 @@ def test_home_obtain_action_loads_a_fresh_demo_when_the_demo_is_picked(tmp_path,
 # ── graph: free a busy port by default (no phantom "install ster[api]") ─────────
 
 
-def test_free_graph_port_closes_a_previous_process(monkeypatch):
+def _claim_stub(monkeypatch, *, outcome: str, message: str = ""):
+    from ster import viz_vowl
+    from ster.viz_vowl._claim import Claim
+
+    asked: list = []
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
+
+    def _claim(taxonomy_file, confirm=None, host=None, port=None):
+        asked.append(confirm)
+        return Claim(outcome, message)
+
+    monkeypatch.setattr(viz_vowl, "claim_port", _claim)
+    return asked
+
+
+def test_free_graph_port_asks_before_closing_a_previous_server(monkeypatch):
+    from ster.cli import _free_graph_port
+    from ster.cli._publish import _confirm_replace
+
+    asked = _claim_stub(monkeypatch, outcome="free")
+
+    assert _free_graph_port(Path("tax.ttl")) is True
+    assert asked == [_confirm_replace]  # the CLI never replaces a view without asking
+
+
+def test_free_graph_port_reports_a_blocked_port_and_refuses(monkeypatch):
+    from ster import cli
+    from ster.cli import _free_graph_port
+
+    _claim_stub(monkeypatch, outcome="blocked", message="another ster session is open (x)")
+
+    with cli._app.err.capture() as captured:
+        assert _free_graph_port(Path("tax.ttl")) is False
+
+    assert "another ster session is open" in captured.get()
+
+
+def test_free_graph_port_is_a_noop_when_our_server_is_live(monkeypatch):
     from ster import viz_vowl
     from ster.cli import _free_graph_port
 
-    freed: list = []
-    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
-    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: (999, "old graph"))
-    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **k: freed.append(pid) or True)
-    _free_graph_port()
-    assert freed == [999]  # the leftover graph process on the port is closed
+    called: list = []
+    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: True)
+    monkeypatch.setattr(viz_vowl, "claim_port", lambda *a, **k: called.append(a))
 
-
-def test_free_graph_port_is_a_noop_when_live_or_port_free(monkeypatch):
-    from ster import viz_vowl
-    from ster.cli import _free_graph_port
-
-    freed: list = []
-    monkeypatch.setattr(viz_vowl, "free_port", lambda pid, **k: freed.append(pid) or True)
-    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: True)  # our server is live → skip
-    _free_graph_port()
-    monkeypatch.setattr(viz_vowl, "is_live_server", lambda: False)
-    monkeypatch.setattr(viz_vowl, "port_holder", lambda host=None, port=None: None)  # free → skip
-    _free_graph_port()
-    assert freed == []
+    assert _free_graph_port(Path("tax.ttl")) is True
+    assert called == []
 
 
 # ── non-interactive picker (covers the fallback action menu) ───────────────────

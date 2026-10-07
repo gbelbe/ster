@@ -40,7 +40,7 @@ def zoo() -> Taxonomy:
     return tax
 
 
-def _call(zoo, tool: str, arguments: dict | None = None, selection: str | None = None):
+def _call(zoo, tool: str, arguments: dict | None = None):
     """Invoke a tool through the wire layer and return its decoded payload."""
     reply = ms.handle_message(
         {
@@ -50,7 +50,6 @@ def _call(zoo, tool: str, arguments: dict | None = None, selection: str | None =
             "params": {"name": tool, "arguments": arguments or {}},
         },
         zoo,
-        selection,
     )
     return json.loads(reply["result"]["content"][0]["text"]), reply["result"]
 
@@ -145,7 +144,6 @@ def test_tools_are_registered_with_expected_names(zoo):
     reply = ms.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, zoo)
     names = {t["name"] for t in reply["result"]["tools"]}
     assert names == {
-        "get_current_context",
         "get_overview",
         "get_entity",
         "search_entities",
@@ -339,16 +337,6 @@ def test_call_search_entities_finds_by_label(zoo):
     assert [h["uri"] for h in payload] == [NS + "Dog"]
 
 
-def test_call_get_current_context_uses_the_published_selection(zoo):
-    payload, _ = _call(zoo, "get_current_context", selection=NS + "Dog")
-    assert payload["focused"]["label"] == "Dog"
-
-
-def test_call_get_current_context_without_selection_falls_back(zoo):
-    payload, _ = _call(zoo, "get_current_context")
-    assert payload["focused"] is None
-
-
 def test_call_unknown_tool_is_an_error_result_not_an_exception(zoo):
     payload, result = _call(zoo, "no_such_tool")
     assert result["isError"] is True
@@ -522,22 +510,6 @@ def test_mcp_route_allows_a_localhost_origin(client):
 def test_mcp_get_returns_405_since_no_sse_stream_is_offered(client):
     """The spec allows either an SSE stream or 405 on GET; we offer no stream."""
     assert client.get("/mcp", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 405
-
-
-def test_mcp_reads_the_live_selection_from_app_state(client):
-    """The TUI publishes into app.state._ster['selection']; the route must read it."""
-    client.app.state._ster["selection"] = NS + "Dog"
-    resp = _rpc(
-        client,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "get_current_context", "arguments": {}},
-        },
-    )
-    payload = json.loads(resp.json()["result"]["content"][0]["text"])
-    assert payload["focused"]["label"] == "Dog"
 
 
 # ── get_vocabulary wiring + the hints that route agents to it ─────────────────

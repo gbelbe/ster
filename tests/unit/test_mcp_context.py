@@ -145,52 +145,6 @@ def test_search_entities_spans_every_kind(zoo):
     assert {h["kind"] for h in mc.search(zoo, "e", limit=50)} >= {"concept", "class"}
 
 
-# ── ancestors / siblings ──────────────────────────────────────────────────────
-
-
-def test_ancestors_are_root_first(zoo):
-    assert mc.ancestors_of(zoo, NS + "Dog") == [NS + "Animal", NS + "Mammal"]
-
-
-def test_ancestors_of_root_is_empty(zoo):
-    assert mc.ancestors_of(zoo, NS + "Animal") == []
-
-
-def test_ancestors_stops_on_a_broader_cycle(zoo):
-    """A malformed graph must not hang the server."""
-    zoo.concepts[NS + "Animal"].broader = [NS + "Dog"]
-    assert mc.ancestors_of(zoo, NS + "Dog") == [NS + "Animal", NS + "Mammal"]
-
-
-def test_siblings_exclude_the_entity_itself(zoo):
-    assert mc.siblings_of(zoo, NS + "Dog") == [NS + "Cat"]
-
-
-# ── current_context ───────────────────────────────────────────────────────────
-
-
-def test_current_context_returns_focused_entity_when_selection_published(zoo):
-    out = mc.current_context(zoo, NS + "Dog")
-    assert out["focused"]["label"] == "Dog"
-
-
-def test_current_context_includes_breadcrumb_ancestors(zoo):
-    out = mc.current_context(zoo, NS + "Dog")
-    assert [a["label"] for a in out["ancestors"]] == ["Animal", "Mammal"]
-
-
-def test_current_context_falls_back_to_overview_when_no_selection(zoo):
-    out = mc.current_context(zoo, None)
-    assert out["focused"] is None
-    assert out["overview"]["counts"]["concepts"] == 4
-
-
-def test_current_context_falls_back_when_selection_is_stale(zoo):
-    """A URI that no longer exists must not error — the file was edited underneath."""
-    out = mc.current_context(zoo, NS + "Deleted")
-    assert out["focused"] is None
-
-
 # ── SPARQL read-only guard ────────────────────────────────────────────────────
 
 

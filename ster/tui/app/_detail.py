@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from textual.css.query import NoMatches
+
 from .. import data, detail, edits
 from ..detail_view import PLACEHOLDER, DetailView
 from ._constants import _DETAIL_SELECTOR, _KIND_TITLE
-from ._helpers import _publish_selection
 from ._state import _AppState
 
 DETAIL_SETTLE_S = 0.12  # moves closer together than this are one sweep: the panel waits for its end
@@ -18,12 +19,11 @@ class _DetailMixin(_AppState):
         """Select *uri* now, draw its detail when the cursor stops moving.
 
         While someone holds an arrow key the cursor crosses many entities and every detail panel but
-        the last is thrown away unread. What the app and the MCP server see as the selection moves at
+        the last is thrown away unread. What the app sees as the selection moves at
         once; the panel (the expensive part) is built once, after ``DETAIL_SETTLE_S`` without another
         move. Anything that calls :meth:`_show` itself draws immediately and cancels the wait.
         """
         self._detail_uri = uri
-        _publish_selection(uri)
         self._cancel_pending_show()
         self._pending_show = (uri,)
         self._show_timer = self.set_timer(DETAIL_SETTLE_S, self._flush_show)
@@ -39,15 +39,20 @@ class _DetailMixin(_AppState):
         pending = self._pending_show
         self._show_timer = None
         self._pending_show = None
-        if pending is not None:
+        if pending is None:
+            return
+        try:
             self._show(pending[0])
+        except (
+            NoMatches
+        ):  # the wait outlived the screen: the app is closing, nothing is left to draw into
+            return
 
     def _show(self, uri: str | None) -> None:
         # _detail_text mirrors the rendered markup (used by tests + as a quick
         # text view); the DetailView builds the composed, focusable widgets.
         self._cancel_pending_show()  # a draw now supersedes one that was waiting
         self._detail_uri = uri
-        _publish_selection(uri)  # so the MCP server knows what the user is looking at
         clangs = self.configured_langs or [self.lang]
         self._detail_text = (
             detail.render_detail(self.tax, uri, self.lang, clangs, self.entity_metadata_props)

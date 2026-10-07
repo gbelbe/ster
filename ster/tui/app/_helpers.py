@@ -29,22 +29,34 @@ def _start_context_server(taxonomy: Taxonomy, path: Path | None) -> bool:
         return False
 
 
-def _publish_selection(uri: str | None) -> None:
-    """Tell the running API server which entity is on screen, for MCP's
-    ``get_current_context``.
+def _context_server_notice(started: bool, path: Path | None) -> tuple[str, str] | None:
+    """The one toast to show when the TUI's own server did not start, as
+    ``(message, severity)``; None when nothing needs saying.
 
-    A no-op when no server is running (the common case — the server only starts
-    once a file is opened), and never allowed to disturb navigation: publishing
-    context is strictly best-effort.
+    Without it a held port silently means no MCP. The port is only *looked at*
+    here: the claim is made with a confirm that always declines, so nothing is
+    ever closed from a startup path. A same-file, same-build ``ster serve`` is
+    fine and is named as the server in use; anything else is a warning that
+    names the holder. A free port that still would not start is not a port
+    problem, so it gets no toast.
     """
+    if started:
+        return None
     try:
-        from ...api_server import current_app  # noqa: PLC0415
+        from ...viz_vowl import claim_port  # noqa: PLC0415
+        from ...viz_vowl._claim import BLOCKED, REUSE  # noqa: PLC0415
 
-        app = current_app()
-        if app is not None:
-            app.state._ster["selection"] = uri
-    except Exception:  # noqa: BLE001 — context publishing must never break the UI
-        pass
+        claim = claim_port(path, confirm=lambda _question: False)
+    except Exception:  # noqa: BLE001 — a notice must never be the thing that fails
+        return None
+    if claim.outcome == REUSE:
+        return (
+            f"MCP and the graph are served by another ster process at {claim.url}.",
+            "information",
+        )
+    if claim.outcome == BLOCKED:
+        return (f"MCP is off: {claim.message}", "warning")
+    return None
 
 
 def _add_prop_uri(prop_type: str) -> str:

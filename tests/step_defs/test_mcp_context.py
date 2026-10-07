@@ -21,7 +21,7 @@ def _lbl(value: str, lang: str = "en") -> Label:
 
 @pytest.fixture
 def ctx(tmp_path) -> dict:
-    return {"tmp_path": tmp_path, "selection": None, "reply": None}
+    return {"tmp_path": tmp_path, "reply": None}
 
 
 @given("a zoo taxonomy open in ster")
@@ -90,21 +90,10 @@ def given_rdfs_only_file(ctx):
     _retarget(ctx, RDFS_ONLY_TTL)
 
 
-@given(parsers.parse('the user has focused the concept "{name}"'))
-def given_focused(ctx, name):
-    ctx["selection"] = NS + name
-
-
-@given("no entity is focused")
-def given_nothing_focused(ctx):
-    ctx["selection"] = None
-
-
 def _rpc(ctx, method: str, params: dict | None = None):
     ctx["reply"] = ms.handle_message(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
         ctx["tax"],
-        ctx["selection"],
     )
     return ctx["reply"]
 
@@ -136,22 +125,6 @@ def when_sparql(ctx, query):
 @when("the agent lists the tools")
 def when_list_tools(ctx):
     _rpc(ctx, "tools/list")
-
-
-@then(parsers.parse('the focused entity is labelled "{label}"'))
-def then_focused_label(ctx, label):
-    assert _payload(ctx)["focused"]["label"] == label
-
-
-@then(parsers.parse('the ancestor chain is "{chain}"'))
-def then_ancestors(ctx, chain):
-    got = [a["label"] for a in _payload(ctx)["ancestors"]]
-    assert got == [p.strip() for p in chain.split(",")]
-
-
-@then("no entity is reported as focused")
-def then_no_focus(ctx):
-    assert _payload(ctx)["focused"] is None
 
 
 @then(parsers.parse("the overview counts {count:d} concepts"))

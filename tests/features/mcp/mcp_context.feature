@@ -1,22 +1,10 @@
 Feature: Read-only ontology context over MCP
   As someone editing an ontology in ster
-  I want my AI agent to see what I am looking at and answer questions about the graph
+  I want my AI agent to answer questions about the graph
   So that I can ask about my taxonomy without pasting it into a chat window
 
   Background:
     Given a zoo taxonomy open in ster
-
-  Scenario: Agent asks what the user is currently looking at
-    Given the user has focused the concept "Dog"
-    When the agent calls "get_current_context"
-    Then the focused entity is labelled "Dog"
-    And the ancestor chain is "Animal, Mammal"
-
-  Scenario: Context falls back to the file overview when nothing is focused
-    Given no entity is focused
-    When the agent calls "get_current_context"
-    Then no entity is reported as focused
-    And the overview counts 4 concepts
 
   Scenario: Agent gets oriented with an ontology overview
     When the agent calls "get_overview"
@@ -41,7 +29,7 @@ Feature: Read-only ontology context over MCP
 
   Scenario: The agent discovers the available tools
     When the agent lists the tools
-    Then the tool list includes "get_current_context"
+    Then the tool list includes "get_overview"
     And the tool list includes "run_sparql"
     And the tool list includes "get_vocabulary"
 

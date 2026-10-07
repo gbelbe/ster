@@ -201,28 +201,33 @@ def _run_graph_viz_interactive(files: list[Path]) -> None:
     if taxonomy is None:
         return
     console.print(f"\n[dim]Opening graph for[/dim] [bold]{taxonomy_file.name}{_LIT_BOLD}")
+    if not _free_graph_port(taxonomy_file):  # a held port would block the live view
+        return
     try:
-        _free_graph_port()  # a leftover graph process on the port would block the live view
         out = _viz.open_in_browser(taxonomy, taxonomy_file)
         console.print(f"{_LIT_GREEN}{out}")
     except Exception as exc:
         _app.err.print(f"[red]Graph error: {exc}{_LIT_RED}")
 
 
-def _free_graph_port() -> None:
-    """Close a previous graph process still holding the live-server port, so the live
-    (interactive) graph can start. No-op when our own server is already live or the
-    port is free."""
+def _free_graph_port(taxonomy_file: Path) -> bool:
+    """Make the live-server port usable for the graph; False when it cannot be.
+
+    A previous ``ster serve`` is closed only after the reader agrees (it may be a
+    view they are looking at); an interactive ster session or a process that is
+    not ster is never closed — the reason is printed instead. No-op when our own
+    server is already live or the port is free.
+    """
     from .. import viz_vowl as _viz
+    from ._publish import _confirm_replace
 
     if _viz.is_live_server():
-        return
-    holder = _viz.port_holder()
-    if holder is None:
-        return
-    pid, _desc = holder
-    if _viz.free_port(pid):
-        console.print(f"  [dim]Closed a previous graph process (PID {pid}) holding the port.[/dim]")
+        return True
+    claim = _viz.claim_port(taxonomy_file, _confirm_replace)
+    if claim.outcome == "blocked":
+        _app.err.print(f"[red]Graph error: {claim.message}{_LIT_RED}")
+        return False
+    return True
 
 
 def _ensure_pylode() -> bool:
