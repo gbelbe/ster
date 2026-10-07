@@ -1,0 +1,26 @@
+{
+  "label": "Claude Code",
+  "binary": "claude",
+  "verified": true,
+  "priority": 10,
+  "command": ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+              "--strict-mcp-config", "--mcp-config", "{ster_mcp_json}",
+              "--allowedTools", "mcp__ster__*", "--tools", "", "--permission-mode", "dontAsk",
+              "--append-system-prompt", "{system_prompt}"],
+  "resume": ["--resume", "{session}"],
+  "model_args": ["--model", "{model}"],
+  "stdin": "prompt",
+  "output": "events",
+  "stream": [
+    {"when": {"type": "system", "subtype": "init"}, "emit": {"e": "session", "session_id": "$.session_id", "model": "$.model"}},
+    {"when": {"type": "stream_event", "event.type": "message_start"}, "set": {"step": "$.event.message.id"}, "emit": [{"e": "step_start", "step": "$.event.message.id", "model": "$.event.message.model"}, {"e": "usage", "step": "$.event.message.id", "input": "$.event.message.usage.input_tokens", "output": "$.event.message.usage.output_tokens", "cache_read": "$.event.message.usage.cache_read_input_tokens", "cache_write": "$.event.message.usage.cache_creation_input_tokens"}]},
+    {"when": {"type": "stream_event", "event.type": "content_block_start", "event.content_block.type": "thinking"}, "emit": {"e": "thinking", "step": {"state": "step"}}},
+    {"when": {"type": "stream_event", "event.type": "content_block_start", "event.content_block.type": "tool_use"}, "begin": {"key": "$.event.index", "fields": {"id": "$.event.content_block.id", "name": "$.event.content_block.name"}}},
+    {"when": {"type": "stream_event", "event.delta.type": "text_delta"}, "emit": {"e": "text_delta", "step": {"state": "step"}, "text": "$.event.delta.text"}},
+    {"when": {"type": "stream_event", "event.delta.type": "input_json_delta"}, "append": {"key": "$.event.index", "text": "$.event.delta.partial_json"}},
+    {"when": {"type": "stream_event", "event.type": "content_block_stop"}, "flush": {"key": "$.event.index", "emit": {"e": "tool_call", "step": {"state": "step"}, "id": "@id", "name": "@name", "input": {"json": "buffer"}}}},
+    {"when": {"type": "stream_event", "event.type": "message_delta"}, "emit": {"e": "usage", "step": {"state": "step"}, "input": "$.event.usage.input_tokens", "output": "$.event.usage.output_tokens", "cache_read": "$.event.usage.cache_read_input_tokens", "cache_write": "$.event.usage.cache_creation_input_tokens"}},
+    {"when": {"type": "user"}, "each": "$.message.content", "where": {"type": "tool_result"}, "emit": {"e": "tool_result", "id": "$.tool_use_id", "text": {"any": [{"join": "$.content[*].text"}, ""]}, "is_error": {"if": "$.is_error", "then": true, "else": false}}},
+    {"when": {"type": "result"}, "emit": {"e": "done", "status": {"if": "$.is_error", "then": "error", "else": "completed"}, "answer": "$.result", "session_id": "$.session_id", "duration_ms": "$.duration_ms", "cost_usd": "$.total_cost_usd", "usage": {"input": "$.usage.input_tokens", "output": "$.usage.output_tokens", "cache_read": "$.usage.cache_read_input_tokens", "cache_write": "$.usage.cache_creation_input_tokens"}}}
+  ]
+}

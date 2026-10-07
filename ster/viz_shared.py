@@ -30,6 +30,21 @@ from .model import is_builtin_uri
 # strings, so this is the only thing separating an identifier from a label.
 URI_SCHEMES = ("http://", "https://", "urn:")  # NOSONAR - scheme prefixes, not URLs
 
+# The id of the <style> a page gains in embed mode, so a test (or a person reading the source)
+# can tell an embedded page from a normal one.
+EMBED_STYLE_ID = "ster-embed"
+
+
+def embed_style(hidden: tuple[str, ...]) -> str:
+    """The <style> that hides a page's own chrome when it is shown inside another page.
+
+    ``?embed=1`` on ``/map`` and ``/timeline`` asks for it. The page keeps working exactly as before
+    (same query, same token, same script); only what surrounds the drawing is hidden, because the
+    page that frames it supplies its own. ``!important`` so a rule the page adds later cannot bring
+    the chrome back, and the style lives in the head so it applies before anything is drawn.
+    """
+    return f'<style id="{EMBED_STYLE_ID}">{",".join(hidden)}{{display:none !important}}</style>'
+
 
 def ster_cache_dir() -> Path:
     """The directory vendored libraries and generated pages live in."""

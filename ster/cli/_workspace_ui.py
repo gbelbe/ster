@@ -305,8 +305,11 @@ def _home_actions() -> list[tuple[object, str]]:
         (_constants._MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_constants._QUIT_SENTINEL, "✕  Quit"),
     ]
-    from ster.plugins import semanticdiff
+    from ster.plugins import semanticdiff, talk_to_graph
 
+    if talk_to_graph.agent_ready():  # a usable agent: the page replaces the connect instructions
+        at = next(i for i, (s, _) in enumerate(actions) if s is _constants._MCP_SENTINEL)
+        actions[at] = (_constants._AGENT_SENTINEL, "💬 Agent: talk to graph")
     if semanticdiff.is_active():
         actions.insert(6, (_constants._HISTORY_SENTINEL, "🕘 Semantic History"))
     return actions

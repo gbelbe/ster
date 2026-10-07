@@ -1,0 +1,18 @@
+{
+  "label": "OpenCode",
+  "binary": "opencode",
+  "verified": true,
+  "priority": 20,
+  "command": ["opencode", "run", "--format", "json", "{system_prompt}\n\nQuestion: {prompt}"],
+  "resume": ["--session", "{session}"],
+  "model_args": ["-m", "{model}"],
+  "stdin": "none",
+  "output": "events",
+  "env": {"OPENCODE_CONFIG_CONTENT": "{\"mcp\":{\"ster\":{\"type\":\"remote\",\"url\":\"{ster_url}\",\"enabled\":true,\"headers\":{\"Authorization\":\"Bearer {ster_token}\"}}},\"permission\":{\"*\":\"deny\",\"ster_*\":\"allow\"}}"},
+  "stream": [
+    {"when": {"type": "step_start"}, "set": {"step": "$.part.messageID"}, "emit": [{"e": "session", "session_id": "$.sessionID"}, {"e": "step_start", "step": "$.part.messageID"}]},
+    {"when": {"type": "text"}, "emit": {"e": "text_delta", "step": {"state": "step"}, "text": "$.part.text"}},
+    {"when": {"type": "tool_use"}, "emit": [{"e": "tool_call", "step": {"state": "step"}, "id": "$.part.callID", "name": "$.part.tool", "input": "$.part.state.input"}, {"e": "tool_result", "id": "$.part.callID", "text": {"any": ["$.part.state.output", "$.part.state.error"]}, "is_error": {"if": "$.part.state.error", "then": true, "else": false}}]},
+    {"when": {"type": "step_finish"}, "emit": {"e": "usage", "step": "$.part.messageID", "input": "$.part.tokens.input", "output": "$.part.tokens.output", "cache_read": "$.part.tokens.cache.read", "cache_write": "$.part.tokens.cache.write"}}
+  ]
+}

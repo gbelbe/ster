@@ -1,0 +1,6 @@
+{
+  "name": "agent-app",
+  "private": true,
+  "type": "commonjs",
+  "description": "Marks this folder CommonJS: the page scripts export for node when tested, and run as plain scripts in the browser."
+}

@@ -1,0 +1,23 @@
+{
+  "label": "Codex CLI",
+  "binary": "codex",
+  "verified": false,
+  "priority": 25,
+  "command": [
+    "codex",
+    "exec",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+    "-c",
+    "mcp_servers.ster.url=\"{ster_url}\"",
+    "-c",
+    "mcp_servers.ster.bearer_token_env_var=\"ASK_STER_TOKEN\"",
+    "{system_prompt}\n\nQuestion: {prompt}"
+  ],
+  "env": {
+    "ASK_STER_TOKEN": "{ster_token}"
+  },
+  "stdin": "none",
+  "output": "text"
+}

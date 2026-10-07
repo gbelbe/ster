@@ -9,9 +9,11 @@ from ster.plugins import get, is_enabled, set_enabled
 from ster.plugins.query_trace.sessions import AgentSession, TraceSession, sessions_for_project
 from ster.query_trace.model import Event
 
+RUN_EVENTS = 2  # a journal of one run: started, completed
+
 
 def test_query_trace_plugin_is_registered_with_portable_dependency():
-    spec = get("mcp_query_trace")
+    spec = get("mcp")
     assert spec is not None
     assert spec.dependency == "ster.query_trace"
 
@@ -20,18 +22,18 @@ def test_query_trace_plugin_enablement_is_persistent(monkeypatch, tmp_path):
     prefs = tmp_path / "prefs.json"
     monkeypatch.setattr("ster.nav.prefs._prefs_path", lambda: prefs)
 
-    set_enabled("mcp_query_trace", True)
-    assert is_enabled("mcp_query_trace") is True
-    assert "mcp_query_trace" in prefs.read_text(encoding="utf-8")
+    set_enabled("mcp", True)
+    assert is_enabled("mcp") is True
+    assert "mcp" in prefs.read_text(encoding="utf-8")
 
-    set_enabled("mcp_query_trace", False)
-    assert is_enabled("mcp_query_trace") is False
+    set_enabled("mcp", False)
+    assert is_enabled("mcp") is False
 
 
 def test_plugin_dependency_is_checked_as_an_importable_module():
     import importlib
 
-    spec = get("mcp_query_trace")
+    spec = get("mcp")
     assert spec is not None
     assert importlib.util.find_spec(spec.dependency) is not None
 
@@ -189,7 +191,7 @@ def test_agent_session_aggregates_questions_and_token_usage(tmp_path):
 
     assert grouped.started == session.started
     assert grouped.ended == session.ended
-    assert grouped.event_count == 2
+    assert grouped.event_count == RUN_EVENTS
     assert grouped.call_count == 1
     assert grouped.agent_question == "step question"
     assert grouped.session_question == "global question"

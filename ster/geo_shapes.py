@@ -35,6 +35,7 @@ import rdflib
 from rdflib.namespace import GEO, XSD
 
 from .model import is_builtin_uri
+from .viz_shared import most_specific_types
 
 # The W3C Basic Geo namespace is http, not https — rdflib binds `wgs` to an
 # https variant that real data does not use, so this one is spelled out. Flagged
@@ -1147,18 +1148,6 @@ def _has_children(graph: rdflib.Graph, node: rdflib.term.Node) -> bool:
     return found
 
 
-def _superclasses(graph: rdflib.Graph, cls: rdflib.URIRef, rdfs: object) -> set[str]:
-    """Every class above *cls*, transitively. Bounded, so a cycle cannot hang."""
-    seen: set[rdflib.URIRef] = set()
-    frontier = [cls]
-    while frontier and len(seen) < 64:
-        for parent in graph.objects(frontier.pop(), rdfs.subClassOf):  # type: ignore[attr-defined]
-            if isinstance(parent, rdflib.URIRef) and parent not in seen:
-                seen.add(parent)
-                frontier.append(parent)
-    return {str(c) for c in seen}
-
-
 def _facet_classes(graph: rdflib.Graph, node: rdflib.term.Node) -> list[str]:
     """*node*'s most specific modelled classes — every one, not just the deepest.
 
@@ -1166,22 +1155,10 @@ def _facet_classes(graph: rdflib.Graph, node: rdflib.term.Node) -> list[str]:
     axes need not meet: where brands are modelled as classes, a business unit is
     both a BusinessUnit and a LeroyMerlin. Neither subsumes the other, both are
     useful filters, so the entity belongs in both facets. Picking only the
-    deepest would silently retire the other menu.
-
-    A class is dropped only when some *other* declared class already implies it,
-    since offering Person beside Employee adds a filter that says less.
+    deepest would silently retire the other menu. The walk is the one every view
+    shares (:func:`ster.viz_shared.most_specific_types`).
     """
-    from rdflib.namespace import RDF, RDFS  # noqa: PLC0415
-
-    declared = [
-        cls
-        for cls in graph.objects(node, RDF.type)
-        if isinstance(cls, rdflib.URIRef) and not is_builtin_uri(str(cls))
-    ]
-    implied: set[str] = set()
-    for cls in declared:
-        implied |= _superclasses(graph, cls, RDFS) - {str(cls)}
-    return sorted({str(c) for c in declared} - implied)
+    return most_specific_types(graph, node)
 
 
 def facet_catalogue(graph: rdflib.Graph, uris: list[str]) -> dict[str, dict]:

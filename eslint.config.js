@@ -44,4 +44,12 @@ export default [
       "no-unused-vars": ["error", { caughtErrors: "none", args: "none" }],
     },
   },
+  {
+    // agent-app/: page scripts that also export for node when tested (UMD-style `module.exports`), and node's own test files.
+    files: ["agent-app/**/*.js"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
 ];

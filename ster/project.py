@@ -15,6 +15,21 @@ from pathlib import Path
 # ──────────────────────────── git helpers ────────────────────────────────────
 
 
+STER_DIR = ".ster"  # a project's state folder, beside its files
+PROJECT_FILE = "project.json"  # what marks a folder as a ster project
+
+
+def home_of(file: Path) -> Path:
+    """The folder a file's project keeps its ``.ster/`` in: the nearest parent that already has a ``project.json``
+    there, else the file's own folder. Query traces and the Talk to graph page's history live in that folder, so
+    a file in ``data/`` of a project whose ``.ster/`` is one level up still shares it."""
+    here = file.resolve().parent
+    for folder in (here, *here.parents):
+        if (folder / STER_DIR / PROJECT_FILE).is_file():
+            return folder
+    return here
+
+
 def _git_root(cwd: Path) -> Path | None:
     """Return the git root for *cwd*, or None if not inside a repository."""
     try:
@@ -53,11 +68,11 @@ class Project:
     @staticmethod
     def _ster_dir(cwd: Path) -> Path:
         root = _git_root(cwd) or cwd
-        return root / ".ster"
+        return root / STER_DIR
 
     @staticmethod
     def _project_file(cwd: Path) -> Path:
-        return Project._ster_dir(cwd) / "project.json"
+        return Project._ster_dir(cwd) / PROJECT_FILE
 
     # ── persistence ───────────────────────────────────────────────────────────
 
@@ -82,9 +97,9 @@ class Project:
 
     def save(self) -> None:
         """Write the project file, creating .ster/ if needed."""
-        ster_dir = self.root / ".ster"
+        ster_dir = self.root / STER_DIR
         ster_dir.mkdir(parents=True, exist_ok=True)
-        p = ster_dir / "project.json"
+        p = ster_dir / PROJECT_FILE
         data: dict[str, object] = {
             "files": [str(f) for f in self.files],
             "lang": self.lang,

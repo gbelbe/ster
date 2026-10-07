@@ -76,6 +76,8 @@ INVALID_PARAMS = -32602
 
 _STRING = {"type": "string"}
 _ARG_QUERY: Final = "query"
+_ARG_QUESTION: Final = "question"
+_QUESTION_MAX: Final = 10000  # characters of a step question, from _meta or from the argument
 _VIEW_ENUM: Final = {**_STRING, "enum": list(VIEWS)}
 _ARG_LIMIT: Final = "limit"
 _LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": 200}
@@ -205,6 +207,17 @@ TOOLS: list[dict[str, Any]] = [
         ),
         {
             _ARG_QUERY: _STRING,
+            _ARG_QUESTION: {
+                "type": "string",
+                "maxLength": _QUESTION_MAX,
+                _DESC: (
+                    "In one plain sentence, what this query looks for (for example 'Count the "
+                    "open epics of the CCDP'), in the language of the user's question. It is "
+                    "recorded in the query trace and shown as the step's title. Give it on "
+                    "every call: most clients cannot set the _meta field that carries it "
+                    "otherwise."
+                ),
+            },
             "view": {
                 **_VIEW_ENUM,
                 _DESC: (
@@ -338,7 +351,17 @@ def _tool_get_timeline(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
     )
 
 
+def _question_argument(args: dict) -> str | None:
+    """The step question a caller passed as an argument: text, at most _QUESTION_MAX characters, else None."""
+    value = args.get(_ARG_QUESTION)
+    if not isinstance(value, str) or not value.strip() or len(value) > _QUESTION_MAX:
+        return None
+    return value.strip()
+
+
 def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
+    # _meta, when the client could send it, wins; the argument is for the clients that cannot set _meta.
+    call = replace(call, agent_question=call.agent_question or _question_argument(args))
     payload = ctx.run_sparql(
         tax,
         args[_ARG_QUERY],
@@ -443,6 +466,8 @@ request metadata:
     "com.adeo/agent-session-question": "the original user question",
     "com.adeo/agent-question": "the concise natural-language subquestion for this step"
   }
+A client that cannot set _meta can pass the step question as run_sparql's "question"
+argument instead.
 Reuse the same agent-session-id and agent-session-question for every MCP call
 made while answering one user question. Each call's agent-question should
 describe only that call's subquestion; do not use one step's question as the
@@ -594,7 +619,8 @@ def _add_question_metadata_notice(payload: dict[str, Any], call: CallContext) ->
         payload["agent_question_required"] = True
         payload["agent_question_hint"] = (
             "Before the next MCP call, provide this step's concise natural-language "
-            "subquestion in _meta.com.adeo/agent-question."
+            "subquestion in _meta.com.adeo/agent-question (run_sparql also takes it as its "
+            "'question' argument, for clients that cannot set _meta)."
         )
     if call.agent_session_question:
         payload["agent_session_question"] = call.agent_session_question
@@ -685,10 +711,10 @@ def handle_message(
     if not isinstance(agent_session_id, str) or len(agent_session_id) > 256:
         agent_session_id = None
     agent_question = metadata.get("com.adeo/agent-question")
-    if not isinstance(agent_question, str) or len(agent_question) > 10000:
+    if not isinstance(agent_question, str) or len(agent_question) > _QUESTION_MAX:
         agent_question = None
     agent_session_question = metadata.get("com.adeo/agent-session-question")
-    if not isinstance(agent_session_question, str) or len(agent_session_question) > 10000:
+    if not isinstance(agent_session_question, str) or len(agent_session_question) > _QUESTION_MAX:
         agent_session_question = None
     token_usage = _normalise_token_usage(metadata.get("com.adeo/token-usage"))
     call = replace(

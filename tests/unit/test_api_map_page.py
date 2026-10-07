@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
+import pytest
 from fastapi.testclient import TestClient
 
 from ster.api import SSEBroadcaster, create_app
@@ -28,14 +31,14 @@ def _client() -> TestClient:
 
 def test_map_route_returns_html() -> None:
     response = _client().get("/map")
-    assert response.status_code == 200
+    assert response.status_code == HTTPStatus.OK
     assert "text/html" in response.headers["content-type"]
 
 
 def test_map_route_loads_without_a_token() -> None:
     """Same as /viz: the page itself is open, its API calls carry the token."""
     response = _client().get("/map")
-    assert response.status_code == 200
+    assert response.status_code == HTTPStatus.OK
 
 
 def test_map_route_renders_the_supplied_query() -> None:
@@ -133,7 +136,7 @@ ex:shop  ex:partOf ex:Brand ; wgs:lat 48.11 ; wgs:long -1.68 .
     finally:
         api._graph_for_locate = original  # type: ignore[assignment]
 
-    assert response.status_code == 200
+    assert response.status_code == HTTPStatus.OK
     assert "VALUES ?thing" in response.text
     assert "shop" in response.text
 
@@ -141,5 +144,65 @@ ex:shop  ex:partOf ex:Brand ; wgs:lat 48.11 ; wgs:long -1.68 .
 def test_a_focus_that_reaches_nothing_still_serves_the_default_map() -> None:
     response = _client().get("/map", params={"focus": NS + "Nowhere"})
 
-    assert response.status_code == 200
+    assert response.status_code == HTTPStatus.OK
     assert "VALUES ?thing" not in response.text
+
+
+# ---- embed mode: the page without its own chrome, for showing inside another page ----------------
+
+
+def _hidden_by_embed(html: str) -> list[str] | None:
+    """The selectors the embed <style> hides, or None when the page is not embedded."""
+    marker = '<style id="ster-embed">'
+    if marker not in html:
+        return None
+    return html.split(marker, 1)[1].split("{display:none !important}", 1)[0].split(",")
+
+
+def test_map_page_without_embed_carries_no_embed_style() -> None:
+    assert _hidden_by_embed(_client().get("/map").text) is None
+
+
+def test_map_embed_hides_the_pages_own_chrome() -> None:
+    hidden = _hidden_by_embed(_client().get("/map", params={"embed": "1"}).text)
+    assert hidden is not None
+    assert {"header", "#query-panel", "aside"} <= set(hidden)
+
+
+def test_map_embed_leaves_the_map_itself_alone() -> None:
+    hidden = _hidden_by_embed(_client().get("/map", params={"embed": "1"}).text) or []
+    assert "#map" not in hidden
+    assert "main" not in hidden
+
+
+def test_map_embed_keeps_the_query_and_the_token() -> None:
+    text = _client().get("/map", params={"q": QUERY, "embed": "1"}).text
+    assert "wgs84_pos" in text
+    assert TOKEN in text
+
+
+def test_map_embed_style_sits_in_the_head_so_it_applies_before_the_page_draws() -> None:
+    text = _client().get("/map", params={"embed": "1"}).text
+    assert text.index('id="ster-embed"') < text.index("</head>")
+
+
+@pytest.mark.parametrize(
+    ("value", "embedded"),
+    [("1", True), ("true", True), ("on", True), ("0", False), ("false", False), ("off", False)],
+)
+def test_map_embed_flag_values(value: str, embedded: bool) -> None:
+    text = _client().get("/map", params={"embed": value}).text
+    assert (_hidden_by_embed(text) is not None) is embedded
+
+
+def test_map_embed_rejects_a_value_that_is_not_a_boolean() -> None:
+    assert (
+        _client().get("/map", params={"embed": "maybe"}).status_code
+        == HTTPStatus.UNPROCESSABLE_ENTITY
+    )
+
+
+def test_map_embed_combines_with_show_everything() -> None:
+    text = _client().get("/map", params={"embed": "1", "show": "all"}).text
+    assert _hidden_by_embed(text) is not None
+    assert "let showAll = true;" in text

@@ -81,9 +81,12 @@ jobs:
 
       - name: node --check — syntax of every browser .js
         run: |
-          for f in ster/assets/*.js kai-extension/*.js; do
+          for f in ster/assets/*.js kai-extension/*.js agent-app/agent_app/static/*.js; do
             echo "checking $f"; node --check "$f";
           done
+
+      - name: agent-app — JavaScript tests (node's built-in runner)
+        run: node --test agent-app/tests/*.test.js
 
   # ── 1c. Complexity ratchet (diff-aware) ──────────────────────────────────────
   # scripts/check_complexity_ratchet.py is now craft-gate's canonical copy

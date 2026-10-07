@@ -18,7 +18,7 @@ _LIT_PARENT: Final = "--parent"
 _LIT_HANDLE: Final = "HANDLE"
 
 
-from . import _app, _export, _file_picker, _taxonomy_io, _viewer
+from . import _app, _export, _file_picker, _mcp_option, _options, _taxonomy_io, _viewer
 
 # ──────────────────────────── show ───────────────────────────────────────────
 
@@ -45,13 +45,8 @@ def cmd_show(
         "-p",
         help="Print static tree and exit (no interactive viewer).",
     ),
-    context_files: list[Path] | None = typer.Option(
-        None,
-        "--context-files",
-        "-x",
-        help="Load these files read-only alongside FILE (repeatable). "
-        "Their entities are visible but locked, and saving never writes to them.",
-    ),
+    context_files: list[Path] | None = _options.context_files(),
+    mcp: bool | None = _mcp_option.option(),  # type: ignore[assignment]
 ) -> None:
     """Open the interactive taxonomy browser (the Textual New-TUI) and commit on exit.
 
@@ -64,6 +59,7 @@ def cmd_show(
 
     Pass --plain to print the tree non-interactively and exit.
     """
+    _mcp_option.apply(mcp)
     taxonomy_file = _file_picker._resolve_file(file)
     # The interactive viewer diagnoses an unreadable file itself, in a modal that
     # can also apply the fix; only the printing paths need the text report.

@@ -22,7 +22,7 @@ _LIT_WARNING: Final = "warning"
 class _ConfigMixin(_AppState):
     """Mixin: the config modal round-trip: opening it, applying the returned config (plugins, theme, SHACL enforcement, ontology CI writing), and persisting it."""
 
-    def action_open_config(self) -> None:
+    def action_open_config(self) -> None:  # noqa: V105
         """Open the global configuration modal (it auto-saves via ConfigModal.Changed)."""
         from ster.annotation_properties import is_annotation_property
 
@@ -47,11 +47,11 @@ class _ConfigMixin(_AppState):
             )
         )
 
-    def on_config_modal_changed(self, message) -> None:  # type: ignore[no-untyped-def]
+    def on_config_modal_changed(self, message) -> None:  # type: ignore[no-untyped-def]  # noqa: V105
         """A setting changed in the config modal → apply it live and persist."""
         self._apply_config(message.result)
 
-    def on_config_modal_write_onto_ci(self, message) -> None:  # type: ignore[no-untyped-def]
+    def on_config_modal_write_onto_ci(self, message) -> None:  # type: ignore[no-untyped-def]  # noqa: V105
         """Export the plugin's quality config to the repo's onto-ci.yml (aligns CI)."""
         if self._path is None:
             self.notify("No file open — can't locate the repo.", severity=_LIT_WARNING)
@@ -61,7 +61,7 @@ class _ConfigMixin(_AppState):
         path = config.write_onto_ci(self._path.parent)
         self.notify(f"Wrote {path.name} (aligned with quality.json).")
 
-    def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]
+    def on_declare_annotation_property(self, message) -> None:  # type: ignore[no-untyped-def]  # noqa: V105
         """A config-modal predicate was confirmed despite not being a known annotation
         property → declare it locally as an ``owl:AnnotationProperty`` (skip if it is
         already a property of some kind)."""
@@ -205,16 +205,18 @@ class _ConfigMixin(_AppState):
                 plugins.set_enabled(plugin_id, bool(enabled))
                 changed = True
         if changed:
+            self.refresh_bindings()  # the 'a' key follows the talk-to-graph option
             self._invalidate_lint()  # force a recompute with the new active state
-        if "mcp_query_trace" in result.get("plugins", {}):
+        if "mcp" in result.get("plugins", {}):
+            from ster.project import home_of
             from ster.query_trace import configure
 
             directory = (
-                self._path.parent / ".ster" / "query-traces"
+                home_of(self._path) / ".ster" / "query-traces"
                 if self._path is not None
                 else Path(".ster/query-traces")
             )
-            configure(bool(result["plugins"]["mcp_query_trace"]), str(directory))
+            configure(bool(result["plugins"]["mcp"]), str(directory))
         return changed
 
     def _apply_theme(self, result: dict) -> None:
@@ -293,7 +295,7 @@ class _ConfigMixin(_AppState):
         service.add_rename_listener(graph_layout.rename_nodes)  # positions follow renames
         return service
 
-    def action_cycle_theme(self) -> None:
+    def action_cycle_theme(self) -> None:  # noqa: V105
         """Step through the curated theme shortlist (the full list is in the palette)."""
         cycle = [name for name in THEME_CYCLE if name in self.available_themes]
         if not cycle:

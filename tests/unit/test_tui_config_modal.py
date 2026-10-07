@@ -15,12 +15,14 @@ from ster.nav.prefs import _load_prefs, load_configured_langs, save_configured_l
 from ster.tui.app import OntologyApp
 from ster.tui.config_modal import ConfigModal
 
-pytestmark = pytest.mark.tui
+pytestmark = pytest.mark.tui  # noqa: V107
 
+META_CATALOGS = 2  # the ontology catalog and the entity catalog
+HALF, WHOLE = 0.5, 1.0  # a coverage threshold as a fraction
 DEMO = Path(__file__).resolve().parents[2] / "ster" / "tui" / "demo.ttl"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # noqa: V103
 def _isolate_prefs(tmp_path, monkeypatch):
     """Redirect all preference files to a temp dir so tests don't touch real config."""
     from ster import api_server
@@ -320,7 +322,7 @@ def test_annotation_tab_renamed_and_has_two_foldable_groups(tmp_path) -> None:
             titles = {c.title for c in modal.query(Collapsible)}
             assert {"Ontology Metadata", "Entity metadata"} <= titles
             # Two independent catalog editors, each with its own add row.
-            assert len(modal.query(_MetaCatalog)) == 2
+            assert len(modal.query(_MetaCatalog)) == META_CATALOGS
             assert _ont_catalog(modal).query_one(".cfg-mp-uri")
             assert _entity_catalog(modal).query_one(".cfg-mp-uri")
 
@@ -945,7 +947,7 @@ def test_semanticlint_thresholds_and_features_persist_to_quality_json(tmp_path) 
                 await pilot.pause()
         saved = config.load_config()
         assert saved["features"]["icons"] is False
-        assert saved["quality"]["min_label_coverage"] == 0.5
+        assert saved["quality"]["min_label_coverage"] == HALF
 
     _run(scenario)
 
@@ -956,7 +958,7 @@ def test_threshold_percent_display_and_parse_round_trip() -> None:
 
     assert _pct_display(1.0) == "100" and _pct_display(0.5) == "50"
     assert _pct_display(None) == "" and _pct_display("") == ""  # unset → blank field
-    assert _pct_parse("100") == 1.0 and _pct_parse("50%") == 0.5
+    assert _pct_parse("100") == WHOLE and _pct_parse("50%") == HALF
     assert _pct_parse("") is None and _pct_parse("abc") is None  # keep stored value
     assert _pct_parse("250") == 1.0 and _pct_parse("-5") == 0.0  # clamped to 0–1
 
@@ -1137,7 +1139,7 @@ def test_enforce_button_toggles_its_label() -> None:
     assert "Enforce" in str(button.label) and button.variant == "success"
 
 
-@pytest.fixture
+@pytest.fixture  # noqa: V103
 def enforce_enabled(tmp_path, monkeypatch):
     """Enable semanticlint + its opt-in 'enforce' feature so the SHACL authoring UI
     (catalog buttons, context-menu items) is active."""
@@ -1162,7 +1164,7 @@ def test_enforce_buttons_hidden_when_feature_off(tmp_path) -> None:
     _run(scenario)
 
 
-def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path, enforce_enabled) -> None:
+def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path, enforce_enabled) -> None:  # noqa: V103
     """Pressing a catalog row's Enforce button writes a SHACL rule (message reaches the
     app) and relabels the button to Delete; pressing again removes the rule."""
 
@@ -1184,5 +1186,34 @@ def test_pressing_enforce_button_writes_a_rule_and_toggles_label(tmp_path, enfor
                 await pilot.pause()
             assert "sh:minCount 1" not in shapes.read_text(encoding="utf-8")
             assert "Enforce" in str(button.label)
+
+    _run(scenario)
+
+
+def test_the_mcp_plugin_has_its_tab_when_it_is_on(tmp_path) -> None:
+    async def scenario() -> None:
+        from ster import plugins
+
+        plugins.set_enabled("mcp", True)
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert modal.query("#cfg-tab-mcp")  # the traces, and Talk to graph, are one switch
+
+    _run(scenario)
+
+
+def test_toggling_the_mcp_plugin_adds_and_removes_its_tab(tmp_path, settle) -> None:
+    async def scenario() -> None:
+        app, _src = _app(tmp_path)
+        async with app.run_test(size=(120, 48)) as pilot:
+            modal = await _open_app_config(pilot, app)
+            assert not modal.query("#cfg-tab-mcp")  # off by default
+
+            modal.query_one("#cfg-plugin-mcp", Checkbox).value = True
+            assert await settle(pilot, lambda: bool(modal.query("#cfg-tab-mcp")))
+
+            modal.query_one("#cfg-plugin-mcp", Checkbox).value = False
+            assert await settle(pilot, lambda: not modal.query("#cfg-tab-mcp"))
 
     _run(scenario)

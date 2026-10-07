@@ -37,7 +37,7 @@ def _result(query_type: str = "SELECT", rows: int = 1) -> QueryResult:
     return QueryResult(columns=["s"], rows=[["https://x/Thing"]] * rows, query_type=query_type)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # noqa: V103
 def _server_up():
     with patch.object(view_links, "_server_running", return_value=True):
         yield
@@ -126,3 +126,37 @@ def test_a_usable_link_carries_a_hint_for_callers_without_a_browser(tax):
 
     assert payload["view_url"]
     assert "browser" in payload["view_hint"]
+
+
+# ---- embed: the link asks for the page without its own chrome ------------------------------------
+
+_BASE = "http://127.0.0.1:8765"
+
+
+def test_map_url_has_no_embed_unless_asked() -> None:
+    assert "embed" not in view_links.map_url("SELECT 1", base=_BASE)
+
+
+def test_map_url_asks_for_embed_when_told_to() -> None:
+    assert view_links.map_url("SELECT 1", base=_BASE, embed=True).endswith("&embed=1")
+
+
+def test_map_url_embed_comes_after_the_focus() -> None:
+    url = view_links.map_url("SELECT 1", "https://x/Thing", base=_BASE, embed=True)
+    assert url == f"{_BASE}/map?q=SELECT%201&focus=https%3A//x/Thing&embed=1"
+
+
+def test_timeline_url_has_no_embed_unless_asked() -> None:
+    assert "embed" not in view_links.timeline_url("SELECT 1", base=_BASE)
+
+
+def test_timeline_url_embed_keeps_the_date_range() -> None:
+    url = view_links.timeline_url(
+        "SELECT 1", base=_BASE, date_range=view_links.DateRange(after="2025-01-01"), embed=True
+    )
+    assert "after=2025-01-01" in url
+    assert url.endswith("&embed=1")
+
+
+def test_embed_never_touches_the_graph_link() -> None:
+    assert "embed" not in view_links.graph_url("SELECT 1", base=_BASE)

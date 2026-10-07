@@ -37,23 +37,23 @@ class _PluginsMixin(_ModalState):
         ]
         yield FormGroup(*blocks, id="cfg-plugins-group")  # one Tab stop, arrows rove the cards
 
-    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:  # noqa: V105
         """Add / remove the Semantic Lint tab live when the plugin is toggled."""
         if event.checkbox.id != "cfg-plugin-semanticlint":
-            if event.checkbox.id != "cfg-plugin-mcp_query_trace":
+            if event.checkbox.id != "cfg-plugin-mcp":
                 return
             tabbed = self.query_one(TabbedContent)
-            mounted = bool(self.query("#cfg-tab-mcp-query-trace"))
+            mounted = bool(self.query("#cfg-tab-mcp"))
             if event.value and not mounted:
                 await tabbed.add_pane(
                     TabPane(
-                        "MCP Query Trace",
+                        "MCP",
                         self._trace_panel(),
-                        id="cfg-tab-mcp-query-trace",
+                        id="cfg-tab-mcp",
                     )
                 )
             elif not event.value and mounted:
-                await tabbed.remove_pane("cfg-tab-mcp-query-trace")
+                await tabbed.remove_pane("cfg-tab-mcp")
             return
         tabbed = self.query_one(TabbedContent)
         mounted = bool(self.query("#cfg-tab-semanticlint"))

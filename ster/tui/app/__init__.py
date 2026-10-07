@@ -327,6 +327,7 @@ class OntologyApp(
         Binding("s", "open_query", "SPARQL"),
         Binding("m", "open_map", "Map"),
         Binding("t", "open_timeline", "Timeline"),
+        Binding("a", "open_agent", "Agent"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("r", "toggle_source", "Source"),
         Binding("f", "working_file", "Working file"),

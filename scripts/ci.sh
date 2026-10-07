@@ -70,7 +70,7 @@ ok "no ghost deletions"
 # repo root is their own business and must not block the gate. Only files that
 # would ship are checked.
 step "Pre-flight: untracked Python files"
-UNTRACKED_PY=$(git ls-files --others --exclude-standard -- 'ster/*.py' 'tests/*.py' 'scripts/*.py' 2>/dev/null || true)
+UNTRACKED_PY=$(git ls-files --others --exclude-standard -- 'ster/*.py' 'tests/*.py' 'scripts/*.py' 'agent-app/*.py' 2>/dev/null || true)
 if [[ -n "$UNTRACKED_PY" ]]; then
   echo -e "${FAIL} Untracked .py files in the source tree — prek cannot see them, so GitHub lints them first:"
   while IFS= read -r f; do echo "  ? $f"; done <<< "$UNTRACKED_PY"
@@ -223,6 +223,16 @@ else
   uv run pytest tests/ -q --tb=short -n auto ${MARKER_ARGS[@]+"${MARKER_ARGS[@]}"} \
     --cov=ster --cov-report=term-missing --cov-report=xml
   ok "pytest"
+fi
+
+# The agent app is its own package in its own folder, with its own tests (Python and node).
+# The agent app's pytest tests are in pyproject's testpaths, so the run above covers them (and their coverage).
+step "Agent app tests (agent-app/, JavaScript)"
+if command -v node >/dev/null 2>&1; then
+  node --test agent-app/tests/*.test.js
+  ok "agent-app node tests"
+else
+  warn "node not found — skipping the agent app's JavaScript tests (the GitHub 'Lint JS' job runs them)"
 fi
 
 # ── 5. Mutation ratchet — full mode only ──────────────────────────────────────

@@ -23,6 +23,7 @@ import html
 import json
 
 from .branding import FAVICON_LINK_TAG
+from .viz_shared import embed_style
 
 _PAGE = """<!doctype html>
 <html lang="en">
@@ -201,6 +202,7 @@ __FAVICON__
           background:rgba(22,25,29,.86); color:#fff; padding:7px 14px; border-radius:20px;
           font-size:13px; pointer-events:none; transition:opacity .3s; }
 </style>
+__EMBED__
 </head>
 <body>
 <header>
@@ -1459,16 +1461,24 @@ run();
 _PAGE = _PAGE.replace("__FAVICON__", FAVICON_LINK_TAG)
 
 
-def render_map_html(query: str, token: str, show_all: bool = False) -> str:
+# What the page shows around the map itself; hidden when it is embedded in another page.
+_EMBED_HIDDEN = ("header", "#query-panel", "aside")
+
+
+def render_map_html(query: str, token: str, show_all: bool = False, embed: bool = False) -> str:
     """The ``/map`` page, primed with *query* and able to re-run it via *token*.
 
     *show_all* opens the page drawing every result beneath the focus rather than
     one tier of the hierarchy, so a link can be shared in either mode.
+
+    *embed* hides the header, the query box and the details panel, for showing the map inside
+    another page: the map, its clustering and its drill-down are unchanged.
     """
     return (
         _PAGE.replace("__QUERY__", _escape(query))
         .replace("__TOKEN__", json.dumps(token))
         .replace("__SHOW_ALL__", "true" if show_all else "false")
+        .replace("__EMBED__", embed_style(_EMBED_HIDDEN) if embed else "")
     )
 
 

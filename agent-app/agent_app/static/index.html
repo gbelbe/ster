@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ask the ontology</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: history rail | conversation | step timeline. The timeline is the product:
+   every model call, ster query and token count between the question and the answer. */
+:root {
+  --bg: #eceFeb;
+  --surface: #f8faf8;
+  --surface-2: #f0f3f0;
+  --ink: #12201a;
+  --ink-2: #4f5f56;
+  --ink-3: #7a8981;
+  --line: #d3dbd5;
+  --accent: #0b6e4f;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcefe6;
+  --good: #0b7a3e;
+  --bad: #b3261e;
+  --warn: #8a5a00;
+  /* data series, fixed order (dataviz reference palette, validated) */
+  --s-input: #2a78d6;
+  --s-output: #eb6834;
+  --s-cache-read: #1baf7a;
+  --s-cache-write: #eda100;
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #008300; --c7: #4a3aa7; --c8: #e34948;
+  --tok-iri: #7a3db8;
+  --tok-var: #1a6fb3;
+  --tok-kw: #0b6e4f;
+  --tok-str: #a3501a;
+  --tok-cmt: #7a8981;
+  --f-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --f-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1411; --surface: #141b17; --surface-2: #1a231e;
+    --ink: #e6ece8; --ink-2: #a2b0a8; --ink-3: #75847b; --line: #26322b;
+    --accent: #3fb585; --accent-ink: #07130d; --accent-soft: #17382a;
+    --good: #4cc27f; --bad: #ff8a80; --warn: #e0b04a;
+    --s-input: #3987e5; --s-output: #d95926; --s-cache-read: #199e70; --s-cache-write: #c98500;
+    --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #008300; --c7: #9085e9; --c8: #e66767;
+    --tok-iri: #b794f4; --tok-var: #6cb6ff; --tok-kw: #4cc79a; --tok-str: #e0a36a; --tok-cmt: #75847b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1411; --surface: #141b17; --surface-2: #1a231e;
+  --ink: #e6ece8; --ink-2: #a2b0a8; --ink-3: #75847b; --line: #26322b;
+  --accent: #3fb585; --accent-ink: #07130d; --accent-soft: #17382a;
+  --good: #4cc27f; --bad: #ff8a80; --warn: #e0b04a;
+  --s-input: #3987e5; --s-output: #d95926; --s-cache-read: #199e70; --s-cache-write: #c98500;
+  --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #008300; --c7: #9085e9; --c8: #e66767;
+  --tok-iri: #b794f4; --tok-var: #6cb6ff; --tok-kw: #4cc79a; --tok-str: #e0a36a; --tok-cmt: #75847b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 var(--f-body); -webkit-font-smoothing: antialiased;
+}
+[hidden] { display: none !important; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--f-mono); font-size: 12px; }
+
+/* ---------- shell ---------- */
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+.top {
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.brand { font: 700 18px/1 var(--f-display); letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 8px; }
+.brand small { font: 500 12px var(--f-body); color: var(--ink-3); letter-spacing: 0; }
+.spacer { flex: 1; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 99px;
+  border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); background: var(--surface-2);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.dot.up { background: var(--good); } .dot.down { background: var(--bad); } .dot.warn { background: var(--warn); }
+.dot.run { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.icon-btn {
+  width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); display: inline-grid; place-items: center; color: var(--ink-2);
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+.lang { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; }
+.only-narrow { display: none !important; } /* later .seg / .icon-btn rules set display and would win without !important */
+
+.cols { min-height: 0; display: grid; grid-template-columns: 264px minmax(0, 1fr) minmax(360px, 460px); }
+.col { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.col + .col { border-left: 1px solid var(--line); }
+
+/* ---------- history ---------- */
+.hist { background: var(--surface); }
+.hist-head { padding: 12px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+  font-weight: 500;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { border-color: var(--bad); color: var(--bad); }
+.btn[disabled] { opacity: .5; cursor: default; }
+.search {
+  width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg);
+}
+.hist-list { overflow: auto; padding: 8px; flex: 1; }
+.hist-group { font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 12px 8px 4px; }
+.hist-item {
+  display: grid; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid transparent; background: none; position: relative;
+}
+.hist-item:hover { background: var(--surface-2); }
+.hist-item[aria-current="true"] { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.hist-title { font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; padding-right: 22px; }
+.hist-meta { font-size: 12px; color: var(--ink-3); display: flex; gap: 8px; flex-wrap: wrap; }
+.hist-del { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border: 0; background: none; border-radius: 6px; color: var(--ink-3); opacity: 0; }
+.hist-item:hover .hist-del, .hist-del:focus-visible { opacity: 1; }
+.hist-del:hover { color: var(--bad); background: var(--surface); }
+.confirm { display: flex; gap: 6px; align-items: center; font-size: 12px; padding-top: 4px; }
+.confirm button { padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
+.empty-note { color: var(--ink-3); padding: 16px 10px; font-size: 13px; }
+
+/* ---------- conversation ---------- */
+.chat { background: var(--bg); }
+.thread { flex: 1; overflow: auto; padding: 20px 24px 8px; }
+.thread-inner { max-width: 760px; margin: 0 auto; display: grid; gap: 18px; }
+.turn { display: grid; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; min-width: 0; }
+.turn[data-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.q {
+  background: var(--accent-soft); color: var(--ink); font-weight: 600; border-bottom: 1px solid var(--line);
+  padding: 12px 16px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.a { padding: 14px 16px; min-width: 0; }
+.a-status { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.a-status .elapsed { margin-left: auto; color: var(--ink-3); }
+.prose > :first-child { margin-top: 0; } .prose > :last-child { margin-bottom: 0; }
+.prose p, .prose ul, .prose ol { margin: .6em 0; }
+.prose h3, .prose h4, .prose h5 { font-family: var(--f-display); margin: 1em 0 .3em; letter-spacing: -.005em; }
+.prose h3 { font-size: 18px; } .prose h4 { font-size: 16px; } .prose h5 { font-size: 14px; }
+.prose code { font: 12.5px var(--f-mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.prose pre { background: var(--surface-2); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+.prose pre code { background: none; padding: 0; }
+.prose a { color: var(--accent); }
+.prose .tbl { overflow-x: auto; margin: .6em 0; }
+.prose table { border-collapse: collapse; font-size: 13px; }
+.prose th, .prose td { border-bottom: 1px solid var(--line); padding: 4px 10px; text-align: left; }
+.a-foot { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
+.a-foot b { color: var(--ink-2); font-weight: 600; }
+.a-foot .btn { margin-left: auto; padding: 3px 10px; font-size: 12px; }
+.err { color: var(--bad); display: flex; gap: 8px; align-items: flex-start; }
+.err pre { margin: 6px 0 0; white-space: pre-wrap; font: 12px var(--f-mono); color: var(--ink-2); }
+
+.hero { max-width: 640px; margin: 8vh auto 0; display: grid; gap: 18px; }
+.hero h1 { font: 700 clamp(28px, 4vw, 40px)/1.05 var(--f-display); letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+.hero p { margin: 0; color: var(--ink-2); max-width: 56ch; }
+.examples { display: grid; gap: 8px; }
+.example {
+  text-align: left; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--surface); display: flex; justify-content: space-between; gap: 12px;
+}
+.example:hover { border-color: var(--accent); }
+.example span:last-child { color: var(--ink-3); flex: none; }
+
+.composer { padding: 10px 24px calc(14px + env(safe-area-inset-bottom, 0px)); }
+.composer-inner { max-width: 760px; margin: 0 auto; display: grid; gap: 6px; }
+.box { display: flex; gap: 8px; align-items: flex-end; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.box:focus-within { border-color: var(--accent); }
+.box textarea { flex: 1; border: 0; background: none; resize: none; outline: none; max-height: 180px; min-height: 24px; padding: 4px 6px; line-height: 1.45; }
+.hint { font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* ---------- timeline ---------- */
+.tl { background: var(--surface); }
+.tl-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+.tl-title { display: flex; align-items: center; gap: 8px; }
+.tl-title h2 { margin: 0; font: 700 15px var(--f-display); letter-spacing: -.005em; }
+.tl-title .btn { margin-left: auto; padding: 3px 10px; font-size: 12px; }
+.headline { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.headline .big { display: block; font: 700 30px/1 var(--f-display); letter-spacing: -.02em; }
+.headline .cost { font: 600 17px/1 var(--f-body); text-align: right; font-variant-numeric: tabular-nums; }
+.cap { display: block; font: 500 11px var(--f-body); color: var(--ink-3); margin-top: 4px; }
+.cost .cap { text-align: right; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.soft, .soft b, .chips .soft { color: var(--ink-3); font-weight: 400; }
+.stat.soft b { font-weight: 500; font-size: 14px; }
+.chips .soft .sw, .stat.soft .sw { opacity: .55; }
+.stat { min-width: 0; }
+.stat b { display: block; font: 600 17px/1.2 var(--f-body); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11px; color: var(--ink-3); display: flex; align-items: center; gap: 5px; }
+.sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.sw.input { background: var(--s-input); } .sw.output { background: var(--s-output); }
+.sw.cache_read { background: var(--s-cache-read); } .sw.cache_write { background: var(--s-cache-write); }
+.meta-row { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.meta-row b { color: var(--ink); font-weight: 600; }
+.tl-body { overflow: auto; padding: 14px 16px 24px; flex: 1; display: grid; gap: 18px; align-content: start; }
+.sec-h { display: flex; align-items: center; gap: 8px; font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+.seg { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: none; padding: 2px 9px; font-size: 11px; color: var(--ink-2); text-transform: none; letter-spacing: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+
+.bars { display: grid; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: 2.2em minmax(0, 1fr) 4.2em; gap: 8px; align-items: center; font-size: 12px; border-radius: 6px; cursor: pointer; }
+.bar-row:hover .bar-lab { color: var(--ink); }
+.bar-lab { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.bar-track { display: flex; gap: 2px; height: 14px; min-width: 0; }
+.bar-seg { height: 100%; min-width: 2px; border-radius: 0 3px 3px 0; }
+.bar-seg:first-child { border-radius: 0 3px 3px 0; }
+.bar-seg.input { background: var(--s-input); } .bar-seg.output { background: var(--s-output); }
+.bar-seg.cache_read { background: var(--s-cache-read); } .bar-seg.cache_write { background: var(--s-cache-write); }
+.bar-val { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tok-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.tok-table th, .tok-table td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--line); }
+.tok-table th:first-child, .tok-table td:first-child { text-align: left; }
+.tok-table th { color: var(--ink-3); font-weight: 500; }
+
+.step-n {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: var(--surface-2); border: 2px solid var(--line); color: var(--ink-2); z-index: 1; font-variant-numeric: tabular-nums;
+}
+.istep.live .step-n { border-color: var(--accent); color: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.istep.final .step-n { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.istep.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { from { background: var(--accent-soft); } to { background: transparent; } }
+/* ---------- a turn: one card holding the question, its folded steps and the answer ---------- */
+.isteps { display: grid; gap: 6px; margin-bottom: 12px; }
+.isteps-h { font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+details.istep { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+details.istep > summary { list-style: none; display: flex; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer; min-width: 0; }
+details.istep > summary::-webkit-details-marker { display: none; }
+details.istep > summary::after { content: "▸"; color: var(--ink-3); font-size: 10px; transition: transform .12s; flex: none; }
+details.istep[open] > summary::after { transform: rotate(90deg); }
+details.istep > summary:hover { background: var(--surface-2); border-radius: 10px; }
+details.istep .step-n { width: 20px; height: 20px; font-size: 11px; border-width: 1.5px; flex: none; }
+.step-hint.nl { color: var(--ink); font-size: 13px; }
+.step-hint { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.step-tok { color: var(--ink-2); font-size: 12px; flex: none; }
+.istep-body { padding: 8px 12px 12px; display: grid; gap: 8px; min-width: 0; border-top: 1px solid var(--line); }
+.a-warn { border-left: 3px solid var(--warn, #c98a1b); padding: 4px 10px; margin-bottom: 10px; font-size: 13px; color: var(--ink-2); }
+.a-main.after-steps { padding-top: 12px; border-top: 1px solid var(--line); }
+.tool.flat > .tool-head { display: flex; gap: 8px; align-items: center; padding: 7px 10px 0; }
+.step-title { font-weight: 600; white-space: nowrap; flex: none; }
+.step-span { margin-left: 0; flex: none; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.chips span { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.say { font-size: 13px; color: var(--ink-2); margin: 6px 0 0; overflow-wrap: anywhere; font-style: italic; }
+.tools { display: grid; gap: 6px; margin-top: 8px; }
+.tool { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-width: 0; }
+.tool > summary { list-style: none; display: flex; gap: 8px; align-items: center; padding: 7px 10px; cursor: pointer; }
+.tool > summary::-webkit-details-marker { display: none; }
+.tool > summary::before { content: "▸"; color: var(--ink-3); font-size: 10px; transition: transform .12s; }
+.tool[open] > summary::before { transform: rotate(90deg); }
+.tool-name { font: 500 12.5px var(--f-mono); }
+.tool-sum { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.tool-dur { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+.tool-body { padding: 0 10px 10px; display: grid; gap: 10px; min-width: 0; }
+.label { font: 600 11px var(--f-body); letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 3px; display: flex; gap: 8px; align-items: center; }
+.label .cp { margin-left: auto; border: 0; background: none; font-size: 11px; color: var(--ink-3); text-transform: none; letter-spacing: 0; }
+.label .cp:hover { color: var(--accent); }
+pre.code { margin: 0; padding: 9px 11px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; font: 12px/1.55 var(--f-mono); max-height: 260px; }
+.t-iri { color: var(--tok-iri); } .t-var { color: var(--tok-var); } .t-kw { color: var(--tok-kw); font-weight: 500; }
+.t-str { color: var(--tok-str); } .t-cmt { color: var(--tok-cmt); font-style: italic; }
+.rows { overflow: auto; max-height: 240px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.rows table { border-collapse: collapse; font: 12px var(--f-mono); width: 100%; }
+.rows th, .rows td { padding: 3px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.rows th { position: sticky; top: 0; background: var(--surface-2); color: var(--ink-2); font-weight: 500; }
+.kv { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
+.kv b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ok { color: var(--good); } .bad { color: var(--bad); }
+.tl-empty { color: var(--ink-3); padding: 24px 4px; font-size: 13px; }
+
+/* ---------- result charts ---------- */
+.viz { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; min-width: 0; }
+.viz-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.viz-head .lab { font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.viz-head select { margin-left: auto; max-width: 100%; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); font-size: 12px; }
+.vchips { display: flex; gap: 6px; flex-wrap: wrap; }
+.vchip { display: inline-flex; gap: 7px; align-items: center; padding: 5px 11px 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.vchip:hover { border-color: var(--accent); }
+.vchip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.vchip svg { width: 16px; height: 16px; flex: none; }
+.vchip .rec { font-size: 10px; font-weight: 600; color: var(--accent); letter-spacing: .03em; text-transform: uppercase; }
+.viz-ask { background: var(--accent-soft); border-radius: 10px; padding: 11px 13px; display: grid; gap: 9px; }
+.viz-ask p { margin: 0; font-weight: 500; }
+.viz-ask .vchip { background: var(--surface); }
+.chart-box { position: relative; width: 100%; min-width: 0; }
+.kpis { display: flex; gap: 12px 32px; flex-wrap: wrap; padding: 4px 0; }
+.kpi b { display: block; font: 700 40px/1 var(--f-display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 12px; color: var(--ink-3); }
+.viz-cap { font-size: 12px; color: var(--ink-3); }
+.fr-scroll { overflow-x: auto; padding-bottom: 4px; }
+.fr-grid { min-width: 620px; display: grid; grid-template-columns: 104px minmax(0, 1fr); column-gap: 12px; }
+.fr-axis { grid-column: 2; position: relative; height: 22px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fr-tick { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.fr-lab { grid-column: 1; padding-top: 6px; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; display: flex; gap: 6px; align-items: baseline; }
+.fr-lab small { color: var(--ink-3); }
+.fr-track { grid-column: 2; position: relative; border-bottom: 1px solid var(--line); }
+.fr-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: .55; }
+.fr-item { position: absolute; display: flex; align-items: center; gap: 6px; height: 20px; white-space: nowrap; font-size: 12px; color: var(--ink); }
+.fr-item.flip { flex-direction: row-reverse; }
+.fr-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--lane); box-shadow: 0 0 0 2px var(--surface); flex: none; }
+.fr-bar { height: 10px; flex: 1; min-width: 6px; border-radius: 4px; background: var(--lane); }
+.fr-item.span .fr-text { position: absolute; left: 100%; margin-left: 6px; }
+.fr-item.span.flip .fr-text { left: auto; right: 100%; margin: 0 6px 0 0; }
+.fr-item.prov .fr-dot, .fr-item.prov .fr-bar { background: transparent; box-shadow: none; border: 2px solid var(--lane); }
+.fr-item:hover .fr-text { text-decoration: underline; }
+.mapask { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.mapask .btn { padding: 4px 11px; font-size: 12px; }
+.mapbox { display: grid; gap: 8px; }
+.maphead { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.maphead .lab { font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.maphead .viz-cap { flex: 1; min-width: 12em; }
+.maphead .btn { text-decoration: none; padding: 3px 10px; font-size: 12px; color: var(--ink); }
+.mapframe { width: 100%; height: 440px; min-height: 240px; border: 1px solid var(--line); border-radius: 10px; background: #fff; resize: vertical; overflow: auto; display: block; }
+/* ---------- no agent: read-only ---------- */
+.agent-off { margin: 0 24px; max-width: 760px; align-self: center; width: calc(100% - 48px); display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+.agent-off > div { display: grid; gap: 2px; min-width: 0; } .agent-off span { color: var(--ink-2); overflow-wrap: anywhere; }
+body[data-agent="off"] .composer .box, body[data-agent="off"] .composer .hint { opacity: .45; filter: grayscale(1); pointer-events: none; }
+body[data-agent="off"] #new { opacity: .45; filter: grayscale(1); cursor: not-allowed; }
+body[data-agent="off"] [data-ask] { opacity: .45; filter: grayscale(1); pointer-events: none; }
+body[data-agent="off"] [data-ask]::after { content: attr(data-off); }
+/* ---------- agent check dialog ---------- */
+.pill { font: inherit; cursor: default; }
+button.pill { cursor: pointer; }
+button.pill:hover { background: var(--accent-soft); }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); width: min(780px, calc(100vw - 32px)); max-height: 88vh; padding: 0; overflow: hidden; }
+dialog[open] { display: flex; flex-direction: column; }
+dialog::backdrop { background: rgba(8, 14, 11, .45); }
+.dlg-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.dlg-head h2 { margin: 0; font: 700 17px var(--f-display); letter-spacing: -.005em; }
+.dlg-body { overflow: auto; padding: 4px 16px 18px; min-height: 0; } /* a block, not a grid: an overflow:auto child (the table wrapper) collapsed to 0 height in a grid */
+.dlg-body h3 { margin: 16px 0 6px; font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.chk { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; padding: 4px 0; }
+.chk small { display: block; color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; }
+.ck { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 700 11px var(--f-body); font-style: normal; margin-top: 2px; }
+.ck.ok { background: var(--good); color: var(--accent-ink); } .ck.bad { background: var(--bad); color: #fff; }
+.ck.warn { background: var(--warn); color: #fff; } .ck.na { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
+.mx { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mx th, .mx td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: center; }
+.mx th:first-child, .mx td:first-child { text-align: left; }
+.mx th { font-weight: 600; color: var(--ink-2); font-size: 12px; }
+.mx .sel { background: var(--accent-soft); }
+.mx td .ck { display: inline-grid; margin: 0; }
+.mx td:first-child small { display: block; color: var(--ink-3); font-size: 11.5px; }
+.tablewrap { overflow-x: auto; }
+#tip {
+  position: fixed; z-index: 50; pointer-events: none; padding: 6px 9px; border-radius: 7px; font-size: 12px;
+  background: var(--ink); color: var(--bg); white-space: pre; box-shadow: 0 4px 16px rgba(0,0,0,.25); display: none; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- narrow screens ---------- */
+@media (max-width: 1100px) {
+  .cols { grid-template-columns: minmax(0, 1fr); position: relative; }
+  .hist { position: absolute; inset: 0 auto 0 0; width: min(300px, 86vw); z-index: 20; transform: translateX(-102%); transition: transform .18s; box-shadow: 4px 0 24px rgba(0,0,0,.25); }
+  body[data-drawer="open"] .hist { transform: none; }
+  .col + .col { border-left: 0; }
+  body[data-view="chat"] .tl, body[data-view="timeline"] .chat { display: none; }
+  .only-narrow { display: inline-flex !important; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .thread { padding-inline: 16px; } .composer { padding-inline: 16px; }
+}
+@media (max-width: 520px) { .brand small { display: none; } .pill.hide-s { display: none; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-view="chat">
+<div class="app">
+  <header class="top">
+    <button class="icon-btn only-narrow" id="menu" data-i18n-attr="aria-label:head.history;title:head.history">☰</button>
+    <div class="brand"><span data-i18n="app.name">Ask the ontology</span> <small id="project"></small></div>
+    <span class="spacer"></span>
+    <div class="seg only-narrow" id="viewseg" role="group" data-i18n-attr="aria-label:head.view">
+      <button data-view="chat" aria-pressed="true" data-i18n="head.chat">Chat</button>
+      <button data-view="timeline" aria-pressed="false" data-i18n="head.timeline">Timeline</button>
+    </div>
+    <button type="button" class="pill hide-s" id="agent-pill" data-i18n-attr="title:head.agent_title"><i class="dot" id="agent-dot"></i><span id="agent-text">agent…</span></button>
+    <span class="pill hide-s" id="ster-pill"><i class="dot" id="ster-dot"></i><span id="ster-text">ster…</span></span>
+    <select class="lang" id="lang" data-i18n-attr="aria-label:head.lang"></select>
+    <button class="icon-btn" id="theme" data-i18n-attr="aria-label:head.theme;title:head.theme_title">◐</button>
+  </header>
+
+  <div class="cols">
+    <aside class="col hist" data-i18n-attr="aria-label:head.history">
+      <div class="hist-head">
+        <button class="btn primary" id="new" data-i18n="hist.new">+ New conversation</button>
+        <input class="search" id="search" type="search" data-i18n-attr="placeholder:hist.search;aria-label:hist.search">
+      </div>
+      <div class="hist-list" id="hist"></div>
+    </aside>
+
+    <main class="col chat">
+      <div class="thread" id="thread"><div class="thread-inner" id="thread-inner"></div></div>
+      <div class="agent-off" id="agent-off" hidden><div><b data-i18n="off.title">Read-only: no agent configured.</b><span id="agent-off-why"></span></div><button type="button" class="btn" data-agent-check data-i18n="off.check">See the check</button></div>
+      <div class="agent-off" id="ster-restarted" hidden><div><b data-i18n="lost.title">ster was restarted since this conversation began.</b><span data-i18n="lost.why">The agent's connection to ster is probably gone.</span></div><button type="button" class="btn" id="lost-new" data-i18n="changed.new">New conversation</button></div>
+      <div class="agent-off" id="graph-changed" hidden><div><b data-i18n="changed.title">The graph changed since this conversation began.</b><span data-i18n="changed.why">Earlier answers may no longer hold.</span></div><button type="button" class="btn" id="graph-new" data-i18n="changed.new">New conversation</button></div>
+      <form class="composer" id="form">
+        <div class="composer-inner">
+          <div class="box">
+            <textarea id="prompt" rows="1" data-i18n-attr="placeholder:composer.placeholder;aria-label:composer.question"></textarea>
+            <button class="btn primary" id="send" type="submit" data-i18n="composer.send">Send</button>
+            <button class="btn danger" id="stop" type="button" hidden data-i18n="composer.stop">Stop</button>
+          </div>
+          <div class="hint"><span data-i18n="composer.hint"></span><span id="ctx-hint"></span></div>
+        </div>
+      </form>
+    </main>
+
+    <aside class="col tl" data-i18n-attr="aria-label:tl.title">
+      <div class="tl-head" id="tl-head"></div>
+      <div class="tl-body" id="tl-body"></div>
+    </aside>
+  </div>
+</div>
+<dialog id="agent-dlg" aria-labelledby="agent-title">
+  <div class="dlg-head"><h2 id="agent-title" data-i18n="dlg.title">Agent check</h2><span class="spacer"></span><button type="button" class="btn" id="agent-rerun" data-i18n="dlg.rerun">Run again</button><button type="button" class="icon-btn" id="agent-close" data-i18n-attr="aria-label:dlg.close">✕</button></div>
+  <div class="dlg-body" id="agent-body"><p class="viz-cap" data-i18n="dlg.loading"></p></div>
+</dialog>
+<div id="tip" role="tooltip"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="/static/i18n.js"></script>
+<script src="/static/viz.js"></script>
+<script src="/static/render.js"></script>
+<script>
+"use strict";
+/* ================= helpers ================= */
+const $ = (s, r = document) => r.querySelector(s);
+const { esc, md, sparql, connectionLost } = Render;   // pure text helpers: render.js
+const tx = (k, p) => I18n.t(k, p);
+const LOCALE = () => I18n.locale;
+const nfmt = (n, o) => n.toLocaleString(LOCALE(), o);
+const fmt = n => n == null ? "–" : n >= 1000 ? nfmt(n / 1000, { maximumFractionDigits: n >= 100000 ? 0 : 1 }) + "k" : String(n);
+const full = n => nfmt(n ?? 0);
+const secs = ms => ms == null ? "–" : ms < 950 ? Math.round(ms) + " ms" : nfmt(ms / 1000, { maximumFractionDigits: ms < 10000 ? 1 : 0 }) + " s";
+const short = s => /^https?:\/\//.test(String(s)) ? (String(s).split("#").pop().split("/").pop() || String(s)) : String(s ?? "");  // an IRI shows its local name; the title keeps it whole
+const rowsTxt = n => tx("viz.rows", { count: n });
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const api = async (url, opt) => { const r = await fetch(url, opt); if (!r.ok) { const raw = await r.text(); let m = raw; try { const d = JSON.parse(raw).detail; m = typeof d === "string" ? d : raw; } catch {} throw new Error(m || r.status); } return r.json(); };
+
+/* ================= events -> model ================= */
+const sum = u => (u.input || 0) + (u.output || 0) + (u.cache_read || 0) + (u.cache_write || 0);
+/* "new tokens": what the agent actually added; cache reads are the same context re-sent on every call */
+const fresh = u => (u.input || 0) + (u.output || 0) + (u.cache_write || 0);
+const usd = n => { if (n == null) return "–"; const d = n < 0.01 ? 4 : n < 1 ? 3 : 2; return nfmt(n, { style: "currency", currency: "USD", minimumFractionDigits: d, maximumFractionDigits: d }); };
+function derive(events, status) {
+  const M = { steps: [], byId: {}, tools: {}, total: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, done: null, t: 0, session: null };
+  let cur = null;
+  for (const e of events) {
+    M.t = Math.max(M.t, e.t || 0);
+    switch (e.e) {
+      case "session": M.session = e; break;
+      case "step_start": cur = { id: e.step, n: M.steps.length + 1, t0: e.t, text: "", thinking: false, tools: [], usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 } }; M.steps.push(cur); M.byId[e.step] = cur; break;
+      case "thinking": if (M.byId[e.step]) M.byId[e.step].thinking = true; break;
+      case "text_delta": if (M.byId[e.step]) M.byId[e.step].text += e.text; break;
+      case "usage": if (M.byId[e.step]) { const s = M.byId[e.step]; s.reported = true; s.usage = { input: e.input || 0, output: e.output || 0, cache_read: e.cache_read || 0, cache_write: e.cache_write || 0 }; } break;
+      case "tool_call": { const s = M.byId[e.step]; const t = { id: e.id, name: e.name, input: e.input, t0: e.t, t1: null, result: null, trace: null }; if (s) s.tools.push(t); M.tools[e.id] = t; break; }
+      case "tool_result": { const t = M.tools[e.id]; if (t) { t.t1 = e.t; t.result = e; } break; }
+      case "trace": { const t = M.tools[e.id]; if (t) t.trace = e; break; }
+      case "done": M.done = e; break;
+    }
+  }
+  for (const s of M.steps) for (const k in M.total) M.total[k] += s.usage[k] || 0;
+  M.steps.forEach((s, i) => { const nx = M.steps[i + 1]; s.t1 = nx ? nx.t0 : (M.done ? M.done.t : M.t); s.last = i === M.steps.length - 1 && !!M.done; s.tools.forEach(t => { if (t.t1 == null && M.done) t.t1 = M.done.t; }); });
+  M.live = !M.done && status === "running";
+  M.hasUsage = M.steps.some(s => s.reported);
+  M.queries = Object.values(M.tools).filter(t => t.name === "run_sparql").length;
+  M.toolCount = Object.keys(M.tools).length;
+  return M;
+}
+
+/* ================= state ================= */
+const S = {
+  convs: [], conv: null, sel: null, es: {}, replay: null, q: "", confirm: null,
+  chartMode: "chart", open: new Set(), viz: {}, charts: new Map(), sections: new Map(), probe: {}, agent: null, mapUrl: "http://127.0.0.1:8765/map", status: null, tick: 0
+};
+const turnById = id => S.conv?.turns.find(t => t.id === id);
+const eventsOf = t => (S.replay && S.replay.id === t.id) ? t.events.slice(0, S.replay.upto) : t.events;
+const statusOf = t => (S.replay && S.replay.id === t.id) ? "running" : t.status;
+const modelOf = t => derive(eventsOf(t), statusOf(t));
+const isRunning = () => !!S.conv && S.conv.turns.some(t => t.status === "running");
+
+/* No usable agent: the page becomes a reader of past traces (history, replay, timeline, charts, maps). */
+const agentOff = () => !!S.agent && !S.agent.ready;
+/* the graph this page's ster serves now, against the one each answer was given on */
+const graphNow = () => S.ster?.graph?.fingerprint || null;
+const graphChanged = () => { const last = S.conv?.turns?.filter(t => t.graph).at(-1); return !!(last && graphNow() && last.graph !== graphNow()); };
+function applyAgent() {
+  const off = agentOff(); document.body.dataset.agent = off ? "off" : "on";
+  $("#agent-off").hidden = !off; if (off) $("#agent-off-why").textContent = I18n.msg(S.agent.reason);
+  const readonly = !!S.conv?.readonly, paused = off || readonly;  /* a conversation rebuilt from ster's traces cannot be continued */
+  $("#graph-changed").hidden = !graphChanged();
+  $("#ster-restarted").hidden = readonly || !connectionLost(S.conv?.turns, S.ster?.graph?.started);
+  $("#prompt").disabled = paused; $("#send").disabled = paused; $("#new").disabled = off;
+  $("#prompt").placeholder = tx(off ? "composer.placeholder_off" : readonly ? "composer.placeholder_readonly" : "composer.placeholder");
+  $("#agent-dot").className = "dot " + (off ? "down" : "up"); $("#agent-text").textContent = off ? tx("agent.none") : (S.agent?.label || tx("agent.loading"));
+}
+
+/* ================= rendering: history ================= */
+function renderHistory() {
+  const q = S.q.trim().toLowerCase();
+  const items = S.convs.filter(c => !q || (c.title + " " + c.prompts.join(" ")).toLowerCase().includes(q));
+  const day0 = new Date().setHours(0, 0, 0, 0), groups = {};
+  for (const c of items) {
+    const d = c.updated * 1000, g = d >= day0 ? "today" : d >= day0 - 864e5 ? "yesterday" : d >= day0 - 6 * 864e5 ? "week" : "older";
+    (groups[g] ||= []).push(c);
+  }
+  let h = "";
+  for (const g of ["today", "yesterday", "week", "older"]) {
+    if (!groups[g]) continue;
+    h += `<div class="hist-group">${tx("hist." + g)}</div>`;
+    for (const c of groups[g]) {
+      const t = fresh(c.usage), time = new Date(c.updated * 1000).toLocaleTimeString(LOCALE(), { hour: "2-digit", minute: "2-digit" });
+      h += `<div class="hist-item" role="button" tabindex="0" data-id="${c.id}" aria-current="${S.conv?.id === c.id}">
+        <span class="hist-title">${esc(c.title)}</span>
+        <span class="hist-meta"><span>${time}</span><span>${tx("hist.turns", { count: c.turns })}</span>${t ? `<span class="num">${tx("hist.new_tokens", { n: fmt(t) })}</span>` : ""}${c.cost_usd ? `<span class="num">≈ ${usd(c.cost_usd)}</span>` : ""}</span>
+        ${S.confirm === c.id ? `<span class="confirm">${tx("hist.delete_q")} <button data-del-yes="${c.id}">${tx("hist.yes")}</button><button data-del-no>${tx("hist.no")}</button></span>`
+          : `<button class="hist-del" data-del="${c.id}" aria-label="${tx("hist.delete")}" title="${tx("hist.delete")}">✕</button>`}
+      </div>`;
+    }
+  }
+  $("#hist").innerHTML = h || `<div class="empty-note">${q ? tx("hist.none_found") : tx("hist.empty")}</div>`;
+}
+
+
+/* ================= result charts ================= */
+const ICON = {
+  bar: '<svg viewBox="0 0 16 16"><rect x="2" y="9" width="3" height="5" rx="1" fill="currentColor"/><rect x="6.5" y="4" width="3" height="10" rx="1" fill="currentColor"/><rect x="11" y="7" width="3" height="7" rx="1" fill="currentColor"/></svg>',
+  grouped: '<svg viewBox="0 0 16 16"><rect x="1.5" y="7" width="2.5" height="7" rx=".8" fill="currentColor"/><rect x="4.5" y="4" width="2.5" height="10" rx=".8" fill="currentColor" opacity=".5"/><rect x="9" y="9" width="2.5" height="5" rx=".8" fill="currentColor"/><rect x="12" y="6" width="2.5" height="8" rx=".8" fill="currentColor" opacity=".5"/></svg>',
+  stacked: '<svg viewBox="0 0 16 16"><rect x="2" y="8" width="4" height="6" rx=".8" fill="currentColor"/><rect x="2" y="3" width="4" height="4" rx=".8" fill="currentColor" opacity=".5"/><rect x="9" y="6" width="4" height="8" rx=".8" fill="currentColor"/><rect x="9" y="2" width="4" height="3" rx=".8" fill="currentColor" opacity=".5"/></svg>',
+  donut: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" stroke-width="3.2" stroke-dasharray="20 13" /><circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" stroke-width="3.2" opacity=".4" stroke-dasharray="9 24" stroke-dashoffset="-20"/></svg>',
+  line: '<svg viewBox="0 0 16 16"><path d="M2 12 L6 7 L9 9.5 L14 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  scatter: '<svg viewBox="0 0 16 16"><circle cx="4" cy="11" r="1.7" fill="currentColor"/><circle cx="8" cy="6.5" r="1.7" fill="currentColor"/><circle cx="12" cy="9" r="1.7" fill="currentColor"/><circle cx="11" cy="3.8" r="1.7" fill="currentColor" opacity=".5"/></svg>',
+  table: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 7h12M6.5 3v10" stroke="currentColor" stroke-width="1.2"/></svg>'
+};
+ICON.kpi = ICON.table;
+try { S.viz = JSON.parse(store.get("viz") || "{}"); } catch { S.viz = {}; }
+const saveViz = () => store.set("viz", JSON.stringify(S.viz));
+const vizTheme = () => { const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim(); return { ink: g("--ink"), ink2: g("--ink-2"), ink3: g("--ink-3"), line: g("--line"), surface: g("--surface"), bg: g("--bg"), series: [1, 2, 3, 4, 5, 6, 7, 8].map(i => g("--c" + i)) }; };
+const pendingCharts = [];
+const profCache = new Map();
+
+function vizSources(M) {
+  const out = [];
+  Object.values(M.tools).forEach(t => { if (t.name === "run_sparql" && t.trace) t.trace.steps.forEach(st => { if (st.columns && st.rows?.length) out.push({ id: t.id, st }); }); });
+  return out;
+}
+const srcSelFor = (t, srcs, si) => `<select data-vsrc="${t.id}" aria-label="${tx("viz.source")}">${srcs.map((s, i) => `<option value="${i}" ${i === si ? "selected" : ""}>${tx("viz.query_n", { n: i + 1 })} · ${rowsTxt(s.st.row_count)}</option>`).join("")}</select>`;
+function renderVizInner(t, M) {
+  if (M.done?.status !== "completed" || !window.Viz) return "";
+  const srcs = vizSources(M); if (!srcs.length) return "";
+  const prof = i => { const k = t.id + ":" + i; if (!profCache.has(k)) { const p = Viz.profile(srcs[i].st.columns, srcs[i].st.rows); profCache.set(k, { p, c: Viz.candidates(p) }); } return profCache.get(k); };
+  const v = S.viz[t.id] || {};
+  let si = Number.isInteger(v.src) && v.src < srcs.length ? v.src : -1;
+  if (si < 0) { for (let i = srcs.length - 1; i >= 0; i--) if (prof(i).c.length) { si = i; break; } }
+  if (si < 0) return "";
+  const { p, c } = prof(si), st = srcs[si].st;
+  if (!c.length) return "";
+  const kinds = c.map(x => x.kind).concat("table");
+  let kind = kinds.includes(v.kind) ? v.kind : (c.length === 1 ? c[0].kind : null);
+  const chip = (k, label, why, rec) => `<button type="button" class="vchip" data-vkind="${k}" data-vtid="${t.id}" aria-pressed="${kind === k}" title="${esc(why)}">${ICON[k] || ""}<span>${label}</span>${rec ? `<span class="rec">${tx("viz.rec")}</span>` : ""}</button>`;
+  const chips = c.map(x => chip(x.kind, x.label, x.why, x.rec && c.length > 1)).join("") + chip("table", tx("kind.table"), tx("viz.table_why"), false);
+  const srcSel = srcs.length > 1 ? srcSelFor(t, srcs, si) : "";
+  const trunc = st.row_count > st.rows.length ? ` · ${tx("viz.first_rows", { shown: full(st.rows.length), total: full(st.row_count) })}` : "";
+  let body = "", cap = "";
+  if (!kind) {
+    return `<div class="viz" data-viz="${t.id}"><div class="viz-head"><span class="lab">${tx("viz.label")}</span>${srcSel}</div><div class="viz-ask" role="group" aria-label="${tx("viz.choose_aria")}"><p>${tx("viz.choose")}</p><div class="vchips">${chips}</div></div></div>`;
+  }
+  if (kind === "table") {
+    body = `<div class="rows"><table><thead><tr>${st.columns.map(x => `<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${st.rows.slice(0, 40).map(r => `<tr>${r.map(x => `<td title="${esc(x)}">${esc(short(x))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    cap = `${rowsTxt(st.row_count)}${st.rows.length > 40 ? " · " + tx("viz.first_shown", { shown: 40 }) : ""}`;
+  } else {
+    const cfg = Viz.config(kind, p, vizTheme());
+    if (cfg?.kpi) body = `<div class="kpis">${cfg.kpi.map(k => `<div class="kpi"><b>${esc(k.value)}</b><span>${esc(k.label)}</span></div>`).join("")}</div>`;
+    else if (cfg && window.Chart) { body = `<div class="chart-box" style="height:${cfg.height}px"><canvas data-chart="${t.id}" role="img" aria-label="${esc(tx("kind." + kind))}: ${esc(st.columns.join(", "))}"></canvas></div>`; pendingCharts.push({ id: t.id, cfg }); }
+    else body = `<div class="viz-cap">${tx("viz.no_lib")}</div>`;
+    cap = c.find(x => x.kind === kind)?.why || "";
+  }
+  return `<div class="viz" data-viz="${t.id}"><div class="viz-head"><span class="lab">${tx("viz.label")}</span><div class="vchips">${chips}</div>${srcSel}</div>${body}<div class="viz-cap">${esc(cap)}${trunc}</div></div>`;
+}
+/* ---- what ster can say about the rows of the last query: placed? dated? ----
+   The last query with rows is the one the answer rests on. Its IRIs go to ster's own
+   /api/locate and /api/timeline, so no rule here knows what a store or a region is. */
+const irisOf = st => { const set = new Set(); st.rows.forEach(r => r.forEach(c => { if (/^https?:\/\//.test(c)) set.add(c); })); return [...set].slice(0, 300); };
+const post = (u, b) => api(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+function ensureProbe(t, last) {
+  if (S.probe[t.id]) return S.probe[t.id];
+  const pr = S.probe[t.id] = { done: false, mapped: 0, items: [] };
+  (async () => {
+    const uris = irisOf(last.st);
+    if (uris.length) {
+      const [loc, tl] = await Promise.all([post("/api/locate", { uris }).catch(() => null), post("/api/timeline", { uris }).catch(() => null)]);
+      pr.mapped = new Set((loc?.places || []).filter(x => x.result && x.mapped).map(x => x.uri)).size;
+      pr.items = tl?.items || [];
+    }
+    pr.done = true; render();
+  })();
+  return pr;
+}
+function friseHtml(m, tid, items, provCount, wantProv) {
+  const lines = m.ticks.map(k => `<i class="fr-line" style="left:${k.pos}%"></i>`).join("");
+  const lanes = m.lanes.map((l, li) => `<div class="fr-lab" title="${esc(l.label)}">${esc(l.label)}<small>${l.count}</small></div>
+    <div class="fr-track" style="height:${l.rows * 24 + 12}px;--lane:var(--c${li % 8 + 1})">${lines}${l.items.map(it => {
+      const tip = `${it.label}\n${Viz.fmtT(it.start)}${it.end ? " → " + Viz.fmtT(it.end) : ""}${it.note ? "\n" + it.note : ""}${it.provenance ? "\n" + tx("frise.prov_tip") : ""}`;
+      const pos = it.flip ? `right:${100 - it.left - (it.width || 0)}%` : `left:${it.left}%`;
+      return `<span class="fr-item ${it.width != null ? "span" : ""} ${it.flip ? "flip" : ""} ${it.provenance ? "prov" : ""}" tabindex="0" data-tip="${esc(tip)}" style="${pos};top:${it.row * 24 + 6}px;${it.width != null ? `width:${it.width}%` : ""}"><i class="${it.width != null ? "fr-bar" : "fr-dot"}"></i><span class="fr-text">${esc(it.label)}</span></span>`;
+    }).join("")}</div>`).join("");
+  const toggle = provCount ? `<button type="button" class="btn" data-prov="${tid}">${tx(wantProv ? "frise.hide" : "frise.include", { n: provCount })}</button>` : "";
+  const span = `${Viz.fmtT(m.from)} → ${Viz.fmtT(m.to)}`;
+  return `<div class="viz" data-frise="${tid}"><div class="viz-head"><span class="lab">${tx("frise.label")}</span><span class="viz-cap">${tx("frise.dates", { count: items.length })}${m.from !== m.to ? " · " + esc(span) : ""}</span>${toggle}</div>
+    <div class="fr-scroll"><div class="fr-grid"><div class="fr-axis">${m.ticks.map(k => `<span class="fr-tick" style="left:${k.pos}%">${esc(k.label)}</span>`).join("")}</div>${lanes}</div></div>
+    ${m.truncated ? `<div class="viz-cap">${tx("frise.truncated", { total: full(m.truncated) })}</div>` : ""}</div>`;
+}
+function renderViz(t, M) {
+  if (M.done?.status !== "completed" || !window.Viz) return "";
+  let out = renderVizInner(t, M); const srcs = vizSources(M); if (!srcs.length) return out;
+  const last = srcs.at(-1), p = Viz.profile(last.st.columns, last.st.rows), q = M.tools[last.id]?.input?.query || "", pr = ensureProbe(t, last), v = S.viz[t.id] || {};
+  /* map: coordinates in the rows, or at least two entities ster could locate; exactly one is a filter echoed back */
+  if (Viz.mapHint(p, pr.mapped)) {
+    const src = `/ster-map?conv=${S.conv.id}&turn=${t.id}&tool=${last.id}`;
+    out += `<div class="viz"><div class="mapbox"><div class="maphead"><span class="lab">${tx("map.label")}</span><span class="viz-cap">${tx("map.sub", { rows: rowsTxt(last.st.row_count) })}</span><a class="btn" href="${esc(src)}&full=1" target="_blank" rel="noopener">${tx("map.open")}</a><button type="button" class="btn" data-copy="${esc(q)}">${tx("map.copy")}</button></div><iframe class="mapframe" loading="lazy" src="${esc(src)}" title="${tx("map.title")}"></iframe></div></div>`;
+  } else if (pr.done && pr.mapped === 1) {
+    out += `<div class="viz mapask"><span class="viz-cap">${tx("map.one_place")}</span><button type="button" class="btn" data-ask="map.ask" data-off="${tx("off.ask_disabled")}">${tx("map.see")}</button></div>`;
+  }
+  /* frise: dated rows (a date column, or dates ster finds on the entities), annotation dates only on request */
+  const items = p.times.length ? Viz.friseItems(p, q) : Viz.entityItems(pr.items), plain = items.filter(x => !x.provenance), prov = items.length - plain.length;
+  const shown = v.prov ? items : plain;
+  if (shown.length >= 2 || (v.prov && shown.length)) { const m = Viz.friseModel(shown); if (m) out += friseHtml(m, t.id, shown, prov, !!v.prov); }
+  else if (prov) out += `<div class="viz mapask"><span class="viz-cap">${tx("frise.only_prov", { n: prov })}</span><button type="button" class="btn" data-prov="${t.id}">${tx("frise.show")}</button></div>`;
+  return out;
+}
+function mountCharts() {
+  if (!window.Chart) { pendingCharts.length = 0; return; }
+  const th = vizTheme(); Chart.defaults.font.family = getComputedStyle(document.body).fontFamily; Chart.defaults.color = th.ink2;
+  for (const { id, cfg } of pendingCharts.splice(0)) {
+    const cv = document.querySelector(`canvas[data-chart="${id}"]`); if (!cv) continue;
+    try { S.charts.set(id, new Chart(cv, { type: cfg.type, data: cfg.data, options: cfg.options, plugins: cfg.plugins || [] })); } catch (e) { console.error("chart", e); }
+  }
+}
+
+/* ================= rendering: thread ================= */
+const EXAMPLES = [1, 2, 3, 4];  // texts live in the catalogs: ex.<n> and ex.<n>.tag
+function renderThread() {
+  const inner = $("#thread-inner");
+  if (!S.conv || !S.conv.turns.length) {
+    inner.innerHTML = agentOff()
+      ? `<div class="hero"><h1>${tx("hero.off_title")}</h1>
+      <p>${tx("hero.off_body")}</p>
+      <p>${S.convs.length ? tx("hero.off_count", { count: S.convs.length }) : tx("hero.off_none")}</p>
+      <div><button type="button" class="btn" data-agent-check>${tx("hero.off_why")}</button></div></div>`
+      : `<div class="hero"><h1>${tx("hero.title")}</h1>
+      <p>${tx("hero.body")}</p>
+      <div class="examples">${EXAMPLES.map(n => `<button class="example" data-ex="${esc(tx("ex." + n))}"><span>${esc(tx("ex." + n))}</span><span>${esc(tx("ex." + n + ".tag"))}</span></button>`).join("")}</div></div>`;
+    S.charts.forEach(ch => ch.destroy()); S.charts.clear(); S.sections.clear(); pendingCharts.length = 0;
+    $("#ctx-hint").textContent = tx("composer.ctx_new");
+    return;
+  }
+  pendingCharts.length = 0;
+  const built = S.conv.turns.map(t => {
+    const M = modelOf(t), st = statusOf(t), selected = S.sel === t.id;
+    let body;
+    if (M.live) {
+      const last = M.steps[M.steps.length - 1], running = last && last.tools.filter(x => x.t1 == null).map(x => x.name);
+      const label = running && running.length ? tx("turn.querying", { tools: running.join(", ") }) : last && last.text ? tx("turn.writing") : tx("turn.thinking");
+      body = `<div class="a-status"><i class="dot run"></i><span>${esc(label)}</span><span class="elapsed num" data-elapsed="${t.id}">${secs(M.t)}</span></div>${last && last.text && !running?.length ? `<div class="prose" style="margin-top:8px">${md(last.text)}</div>` : ""}`;
+    } else if (M.done && M.done.status === "error") {
+      body = `<div class="err"><span>✕</span><div><b>${tx("turn.failed")}</b><pre>${esc(M.done.error_code ? I18n.msg({ code: M.done.error_code, params: M.done.error_params, text: M.done.error }) : (M.done.error || M.done.answer || tx("turn.unknown_error")))}</pre></div></div>`;
+    } else if (M.done && M.done.status === "cancelled" || st === "interrupted" || st === "cancelled") {
+      body = `<div class="a-status"><i class="dot"></i><span>${st === "interrupted" ? tx("turn.interrupted") : tx("turn.stopped")}</span></div>`;
+    } else {
+      body = `<div class="prose">${md(M.done?.answer || M.steps.at(-1)?.text || "")}</div>`;
+    }
+    const foot = M.steps.length ? `<div class="a-foot"><span>${tx("foot.steps", { count: M.steps.length }).replace(/^(\S+)/, "<b>$1</b>")}</span><span><b>${M.queries}</b> SPARQL</span>${M.hasUsage ? `<span><b class="num">${fmt(fresh(M.total))}</b> ${tx("foot.new_tokens")}</span>` : ""}${M.done?.cost_usd != null ? `<span>≈ <b class="num">${usd(M.done.cost_usd)}</b></span>` : ""}<span><b class="num">${secs(M.done?.duration_ms ?? M.t)}</b></span><button class="btn" data-inspect="${t.id}">${tx("foot.inspect")}</button></div>` : "";
+    const noCall = M.done?.status === "completed" && !M.toolCount ? `<div class="a-warn">${tx("nocall.note")}</div>` : "";
+    const shown = M.steps.filter(s => !(s.last && !s.tools.length));  /* the closing step only writes the answer, which is shown below */
+    const steps = shown.length ? `<div class="isteps"><div class="isteps-h">${tx("steps.heading", { count: shown.length })}</div>${shown.map(s => renderStep(t, s, M)).join("")}</div>` : "";
+    return { id: t.id, selected, html: `<div class="q">${esc(t.prompt)}</div><div class="a">${steps}<div class="a-main ${steps ? "after-steps" : ""}">${noCall}${body}${renderViz(t, M)}</div>${foot}</div>` };
+  });
+  /* Only sections whose markup changed are rebuilt, so a finished answer keeps its
+     chart and its embedded map while another turn streams or a different one is selected. */
+  inner.querySelector(".hero")?.remove();
+  const ids = new Set(built.map(b => b.id)), existing = new Map([...inner.children].map(el => [el.dataset.turn, el])), changed = new Set();
+  for (const [id, el] of existing) if (!ids.has(id)) { S.charts.get(id)?.destroy(); S.charts.delete(id); S.sections.delete(id); el.remove(); existing.delete(id); }
+  let prev = null;
+  for (const b of built) {
+    let el = existing.get(b.id);
+    if (!el || S.sections.get(b.id) !== b.html) {
+      S.charts.get(b.id)?.destroy(); S.charts.delete(b.id);
+      const n = document.createElement("section"); n.className = "turn"; n.dataset.turn = b.id; n.innerHTML = b.html;
+      if (el) el.replaceWith(n); else if (prev) prev.after(n); else inner.prepend(n);
+      n.querySelectorAll("details[data-open-key]").forEach(d => { d.open = S.open.has(d.dataset.openKey); });
+      el = n; S.sections.set(b.id, b.html); changed.add(b.id);
+    } else if (el.previousElementSibling !== prev) { prev ? prev.after(el) : inner.prepend(el); }
+    el.dataset.selected = b.selected;
+    prev = el;
+  }
+  for (let i = pendingCharts.length - 1; i >= 0; i--) if (!changed.has(pendingCharts[i].id)) pendingCharts.splice(i, 1);
+  mountCharts();
+  $("#ctx-hint").textContent = tx("composer.ctx_follow", { title: S.conv.title });
+}
+
+/* ================= rendering: timeline ================= */
+const TOK = ["input", "output", "cache_read", "cache_write"].map(k => [k, ""]);  // label: tx("tok." + k), looked up when drawn
+const tokL = k => tx("tok." + k);
+function toolSummary(t) {
+  const i = t.input || {};
+  if (t.name === "run_sparql") return (i.query || "").replace(/PREFIX[^\n]*\n?/gi, "").replace(/\s+/g, " ").trim();
+  return Object.values(i).filter(v => typeof v === "string").join(" · ");
+}
+function stepLabel(s) {
+  if (!s.tools.length) return s.last ? tx("step.answer") : s.thinking && !s.text ? tx("step.reasoning") : tx("step.writing");
+  const c = {}; s.tools.forEach(t => c[t.name] = (c[t.name] || 0) + 1);
+  return Object.entries(c).map(([k, v]) => v > 1 ? `${k} ×${v}` : k).join(" + ");
+}
+/* a call, drawn open inside its (folded) step: its SPARQL or arguments, then ster's rows */
+function renderTool(t, M) {
+  const tr = t.trace, dur = t.t1 != null ? t.t1 - t.t0 : null;
+  const running = t.t1 == null && M.live;
+  let h = `<div class="tool flat"><div class="tool-head"><span class="tool-name">${esc(t.name)}</span>
+    ${running ? `<i class="dot run"></i>` : t.result?.is_error ? `<span class="bad" title="${tx("tool.error")}">✕</span>` : `<span class="tool-dur">${secs(dur)}</span>`}</div><div class="tool-body">`;
+  if (t.name === "run_sparql" && t.input?.query) h += `<div><div class="label">SPARQL<button class="cp" data-copy="${esc(t.input.query)}">${tx("tool.copy")}</button></div><pre class="code">${sparql(t.input.query)}</pre></div>`;
+  else if (Object.keys(t.input || {}).length) h += `<div><div class="label">${tx("tool.args")}</div><pre class="code">${esc(JSON.stringify(t.input, null, 2))}</pre></div>`;
+  if (tr) for (const st of tr.steps) {
+    if (st.columns) h += `<div><div class="label">${tx("tool.result")}</div>
+      <div class="kv" style="margin-bottom:6px"><span><b>${full(st.row_count)}</b> ${tx("tool.rows", { count: st.row_count }).replace(/^\S+\s*/, "")}</span><span>ster <b>${secs(st.duration_ms)}</b></span><span class="${st.status === "completed" ? "ok" : "bad"}">${st.status === "completed" ? "✓ " : "✕ "}${esc(st.status)}</span></div>
+      <div class="rows"><table><thead><tr>${st.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${(st.rows || []).slice(0, 30).map(r => `<tr>${r.map(c => `<td title="${esc(c)}">${esc(short(c))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      ${st.row_count > 30 ? `<div class="kv" style="margin-top:4px">${tx("tool.first_n", { total: full(st.row_count) })}</div>` : ""}</div>`;
+  }
+  if (tr) h += `<div class="kv"><span>${tx("tool.trace")} <button class="cp" style="border:0;background:none;color:var(--accent);padding:0" data-copy="${esc(tr.file)}" title="${tx("tool.copy_path")}">${esc(tr.run_id.slice(0, 16))}…</button></span></div>`;
+  else if (t.result) h += `<div><div class="label">${tx("tool.raw")}${t.result.truncated ? ` <span style="text-transform:none;letter-spacing:0">${tx("tool.raw_trunc", { n: full(t.result.length) })}</span>` : ""}</div><pre class="code">${esc(t.result.text)}</pre></div>`;
+  return h + `</div></div>`;
+}
+/* a step, folded to one line (what it did, its new tokens, its time); unfolded, its detail: token split, what the
+   model said, and each call. Open or shut is remembered in S.open, not in the markup, so a streaming turn does not
+   rebuild the section (and reload its map) when someone unfolds a step. */
+const stepQuestion = s => Render.stepQuestion(s.tools);  /* what a step looks for, in plain words (render.js) */
+function renderStep(t, s, M) {
+  const ctx = s.usage.input + s.usage.cache_read + s.usage.cache_write, live = M.live && s === M.steps.at(-1);
+  const first = s.tools[0], nl = stepQuestion(s), hint = (nl || (first ? toolSummary(first) : (s.text || "").replace(/\s+/g, " ").trim())).slice(0, 200);
+  const chips = s.reported ? `<div class="chips" data-tip="${tx("tl.chips_tip", { n: full(ctx) })}"><span><i class="sw input"></i>${fmt(s.usage.input)}</span><span><i class="sw output"></i>${fmt(s.usage.output)}</span><span><i class="sw cache_write"></i>${fmt(s.usage.cache_write)}</span><span class="soft"><i class="sw cache_read"></i>${fmt(s.usage.cache_read)}</span></div>` : "";
+  const say = s.text && s.tools.length ? `<p class="say">${esc(s.text.length > 220 ? s.text.slice(0, 220) + "…" : s.text)}</p>` : "";
+  const calls = s.tools.length ? `<div class="tools">${s.tools.map(x => renderTool(x, M)).join("")}</div>` : "";
+  return `<details class="istep ${live ? "live" : ""} ${s.last ? "final" : ""}" id="st-${s.id}" data-open-key="step:${t.id}:${s.id}"><summary><span class="step-n">${s.n}</span><span class="step-title">${esc(stepLabel(s))}${nl ? ":" : ""}</span><span class="step-hint ${nl ? "nl" : ""}">${esc(hint)}</span>${s.reported ? `<span class="step-tok num" title="${tx("step.tokens_tip")}">${fmt(fresh(s.usage))} <small>${tx("step.tok")}</small></span>` : ""}<span class="step-span">${secs(s.t1 - s.t0)}</span></summary><div class="istep-body">${chips}${say}${calls || (!chips && !say ? `<div class="kv">${tx("step.nothing")}</div>` : "")}</div></details>`;
+}
+function renderTimeline() {
+  const head = $("#tl-head"), body = $("#tl-body"), t = turnById(S.sel);
+  if (!t) {
+    head.innerHTML = `<div class="tl-title"><h2>${tx("tl.heading")}</h2></div>`;
+    body.innerHTML = `<div class="tl-empty">${tx("tl.empty")}</div>`;
+    return;
+  }
+  const M = modelOf(t), T = M.total, dur = M.done?.duration_ms ?? M.t, replaying = S.replay?.id === t.id;
+  head.innerHTML = `<div class="tl-title"><i class="dot ${M.live ? "run" : M.done?.status === "error" ? "down" : "up"}"></i><h2>${tx(M.live ? "tl.running" : "tl.question")} · ${esc(t.prompt.slice(0, 40))}${t.prompt.length > 40 ? "…" : ""}</h2>
+      ${!M.live && t.events.length ? `<button class="btn" data-replay="${t.id}">${tx(replaying ? "tl.replay_stop" : "tl.replay")}</button>` : ""}</div>
+    <div class="headline"><div data-tip="${tx("tl.new_tokens_tip", { n: full(fresh(T)) })}"><b class="big num">${M.hasUsage ? fmt(fresh(T)) : "–"}</b><span class="cap">${M.hasUsage ? tx("tl.new_tokens") : tx("tl.not_reported")}</span></div>
+      <div class="cost" data-tip="${tx("tl.cost_tip")}">${M.done?.cost_usd != null ? "≈ " + usd(M.done.cost_usd) : M.live ? "≈ …" : "≈ –"}<span class="cap">${tx("tl.cost")}</span></div></div>
+    ${M.hasUsage ? `<div class="stats">${TOK.filter(([k]) => k !== "cache_read").map(([k]) => `<div class="stat" data-tip="${tx("tl.stat_tip", { label: tokL(k), n: full(T[k]) })}"><b>${fmt(T[k])}</b><span><i class="sw ${k}"></i>${tokL(k)}</span></div>`).join("")}
+      <div class="stat soft" data-tip="${tx("tl.cache_tip", { n: full(T.cache_read) })}"><b>${fmt(T.cache_read)}</b><span><i class="sw cache_read"></i>${tokL("cache_read")}</span></div></div>`: ""}
+    <div class="meta-row"><span><b>${M.steps.length}</b> ${tx("tl.model_calls")}</span><span><b>${M.queries}</b> ${tx("tl.sparql_queries")}</span><span><b>${M.toolCount - M.queries}</b> ${tx("tl.other_tools")}</span><span><b class="num">${secs(dur)}</b></span></div>`;
+
+  if (!M.steps.length) { body.innerHTML = `<div class="tl-empty">${M.live ? tx("tl.starting") : tx("tl.no_steps")}</div>`; return; }
+
+  const max = Math.max(...M.steps.map(s => fresh(s.usage)), 1);
+  const chart = S.chartMode === "chart"
+    ? `<div class="bars">${M.steps.map(s => `<div class="bar-row" tabindex="0" data-goto="${s.id}" data-tip="${tx("tl.step_tip", { n: s.n, label: esc(stepLabel(s)) })}\n${TOK.map(([k]) => `${tokL(k)}: ${full(s.usage[k])}`).join("\n")}\n${tx("tl.context_sent", { n: full(s.usage.input + s.usage.cache_read + s.usage.cache_write) })}"><span class="bar-lab">${s.n}</span>
+        <span class="bar-track" style="width:${Math.max(fresh(s.usage) / max * 100, 2)}%">${["input", "output", "cache_write"].filter(k => s.usage[k] > 0).map(k => `<i class="bar-seg ${k}" style="flex:${s.usage[k]} 1 0"></i>`).join("")}</span><span class="bar-val">${fmt(fresh(s.usage))}</span></div>`).join("")}</div>
+      <div class="legend">${TOK.filter(([k]) => k !== "cache_read").map(([k]) => `<span><i class="sw ${k}"></i>${tokL(k)}</span>`).join("")}<span class="soft">${tx("tl.legend_cache")}</span></div>`
+    : `<table class="tok-table"><thead><tr><th>${tx("tl.step")}</th>${TOK.map(([k]) => `<th>${tokL(k)}</th>`).join("")}<th>${tx("tl.new")}</th></tr></thead><tbody>${M.steps.map(s => `<tr><td>${s.n} · ${esc(stepLabel(s))}</td>${TOK.map(([k]) => `<td class="${k === "cache_read" ? "soft" : ""}">${full(s.usage[k])}</td>`).join("")}<td>${full(fresh(s.usage))}</td></tr>`).join("")}</tbody><tfoot><tr><td><b>${tx("tl.total")}</b></td>${TOK.map(([k]) => `<td class="${k === "cache_read" ? "soft" : ""}"><b>${full(T[k])}</b></td>`).join("")}<td><b>${full(fresh(T))}</b></td></tr></tfoot></table>`;
+
+  body.innerHTML = `${!M.hasUsage ? `<section><div class="tl-empty">${tx("tl.no_usage")}</div></section>` : `<section><h3 class="sec-h">${tx("tl.new_by_step")}<span class="seg" role="group"><button data-mode="chart" aria-pressed="${S.chartMode === "chart"}">${tx("tl.chart")}</button><button data-mode="table" aria-pressed="${S.chartMode === "table"}">${tx("tl.table")}</button></span></h3>${chart}</section>`}`;
+}
+
+/* ================= render scheduling ================= */
+let queued = false;
+function render(parts = "hct") {
+  applyAgent();
+  if (queued) return; queued = true;
+  requestAnimationFrame(() => {
+    queued = false;
+    const tl = $("#tl-body"), keep = tl.scrollTop, th = $("#thread"), nearBottom = th.scrollHeight - th.scrollTop - th.clientHeight < 120;
+    renderHistory(); renderThread(); renderTimeline();
+    tl.scrollTop = keep; if (nearBottom) th.scrollTop = th.scrollHeight;
+    const running = isRunning();
+    $("#send").hidden = running; $("#stop").hidden = !running;
+  });
+}
+
+/* ================= data flow ================= */
+async function refreshList() { try { S.convs = await api("/api/conversations"); } catch {} render(); }
+
+async function openConv(id, selTurn) {
+  stopReplay();
+  S.conv = await api("/api/conversations/" + encodeURIComponent(id));
+  S.sel = selTurn || S.conv.turns.at(-1)?.id || null;
+  location.hash = id; store.set("conv", id);
+  for (const t of S.conv.turns) if (t.status === "running") attach(t, true);
+  $("#thread").scrollTop = 0; render();
+  requestAnimationFrame(() => { const th = $("#thread"); th.scrollTop = th.scrollHeight; });
+  document.body.dataset.drawer = "";
+}
+
+function attach(turn, fromStart) {
+  if (S.es[turn.id]) return;
+  if (fromStart) turn.events = [];
+  const es = new EventSource(`/api/runs/${turn.id}/events?after=${turn.events.length}`);
+  S.es[turn.id] = es;
+  es.onmessage = m => {
+    const ev = JSON.parse(m.data); turn.events.push(ev);
+    if (ev.e === "done") turn.status = ev.status;
+    render();
+  };
+  es.addEventListener("end", async () => {
+    es.close(); delete S.es[turn.id];
+    const keepSel = S.sel; const fresh = await api("/api/conversations/" + encodeURIComponent(S.conv.id)).catch(() => null);
+    if (fresh && S.conv && S.conv.id === fresh.id) { S.conv = fresh; S.sel = keepSel; }
+    refreshList();
+  });
+  es.onerror = () => { if (es.readyState === 2) { delete S.es[turn.id]; } };
+}
+
+async function ask(prompt) {
+  prompt = prompt.trim(); if (!prompt || isRunning() || agentOff()) return;
+  stopReplay();
+  try {
+    const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, conversation_id: S.conv?.id || null }) });
+    if (!S.conv || S.conv.id !== r.conversation_id) S.conv = await api("/api/conversations/" + encodeURIComponent(r.conversation_id));
+    else S.conv = await api("/api/conversations/" + encodeURIComponent(r.conversation_id));
+    const turn = S.conv.turns.at(-1); turn.status = "running"; turn.events = [];
+    S.sel = turn.id; location.hash = S.conv.id; store.set("conv", S.conv.id);
+    attach(turn, false); $("#prompt").value = ""; autoGrow();
+    document.body.dataset.view = "chat"; syncView();
+    refreshList(); render();
+    requestAnimationFrame(() => { const th = $("#thread"); th.scrollTop = th.scrollHeight; });
+  } catch (e) { alert(tx("composer.send_failed", { error: e.message })); }
+}
+
+/* replay: feed saved events back through the same renderer, with gaps capped */
+function stopReplay() { if (S.replay) { clearTimeout(S.replay.timer); S.replay = null; render(); } }
+function startReplay(id) {
+  const t = turnById(id); if (!t) return; stopReplay();
+  const r = S.replay = { id, upto: 0, timer: null };
+  const step = () => {
+    if (S.replay !== r) return;
+    if (r.upto >= t.events.length) { S.replay = null; render(); return; }
+    const prev = t.events[r.upto - 1]?.t ?? 0, now = t.events[r.upto].t; r.upto++; render();
+    const nextGap = r.upto < t.events.length ? Math.min(Math.max(t.events[r.upto].t - now, 0), 450) : 0;
+    r.timer = setTimeout(step, nextGap);
+  };
+  step();
+}
+
+/* ================= UI wiring ================= */
+function autoGrow() { const p = $("#prompt"); p.style.height = "auto"; p.style.height = Math.min(p.scrollHeight, 180) + "px"; }
+function syncView() {
+  const v = document.body.dataset.view;
+  document.querySelectorAll("#viewseg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.view === v));
+}
+function newConversation() { stopReplay(); S.conv = null; S.sel = null; location.hash = ""; store.set("conv", ""); document.body.dataset.drawer = ""; render(); $("#prompt").focus(); }
+
+$("#form").addEventListener("submit", e => { e.preventDefault(); ask($("#prompt").value); });
+$("#prompt").addEventListener("input", autoGrow);
+$("#prompt").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask($("#prompt").value); } });
+$("#stop").addEventListener("click", () => { const t = S.conv?.turns.find(t => t.status === "running"); if (t) api(`/api/runs/${encodeURIComponent(t.id)}/cancel`, { method: "POST" }).catch(() => {}); });
+$("#new").addEventListener("click", newConversation);
+$("#graph-new").addEventListener("click", newConversation);
+$("#lost-new").addEventListener("click", newConversation);
+$("#search").addEventListener("input", e => { S.q = e.target.value; render(); });
+$("#menu").addEventListener("click", () => { document.body.dataset.drawer = document.body.dataset.drawer === "open" ? "" : "open"; });
+$("#viewseg").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { document.body.dataset.view = b.dataset.view; syncView(); } });
+document.addEventListener("change", e => { const el = e.target.closest?.("[data-vsrc]"); if (el) { const v = S.viz[el.dataset.vsrc] ||= {}; v.src = +el.value; delete v.kind; saveViz(); render(); } });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { S.sections.clear(); render(); });
+$("#theme").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches, cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; store.set("theme", next); S.sections.clear(); render();
+});
+
+document.addEventListener("click", async e => {
+  const t = e.target;
+  let el;
+  if ((el = t.closest("[data-del-yes]"))) { e.stopPropagation(); await api("/api/conversations/" + encodeURIComponent(el.dataset.delYes), { method: "DELETE" }); S.confirm = null; if (S.conv?.id === el.dataset.delYes) newConversation(); return refreshList(); }
+  if (t.closest("[data-del-no]")) { S.confirm = null; return render(); }
+  if ((el = t.closest("[data-del]"))) { e.stopPropagation(); S.confirm = el.dataset.del; return render(); }
+  if ((el = t.closest(".hist-item"))) return openConv(el.dataset.id);
+  if ((el = t.closest("[data-ex]"))) { $("#prompt").value = el.dataset.ex; autoGrow(); return ask(el.dataset.ex); }
+  if ((el = t.closest("[data-inspect]"))) { stopReplay(); S.sel = el.dataset.inspect; document.body.dataset.view = "timeline"; syncView(); return render(); }
+  if ((el = t.closest("[data-replay]"))) { return S.replay ? stopReplay() : startReplay(el.dataset.replay); }
+  if (t.closest("[data-agent-check]")) { $("#agent-dlg").showModal(); return runAgentCheck(); }
+  if ((el = t.closest("[data-ask]"))) { e.stopPropagation(); return ask(tx(el.dataset.ask)); }
+  if ((el = t.closest("[data-prov]"))) { e.stopPropagation(); const v = S.viz[el.dataset.prov] ||= {}; v.prov = !v.prov; saveViz(); return render(); }
+  if ((el = t.closest("[data-vkind]"))) { e.stopPropagation(); (S.viz[el.dataset.vtid] ||= {}).kind = el.dataset.vkind; saveViz(); return render(); }
+  if ((el = t.closest("[data-mode]"))) { S.chartMode = el.dataset.mode; store.set("chart", S.chartMode); return render(); }
+  if ((el = t.closest("[data-copy]"))) { e.preventDefault(); e.stopPropagation(); try { await navigator.clipboard.writeText(el.dataset.copy); el.textContent = tx("tool.copied"); } catch { el.textContent = tx("tool.not_copied"); } return; }
+  if ((el = t.closest("[data-goto]"))) { if (document.body.dataset.view === "timeline") { document.body.dataset.view = "chat"; syncView(); } const s = $("#st-" + el.dataset.goto); if (s) { s.open = true; s.scrollIntoView({ block: "center", behavior: "smooth" }); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash"); } return; }
+  if ((el = t.closest(".turn"))) { if (S.sel !== el.dataset.turn && !t.closest("a,pre,table")) { stopReplay(); S.sel = el.dataset.turn; render(); } }
+});
+document.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".hist-item")) { e.preventDefault(); openConv(e.target.dataset.id); } if ((e.key === "Enter") && e.target.matches("[data-goto]")) e.target.click(); });
+/* remember which steps are unfolded across re-renders */
+document.addEventListener("toggle", e => { const k = e.target.dataset?.openKey; if (k) e.target.open ? S.open.add(k) : S.open.delete(k); }, true);
+
+/* tooltip */
+const tip = $("#tip");
+function showTip(el, x, y) { tip.textContent = el.dataset.tip; tip.style.display = "block"; const r = tip.getBoundingClientRect(); tip.style.left = Math.max(8, Math.min(x + 12, innerWidth - r.width - 8)) + "px"; tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px"; }
+document.addEventListener("pointermove", e => { const el = e.target.closest?.("[data-tip]"); if (el) showTip(el, e.clientX, e.clientY); else tip.style.display = "none"; });
+document.addEventListener("focusin", e => { const el = e.target.closest?.("[data-tip]"); if (el) { const r = el.getBoundingClientRect(); showTip(el, r.left + 20, r.bottom - 10); } });
+document.addEventListener("focusout", () => tip.style.display = "none");
+
+/* live elapsed counter without a full re-render */
+setInterval(() => {
+  const t = S.conv?.turns.find(t => t.status === "running"); if (!t) return;
+  const el = document.querySelector(`[data-elapsed="${t.id}"]`);
+  if (el) el.textContent = secs(Date.now() - t.started * 1000);
+}, 500);
+
+/* ---- agent check: what works with this agent, and with the others installed here ---- */
+const ck = k => `<i class="ck ${k}" aria-hidden="true">${{ ok: "✓", bad: "✕", warn: "!", na: "–" }[k]}</i>`;
+const row = (k, title, detail) => `<div class="chk">${ck(k)}<div>${title}${detail ? `<small>${detail}</small>` : ""}</div></div>`;
+/* What the page can show depends on what the agent reports, so the check measures the last run instead of guessing from a name. */
+const MEASURED = ["stream_steps", "token_usage", "cost", "resume", "sparql_rows"];
+function renderAgentCheck(d) {
+  const st = d.ster, sel = d.selected;
+  let h = `<h3>${tx("dlg.h_active")}</h3>` + (sel
+    ? row(sel.path ? "ok" : "bad", `<b>${esc(sel.label)}</b>${sel.version ? " · " + esc(sel.kind === "model" ? tx("dlg.model_is", { model: sel.version }) : sel.version) : ""}`,
+        [esc(sel.path || ""), tx(sel.output === "events" ? "dlg.out_events" : sel.output === "model" ? "dlg.out_model" : "dlg.out_text"), tx(sel.source === "ASK_AGENT_CMD" ? "dlg.custom" : sel.verified ? "dlg.verified" : "dlg.unverified")].filter(Boolean).join(" · "))
+    : row("bad", tx("dlg.none_title"), esc(I18n.msg(d.reason)) + " " + esc(tx("dlg.none_how"))));
+  h += `<h3>${tx("dlg.h_ster")}</h3>` + (st.up
+    ? row("ok", tx("dlg.ster_up", { url: esc(st.url) }), tx("dlg.ster_tools", { n: st.tools.length, list: esc(st.tools.join(", ")) }))
+      + row(st.missing.length ? "bad" : "ok", st.missing.length ? tx("dlg.ster_req_missing", { list: esc(st.missing.join(", ")) }) : tx("dlg.ster_req_ok"), "get_overview, get_vocabulary, search_entities, run_sparql")
+      + row(st.file ? "ok" : "warn", tx("dlg.ster_file"), esc(st.file || tx("dlg.unknown")))
+      + row(st.instructions ? "ok" : "warn", tx(st.instructions ? "dlg.ster_instr_ok" : "dlg.ster_instr_no"))
+    : row("bad", tx("dlg.ster_down"), esc(st.error || "")));
+  h += `<h3>${tx("dlg.h_recipes")}</h3>` + (d.agents.length ? d.agents.map(a => row(a.path ? "ok" : "na", `<b>${esc(a.label)}</b>${a.selected ? " · " + tx("dlg.active") : ""}`,
+        `${tx(a.kind === "model" ? (a.path ? "dlg.endpoint_found" : "dlg.endpoint_missing") : (a.path ? "dlg.recipe_found" : "dlg.recipe_missing"))} (${esc(a.binary)}) · ${esc(a.source)}`)).join("") : row("na", esc(I18n.msg(d.reason))));
+  h += `<h3>${tx("dlg.h_last")}</h3>`;
+  if (!d.last_run) h += row("na", tx("dlg.last_none"), tx("dlg.last_none_hint"));
+  else {
+    const o = d.last_run.observed, c = d.last_run.counts;
+    h += `<div class="viz-cap" style="margin-bottom:4px">${tx("dlg.last_counts", { prompt: esc(d.last_run.prompt), steps: c.steps, calls: c.tool_calls, sparql: c.sparql, traced: c.traced })}</div>`
+      + MEASURED.map(k => row(o[k] === null ? "na" : o[k] ? "ok" : "bad", tx("lastcap." + k), o[k] === false ? tx("dlg.not_reported") : o[k] === null ? tx("dlg.last_no_tool") : "")).join("")
+      + d.last_run.problems.map(p => row("warn", esc(I18n.msg(p)))).join("")
+      + `<div class="viz-cap" style="margin-top:6px">${tx("dlg.measured")}</div>`;
+  }
+  return h;
+}
+async function runAgentCheck() {
+  const body = $("#agent-body"); body.innerHTML = `<p class="viz-cap">${tx("dlg.loading")}</p>`;
+  try { body.innerHTML = renderAgentCheck(await api("/api/agent-check")); } catch (e) { body.innerHTML = row("bad", tx("dlg.failed"), esc(e.message)); }
+}
+$("#agent-pill").addEventListener("click", () => { $("#agent-dlg").showModal(); runAgentCheck(); });
+$("#agent-close").addEventListener("click", () => $("#agent-dlg").close());
+$("#agent-rerun").addEventListener("click", runAgentCheck);
+$("#agent-dlg").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+
+async function pollStatus() {
+  try {
+    const s = await api("/api/status"); S.ster = { state: s.ster_state, port: s.ster_port, graph: s.graph };
+    if (s.map_url) S.mapUrl = s.map_url; if (s.project) $("#project").textContent = s.project;
+    document.title = (s.project ? s.project + " · " : "") + tx("app.name");
+    if (s.agent) { const was = agentOff(); S.agent = s.agent; if (was !== agentOff()) render(); }
+    applyAgent();
+    const g = s.graph; $("#ster-dot").className = "dot " + (s.ster ? "up" : "down"); $("#ster-text").textContent = tx(s.ster ? "ster.up" : "ster.down");
+    $("#ster-pill").title = !s.ster ? tx("ster.hint_down") : `:${s.ster_port}` + (g ? " · " + tx("ster.graph", { title: g.title || g.ontology_uri || String(g.file || "?").split(/[\\/]/).pop(), triples: full(g.triples || 0), stamp: (g.fingerprint || "").slice(0, 6) }) : "");
+  }
+  catch { $("#ster-dot").className = "dot down"; $("#ster-text").textContent = tx("bridge.down"); $("#ster-pill").title = tx("bridge.down_hint"); }
+}
+
+/* ================= boot ================= */
+/* ---- language: the browser's, unless the user picked one ---- */
+function setLanguage() {
+  Viz.setI18n(I18n.t, I18n.locale); I18n.apply();
+  document.title = ($("#project").textContent ? $("#project").textContent + " · " : "") + tx("app.name");
+  $("#lang").value = I18n.locale; applyAgent();
+}
+(async function boot() {
+  const th = store.get("theme"); if (th) document.documentElement.dataset.theme = th;
+  S.chartMode = store.get("chart") || "chart";
+  let locales = [{ code: "en", name: "English" }];
+  try { locales = await api("/api/locales"); } catch {}
+  await I18n.load(locales.map(l => l.code), store.get("lang"));
+  $("#lang").innerHTML = locales.map(l => `<option value="${l.code}">${esc(l.name)}</option>`).join("");
+  $("#lang").addEventListener("change", async e => { store.set("lang", e.target.value); await I18n.load(locales.map(l => l.code), e.target.value); setLanguage(); S.sections.clear(); profCache.clear(); pollStatus(); render(); });
+  setLanguage();
+  pollStatus(); setInterval(pollStatus, 4000);
+  await refreshList();
+  const id = location.hash.slice(1) || store.get("conv");
+  if (id && S.convs.some(c => c.id === id)) await openConv(id); else render();
+})();
+</script>
+</body>
+</html>

@@ -196,7 +196,9 @@ ster = "ster.cli:main"
 ster-trace = "ster.query_trace.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ster"]
+# agent_app is its own package in its own folder (agent-app/), shipped in the same download as ster so enabling
+# "Talk to graph" needs no separate install. It lives outside ster/, so the FastAPI-only-via-ster.api contract is not its rule.
+packages = ["ster", "agent-app/agent_app"]
 
 # ── Project URLs ──────────────────────────────────────────────────────────────
 
@@ -208,7 +210,7 @@ Issues     = "https://github.com/gbelbe/ster/issues"
 # ── Pytest ────────────────────────────────────────────────────────────────────
 
 [tool.pytest.ini_options]
-testpaths    = ["tests"]
+testpaths    = ["tests", "agent-app/tests"]  # the agent app is part of the wheel, so its tests are part of the coverage
 addopts      = "--tb=short --strict-markers --strict-config"
 asyncio_mode = "auto"
 markers = [
@@ -279,6 +281,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"agent-app/tests/*" = [
+    "S105",  # a fake token in a test double is not a secret
+    "S106",
+    "S108",
+]
 "tests/*" = [
     "S105",  # hardcoded passwords in test fixtures (token strings are not real secrets)
     "S106",  # hardcoded password as argument — same as S105

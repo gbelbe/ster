@@ -22,7 +22,7 @@ import functools
 import html
 import json
 
-from .viz_shared import vendored
+from .viz_shared import embed_style, vendored
 
 # Pinned, like the Cytoscape vendoring: a library that changes under a cached
 # file is a bug report nobody can reproduce.
@@ -108,8 +108,16 @@ def _app_js() -> str:
     return (files("ster") / "assets" / "timeline_app.js").read_text(encoding="utf-8")
 
 
+# What the page shows around the frieze itself; hidden when it is embedded in another page.
+_EMBED_HIDDEN = ("header", "#qbox")
+
+
 def render_timeline_html(
-    query: str, token: str, after: str | None = None, before: str | None = None
+    query: str,
+    token: str,
+    after: str | None = None,
+    before: str | None = None,
+    embed: bool = False,
 ) -> str:
     """The ``/timeline`` page, primed with *query* and able to re-run it.
 
@@ -122,6 +130,9 @@ def render_timeline_html(
     ``window.__STER_TIMELINE__``, the same source it reads the token from, so
     there is one place — not two markup spots plus the JSON — that can drift
     from what the page actually does with them.
+
+    *embed* hides the header and the query box, for showing the frieze inside another page: the
+    frieze, its lanes and its item panel are unchanged.
     """
     return (
         _PAGE.replace("__QUERY__", html.escape(query, quote=True))
@@ -134,6 +145,7 @@ def render_timeline_html(
             + ";</script>",
         )
         .replace("__APP_JS__", _app_js())
+        .replace("__EMBED__", embed_style(_EMBED_HIDDEN) if embed else "")
     )
 
 
@@ -191,6 +203,7 @@ header button.active{background:#1f5b80;border-color:#1f5b80;color:#fff}
 .vis-item.vis-range.beside .vis-item-overflow{overflow:visible}
 .vis-item.vis-range.beside .vis-item-content{margin-left:100%}
 </style>
+__EMBED__
 </head>
 <body>
 <header>

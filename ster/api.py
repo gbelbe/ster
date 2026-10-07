@@ -11,6 +11,7 @@ import html
 import re
 import unicodedata
 from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -410,6 +411,9 @@ def create_app(
         _LIT_CONTEXT: list(context or []),
         "html_fn": html_fn,
     }
+    from .plugins.query_trace import follow_setting  # noqa: PLC0415
+
+    follow_setting(file_path)
     _bearer = HTTPBearer(auto_error=False)
 
     def _tax() -> Taxonomy:
@@ -471,6 +475,7 @@ def create_app(
     _register_timeline(app, _tax, _check_auth)
     _register_events(app, token, broadcaster)
     _register_mcp(app, _st, _tax, _check_auth, token)
+    _register_trace_answers(app, _check_auth)
 
     return app
 
@@ -495,6 +500,81 @@ def _graph_html_response(
     return HTMLResponse(
         render(root_uri, full, sparql),
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+def _map_response(
+    _st: dict[str, Any], token: str, sparql: str, show: str, focus: str, embed: bool
+) -> HTMLResponse:
+    from .geo_map_html import render_map_html  # noqa: PLC0415
+
+    query = sparql or (_focused_map_query(_st[_LIT_TAXONOMY], focus) if focus else "")
+    return HTMLResponse(
+        render_map_html(query or _DEFAULT_MAP_QUERY, token, show_all=show == "all", embed=embed)
+    )
+
+
+@dataclass(frozen=True)
+class _TimelinePage:
+    """What a request for the timeline page asked: its query or focus, its date bounds, and whether to embed it."""
+
+    sparql: str
+    focus: str
+    after: str
+    before: str
+    embed: bool
+
+
+def _timeline_response(_st: dict[str, Any], token: str, ask: _TimelinePage) -> HTMLResponse:
+    from .timeline_html import DEFAULT_TIMELINE_QUERY, render_timeline_html  # noqa: PLC0415
+
+    query = ask.sparql or (
+        _focused_timeline_query(_st[_LIT_TAXONOMY], ask.focus) if ask.focus else ""
+    )
+    # The validator restricts these to date characters. Escape them anyway
+    # at this HTML boundary: it documents the sink contract to CodeQL and
+    # keeps a future validator broadening from reopening reflected XSS.
+    after_value = html.escape(_validated_timeline_bound(ask.after, "after") or "") or None
+    before_value = html.escape(_validated_timeline_bound(ask.before, "before") or "") or None
+    # No-cache, as /viz does: the page embeds its own app layer, so a cached
+    # copy silently keeps serving yesterday's JavaScript after an edit — a
+    # confusing failure the author hits before any user does.
+    return HTMLResponse(
+        render_timeline_html(
+            query or DEFAULT_TIMELINE_QUERY, token, after_value, before_value, ask.embed
+        ),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+def _trace_timeline_response(
+    _st: dict[str, Any], page: int, page_size: int, idle_seconds: int, after: str, before: str
+) -> HTMLResponse:
+    from .plugins.query_trace.sessions import agent_sessions_for_project  # noqa: PLC0415
+    from .query_trace.timeline import render_timeline_html  # noqa: PLC0415
+
+    # The bounds reach the page's inputs and its pager links, so they must be dates: the shape is
+    # checked here (a 400 otherwise) and escaped again at the sink, as the /timeline route does.
+    after_value = html.escape(_validated_timeline_bound(after, "after") or "")
+    before_value = html.escape(_validated_timeline_bound(before, "before") or "")
+    path = _st.get(_LIT_FILE_PATH)
+    project = path.parent if path is not None else None
+    sessions = agent_sessions_for_project(project, idle_seconds) if project else []
+    filtered = [
+        item
+        for item in sessions
+        if (not after_value or item.started >= after_value)
+        and (not before_value or item.started <= before_value)
+    ]
+    return HTMLResponse(
+        render_timeline_html(
+            filtered,
+            page=page,
+            page_size=page_size,
+            idle_seconds=idle_seconds,
+            after=after_value,
+            before=before_value,
+        )
     )
 
 
@@ -526,19 +606,18 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         sparql: str = Query(default="", alias="q"),
         show: str = Query(default="", alias="show"),
         focus: str = Query(default="", alias="focus"),
+        embed: bool = Query(default=False, alias="embed"),
     ) -> HTMLResponse:
         """A live map of a SPARQL result — see :mod:`ster.geo_map_html`.
 
         Open like ``/viz``: the page itself needs no token, and embeds one so its
         own ``/mcp`` calls authenticate. Keeping the token out of the URL means it
         does not land in browser history.
-        """
-        from .geo_map_html import render_map_html  # noqa: PLC0415
 
-        query = sparql or (_focused_map_query(_st[_LIT_TAXONOMY], focus) if focus else "")
-        return HTMLResponse(
-            render_map_html(query or _DEFAULT_MAP_QUERY, token, show_all=show == "all")
-        )
+        ``?embed=1`` hides the page's own header, query box and details panel, for showing
+        the map inside another page; nothing else about it changes.
+        """
+        return _map_response(_st, token, sparql, show, focus, embed)
 
     @app.get("/timeline", response_class=HTMLResponse, include_in_schema=False)
     def timeline_page(
@@ -546,6 +625,7 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         focus: str = Query(default="", alias="focus"),
         after: str = Query(default="", alias="after"),
         before: str = Query(default="", alias="before"),
+        embed: bool = Query(default=False, alias="embed"),
     ) -> HTMLResponse:
         """A live frieze of a SPARQL result — see :mod:`ster.timeline_html`.
 
@@ -556,24 +636,13 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         primes its query box — so a link built with them (``timeline_url``, or
         one a person edits by hand) reopens already bounded rather than needing
         the filter re-entered.
+
+        ``?embed=1`` hides the page's own header and query box, for showing the frieze
+        inside another page; nothing else about it changes.
         """
-        from .timeline_html import DEFAULT_TIMELINE_QUERY, render_timeline_html  # noqa: PLC0415
+        return _timeline_response(_st, token, _TimelinePage(sparql, focus, after, before, embed))
 
-        query = sparql or (_focused_timeline_query(_st[_LIT_TAXONOMY], focus) if focus else "")
-        # The validator restricts these to date characters. Escape them anyway
-        # at this HTML boundary: it documents the sink contract to CodeQL and
-        # keeps a future validator broadening from reopening reflected XSS.
-        after_value = html.escape(_validated_timeline_bound(after, "after") or "") or None
-        before_value = html.escape(_validated_timeline_bound(before, "before") or "") or None
-        # No-cache, as /viz does: the page embeds its own app layer, so a cached
-        # copy silently keeps serving yesterday's JavaScript after an edit — a
-        # confusing failure the author hits before any user does.
-        return HTMLResponse(
-            render_timeline_html(query or DEFAULT_TIMELINE_QUERY, token, after_value, before_value),
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
-
-    @app.get("/query-trace/timeline", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/query-trace/timeline", response_class=HTMLResponse, include_in_schema=False)  # noqa: V103
     def query_trace_timeline(
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=10, ge=1, le=50),
@@ -581,32 +650,7 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         after: str = Query(default=""),
         before: str = Query(default=""),
     ) -> HTMLResponse:
-        from .plugins.query_trace.sessions import agent_sessions_for_project
-        from .query_trace.timeline import render_timeline_html
-
-        # The bounds reach the page's inputs and its pager links, so they must be dates: the shape is
-        # checked here (a 400 otherwise) and escaped again at the sink, as the /timeline route does.
-        after_value = html.escape(_validated_timeline_bound(after, "after") or "")
-        before_value = html.escape(_validated_timeline_bound(before, "before") or "")
-        path = _st.get(_LIT_FILE_PATH)
-        project = path.parent if path is not None else None
-        sessions = agent_sessions_for_project(project, idle_seconds) if project else []
-        filtered = [
-            item
-            for item in sessions
-            if (not after_value or item.started >= after_value)
-            and (not before_value or item.started <= before_value)
-        ]
-        return HTMLResponse(
-            render_timeline_html(
-                filtered,
-                page=page,
-                page_size=page_size,
-                idle_seconds=idle_seconds,
-                after=after_value,
-                before=before_value,
-            )
-        )
+        return _trace_timeline_response(_st, page, page_size, idle_seconds, after, before)
 
     @app.get("/onto", response_class=Response, include_in_schema=False)
     def serve_ontology(request: Request) -> Response:
@@ -1467,6 +1511,49 @@ def _register_timeline(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         graph = _graph_for_locate(_tax())
         items = timeline_items(graph, body.uris, body.after, body.before)
         return {"items": items, "lanes": _lanes_of(items), "span": span_of(items)}
+
+
+def _register_trace_answers(app: FastAPI, _check_auth: Any) -> None:
+    """Where an agent runner reports the answer and the resume id the traces cannot see.
+
+    Both need tracing on: the answers live in the trace folder and join its runs.
+    """
+
+    def _directory() -> Path:
+        from .query_trace import get_recorder  # noqa: PLC0415
+
+        directory = getattr(get_recorder(), "directory", None)
+        if directory is None:
+            raise HTTPException(status_code=409, detail="Query tracing is off.")
+        return Path(directory)
+
+    @app.post(  # noqa: V103
+        "/api/query_trace/answers/{answer_id}",
+        summary="Record the answer an agent gave, with the session it can be resumed with",
+        tags=[_TAG_VIZ],
+        status_code=201,
+    )
+    def put_trace_answer(
+        answer_id: str, body: dict[str, Any], _: None = Depends(_check_auth)
+    ) -> dict[str, str]:
+        from .query_trace.answers import record_answer  # noqa: PLC0415
+
+        directory = _directory()
+        try:
+            record_answer(directory, answer_id, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"id": answer_id}
+
+    @app.get(  # noqa: V103
+        "/api/query_trace/answers",
+        summary="The recorded agent answers, oldest first",
+        tags=[_TAG_VIZ],
+    )
+    def list_trace_answers(_: None = Depends(_check_auth)) -> list[dict[str, Any]]:
+        from .query_trace.answers import read_answers  # noqa: PLC0415
+
+        return read_answers(_directory())
 
 
 def _register_events(app: FastAPI, token: str, broadcaster: SSEBroadcaster) -> None:

@@ -154,31 +154,13 @@ def entity(taxonomy: Taxonomy, uri: str, lang: str = "en") -> dict[str, Any]:
 
 
 def overview(taxonomy: Taxonomy, lang: str = "en") -> dict[str, Any]:
-    """Orientation: what this file is and how much of each thing it holds."""
-    return {
-        "ontology_uri": taxonomy.ontology_uri,
-        "title": taxonomy.ontology_title,
-        "file": str(taxonomy.file_path) if taxonomy.file_path else None,
-        "counts": {
-            "schemes": len(taxonomy.schemes),
-            "concepts": len(taxonomy.concepts),
-            "classes": len(taxonomy.owl_classes),
-            "individuals": len(taxonomy.owl_individuals),
-            "properties": len(taxonomy.owl_properties),
-        },
-        "schemes": [_ref(taxonomy, u, lang) for u in taxonomy.schemes],
-        "languages": languages_in(taxonomy),
-    }
+    """Orientation: what this graph is and how much of each thing it holds.
 
+    Read from the store SPARQL runs against, so a figure here is the one a query returns.
+    """
+    from .graph_overview import graph_overview  # noqa: PLC0415
 
-def languages_in(taxonomy: Taxonomy) -> list[str]:
-    """Every language tag appearing on a concept or class label, sorted."""
-    langs: set[str] = set()
-    for concept in taxonomy.concepts.values():
-        langs.update(lbl.lang for lbl in concept.labels if lbl.lang)
-    for cls in taxonomy.owl_classes.values():
-        langs.update(lbl.lang for lbl in cls.labels if lbl.lang)
-    return sorted(langs)
+    return graph_overview(taxonomy, lang)
 
 
 def search(

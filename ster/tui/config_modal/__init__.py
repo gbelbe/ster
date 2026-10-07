@@ -82,7 +82,7 @@ class ConfigModal(  # type: ignore[misc]
 ):
     """Display language + theme + configured languages (auto-saving)."""
 
-    DEFAULT_CSS = """
+    DEFAULT_CSS = """  # noqa: V101
     /* A fixed modal size so it doesn't resize when switching tabs. The tabs fill
        it; each pane scrolls if its content is taller than the box. */
     #cfg-box { width: 90%; height: 90%; }
@@ -254,12 +254,12 @@ class ConfigModal(  # type: ignore[misc]
             if plugins.is_enabled("semanticlint"):
                 with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
                     yield from self._semanticlint_widgets()
-            if plugins.is_enabled("mcp_query_trace"):
-                with TabPane("MCP Query Trace", id="cfg-tab-mcp-query-trace"):
+            if plugins.is_enabled("mcp"):
+                with TabPane("MCP", id="cfg-tab-mcp"):
                     from ster.plugins.query_trace import TracePanel
 
                     panel = TracePanel(self._project_path)
-                    panel.query_trace_base_url = self._trace_base_url  # type: ignore[attr-defined]
+                    panel.query_trace_base_url = self._trace_base_url  # type: ignore[attr-defined]  # noqa: V101
                     yield panel
 
     def footer_hints(self) -> list[Hint]:

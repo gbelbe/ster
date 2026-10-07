@@ -8,7 +8,7 @@ import typer
 
 from ..display import console
 from ..project import Project
-from . import _app
+from . import _app, _mcp_option, _options
 from ._exit import ExitCode
 
 
@@ -91,13 +91,8 @@ def cmd_serve(
     file: Path = typer.Argument(..., help="Ontology file (.ttl / .rdf / .jsonld)."),
     host: str | None = typer.Option(None, "--host", help="Bind host."),
     port: int | None = typer.Option(None, "--port", "-p", help="Bind port."),
-    context_files: list[Path] | None = typer.Option(
-        None,
-        "--context-files",
-        "-x",
-        help="Load these files read-only alongside FILE (repeatable). "
-        "Their entities are visible but locked, and saving never writes to them.",
-    ),
+    context_files: list[Path] | None = _options.context_files(),
+    mcp: bool | None = _mcp_option.option(),  # type: ignore[assignment]
 ) -> None:
     """Start the live graph viewer and ontology REST API.
 
@@ -117,6 +112,7 @@ def cmd_serve(
             "[red]The graph server (fastapi/uvicorn) failed to import — reinstall ster.[/red]"
         )
         raise typer.Exit(ExitCode.UNEXPECTED)
+    _mcp_option.apply(mcp)
     _warn_about_other_servers()
     _require_explicit_context(file.resolve(), context_files)
     serve(

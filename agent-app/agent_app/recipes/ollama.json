@@ -1,0 +1,7 @@
+{
+  "label": "Ollama",
+  "type": "model",
+  "endpoint": "http://localhost:11434/v1",
+  "verified": true,
+  "priority": 30
+}

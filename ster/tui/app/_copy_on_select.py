@@ -38,7 +38,7 @@ class CopiedFlash(Static):
     mouse was released near an edge.
     """
 
-    DEFAULT_CSS = """
+    DEFAULT_CSS = """  # noqa: V101
     CopiedFlash {
         overlay: screen;
         position: absolute;
@@ -57,7 +57,7 @@ class _CopyOnSelectMixin(_AppState):
 
     _flash_timer: Timer | None = None
 
-    def on_text_selected(self, _event: Any) -> None:
+    def on_text_selected(self, _event: Any) -> None:  # noqa: V105
         """After every mouse release: copy what is selected, or clear the message."""
         text = self.screen.get_selected_text()
         if not text:
@@ -88,7 +88,7 @@ class _CopyOnSelectMixin(_AppState):
         for flash in self.screen.query(CopiedFlash):
             flash.remove()
 
-    def action_clear_text_selection(self) -> None:
+    def action_clear_text_selection(self) -> None:  # noqa: V105
         """Escape while text is selected: drop the selection and the message."""
         self.screen.clear_selection()
         self._hide_copied_flash()
@@ -101,4 +101,8 @@ class _CopyOnSelectMixin(_AppState):
         """
         if action == "clear_text_selection":
             return bool(self.screen.selections) or bool(self.screen.query(CopiedFlash))
+        if action == "open_agent":  # the key exists only while the talk-to-graph plugin is on
+            from ster.plugins import talk_to_graph  # noqa: PLC0415
+
+            return talk_to_graph.is_enabled()
         return super().check_action(action, parameters)  # type: ignore[misc]

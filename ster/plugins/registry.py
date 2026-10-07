@@ -48,11 +48,13 @@ _PLUGINS: tuple[PluginSpec, ...] = (
         dependency="rdfdiff>=0.1.1",
     ),
     PluginSpec(
-        id="mcp_query_trace",
-        name="MCP Query Trace",
+        id="mcp",
+        name="MCP",
         description=(
-            "Record MCP query sessions as JSONL events and inspect them as PROV-O "
-            "graphs or timelines."
+            "Record the queries AI agents run on this graph and inspect them as PROV-O "
+            "graphs or timelines. Also turns on Talk to graph: a local page where your own "
+            "agent answers questions about the graph, opened with the a key or from the main "
+            "menu, with its history kept in these traces."
         ),
         dependency="ster.query_trace",
     ),

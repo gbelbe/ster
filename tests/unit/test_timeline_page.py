@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from http import HTTPStatus
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,13 +40,13 @@ def _client() -> TestClient:
 
 def test_timeline_route_returns_html() -> None:
     response = _client().get("/timeline")
-    assert response.status_code == 200
+    assert response.status_code == HTTPStatus.OK
     assert "text/html" in response.headers["content-type"]
 
 
 def test_timeline_route_loads_without_a_token() -> None:
     """Same as /viz and /map: the page is open, its API calls carry the token."""
-    assert _client().get("/timeline").status_code == 200
+    assert _client().get("/timeline").status_code == HTTPStatus.OK
 
 
 def test_timeline_route_renders_the_supplied_query() -> None:
@@ -113,7 +114,7 @@ def test_api_timeline_returns_items_lanes_and_span() -> None:
         json={"uris": []},
         headers={"Authorization": f"Bearer {TOKEN}"},
     )
-    assert body.status_code == 200
+    assert body.status_code == HTTPStatus.OK
     payload = body.json()
     assert set(payload) == {"items", "lanes", "span"}
 
@@ -194,7 +195,7 @@ def test_an_after_value_that_is_not_date_shaped_is_rejected() -> None:
     the CodeQL/SonarQube-flagged sink this pair of tests exists to close."""
     response = _client().get("/timeline", params={"after": "</script><script>alert(1)</script>"})
 
-    assert response.status_code == 400
+    assert response.status_code == HTTPStatus.BAD_REQUEST
 
 
 def test_a_valid_after_value_is_accepted_and_embedded() -> None:
@@ -225,12 +226,14 @@ def test_a_valid_before_value_is_accepted_and_embedded() -> None:
 def test_every_shape_time_shapes_recognises_is_accepted(value: str) -> None:
     """One shape per xsd:gYear/gYearMonth/date/dateTime — see
     time_shapes.TEMPORAL_DATATYPES, which this validation exists to mirror."""
-    assert _client().get("/timeline", params={"before": value}).status_code == 200
+    assert _client().get("/timeline", params={"before": value}).status_code == HTTPStatus.OK
 
 
 @pytest.mark.parametrize("value", ["not-a-date", "2025/06/01", "2025-1-1", "'; DROP--"])
 def test_a_garbled_before_value_is_rejected(value: str) -> None:
-    assert _client().get("/timeline", params={"before": value}).status_code == 400
+    assert (
+        _client().get("/timeline", params={"before": value}).status_code == HTTPStatus.BAD_REQUEST
+    )
 
 
 def test_render_timeline_html_never_lets_a_bound_break_out_of_its_script_tag() -> None:
@@ -252,3 +255,74 @@ def test_narrow_periods_are_rechecked_after_every_zoom() -> None:
     assert "state.beside[item.id] ? ' beside' : ''" in js
     # Only periods can be narrow: a single date is a point with a free label.
     assert "if (!i.end) return;" in js
+
+
+# ---- embed mode: the page without its own chrome, for showing inside another page ----------------
+
+
+def _hidden_by_embed(html: str) -> list[str] | None:
+    marker = '<style id="ster-embed">'
+    if marker not in html:
+        return None
+    return html.split(marker, 1)[1].split("{display:none !important}", 1)[0].split(",")
+
+
+def test_timeline_page_without_embed_carries_no_embed_style() -> None:
+    assert _hidden_by_embed(_client().get("/timeline").text) is None
+
+
+def test_timeline_embed_hides_the_pages_own_chrome() -> None:
+    hidden = _hidden_by_embed(_client().get("/timeline", params={"embed": "1"}).text)
+    assert hidden is not None
+    assert {"header", "#qbox"} <= set(hidden)
+
+
+def test_timeline_embed_leaves_the_frieze_itself_alone() -> None:
+    hidden = _hidden_by_embed(_client().get("/timeline", params={"embed": "1"}).text) or []
+    assert "#tl" not in hidden
+    assert "#main" not in hidden
+
+
+def test_timeline_embed_keeps_query_token_and_date_range() -> None:
+    params = {
+        "q": DEFAULT_TIMELINE_QUERY,
+        "embed": "1",
+        "after": "2025-01-01",
+        "before": "2026-01-01",
+    }
+    text = _client().get("/timeline", params=params).text
+    assert TOKEN in text
+    assert "2025-01-01" in text
+    assert "2026-01-01" in text
+
+
+def test_timeline_embed_style_sits_in_the_head() -> None:
+    text = _client().get("/timeline", params={"embed": "1"}).text
+    assert text.index('id="ster-embed"') < text.index("</head>")
+
+
+@pytest.mark.parametrize(
+    ("value", "embedded"), [("1", True), ("true", True), ("0", False), ("false", False)]
+)
+def test_timeline_embed_flag_values(value: str, embedded: bool) -> None:
+    text = _client().get("/timeline", params={"embed": value}).text
+    assert (_hidden_by_embed(text) is not None) is embedded
+
+
+def test_timeline_embed_rejects_a_value_that_is_not_a_boolean() -> None:
+    assert (
+        _client().get("/timeline", params={"embed": "maybe"}).status_code
+        == HTTPStatus.UNPROCESSABLE_ENTITY
+    )
+
+
+def test_timeline_embed_does_not_loosen_the_date_validation() -> None:
+    assert (
+        _client().get("/timeline", params={"embed": "1", "after": "<script>"}).status_code
+        == HTTPStatus.BAD_REQUEST
+    )
+
+
+def test_the_timeline_renderer_takes_embed_directly() -> None:
+    assert _hidden_by_embed(render_timeline_html("SELECT 1", TOKEN, embed=True)) is not None
+    assert _hidden_by_embed(render_timeline_html("SELECT 1", TOKEN)) is None

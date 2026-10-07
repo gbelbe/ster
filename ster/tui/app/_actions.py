@@ -25,6 +25,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 _WARNING: Final[Literal["warning"]] = "warning"
 
 
+_COPIED_PREVIEW = 60  # characters of the copied text echoed in the toast
+
+
 class _ActionsMixin(_AppState):
     """Mixin: miscellaneous top-level key bindings: help screen, copy-to-clipboard, opening the map/query views, and expand/collapse-all."""
 
@@ -82,7 +85,7 @@ class _ActionsMixin(_AppState):
         # OSC 52 reaches the *client* clipboard over SSH; the local OS clipboard
         # covers terminals that ignore it. Shared with copy-on-select.
         local = self._copy_text(text)
-        shown = text if len(text) <= 60 else text[:57] + "…"
+        shown = text if len(text) <= _COPIED_PREVIEW else text[: _COPIED_PREVIEW - 3] + "…"
         where = "" if local else "  (OSC 52 — enable clipboard access in your terminal)"
         self.notify(f"Copied: {shown}{where}", timeout=3)
 
@@ -186,6 +189,33 @@ class _ActionsMixin(_AppState):
             self.notify("Couldn't open a browser for the timeline.", severity=_WARNING)
             return
         self.notify(f"Timeline opened in your browser — {url}")
+
+    def action_open_agent(self) -> None:  # noqa: V105
+        """The 'a' shortcut: open the talk-to-graph page for this file's folder in the browser.
+
+        Only bound while the plugin is on. The page starts in its own process the first time and is found again after
+        that. Without a usable agent it still opens, in its read-only mode: the history of earlier answers.
+        """
+        from ster.api_server import load_server_config  # noqa: PLC0415
+        from ster.plugins import talk_to_graph  # noqa: PLC0415
+
+        from .. import query as _query
+
+        if self._path is None:
+            self.notify("Open a file first — the page is about one project.", severity=_WARNING)
+            return
+        if not _query.server_is_running():
+            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
+            return
+        url, port = load_server_config()
+        address, why = talk_to_graph.page_url(self._path, url, port)
+        if address is None:
+            self.notify(why or "Couldn't start the agent page.", severity=_WARNING)
+            return
+        if not _query.open_browser(address):
+            self.notify("Couldn't open a browser for the agent page.", severity=_WARNING)
+            return
+        self.notify(f"Agent page opened in your browser — {address}")
 
     def _timeline_focus_target(self, graph: rdflib.Graph, dated_from: ReachFn) -> str | None:
         """The selected entity, when it can put anything on a time axis."""

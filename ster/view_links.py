@@ -62,17 +62,23 @@ def _base(base: str | None = None) -> str:
     return f"{url}:{port}"
 
 
-def map_url(sparql: str, focus: str | None = None, base: str | None = None) -> str:
+def map_url(
+    sparql: str, focus: str | None = None, base: str | None = None, embed: bool = False
+) -> str:
     """Address of the running server's map page, carrying *sparql* to run there.
 
     Same origin as the API, so the page's own re-runs post to ``/mcp`` without
     CORS; the token stays out of the URL and is embedded by the page, so it does
     not land in browser history.
+
+    *embed* asks for the page without its own header, query box and details panel,
+    for showing it inside another page.
     """
     from urllib.parse import quote  # noqa: PLC0415
 
     page = f"{_base(base)}/map?q={quote(sparql)}"
-    return page + (f"&focus={quote(focus)}" if focus else "")
+    page += f"&focus={quote(focus)}" if focus else ""
+    return page + ("&embed=1" if embed else "")
 
 
 def graph_url(sparql: str, base: str | None = None) -> str:
@@ -82,13 +88,21 @@ def graph_url(sparql: str, base: str | None = None) -> str:
     return f"{_base(base)}/viz?q={quote(sparql)}"
 
 
-def timeline_url(sparql: str, base: str | None = None, date_range: DateRange = _NO_RANGE) -> str:
+def timeline_url(
+    sparql: str,
+    base: str | None = None,
+    date_range: DateRange = _NO_RANGE,
+    embed: bool = False,
+) -> str:
     """Address of the running server's timeline page, dating *sparql*'s rows.
 
     *date_range* rides in the query string, the same way *sparql* does, so the
     link is the whole request: opening it later, or handing it to someone else,
     reproduces the bounded view rather than the unbounded one a bare ``?q=``
     would reopen.
+
+    *embed* asks for the page without its own header and query box, for showing
+    it inside another page.
     """
     from urllib.parse import quote  # noqa: PLC0415
 
@@ -97,7 +111,7 @@ def timeline_url(sparql: str, base: str | None = None, date_range: DateRange = _
         url += f"&after={quote(date_range.after)}"
     if date_range.before:
         url += f"&before={quote(date_range.before)}"
-    return url
+    return url + ("&embed=1" if embed else "")
 
 
 def is_graphable(result: QueryResult) -> bool:
@@ -235,7 +249,7 @@ def assess(
     return ViewLink(spec.url(sparql, base, date_range), None, count)
 
 
-def link_for(
+def link_for(  # noqa: PLR0913 - the positional API its callers share; a parameter object is its own change
     taxonomy: Taxonomy,
     result: QueryResult,
     sparql: str,

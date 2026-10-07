@@ -18,6 +18,6 @@ The public surface is intentionally tiny::
 from __future__ import annotations
 
 from .registry import PluginSpec, all_plugins, get
-from .state import is_enabled, set_enabled
+from .state import is_enabled, override, set_enabled
 
-__all__ = ["PluginSpec", "all_plugins", "get", "is_enabled", "set_enabled"]
+__all__ = ["PluginSpec", "all_plugins", "get", "is_enabled", "override", "set_enabled"]

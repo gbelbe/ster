@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ster.query_trace.answers import read_answers
 from ster.query_trace.jsonl import read_events
 from ster.query_trace.validation import validate_events
 
 
 @dataclass(frozen=True)
-class TraceSession:
+class TraceSession:  # pylint: disable=too-many-instance-attributes  # one record of a run, as the timeline shows it
     run_id: str
     trace_id: str
     question: str
@@ -30,6 +31,8 @@ class AgentSession:
     """A chain of MCP calls separated by no more than the idle window."""
 
     calls: tuple[tuple[TraceSession, list], ...]
+    # What the agent said and the id it resumes with, reported by whoever ran it (see ster.query_trace.answers)
+    answers: tuple[dict, ...] = ()
 
     @property
     def started(self) -> str:
@@ -83,9 +86,14 @@ class AgentSession:
 _AGENT_IDLE_SECONDS = 120
 
 
+def trace_dir(project: Path) -> Path:
+    """Where a project's query traces (and the answers beside them) are kept."""
+    return project / ".ster" / "query-traces"
+
+
 def events_for_project(project: Path) -> list[tuple[TraceSession, list]]:
     """Return valid project sessions with their decoded events, newest first."""
-    directory = project / ".ster" / "query-traces"
+    directory = trace_dir(project)
     sessions: list[tuple[TraceSession, list]] = []
     for path in sorted(directory.glob("*.jsonl"), reverse=True) if directory.is_dir() else []:
         try:
@@ -124,7 +132,14 @@ def agent_sessions_for_project(
             groups.append([call])
         else:
             groups[-1].append(call)
-    return [AgentSession(tuple(group)) for group in reversed(groups)]
+    answers = read_answers(trace_dir(project))
+    return [AgentSession(tuple(group), _answers_of(group, answers)) for group in reversed(groups)]
+
+
+def _answers_of(group: list[tuple[TraceSession, list]], answers: list[dict]) -> tuple[dict, ...]:
+    """The reported answers that rest on any run of *group*."""
+    runs = {session.run_id for session, _events in group}
+    return tuple(a for a in answers if runs & set(a.get("run_ids", ())))
 
 
 def _gap_seconds(previous: str, current: str) -> float:
@@ -158,7 +173,7 @@ def sessions_for_events(events: list, path: Path) -> TraceSession:
 
 def sessions_for_project(project: Path) -> list[TraceSession]:
     """List valid trace journals under the current project's ``.ster`` folder."""
-    directory = project / ".ster" / "query-traces"
+    directory = trace_dir(project)
     sessions: list[TraceSession] = []
     for path in sorted(directory.glob("*.jsonl")) if directory.is_dir() else []:
         try:
