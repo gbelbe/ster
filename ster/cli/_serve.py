@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from ..display import console
+from ..project import Project
 from . import _app
 from ._exit import ExitCode
 
@@ -65,6 +66,26 @@ def _warn_about_other_servers() -> None:
     console.print("     [dim]Stop them with:[/dim] pkill -f 'ster serve'")
 
 
+def _require_explicit_context(file: Path, context_files: list[Path] | None) -> None:
+    """Reject ambiguous project loads unless serve names the context explicitly."""
+    if context_files:
+        return
+    project = Project.load(file.parent)
+    if project is None:
+        return
+    remembered = project.remembered_context(file)
+    candidates = [*project.resolved_files(), *remembered]
+    unique = list(dict.fromkeys(path.resolve() for path in candidates))
+    if len(unique) <= 1:
+        return
+    names = ", ".join(str(path) for path in unique)
+    raise typer.BadParameter(
+        "This project contains multiple ontology files, but no context files were "
+        "provided. Choose one writable FILE and pass the others explicitly with "
+        f"--context-files/-x. Candidates: {names}"
+    )
+
+
 @_app.app.command("serve")
 def cmd_serve(
     file: Path = typer.Argument(..., help="Ontology file (.ttl / .rdf / .jsonld)."),
@@ -97,6 +118,7 @@ def cmd_serve(
         )
         raise typer.Exit(ExitCode.UNEXPECTED)
     _warn_about_other_servers()
+    _require_explicit_context(file.resolve(), context_files)
     serve(
         file.resolve(),
         host=host,

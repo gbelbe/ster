@@ -8,7 +8,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from rdflib import URIRef
+from rdflib import RDF, Graph, URIRef
+from rdflib.namespace import OWL, RDFS, SKOS
 
 from ..handles import assign_handles
 from ..model import Taxonomy
@@ -107,8 +108,9 @@ def load(
         # is its own even when a context file asserts it too, so the diff below
         # can never mark it as another file's and strip it on save.
         base_triples = frozenset(_to_graph.taxonomy_to_graph(taxonomy))
+        schema_graph = _context_schema_graph(taxonomy, context)
         for other in context:
-            _merge_context(taxonomy, Path(other), base_triples)
+            _merge_context(taxonomy, Path(other), base_triples, schema_graph)
         # Deliberately *not* re-normalising the hierarchy here. A context concept
         # declaring broader on an editable one would gain the reciprocal narrower
         # on that editable entity — and saving would then write a synthesised
@@ -285,7 +287,12 @@ def _record_contributed(
         taxonomy.context_statements.setdefault(path, []).extend(contributed)
 
 
-def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> None:
+def _merge_context(
+    taxonomy: Taxonomy,
+    path: Path,
+    base_triples: frozenset,
+    schema_graph: Graph | None = None,
+) -> None:
     """Merge *path* into *taxonomy* read-only, recording where each entity came from.
 
     An entity the editable file does not define is taken whole and marked as
@@ -299,7 +306,16 @@ def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> N
     file's unmodelled triples were dropped at merge and never existed to write
     back — the retail competitor set alone carries 66 of them.
     """
-    other = load(path)
+    if schema_graph is None:
+        other = load(path)
+    else:
+        source = _parse_graph(path)
+        merged = Graph()
+        for triple in schema_graph:
+            merged.add(triple)
+        for triple in source:
+            merged.add(triple)
+        other = graph_to_taxonomy(merged)
     taxonomy.context_files.append(path)
     _record_contributed(taxonomy, other, path, base_triples)
     for registry in _ENTITY_REGISTRIES:
@@ -320,6 +336,41 @@ def _merge_context(taxonomy: Taxonomy, path: Path, base_triples: frozenset) -> N
         taxonomy.context_residue.setdefault(path, []).extend(kept)
     for prefix, namespace in other.namespace_bindings.items():
         taxonomy.namespace_bindings.setdefault(prefix, namespace)
+
+
+def _context_schema_graph(taxonomy: Taxonomy, context: list[Path]) -> Graph:
+    """Build schema declarations needed to classify context-only instances."""
+    source = _to_graph.taxonomy_to_graph(taxonomy)
+    schema = Graph()
+    schema_types = {
+        str(OWL.Class),
+        str(RDFS.Class),
+        str(OWL.ObjectProperty),
+        str(OWL.DatatypeProperty),
+        str(OWL.AnnotationProperty),
+    }
+    schema_subjects = {
+        subject
+        for subject in source.subjects(RDF.type, None)
+        if str(next(source.objects(subject, RDF.type), "")) in schema_types
+    }
+    for subject in schema_subjects:
+        schema.add((subject, RDF.type, next(source.objects(subject, RDF.type))))
+    for subject, predicate, obj in source:
+        if predicate in (RDFS.domain, RDFS.range, RDFS.subClassOf):
+            schema.add((subject, predicate, obj))
+    for path in context:
+        source = _parse_graph(Path(path))
+        context_schema_types = {*schema_types, str(SKOS.ConceptScheme)}
+        subjects = {
+            str(subject)
+            for subject in source.subjects(RDF.type, None)
+            if any(str(kind) in context_schema_types for kind in source.objects(subject, RDF.type))
+        }
+        for subject, predicate, obj in source:
+            if str(subject) in subjects or predicate in (RDFS.domain, RDFS.range, RDFS.subClassOf):
+                schema.add((subject, predicate, obj))
+    return schema
 
 
 def source_files(taxonomy: Taxonomy) -> list[Path]:

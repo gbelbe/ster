@@ -26,6 +26,8 @@ from fastapi.testclient import TestClient
 from ster import store
 from ster.api import SSEBroadcaster, create_app
 
+pytestmark = pytest.mark.mutation
+
 E = "https://example.org/#"
 TOKEN = "t"
 LOCAL = {"Authorization": f"Bearer {TOKEN}", "Origin": "http://localhost:8000"}
@@ -133,11 +135,28 @@ def test_the_endpoint_and_the_mcp_tool_agree(client):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "run_sparql", "arguments": {"query": SELECT_CLASSES}},
+            "params": {
+                "name": "run_sparql",
+                "arguments": {"query": SELECT_CLASSES},
+                "_meta": {
+                    "com.adeo/agent-session-question": "Compare API and MCP query results.",
+                    "com.adeo/agent-question": "What classes does the query return?",
+                },
+            },
         },
         headers=LOCAL,
     ).json()
     via_mcp = json.loads(mcp["result"]["content"][0]["text"])
+    for key in (
+        "agent_question",
+        "agent_question_hint",
+        "agent_question_required",
+        "agent_session_question",
+        "agent_session_question_hint",
+        "agent_session_question_required",
+        "warning",
+    ):
+        via_mcp.pop(key, None)
 
     # Same answer, compared as a set of rows: without ORDER BY, SPARQL leaves the
     # order unspecified, and the MCP tool runs in a sandboxed copy of the graph
@@ -213,12 +232,30 @@ def test_the_overview_endpoint_and_the_mcp_tool_agree(client):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "get_overview", "arguments": {}},
+            "params": {
+                "name": "get_overview",
+                "arguments": {},
+                "_meta": {
+                    "com.adeo/agent-session-question": "Compare API and MCP overview results.",
+                    "com.adeo/agent-question": "What does the ontology overview contain?",
+                },
+            },
         },
         headers=LOCAL,
     ).json()
 
-    assert json.loads(mcp["result"]["content"][0]["text"]) == via_api
+    via_mcp = json.loads(mcp["result"]["content"][0]["text"])
+    for key in (
+        "agent_question",
+        "agent_question_hint",
+        "agent_question_required",
+        "agent_session_question",
+        "agent_session_question_hint",
+        "agent_session_question_required",
+        "warning",
+    ):
+        via_mcp.pop(key, None)
+    assert via_mcp == via_api
 
 
 def test_vocabulary_is_computed_once_per_model(tax):

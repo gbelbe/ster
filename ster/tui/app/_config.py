@@ -42,6 +42,8 @@ class _ConfigMixin(_AppState):
                 annotation_verifier=lambda uri: is_annotation_property(self.tax, uri),
                 can_declare=self._service is not None and self._path is not None,
                 base_uri=self.tax.base_uri(),
+                project_path=self._path.parent if self._path is not None else None,
+                trace_base_url=self._trace_base_url(),
             )
         )
 
@@ -184,6 +186,13 @@ class _ConfigMixin(_AppState):
         elif display_changed or langs_changed or plugins_changed or entity_meta_changed:
             self._show(self._detail_uri)  # reflect configured-language rows / lint UI / coverage
 
+    @staticmethod
+    def _trace_base_url() -> str:
+        from ster.api_server import load_server_config
+
+        url, port = load_server_config()
+        return f"{url}:{port}"
+
     def _apply_plugins(self, result: dict) -> bool:
         """Persist plugin enable-states from the config result. Returns True when any
         changed — a signal to invalidate the lint cache and re-render the detail (lint
@@ -197,6 +206,15 @@ class _ConfigMixin(_AppState):
                 changed = True
         if changed:
             self._invalidate_lint()  # force a recompute with the new active state
+        if "mcp_query_trace" in result.get("plugins", {}):
+            from ster.query_trace import configure
+
+            directory = (
+                self._path.parent / ".ster" / "query-traces"
+                if self._path is not None
+                else Path(".ster/query-traces")
+            )
+            configure(bool(result["plugins"]["mcp_query_trace"]), str(directory))
         return changed
 
     def _apply_theme(self, result: dict) -> None:

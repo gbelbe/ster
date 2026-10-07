@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from ster import mcp_context
 from ster.api import QueryIn
 from ster.mcp_server import TOOLS
+
+pytestmark = pytest.mark.mutation
 
 
 def _run_sparql_tool() -> dict:

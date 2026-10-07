@@ -40,6 +40,20 @@ class _PluginsMixin(_ModalState):
     async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Add / remove the Semantic Lint tab live when the plugin is toggled."""
         if event.checkbox.id != "cfg-plugin-semanticlint":
+            if event.checkbox.id != "cfg-plugin-mcp_query_trace":
+                return
+            tabbed = self.query_one(TabbedContent)
+            mounted = bool(self.query("#cfg-tab-mcp-query-trace"))
+            if event.value and not mounted:
+                await tabbed.add_pane(
+                    TabPane(
+                        "MCP Query Trace",
+                        self._trace_panel(),
+                        id="cfg-tab-mcp-query-trace",
+                    )
+                )
+            elif not event.value and mounted:
+                await tabbed.remove_pane("cfg-tab-mcp-query-trace")
             return
         tabbed = self.query_one(TabbedContent)
         mounted = bool(self.query("#cfg-tab-semanticlint"))
@@ -50,3 +64,8 @@ class _PluginsMixin(_ModalState):
             await tabbed.add_pane(pane)
         elif not event.value and mounted:
             await tabbed.remove_pane("cfg-tab-semanticlint")
+
+    def _trace_panel(self):
+        from ster.plugins.query_trace import TracePanel
+
+        return TracePanel(self._project_path)

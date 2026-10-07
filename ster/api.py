@@ -573,6 +573,41 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
+    @app.get("/query-trace/timeline", response_class=HTMLResponse, include_in_schema=False)
+    def query_trace_timeline(
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=10, ge=1, le=50),
+        idle_seconds: int = Query(default=60, ge=1, le=3600),
+        after: str = Query(default=""),
+        before: str = Query(default=""),
+    ) -> HTMLResponse:
+        from .plugins.query_trace.sessions import agent_sessions_for_project
+        from .query_trace.timeline import render_timeline_html
+
+        # The bounds reach the page's inputs and its pager links, so they must be dates: the shape is
+        # checked here (a 400 otherwise) and escaped again at the sink, as the /timeline route does.
+        after_value = html.escape(_validated_timeline_bound(after, "after") or "")
+        before_value = html.escape(_validated_timeline_bound(before, "before") or "")
+        path = _st.get(_LIT_FILE_PATH)
+        project = path.parent if path is not None else None
+        sessions = agent_sessions_for_project(project, idle_seconds) if project else []
+        filtered = [
+            item
+            for item in sessions
+            if (not after_value or item.started >= after_value)
+            and (not before_value or item.started <= before_value)
+        ]
+        return HTMLResponse(
+            render_timeline_html(
+                filtered,
+                page=page,
+                page_size=page_size,
+                idle_seconds=idle_seconds,
+                after=after_value,
+                before=before_value,
+            )
+        )
+
     @app.get("/onto", response_class=Response, include_in_schema=False)
     def serve_ontology(request: Request) -> Response:
         accept = request.headers.get("accept", "")

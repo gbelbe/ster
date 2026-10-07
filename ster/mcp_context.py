@@ -12,11 +12,13 @@ without the SDK. Nothing in this module mutates the taxonomy.
 from __future__ import annotations
 
 import re
+import time
 from collections import Counter
 from functools import lru_cache
 from typing import Any, Final, TypedDict, Unpack
 
 from .model import Taxonomy, is_builtin_uri
+from .query_trace import Event, get_recorder
 
 # Entity kinds, in the order a URI is looked up. A dispatch table rather than an
 # if/elif chain so adding a kind is one row.
@@ -50,6 +52,8 @@ _WRITE_KEYWORDS = (
     "move",
     "copy",
 )
+
+_TRACE_RESULT_LIMIT = 20
 
 
 def kind_of(taxonomy: Taxonomy, uri: str) -> str | None:
@@ -418,6 +422,11 @@ class PayloadOptions(TypedDict, total=False):
     before: str | None
     limit: int | None
     timeout: float | None
+    # who is asking, recorded in the query trace (see ster.query_trace)
+    agent_session_id: str | None
+    agent_question: str | None
+    token_usage: dict[str, Any] | None
+    agent_session_question: str | None
 
 
 def sparql_payload(
@@ -442,21 +451,123 @@ def sparql_payload(
     *timeout* (seconds) runs the query where it can be stopped; past it the
     answer is a ``timeout`` error. ``None`` runs it in-process, without a deadline.
     """
+    recorder = get_recorder()
+    trace = recorder.start_run(
+        query,
+        transport="shared_sparql",
+        query_type="raw_sparql",
+        agent_session_id=options.get("agent_session_id"),
+        agent_question=options.get("agent_question"),
+        token_usage=options.get("token_usage"),
+        agent_session_question=options.get("agent_session_question"),
+    )
+    started = time.perf_counter()
+    step_id = "raw-sparql"
+    recorder.record(
+        Event(
+            event="step_planned",
+            run_id=trace.run_id,
+            trace_id=trace.trace_id,
+            sequence=2,
+            step_id=step_id,
+            payload={
+                "step_kind": "raw_sparql_execution",
+                "objective": "Execute the supplied read-only SPARQL query.",
+                "natural_language": "Run the user's SPARQL query against the open graph.",
+            },
+        )
+    )
     if not is_read_only_sparql(query):
-        return {"error": "read_only", "message": "This server accepts SELECT/ASK queries only."}
+        recorder.record(
+            Event(
+                event="step_failed",
+                run_id=trace.run_id,
+                trace_id=trace.trace_id,
+                sequence=3,
+                step_id=step_id,
+                payload={"status": "failed", "error_code": "read_only"},
+            )
+        )
+        recorder.finish(trace, status="failed", error_code="read_only")
+        return {
+            "error": "read_only",
+            "message": "This server accepts SELECT/ASK queries only.",
+            "trace": _trace_payload(trace, recorder),
+        }
+
+    recorder.record(
+        Event(
+            event="query_generated",
+            run_id=trace.run_id,
+            trace_id=trace.trace_id,
+            sequence=3,
+            step_id=step_id,
+            payload={"query_id": f"{trace.run_id}:raw-sparql", "query": query},
+        )
+    )
+    recorder.record(
+        Event(
+            event="step_started",
+            run_id=trace.run_id,
+            trace_id=trace.trace_id,
+            sequence=4,
+            step_id=step_id,
+        )
+    )
 
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
     from .sparql_query import run_query_on_taxonomy  # noqa: PLC0415
 
     result = run_query_on_taxonomy(taxonomy, query, options.get("timeout"))
     if result.error:
-        return {"error": "timeout" if result.timed_out else "query_error", "message": result.error}
+        code = "timeout" if result.timed_out else "query_error"
+        recorder.record(
+            Event(
+                event="step_failed",
+                run_id=trace.run_id,
+                trace_id=trace.trace_id,
+                sequence=5,
+                step_id=step_id,
+                payload={
+                    "status": "failed",
+                    "error_code": code,
+                    "error_message": result.error,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                },
+            )
+        )
+        recorder.finish(trace, status="failed", error_code=code)
+        return {"error": code, "message": result.error, "trace": _trace_payload(trace, recorder)}
     payload: dict[str, Any] = {
         "columns": result.columns,
         "rows": result.rows,
         "row_count": len(result.rows),
         "query_type": result.query_type,
     }
+    recorder.record(
+        Event(
+            event="step_completed",
+            run_id=trace.run_id,
+            trace_id=trace.trace_id,
+            sequence=5,
+            step_id=step_id,
+            payload={
+                "status": "completed",
+                "query_id": f"{trace.run_id}:raw-sparql",
+                "query": query,
+                "result_id": f"{trace.run_id}:raw-sparql-result",
+                "row_count": len(result.rows),
+                "columns": result.columns,
+                "result_rows": result.rows[:_TRACE_RESULT_LIMIT],
+                "result_truncated": len(result.rows) > _TRACE_RESULT_LIMIT,
+                "domain_bindings": _trace_bindings(taxonomy, result),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "token_usage": options.get("token_usage"),
+            },
+        )
+    )
+    recorder.finish(trace, status="completed", row_count=len(result.rows))
+    payload["trace"] = _trace_payload(trace, recorder)
     limit = options.get("limit")
     if limit is not None:
         _cap_rows(payload, limit)
@@ -468,6 +579,78 @@ def sparql_payload(
 
     dates = DateRange(options.get("after"), options.get("before"))
     return annotate(payload, taxonomy, result, query, view, base, dates)
+
+
+def _trace_payload(trace, recorder) -> dict[str, Any]:
+    """Return stable trace IDs without exposing local storage to callers."""
+    if not recorder.enabled():
+        return {"enabled": False}
+    return {
+        "run_id": trace.run_id,
+        "trace_id": trace.trace_id,
+        "enabled": recorder.enabled(),
+    }
+
+
+def _trace_bindings(taxonomy: Taxonomy, result: Any) -> list[dict[str, Any]]:
+    """Describe URI-valued result cells without coupling the trace core to Taxonomy."""
+    bindings: list[dict[str, Any]] = []
+    for row in result.rows:
+        for column, value in zip(result.columns, row, strict=False):
+            if not _is_uri(value):
+                continue
+            kind = kind_of(taxonomy, value)
+            item: dict[str, Any] = {
+                "variable": column,
+                "value": value,
+                "term_type": "uri",
+                "label": label_of(taxonomy, value),
+            }
+            if kind is not None:
+                item["kind"] = kind
+                item["rdf_types"] = list(getattr(_obj(taxonomy, value, kind), "types", []))
+            bindings.append(item)
+    return bindings
+
+
+def _is_uri(value: str) -> bool:
+    return value.startswith(("http://", "https://", "urn:"))
+
+
+def query_trace(run_id: str, export: bool = False) -> dict[str, Any]:
+    """Inspect or export a trace from the active JSONL recorder."""
+    from .query_trace import get_recorder
+    from .query_trace.jsonl import read_events
+    from .query_trace.materialize import materialize_events
+    from .query_trace.validation import validate_events
+
+    recorder = get_recorder()
+    path_for = getattr(recorder, "path_for", None)
+    if path_for is None:
+        return {"error": "trace_unavailable", "message": "Query tracing is not enabled."}
+    try:
+        path = path_for(run_id)
+        events = list(read_events(path))
+    except (FileNotFoundError, ValueError) as exc:
+        return {"error": "trace_not_found", "message": str(exc)}
+    errors = validate_events(events)
+    if errors:
+        return {"error": "invalid_trace", "errors": errors}
+    first, last = events[0], events[-1]
+    result: dict[str, Any] = {
+        "run_id": run_id,
+        "trace_id": first.trace_id,
+        "question": first.payload.get("question", ""),
+        "agent_question": first.payload.get("agent_question"),
+        "agent_session_question": first.payload.get("agent_session_question"),
+        "status": last.payload.get("status", "failed"),
+        "event_count": len(events),
+        "steps": sorted({event.step_id for event in events if event.step_id}),
+    }
+    if export:
+        result["format"] = "trig"
+        result["trig"] = materialize_events(events).serialize(format="trig")
+    return result
 
 
 def _cap_rows(payload: dict[str, Any], limit: int) -> None:

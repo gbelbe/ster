@@ -1,6 +1,6 @@
 ---
 description: Run the full local CI gate and report what failed
-argument-hint: "[--fast|--fix]"
+argument-hint: "[--fast|--fix|--no-tui|--fresh]"
 context: fork
 model: sonnet
 ---
@@ -32,7 +32,8 @@ this gate passed in the last 24 hours. Install the hooks once with:
 
 ```
 /ci          → full local gate: prek checks + eslint + pip-audit + tests + diff-cover
-/ci --fast   → current Python, skips the patch-coverage gate (quick dev check)
+/ci --fast   → current Python, skips mutation and patch-coverage gates (quick dev check)
+/ci --fresh  → clears cached mutants before the full mutation campaign
 /ci --fix    → let prek's hooks auto-fix (ruff lint/format), then re-run to verify
 ```
 
@@ -47,6 +48,8 @@ Invoke directly as: `bash scripts/ci.sh [--fast|--fix]`
 | CVE scan | `pip-audit --skip-editable` |
 | Tests + coverage | `pytest --cov=ster` (current Python) |
 | Patch coverage | `diff-cover` vs `origin/main` (full mode) |
+| Mutation ratchet | cached `mutmut run` + touched-function score ≥ 80% (full mode) |
+| craftCov reports | `craftcov-report.md` and `craftcov.sarif` |
 
 On success, writes `.ci-passed` (gitignored sentinel, expires 24 h for push, 60 min for release).
 The prek pre-push hook reads this file and blocks any `git push` that

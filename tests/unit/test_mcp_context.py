@@ -10,6 +10,8 @@ import pytest
 
 from ster import mcp_context as mc
 from ster import store
+
+pytestmark = pytest.mark.mutation
 from ster.model import (
     Concept,
     ConceptScheme,
@@ -226,6 +228,65 @@ def test_run_sparql_rejects_update_keywords(query):
 def test_run_sparql_refuses_a_write_query(zoo):
     out = mc.run_sparql(zoo, "INSERT DATA { <a> <b> <c> }")
     assert out["error"] == "read_only"
+
+
+def test_run_sparql_records_a_jsonl_trace_when_enabled(zoo, tmp_path):
+    from ster.query_trace import configure
+
+    configure(True, str(tmp_path))
+    try:
+        out = mc.run_sparql(zoo, "SELECT ?s WHERE { ?s ?p ?o }")
+    finally:
+        configure(False)
+
+    assert out["trace"]["enabled"] is True
+    journals = list(tmp_path.glob("*.jsonl"))
+    assert len(journals) == 1
+    text = journals[0].read_text(encoding="utf-8")
+    assert '"event": "step_completed"' in text
+    assert "SELECT ?s WHERE" in text
+    assert '"domain_bindings"' in text
+
+
+def test_query_trace_inspection_and_export_use_recorded_run(zoo, tmp_path):
+    from ster.query_trace import configure
+
+    configure(True, str(tmp_path))
+    try:
+        query = "SELECT ?s WHERE { ?s ?p ?o }"
+        out = mc.run_sparql(zoo, query)
+        run_id = out["trace"]["run_id"]
+        summary = mc.query_trace(run_id)
+        exported = mc.query_trace(run_id, export=True)
+    finally:
+        configure(False)
+
+    assert summary["status"] == "completed"
+    assert "raw-sparql" in summary["steps"]
+    assert "journal" not in summary
+    assert "prov:Activity" in exported["trig"]
+
+
+def test_query_trace_inspection_exposes_both_question_scopes(zoo, tmp_path):
+    from ster.query_trace import configure
+    from ster.query_trace.jsonl import JsonlTraceRecorder
+    from ster.query_trace.recorder import set_recorder
+
+    recorder = JsonlTraceRecorder(tmp_path)
+    set_recorder(recorder)
+    try:
+        trace = recorder.start_run(
+            "SELECT ?s WHERE { ?s ?p ?o }",
+            agent_question="Which entities are returned?",
+            agent_session_question="Investigate the ontology entities.",
+        )
+        recorder.finish(trace)
+        summary = mc.query_trace(trace.run_id)
+    finally:
+        configure(False)
+
+    assert summary["agent_question"] == "Which entities are returned?"
+    assert summary["agent_session_question"] == "Investigate the ontology entities."
 
 
 def test_run_sparql_answers_a_taxonomy_that_has_no_file(zoo):

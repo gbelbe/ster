@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from . import mcp_context as ctx
 from .mcp_views import ApiPost, open_view
 from .model import Taxonomy
+from .query_trace import Event, get_recorder
 from .view_links import VIEWS
 
 SERVER_NAME = "ster"
@@ -264,6 +265,24 @@ TOOLS: list[dict[str, Any]] = [
         },
         ["view", _ARG_QUERY],
     ),
+    _tool(
+        "get_query_trace",
+        (
+            "Inspect a recorded query trace by run ID. Returns the natural-language question, "
+            "status, event count, and logical steps. Query tracing must be enabled."
+        ),
+        {"run_id": _STRING},
+        ["run_id"],
+    ),
+    _tool(
+        "export_query_trace",
+        (
+            "Export a recorded query trace as PROV-O TriG text. Use the returned graph to "
+            "visualise the query process or connect it to the domain graph."
+        ),
+        {"run_id": _STRING},
+        ["run_id"],
+    ),
 ]
 
 
@@ -283,6 +302,10 @@ class CallContext:
     # a browser opener — set only when the caller is on this machine.
     api_post: ApiPost | None = None
     open_browser: Callable[[str], bool] | None = None
+    agent_session_id: str | None = None
+    agent_question: str | None = None
+    agent_session_question: str | None = None
+    token_usage: dict[str, int] | None = None
 
 
 def _tool_get_current_context(tax: Taxonomy, call: CallContext, args: dict) -> Any:
@@ -324,7 +347,12 @@ def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
         after=args.get(_ARG_AFTER),
         before=args.get(_ARG_BEFORE),
         limit=int(args.get(_ARG_LIMIT, ctx.SPARQL_ROW_LIMIT)),
+        agent_session_id=call.agent_session_id,
+        agent_question=call.agent_question,
+        token_usage=call.token_usage,
+        agent_session_question=call.agent_session_question,
     )
+    _add_question_metadata_notice(payload, call)
     # Opening is an MCP-transport concern (whether *this caller* is on ster's own
     # machine), so it lives here rather than in the shared sparql_payload/annotate
     # path the REST endpoint also runs — see test_the_shared_function_is_where_view_is_handled.
@@ -343,6 +371,14 @@ def _tool_open_view(_tax: Taxonomy, call: CallContext, args: dict) -> Any:
     return open_view(args, call.api_post, call.open_browser)
 
 
+def _tool_get_query_trace(_tax: Taxonomy, _call: CallContext, args: dict) -> Any:
+    return ctx.query_trace(args["run_id"])
+
+
+def _tool_export_query_trace(_tax: Taxonomy, _call: CallContext, args: dict) -> Any:
+    return ctx.query_trace(args["run_id"], export=True)
+
+
 # name → implementation. A registry, so adding a tool is one row plus one entry
 # in TOOLS rather than another branch.
 _IMPLS: dict[str, Callable[[Taxonomy, CallContext, dict], Any]] = {
@@ -354,6 +390,8 @@ _IMPLS: dict[str, Callable[[Taxonomy, CallContext, dict], Any]] = {
     "get_timeline": _tool_get_timeline,
     "run_sparql": _tool_run_sparql,
     "open_view": _tool_open_view,
+    "get_query_trace": _tool_get_query_trace,
+    "export_query_trace": _tool_export_query_trace,
 }
 
 # Required arguments per tool, read from the schemas above so the two cannot
@@ -397,6 +435,23 @@ A reliable order:
   2. get_vocabulary    — the predicates and prefixes to build the query from
   3. search_entities   — resolve each name to a real URI; never invent one
   4. run_sparql        — compose using only predicates you have now seen
+
+For every MCP tool call, include both levels of natural-language context in MCP
+request metadata:
+  "_meta": {
+    "com.adeo/agent-session-id": "stable-id-for-the-user-question",
+    "com.adeo/agent-session-question": "the original user question",
+    "com.adeo/agent-question": "the concise natural-language subquestion for this step"
+  }
+Reuse the same agent-session-id and agent-session-question for every MCP call
+made while answering one user question. Each call's agent-question should
+describe only that call's subquestion; do not use one step's question as the
+session question. If either question is not supplied, ster asks for it in the
+tool response and the trace marks that context as missing.
+
+If available, include token usage for the current agent step:
+  "com.adeo/token-usage": {"input": 120, "output": 34, "total": 154}
+Token counts are optional and are recorded for observability only.
 
 Zero rows means an assumption was wrong, not that the answer is empty. Re-read
 the vocabulary and drop one triple pattern at a time to find the one that
@@ -460,11 +515,126 @@ def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[s
     if missing:
         return _text_result({"error": "missing_argument", "argument": missing}, is_error=True)
     try:
-        return _text_result(impl(tax, call, args))
+        if name == "run_sparql":
+            return _text_result(impl(tax, call, args))
+        return _text_result(_traced_tool_call(name, impl, tax, call, args))
     # A fault inside one tool is reported as an error result; it must not take
     # down the whole JSON-RPC session.
     except Exception as exc:  # noqa: BLE001
         return _text_result({"error": "tool_failed", "message": str(exc)}, is_error=True)
+
+
+def _traced_tool_call(
+    name: str,
+    impl: Callable[[Taxonomy, CallContext, dict], Any],
+    tax: Taxonomy,
+    call: CallContext,
+    args: dict,
+) -> Any:
+    """Record non-SPARQL MCP tools as complete logical query sessions."""
+    recorder = get_recorder()
+    trace = recorder.start_run(
+        json.dumps({"tool": name, "arguments": args}, ensure_ascii=False),
+        transport="mcp",
+        tool=name,
+        agent_session_id=call.agent_session_id,
+        agent_question=call.agent_question,
+        agent_session_question=call.agent_session_question,
+        token_usage=call.token_usage,
+    )
+    step_id = name
+    recorder.record(
+        Event(
+            "step_planned",
+            trace.run_id,
+            trace.trace_id,
+            2,
+            step_id=step_id,
+            payload={"objective": f"Execute MCP tool {name}."},
+        )
+    )
+    recorder.record(Event("step_started", trace.run_id, trace.trace_id, 3, step_id=step_id))
+    try:
+        result = impl(tax, call, args)
+    except Exception as exc:
+        recorder.record(
+            Event(
+                "step_failed",
+                trace.run_id,
+                trace.trace_id,
+                4,
+                step_id=step_id,
+                payload={"status": "failed", "error": str(exc)},
+            )
+        )
+        recorder.finish(trace, status="failed", error=str(exc))
+        raise
+    payload = _tool_result_payload(result)
+    recorder.record(
+        Event(
+            "step_completed",
+            trace.run_id,
+            trace.trace_id,
+            4,
+            step_id=step_id,
+            payload={"status": "completed", "token_usage": call.token_usage, **payload},
+        )
+    )
+    recorder.finish(trace, status="completed", row_count=payload.get("row_count"))
+    if isinstance(result, dict):
+        _add_question_metadata_notice(result, call)
+    return result
+
+
+def _add_question_metadata_notice(payload: dict[str, Any], call: CallContext) -> None:
+    """Tell an MCP caller which independent question metadata is missing."""
+    if call.agent_question:
+        payload["agent_question"] = call.agent_question
+    else:
+        payload["agent_question_required"] = True
+        payload["agent_question_hint"] = (
+            "Before the next MCP call, provide this step's concise natural-language "
+            "subquestion in _meta.com.adeo/agent-question."
+        )
+    if call.agent_session_question:
+        payload["agent_session_question"] = call.agent_session_question
+    else:
+        payload["agent_session_question_required"] = True
+        payload["agent_session_question_hint"] = (
+            "Before the next MCP call, provide the global user goal "
+            "in _meta.com.adeo/agent-session-question."
+        )
+    missing = [
+        label
+        for label, value in (
+            ("step question", call.agent_question),
+            ("global user goal", call.agent_session_question),
+        )
+        if not value
+    ]
+    if missing:
+        payload["warning"] = (
+            "The query was executed, but the trace is missing "
+            + " and ".join(missing)
+            + "; provide both question fields to make the trace readable."
+        )
+
+
+def _tool_result_payload(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {"result": result}
+    payload: dict[str, Any] = {}
+    if "columns" in result:
+        payload["columns"] = result["columns"]
+    if "rows" in result:
+        payload["result_rows"] = result["rows"]
+        payload["row_count"] = result.get("row_count", len(result["rows"]))
+    elif isinstance(result.get("items"), list):
+        payload["result_rows"] = result["items"]
+        payload["row_count"] = len(result["items"])
+    else:
+        payload["result"] = result
+    return payload
 
 
 _METHODS: dict[str, Callable[[dict, Taxonomy, CallContext], dict[str, Any]]] = {
@@ -510,4 +680,44 @@ def handle_message(
         params = {}
     if not isinstance(params, dict):
         return _err(msg_id, INVALID_PARAMS, "params must be an object.")
-    return _ok(msg_id, handler(params, taxonomy, call or CallContext(selection)))
+    metadata = params.get("_meta") or {}
+    agent_session_id = metadata.get("com.adeo/agent-session-id")
+    if not isinstance(agent_session_id, str) or len(agent_session_id) > 256:
+        agent_session_id = None
+    agent_question = metadata.get("com.adeo/agent-question")
+    if not isinstance(agent_question, str) or len(agent_question) > 10000:
+        agent_question = None
+    agent_session_question = metadata.get("com.adeo/agent-session-question")
+    if not isinstance(agent_session_question, str) or len(agent_session_question) > 10000:
+        agent_session_question = None
+    token_usage = _normalise_token_usage(metadata.get("com.adeo/token-usage"))
+    call = replace(
+        call or CallContext(selection),
+        agent_session_id=agent_session_id,
+        agent_question=agent_question,
+        agent_session_question=agent_session_question,
+        token_usage=token_usage,
+    )
+    return _ok(msg_id, handler(params, taxonomy, call))
+
+
+def _normalise_token_usage(value: Any) -> dict[str, Any] | None:
+    """Accept common token field aliases and preserve estimate metadata."""
+    if not isinstance(value, dict):
+        return None
+    aliases = {"input_tokens": "input", "output_tokens": "output", "total_tokens": "total"}
+    usage: dict[str, Any] = {}
+    for canonical, alias in aliases.items():
+        candidate = value.get(canonical, value.get(alias))
+        if candidate is not None:
+            if not isinstance(candidate, int) or candidate < 0:
+                return None
+            usage[canonical] = candidate
+    if not usage:
+        return None
+    for key in ("source", "estimated", "model", "estimator"):
+        if key in value:
+            usage[key] = value[key]
+    usage["estimated"] = bool(usage.get("estimated", usage.get("source") == "estimated"))
+    usage.setdefault("source", "estimated" if usage["estimated"] else "provider")
+    return usage

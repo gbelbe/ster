@@ -8,7 +8,8 @@
 #
 # Usage:
 #   scripts/ci.sh            # full gate: prek + eslint + npm/pip audit + tests + diff-cover
-#   scripts/ci.sh --fast     # skip the patch-coverage gate (quick dev check)
+#   scripts/ci.sh --fast     # skip mutation and patch coverage (quick dev check)
+#   scripts/ci.sh --fresh    # discard cached mutants before the full mutation gate
 #   scripts/ci.sh --fix      # let prek's hooks auto-fix, then re-run to verify
 #   scripts/ci.sh --no-tui   # skip the `tui`-marked tests (462 Textual-pilot
 #                            # tests, 78% of runtime) — only safe when your
@@ -25,11 +26,13 @@ rm -f "$SENTINEL"
 FAST=0
 FIX=0
 NO_TUI=0
+FRESH=0
 for arg in "$@"; do
   case "$arg" in
     --fast)   FAST=1 ;;
     --fix)    FIX=1 ;;
     --no-tui) NO_TUI=1 ;;
+    --fresh)  FRESH=1 ;;
   esac
 done
 MARKER_ARGS=()
@@ -222,7 +225,31 @@ else
   ok "pytest"
 fi
 
-# ── 5. Patch coverage gate (diff-cover vs origin/main) — full mode only ───────
+# ── 5. Mutation ratchet — full mode only ──────────────────────────────────────
+if [[ $FAST -eq 0 ]]; then
+  step "Mutation testing (cached mutants)"
+  if [[ $FRESH -eq 1 ]]; then
+    rm -rf mutants
+    step "Mutation cache cleared"
+  fi
+  uv run mutmut run
+  uv run python scripts/check_mutation_ratchet.py --base origin/main --threshold 80
+  ok "mutation ratchet (touched functions ≥ 80%)"
+fi
+
+# ── 6. Local craftCov reports ─────────────────────────────────────────────────
+step "craftCov reports"
+REPORTS="craftcov.sarif"
+if git rev-parse --verify --quiet origin/main >/dev/null; then
+  uv run python scripts/craftcov_pr_comment.py --base origin/main --dry-run > craftcov-report.md
+  REPORTS="craftcov.sarif + craftcov-report.md"
+else
+  warn "origin/main not found — skipping local craftCov markdown report"
+fi
+uv run python scripts/craftcov.py --format sarif --no-cache --no-diff > craftcov.sarif
+ok "craftCov report ($REPORTS)"
+
+# ── 7. Patch coverage gate (diff-cover vs origin/main) — full mode only ───────
 # Mirrors the CI 'diff-cover' step: changed lines must be ≥ 90% covered.
 if [[ $FAST -eq 0 ]]; then
   step "Patch coverage (diff-cover vs origin/main)"

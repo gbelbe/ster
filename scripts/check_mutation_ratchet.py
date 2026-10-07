@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import subprocess
@@ -195,6 +196,31 @@ def find_violations(results: dict[str, dict[str, int]], threshold: float) -> lis
     return violations
 
 
+def evaluate_results(
+    results: dict[str, dict[str, int]],
+    baseline: dict[str, float],
+    threshold: float = DEFAULT_THRESHOLD,
+    improvement: float = 20.0,
+) -> tuple[list[str], dict[str, float]]:
+    """Accept an absolute floor or a 20% improvement over the first score."""
+    violations: list[str] = []
+    updated = dict(baseline)
+    for name, counts in sorted(results.items()):
+        tested = counts["killed"] + counts["survived"]
+        if not tested:
+            if counts["no_tests"]:
+                violations.append(f"{name}: no covering tests")
+            continue
+        score = 100.0 * counts["killed"] / tested
+        previous = baseline.get(name)
+        if score < threshold and previous is not None:
+            required = previous * (1.0 + improvement / 100.0)
+            if score < required:
+                violations.append(f"{name}: mutation score {score:.0f}%, needs >= {required:.0f}%")
+        updated[name] = round(score, 4)
+    return violations, updated
+
+
 def has_tidy_exempt(base_ref: str) -> bool:
     """True when a `Tidy-Exempt:` trailer appears anywhere in `base_ref..HEAD`."""
     out = subprocess.run(
@@ -206,17 +232,26 @@ def has_tidy_exempt(base_ref: str) -> bool:
     return any(line.startswith("Tidy-Exempt:") for line in out.splitlines())
 
 
+def diff_fingerprint(root: Path, base_ref: str) -> str:
+    diff = subprocess.run(
+        ["git", "diff", "--no-ext-diff", base_ref, "--", "*.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    return hashlib.sha256(diff.encode()).hexdigest()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main", help="git ref to compare against")
     parser.add_argument("--path", default=".", help="source directory to scan")
     parser.add_argument("--mutants-dir", default="mutants", help="mutmut's output directory")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    parser.add_argument("--improvement", type=float, default=20.0)
+    parser.add_argument("--baseline", default=".mutation-baseline.json")
     args = parser.parse_args(argv)
-
-    if has_tidy_exempt(args.base):
-        print(f"Mutation ratchet: Tidy-Exempt: trailer found in {args.base}..HEAD — skipping.")
-        return 0
 
     root = Path(args.path)
     mutants_dir = root / args.mutants_dir
@@ -245,7 +280,18 @@ def main(argv: list[str] | None = None) -> int:
         touched_by_file.setdefault(rel, set()).add(qual)
 
     results = collect_touched_results(root, mutants_dir, touched_by_file)
-    violations = find_violations(results, args.threshold)
+    baseline_path = root / args.baseline
+    try:
+        baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
+    except json.JSONDecodeError:
+        baseline = {}
+    fingerprint = diff_fingerprint(root, args.base)
+    metadata = baseline.pop("__meta__", {})
+    if metadata.get("diff_fingerprint") == fingerprint:
+        violations, updated = [], {**baseline, "__meta__": metadata}
+    else:
+        violations, updated = evaluate_results(results, baseline, args.threshold, args.improvement)
+        updated["__meta__"] = {"diff_fingerprint": fingerprint}
 
     if violations:
         print(f"Mutation ratchet: {len(violations)} violation(s):", file=sys.stderr)
@@ -253,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {v}", file=sys.stderr)
         return 1
 
+    baseline_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     print(f"Mutation ratchet: OK (touched functions >= {args.threshold:.0f}% mutation score).")
     return 0
 

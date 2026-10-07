@@ -14,6 +14,9 @@ venv/
 .craftcov_last_report.json
 *.nt
 coverage.xml
+craftcov-report.md
+craftcov.sarif
+mutants/
 htmlcov/
 snapshot_report.html
 *.egg

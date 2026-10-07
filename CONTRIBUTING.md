@@ -79,6 +79,8 @@ can't drift:
 | CVE scan | `pip-audit --skip-editable` |
 | Tests + coverage | `pytest --cov=ster` — **current Python only, locally** (fast feedback) |
 | Patch coverage (≥ 90%) | `diff-cover` vs `origin/main` |
+| Mutation ratchet (≥ 80%) | cached `mutmut run` + touched-function score |
+| craftCov reports | local Markdown report + SARIF artifact |
 
 Tests run on your current interpreter locally; **GitHub Actions runs the
 3.12 / 3.13 matrix on every PR** — so support for both is enforced on the PR,
@@ -91,7 +93,8 @@ it and blocks `git push` if the gate has not passed in the last 24 hours.
 ### Faster iteration during development
 
 ```bash
-bash scripts/ci.sh --fast   # current Python, skips the patch-coverage gate
+bash scripts/ci.sh --fast   # current Python, skips mutation and patch coverage
+bash scripts/ci.sh --fresh  # full gate with a fresh mutation campaign
 bash scripts/ci.sh --fix    # let prek auto-fix ruff lint/format, then re-run the gate
 ```
 

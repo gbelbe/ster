@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from ster import mcp_server as ms
 from ster.api import SSEBroadcaster, create_app
+
+pytestmark = pytest.mark.mutation
 from ster.model import Concept, Label, LabelType, RDFClass, Taxonomy
 
 NS = "https://example.org/zoo#"
@@ -62,6 +64,11 @@ def test_initialize_reports_tools_capability(zoo):
     )
     assert "tools" in reply["result"]["capabilities"]
     assert reply["result"]["serverInfo"]["name"] == "ster"
+
+
+def test_tools_include_query_trace_inspection_and_export():
+    names = {tool["name"] for tool in ms.TOOLS}
+    assert {"get_query_trace", "export_query_trace"} <= names
 
 
 def test_initialize_echoes_a_supported_protocol_version(zoo):
@@ -146,6 +153,8 @@ def test_tools_are_registered_with_expected_names(zoo):
         "get_timeline",
         "run_sparql",
         "open_view",
+        "get_query_trace",
+        "export_query_trace",
     }
 
 
@@ -205,6 +214,121 @@ def test_call_get_overview_returns_counts(zoo):
     assert payload["counts"]["concepts"] == len(zoo.concepts)
 
 
+def test_agent_session_metadata_is_recorded_for_non_sparql_tool(zoo, monkeypatch, tmp_path):
+    from ster.query_trace.jsonl import JsonlTraceRecorder, read_events
+    from ster.query_trace.recorder import set_recorder
+
+    recorder = JsonlTraceRecorder(tmp_path)
+    set_recorder(recorder)
+    try:
+        reply = ms.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_overview",
+                    "arguments": {},
+                    "_meta": {
+                        "com.adeo/agent-session-id": "agent-42",
+                        "com.adeo/agent-session-question": "Investigate the ontology vocabulary.",
+                        "com.adeo/agent-question": "What is the current vocabulary?",
+                    },
+                },
+            },
+            zoo,
+        )
+        assert reply["result"]["isError"] is False
+        events = list(read_events(next(tmp_path.glob("*.jsonl"))))
+        assert events[0].payload["agent_session_id"] == "agent-42"
+        assert events[0].payload["agent_session_question"] == "Investigate the ontology vocabulary."
+        assert events[0].payload["agent_question"] == "What is the current vocabulary?"
+    finally:
+        from ster.query_trace.recorder import configure
+
+        configure(False)
+
+
+def test_run_sparql_reports_both_missing_question_metadata(zoo):
+    payload, _ = _call(zoo, "run_sparql", {"query": "SELECT ?s WHERE { ?s ?p ?o }"})
+
+    assert payload["row_count"] >= 0
+    assert payload["agent_question_required"] is True
+    assert payload["agent_session_question_required"] is True
+    assert "agent-session-question" in payload["agent_session_question_hint"]
+    assert "agent-question" in payload["agent_question_hint"]
+
+
+def test_run_sparql_accepts_both_required_question_metadata(zoo):
+    reply = ms.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "run_sparql",
+                "arguments": {"query": "SELECT ?s WHERE { ?s ?p ?o }"},
+                "_meta": {
+                    "com.adeo/agent-session-question": "What is in the graph?",
+                    "com.adeo/agent-question": "How many graph subjects are there?",
+                },
+            },
+        },
+        zoo,
+    )
+    payload = json.loads(reply["result"]["content"][0]["text"])
+    assert payload["row_count"] >= 0
+
+
+def test_token_usage_aliases_are_normalized(zoo):
+    reply = ms.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "run_sparql",
+                "arguments": {"query": "SELECT ?s WHERE { ?s ?p ?o }"},
+                "_meta": {
+                    "com.adeo/agent-session-question": "What is in the graph?",
+                    "com.adeo/agent-question": "How many graph subjects are there?",
+                    "com.adeo/token-usage": {
+                        "input": 10,
+                        "output": 4,
+                        "total": 14,
+                        "source": "estimated",
+                    },
+                },
+            },
+        },
+        zoo,
+    )
+    payload = json.loads(reply["result"]["content"][0]["text"])
+    assert payload["trace"]["enabled"] in (False, True)
+
+
+def test_run_sparql_preserves_agent_token_usage(zoo):
+    reply = ms.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "run_sparql",
+                "arguments": {"query": "SELECT ?s WHERE { ?s ?p ?o }"},
+                "_meta": {
+                    "com.adeo/agent-session-question": "What is in the graph?",
+                    "com.adeo/agent-question": "How many graph subjects are there?",
+                    "com.adeo/token-usage": {"input": 1, "output": 2, "total": 3},
+                },
+            },
+        },
+        zoo,
+    )
+    payload = json.loads(reply["result"]["content"][0]["text"])
+    assert payload["row_count"] >= 0
+
+
 def test_call_get_entity_returns_the_entity(zoo):
     payload, _ = _call(zoo, "get_entity", {"uri": NS + "Dog"})
     assert payload["label"] == "Dog"
@@ -255,8 +379,49 @@ def test_run_sparql_schema_advertises_the_limit():
 
 
 def test_call_run_sparql_refuses_updates(zoo):
-    payload, _ = _call(zoo, "run_sparql", {"query": "INSERT DATA { <a> <b> <c> }"})
+    reply = ms.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "run_sparql",
+                "arguments": {"query": "INSERT DATA { <a> <b> <c> }"},
+                "_meta": {
+                    "com.adeo/agent-session-question": "Test a read-only query",
+                    "com.adeo/agent-question": "Can this update be executed?",
+                },
+            },
+        },
+        zoo,
+    )
+    payload = json.loads(reply["result"]["content"][0]["text"])
     assert payload["error"] == "read_only"
+
+
+def test_call_query_trace_tools_forward_the_run_id(zoo, monkeypatch):
+    calls: list[tuple[str, bool]] = []
+
+    def fake_trace(run_id: str, export: bool = False) -> dict:
+        calls.append((run_id, export))
+        return {"run_id": run_id, "export": export}
+
+    monkeypatch.setattr(ms.ctx, "query_trace", fake_trace)
+    for name, export in (("get_query_trace", False), ("export_query_trace", True)):
+        reply = ms.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {"run_id": "run-1"}},
+            },
+            zoo,
+        )
+        payload = json.loads(reply["result"]["content"][0]["text"])
+        assert payload["run_id"] == "run-1"
+        assert payload["export"] is export
+
+    assert calls == [("run-1", False), ("run-1", True)]
 
 
 def test_tool_failure_is_reported_as_an_error_result(zoo, monkeypatch):

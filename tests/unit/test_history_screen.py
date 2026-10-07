@@ -201,7 +201,7 @@ async def test_only_the_selected_commit_is_ever_read(ontology_repo: RepoBuilder)
 
     async with app.run_test() as pilot:
         for _ in range(20):
-            await pilot.pause()
+            await pilot.pause(0.1)
             if history.computed:
                 break
 

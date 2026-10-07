@@ -48,6 +48,8 @@ if TYPE_CHECKING:
         _server_port: int
         _server_token: str
         _ready: bool
+        _project_path: Any
+        _trace_base_url: str
 
         # compose helpers, one per tab (each mixin defines its own)
         def _general_tab(self) -> Any: ...

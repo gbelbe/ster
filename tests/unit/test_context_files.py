@@ -12,6 +12,8 @@ import pytest
 from ster import store
 from ster.model import Taxonomy
 
+pytestmark = pytest.mark.mutation
+
 NS = "https://example.org/t#"
 
 PRIMARY = f"""\
@@ -139,6 +141,34 @@ def test_saving_does_not_absorb_context_entities(files):
     assert "Tent" in written
     for absorbed in ("Alps", "Place", "Matterhorn"):
         assert absorbed not in written, f"{absorbed} came from the context file"
+
+
+def test_context_only_top_concept_reference_does_not_leak_on_save(tmp_path):
+    primary = tmp_path / "primary.ttl"
+    primary.write_text(
+        f"""\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <{NS}> .
+ex:Scheme a skos:ConceptScheme .
+ex:Tent a skos:Concept ; skos:prefLabel "Tent"@en ; skos:inScheme ex:Scheme .
+""",
+        encoding="utf-8",
+    )
+    context = tmp_path / "context.ttl"
+    context.write_text(
+        f"""\
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <{NS}> .
+ex:Alps a skos:Concept ; skos:prefLabel "Alps"@en .
+ex:Scheme skos:hasTopConcept ex:Alps .
+""",
+        encoding="utf-8",
+    )
+
+    tax = store.load(primary, context=[context])
+    store.save(tax, primary)
+
+    assert "Alps" not in primary.read_text(encoding="utf-8")
 
 
 # ── saving: statements merged onto an entity the editable file defines ────────

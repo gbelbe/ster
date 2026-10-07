@@ -217,6 +217,8 @@ class ConfigModal(  # type: ignore[misc]
         annotation_verifier=None,  # Callable[[str], bool] | None — URI is an annotation property?
         can_declare: bool = False,  # may a confirmed unknown predicate be declared locally?
         base_uri: str = "",  # ontology base IRI — fixed prefix for new local properties
+        project_path=None,
+        trace_base_url: str = "",
     ) -> None:
         super().__init__()
         self._display = display_lang
@@ -229,6 +231,8 @@ class ConfigModal(  # type: ignore[misc]
         self._annotation_verifier = annotation_verifier
         self._can_declare = can_declare
         self._base_uri = base_uri
+        self._project_path = project_path
+        self._trace_base_url = trace_base_url
         from ster.api_server import load_server_config, load_token
 
         self._server_url, self._server_port = load_server_config()
@@ -250,6 +254,13 @@ class ConfigModal(  # type: ignore[misc]
             if plugins.is_enabled("semanticlint"):
                 with TabPane("Semantic Lint", id="cfg-tab-semanticlint"):
                     yield from self._semanticlint_widgets()
+            if plugins.is_enabled("mcp_query_trace"):
+                with TabPane("MCP Query Trace", id="cfg-tab-mcp-query-trace"):
+                    from ster.plugins.query_trace import TracePanel
+
+                    panel = TracePanel(self._project_path)
+                    panel.query_trace_base_url = self._trace_base_url  # type: ignore[attr-defined]
+                    yield panel
 
     def footer_hints(self) -> list[Hint]:
         return [
