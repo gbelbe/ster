@@ -184,3 +184,50 @@ test("nothing is claimed when either side does not know", () => {
   assert.equal(connectionLost([{}], "A"), false);
   assert.equal(connectionLost([{ ster_started: "A" }], null), false);
 });
+
+// ---------------------------------------------------------------- a call that failed
+const { toolFailure, failureHtml } = require("../agent_app/static/render.js");
+const WORDS = { failed: "Failed", kind: "Kind of fault", where: "Where it broke" };
+
+test("a call whose trace has a failed step says why, with the code, the kind of fault and where it broke", () => {
+  const step = { status: "failed", error_code: "query_failed", error_message: "ValueError: bad value(s) in fds_to_keep", error_type: "ValueError", traceback: "Traceback…\nValueError" };
+  assert.deepEqual(toolFailure({ trace: { steps: [{ status: "completed" }, step] } }), { code: "query_failed", message: step.error_message, kind: "ValueError", traceback: step.traceback });
+});
+
+test("a failed step without a status is still a failure when it has a message", () => {
+  assert.equal(toolFailure({ trace: { steps: [{ error_message: "boom" }] } }).message, "boom");
+});
+
+test("a call without a trace is a failure when its result is flagged, and the message comes from the result's JSON", () => {
+  const f = toolFailure({ result: { is_error: true, text: JSON.stringify({ error: "tool_failed", message: "disk gone", error_type: "OSError" }) } });
+  assert.deepEqual(f, { code: "tool_failed", message: "disk gone", kind: "OSError", traceback: "" });
+});
+
+test("a result that is flagged but not JSON is shown as it is", () => {
+  assert.equal(toolFailure({ result: { is_error: true, text: "plain text failure" } }).message, "plain text failure");
+});
+
+test("an older ster's error result, not flagged, is still recognised by its error field", () => {
+  const f = toolFailure({ result: { is_error: false, text: JSON.stringify({ error: "query_error", message: "bad syntax" }) } });
+  assert.equal(f.code, "query_error");
+  assert.equal(f.message, "bad syntax");
+});
+
+test("a call that worked is not a failure", () => {
+  assert.equal(toolFailure({ trace: { steps: [{ status: "completed", columns: ["a"] }] }, result: { is_error: false, text: '{"rows":[]}' } }), null);
+  assert.equal(toolFailure({}), null);
+  assert.equal(toolFailure({ result: { is_error: false, text: "not json" } }), null);
+});
+
+test("the failure is drawn with its message, code, kind and traceback, all escaped", () => {
+  const html = failureHtml({ code: "query_failed", message: "<img src=x onerror=alert(1)>", kind: "ValueError", traceback: "<script>x</script>" }, WORDS);
+  assert.ok(html.includes("Failed") && html.includes("query_failed") && html.includes("ValueError") && html.includes("Where it broke"));
+  assert.ok(!/<(img|script)\b/i.test(html));
+  assert.ok(html.includes("&lt;img"));
+});
+
+test("a failure with only a message draws no kind and no traceback", () => {
+  const html = failureHtml({ code: "", message: "boom", kind: "", traceback: "" }, WORDS);
+  assert.ok(html.includes("boom"));
+  assert.ok(!html.includes("Kind of fault") && !html.includes("<details>") && !html.includes("<code>"));
+});

@@ -26,6 +26,7 @@ MAX_TEXT = 200_000
 _FIELDS: dict[str, type | tuple[type, ...]] = {
     _QUESTION: str,
     "answer": (str, type(None)),
+    "error": (str, type(None)),  # why the turn failed, when it did
     "status": str,
     "agent": (str, type(None)),
     "model": (str, type(None)),  # the model that answered, when the agent reports it

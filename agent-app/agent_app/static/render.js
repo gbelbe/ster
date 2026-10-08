@@ -65,6 +65,33 @@
   /* one line for a step: the distinct questions of its calls */
   function stepQuestion(tools) { return [...new Set(tools.map(toolQuestion).filter(Boolean))].join(" · "); }
 
+  /* ================= a call that failed ================= */
+  /* Why a call failed, from what ster recorded in its trace (a failed step: code, message, kind of fault, traceback)
+   * or, without a trace, from the call's own result: a result flagged as an error, or one whose JSON says "error".
+   * null when the call did not fail. A failed call used to draw nothing at all. */
+  function resultJson(text) { try { const v = JSON.parse(text); return v && typeof v === "object" ? v : null; } catch { return null; } }
+  function toolFailure(tool) {
+    const step = ((tool.trace && tool.trace.steps) || []).find(x => x.status === "failed" || x.error_message);
+    if (step) return { code: step.error_code || "", message: step.error_message || "", kind: step.error_type || "", traceback: step.traceback || "" };
+    const result = tool.result;
+    if (!result) return null;
+    const body = resultJson(result.text);
+    if (!result.is_error && !(body && body.error)) return null;
+    return {
+      code: body && typeof body.error === "string" ? body.error : "",
+      message: (body && (body.message || body.error)) || String(result.text || ""),
+      kind: (body && body.error_type) || "",
+      traceback: (body && body.traceback) || "",
+    };
+  }
+  /* the failure as markup; *labels* are the page's own words for its parts, everything else is escaped */
+  function failureHtml(f, labels) {
+    const code = f.code ? ` <code>${esc(f.code)}</code>` : "";
+    const kind = f.kind ? `<div class="kv">${esc(labels.kind)} <code>${esc(f.kind)}</code></div>` : "";
+    const where = f.traceback ? `<details><summary>${esc(labels.where)}</summary><pre>${esc(f.traceback)}</pre></details>` : "";
+    return `<div class="failure"><div class="label">${esc(labels.failed)}${code}</div><div class="err"><span>✕</span><div><b>${esc(f.message)}</b>${kind}${where}</div></div></div>`;
+  }
+
   /* ================= a lost connection to ster ================= */
   /* An agent keeps one connection to ster for a whole conversation. When ster has been restarted since the
    * conversation's last answer, that connection is gone: the agent says ster is disconnected while the page, which
@@ -74,6 +101,6 @@
     return !!(last && sterStarted && last.ster_started !== sterStarted);
   }
 
-  const api = { esc, md, sparql, toolQuestion, stepQuestion, connectionLost };
+  const api = { esc, md, sparql, toolQuestion, stepQuestion, toolFailure, failureHtml, connectionLost };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.Render = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -11,3 +11,17 @@ def model_field(events: list[dict]) -> dict:
         if event.get("e") == "session" and event.get(MODEL):
             return {MODEL: event[MODEL]}
     return {}
+
+
+ANSWER, ERROR = "answer", "error"
+
+
+def error_fields(turn: dict) -> dict:
+    """The turn's answer and error as reported: a turn that failed has no answer, so what went wrong is its answer."""
+    failure = turn.get(ERROR)
+    return {ANSWER: turn.get(ANSWER) or failure, ERROR: failure}
+
+
+def keep_error(turn: dict, done: dict) -> None:
+    """Remember on the turn why it failed, from the event that ended it."""
+    turn[ERROR] = done.get(ERROR)

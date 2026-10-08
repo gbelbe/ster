@@ -39,7 +39,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import graph_switch, history, native, reported, runner
+from . import graph_switch, history, native, reported, runner, trace_steps
 from . import rules as rule_engine
 
 WEB = Path(__file__).resolve().parent
@@ -214,36 +214,8 @@ def read_trace(run_id: str) -> dict | None:
         time.sleep(0.1)
     else:
         return None
-    steps: dict[str, dict] = {}
-    info: dict = {
-        "run_id": run_id,
-        "file": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
-        "steps": [],
-    }
-    for line in path.read_text().splitlines():
-        ev = json.loads(line)
-        p = ev.get("payload", {})
-        if ev["event"] == "run_started":
-            info["query_type"] = p.get("query_type")
-            info["agent_question"] = p.get(
-                "agent_question"
-            )  # in plain words, as the MCP asks the agent for it
-        elif ev["event"] == "step_planned":
-            steps[ev["step_id"]] = {"kind": p.get("step_kind"), "goal": p.get("natural_language")}
-        elif ev["event"] == "query_generated":
-            steps.setdefault(ev["step_id"], {})["query"] = p.get("query")
-        elif ev["event"] == "step_completed":
-            s = steps.setdefault(ev["step_id"], {})
-            s.update(
-                columns=p.get("columns"),
-                rows=(p.get("result_rows") or [])[:300],
-                row_count=p.get("row_count"),
-                duration_ms=p.get("duration_ms"),
-                truncated=p.get("result_truncated"),
-                status=p.get("status"),
-            )
-    info["steps"] = list(steps.values())
-    return info
+    shown = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+    return trace_steps.fold(path.read_text().splitlines(), run_id, shown)
 
 
 # ------------------------------------------------------------------ run object
@@ -605,7 +577,7 @@ def report_answer(run: Run) -> bool:
     runs = [e["run_id"] for e in run.events if e["e"] == "trace" and e.get("run_id")]
     body = {
         "question": turn["prompt"],
-        "answer": turn.get("answer"),
+        **reported.error_fields(turn),
         "status": turn.get("status", "error"),
         "agent": turn.get("agent"),
         **reported.model_field(run.events),
@@ -643,6 +615,7 @@ async def run_task(run: Run):
         run.turn["usage"] = done.get("usage")
         run.turn["cost_usd"] = done.get("cost_usd")
         run.turn["answer"] = done.get("answer")
+        reported.keep_error(run.turn, done)
         run.turn["duration_ms"] = run.events[-1]["t"] if run.events else 0
         save(run.conv)
         await asyncio.to_thread(report_answer, run)

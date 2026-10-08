@@ -109,5 +109,7 @@ def test_a_tool_that_fails_is_journalled_as_a_failed_step_and_a_failed_run(journ
     ]
     failed = events[3]
     assert (failed.sequence, failed.step_id) == (4, TOOL)
-    assert failed.payload == {STATUS: "failed", "error": GONE}
-    assert events[-1].payload == {STATUS: "failed", "error": GONE}
+    for payload in (failed.payload, events[-1].payload):
+        assert (payload[STATUS], payload["error"]) == ("failed", GONE)
+        assert payload["error_type"] == "RuntimeError"
+        assert "RuntimeError" in payload["traceback"]

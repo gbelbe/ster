@@ -735,9 +735,9 @@ function stepLabel(s) {
 /* a call, drawn open inside its (folded) step: its SPARQL or arguments, then ster's rows */
 function renderTool(t, M) {
   const tr = t.trace, dur = t.t1 != null ? t.t1 - t.t0 : null;
-  const running = t.t1 == null && M.live;
+  const running = t.t1 == null && M.live, failure = running ? null : Render.toolFailure(t);
   let h = `<div class="tool flat"><div class="tool-head"><span class="tool-name">${esc(t.name)}</span>
-    ${running ? `<i class="dot run"></i>` : t.result?.is_error ? `<span class="bad" title="${tx("tool.error")}">✕</span>` : `<span class="tool-dur">${secs(dur)}</span>`}</div><div class="tool-body">`;
+    ${running ? `<i class="dot run"></i>` : failure ? `<span class="bad" title="${tx("tool.error")}">✕</span>` : `<span class="tool-dur">${secs(dur)}</span>`}</div><div class="tool-body">`;
   if (t.name === "run_sparql" && t.input?.query) h += `<div><div class="label">SPARQL<button class="cp" data-copy="${esc(t.input.query)}">${tx("tool.copy")}</button></div><pre class="code">${sparql(t.input.query)}</pre></div>`;
   else if (Object.keys(t.input || {}).length) h += `<div><div class="label">${tx("tool.args")}</div><pre class="code">${esc(JSON.stringify(t.input, null, 2))}</pre></div>`;
   if (tr) for (const st of tr.steps) {
@@ -746,8 +746,9 @@ function renderTool(t, M) {
       <div class="rows"><table><thead><tr>${st.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${(st.rows || []).slice(0, 30).map(r => `<tr>${r.map(c => `<td title="${esc(c)}">${esc(short(c))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
       ${st.row_count > 30 ? `<div class="kv" style="margin-top:4px">${tx("tool.first_n", { total: full(st.row_count) })}</div>` : ""}</div>`;
   }
+  if (failure) h += Render.failureHtml(failure, { failed: tx("tool.failed"), kind: tx("tool.error_type"), where: tx("tool.traceback") });
   if (tr) h += `<div class="kv"><span>${tx("tool.trace")} <button class="cp" style="border:0;background:none;color:var(--accent);padding:0" data-copy="${esc(tr.file)}" title="${tx("tool.copy_path")}">${esc(tr.run_id.slice(0, 16))}…</button></span></div>`;
-  else if (t.result) h += `<div><div class="label">${tx("tool.raw")}${t.result.truncated ? ` <span style="text-transform:none;letter-spacing:0">${tx("tool.raw_trunc", { n: full(t.result.length) })}</span>` : ""}</div><pre class="code">${esc(t.result.text)}</pre></div>`;
+  else if (t.result && !failure) h += `<div><div class="label">${tx("tool.raw")}${t.result.truncated ? ` <span style="text-transform:none;letter-spacing:0">${tx("tool.raw_trunc", { n: full(t.result.length) })}</span>` : ""}</div><pre class="code">${esc(t.result.text)}</pre></div>`;
   return h + `</div></div>`;
 }
 /* a step, folded to one line (what it did, its new tokens, its time); unfolded, its detail: token split, what the

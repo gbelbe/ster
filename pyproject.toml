@@ -180,6 +180,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_mcp_server.py",
     "tests/unit/test_mcp_tool_journal.py",
     "tests/unit/test_query_endpoint.py",
+    "tests/unit/test_query_failures_recorded.py",
     "tests/unit/test_query_trace.py",
     "tests/unit/test_untraced_calls.py",
     "tests/unit/test_query_trace_agent.py",

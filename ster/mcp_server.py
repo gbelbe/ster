@@ -290,6 +290,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+_ERROR: Final = "error"  # the key a failed tool's answer carries its error code under
 UNTRACED_META: Final = (
     "com.adeo/untraced"  # _meta key of a call that is only a health check: it leaves no trace
 )
@@ -538,14 +539,17 @@ def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[s
         return _text_result({"error": "missing_argument", "argument": missing}, is_error=True)
     try:
         if name == "run_sparql":
-            return _text_result(impl(tax, call, args))
+            answer = impl(tax, call, args)
+            # A failed query comes back as an error result, so a client shows it as one.
+            return _text_result(answer, is_error=isinstance(answer, dict) and _ERROR in answer)
         if call.untraced:
             return _text_result(impl(tax, call, args))
         return _text_result(_traced_tool_call(name, impl, tax, call, args))
     # A fault inside one tool is reported as an error result; it must not take
-    # down the whole JSON-RPC session.
+    # down the whole JSON-RPC session. It says what kind of fault it was, not just its message.
     except Exception as exc:  # noqa: BLE001
-        return _text_result({"error": "tool_failed", "message": str(exc)}, is_error=True)
+        failure = {_ERROR: "tool_failed", "message": str(exc), "error_type": type(exc).__name__}
+        return _text_result(failure, is_error=True)
 
 
 def _traced_tool_call(
@@ -589,10 +593,10 @@ def _traced_tool_call(
                 trace.trace_id,
                 4,
                 step_id=step_id,
-                payload={"status": "failed", "error": str(exc)},
+                payload={"status": "failed", "error": str(exc), **ctx.exception_details(exc)},
             )
         )
-        recorder.finish(trace, status="failed", error=str(exc))
+        recorder.finish(trace, status="failed", error=str(exc), **ctx.exception_details(exc))
         raise
     payload = _tool_result_payload(result)
     recorder.record(

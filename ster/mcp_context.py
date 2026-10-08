@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Final, TypedDict, Unpack
 
@@ -412,22 +413,13 @@ def sparql_payload(
         )
     )
     if not is_read_only_sparql(query):
-        recorder.record(
-            Event(
-                event="step_failed",
-                run_id=trace.run_id,
-                trace_id=trace.trace_id,
-                sequence=3,
-                step_id=step_id,
-                payload={"status": "failed", "error_code": "read_only"},
-            )
+        return _fail_run(
+            recorder,
+            trace,
+            _Failure(
+                step_id, "read_only", "This server accepts SELECT/ASK queries only.", sequence=3
+            ),
         )
-        recorder.finish(trace, status="failed", error_code="read_only")
-        return {
-            "error": "read_only",
-            "message": "This server accepts SELECT/ASK queries only.",
-            "trace": _trace_payload(trace, recorder),
-        }
 
     recorder.record(
         Event(
@@ -452,26 +444,25 @@ def sparql_payload(
     # Imported lazily: sparql_query pulls in rdflib, which is heavy to import.
     from .sparql_query import run_query_on_taxonomy  # noqa: PLC0415
 
-    result = run_query_on_taxonomy(taxonomy, query, options.get("timeout"))
+    try:
+        result = run_query_on_taxonomy(taxonomy, query, options.get("timeout"))
+    # A fault in running the query is the run's outcome, not an exception for the caller to meet:
+    # it is recorded with what failed and where, and handed back as the answer the agent sees.
+    except Exception as exc:  # noqa: BLE001
+        failure = _Failure(
+            step_id,
+            "query_failed",
+            f"{type(exc).__name__}: {exc}",
+            sequence=5,
+            details=exception_details(exc),
+            started=started,
+        )
+        return _fail_run(recorder, trace, failure)
     if result.error:
         code = "timeout" if result.timed_out else "query_error"
-        recorder.record(
-            Event(
-                event="step_failed",
-                run_id=trace.run_id,
-                trace_id=trace.trace_id,
-                sequence=5,
-                step_id=step_id,
-                payload={
-                    "status": "failed",
-                    "error_code": code,
-                    "error_message": result.error,
-                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-                },
-            )
+        return _fail_run(
+            recorder, trace, _Failure(step_id, code, result.error, sequence=5, started=started)
         )
-        recorder.finish(trace, status="failed", error_code=code)
-        return {"error": code, "message": result.error, "trace": _trace_payload(trace, recorder)}
     payload: dict[str, Any] = {
         "columns": result.columns,
         "rows": result.rows,
@@ -513,6 +504,76 @@ def sparql_payload(
 
     dates = DateRange(options.get("after"), options.get("before"))
     return annotate(payload, taxonomy, result, query, view, base, dates)
+
+
+_TRACEBACK_FRAMES: Final = (
+    8  # frames of an exception's traceback kept in a trace: the end, where it broke
+)
+_TRACEBACK_CHARS: Final = 4000
+
+
+@dataclass(frozen=True)
+class _Failure:
+    """Why one step of a run failed: the code an agent can branch on, the message, and whatever else is known."""
+
+    step_id: str
+    code: str
+    message: str
+    sequence: int
+    details: dict[str, Any] = field(default_factory=dict)
+    started: float | None = None  # perf_counter() when the step began, for its duration
+
+
+def exception_details(exc: BaseException) -> dict[str, str]:
+    """What a trace keeps about an exception beyond its message: its type and the end of its traceback."""
+    return {"error_type": type(exc).__name__, "traceback": _traceback_tail(exc)}
+
+
+def _traceback_tail(exc: BaseException) -> str:
+    """The end of *exc*'s traceback as text, bounded: enough to see where it broke without filling a trace."""
+    import traceback  # noqa: PLC0415
+
+    lines = traceback.format_exception(exc, limit=-_TRACEBACK_FRAMES)
+    return "".join(lines)[-_TRACEBACK_CHARS:]
+
+
+def _fail_run(recorder, trace, failure: _Failure) -> dict[str, Any]:
+    """Record the failed step and the failed run with every detail, and return the error an agent is told.
+
+    The same fields go to the trace and to the answer, so what the agent read and what was recorded agree, and a
+    run never stays open: it ends failed, with the reason.
+    """
+    payload: dict[str, Any] = {
+        "status": "failed",
+        "error_code": failure.code,
+        "error_message": failure.message,
+        **failure.details,
+    }
+    if failure.started is not None:
+        payload["duration_ms"] = round((time.perf_counter() - failure.started) * 1000, 3)
+    recorder.record(
+        Event(
+            event="step_failed",
+            run_id=trace.run_id,
+            trace_id=trace.trace_id,
+            sequence=failure.sequence,
+            step_id=failure.step_id,
+            payload=payload,
+        )
+    )
+    recorder.finish(
+        trace,
+        status="failed",
+        error_code=failure.code,
+        error_message=failure.message,
+        **failure.details,
+    )
+    return {
+        "error": failure.code,
+        "message": failure.message,
+        **failure.details,
+        "trace": _trace_payload(trace, recorder),
+    }
 
 
 def _trace_payload(trace, recorder) -> dict[str, Any]:
