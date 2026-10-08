@@ -602,19 +602,20 @@ const irisOf = st => { const set = new Set(); st.rows.forEach(r => r.forEach(c =
 const post = (u, b) => api(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
 function ensureProbe(t, last) {
   if (S.probe[t.id]) return S.probe[t.id];
-  const pr = S.probe[t.id] = { done: false, mapped: 0, items: [] };
+  const pr = S.probe[t.id] = { done: false, mapped: 0, items: [], namedPlaces: 0, namedDated: 0 };
   (async () => {
-    const uris = irisOf(last.st);
-    if (uris.length) {
-      const [loc, tl] = await Promise.all([post("/api/locate", { uris }).catch(() => null), post("/api/timeline", { uris }).catch(() => null)]);
+    const uris = irisOf(last.st), labels = Viz.labelsOf(last.st.rows);
+    if (uris.length || labels.length) {
+      const [loc, tl] = await Promise.all([post("/api/locate", { uris, labels }).catch(() => null), post("/api/timeline", { uris, labels }).catch(() => null)]);
       pr.mapped = new Set((loc?.places || []).filter(x => x.result && x.mapped).map(x => x.uri)).size;
       pr.items = tl?.items || [];
+      pr.namedPlaces = loc?.named || 0; pr.namedDated = tl?.named || 0;
     }
     pr.done = true; render();
   })();
   return pr;
 }
-function friseHtml(m, tid, items, provCount, wantProv) {
+function friseHtml(m, tid, items, provCount, wantProv, full) {
   const lines = m.ticks.map(k => `<i class="fr-line" style="left:${k.pos}%"></i>`).join("");
   const lanes = m.lanes.map((l, li) => `<div class="fr-lab" title="${esc(l.label)}">${esc(l.label)}<small>${l.count}</small></div>
     <div class="fr-track" style="height:${l.rows * 24 + 12}px;--lane:var(--c${li % 8 + 1})">${lines}${l.items.map(it => {
@@ -624,7 +625,7 @@ function friseHtml(m, tid, items, provCount, wantProv) {
     }).join("")}</div>`).join("");
   const toggle = provCount ? `<button type="button" class="btn" data-prov="${tid}">${tx(wantProv ? "frise.hide" : "frise.include", { n: provCount })}</button>` : "";
   const span = `${Viz.fmtT(m.from)} → ${Viz.fmtT(m.to)}`;
-  return `<div class="viz" data-frise="${tid}"><div class="viz-head"><span class="lab">${tx("frise.label")}</span><span class="viz-cap">${tx("frise.dates", { count: items.length })}${m.from !== m.to ? " · " + esc(span) : ""}</span>${toggle}</div>
+  return `<div class="viz" data-frise="${tid}"><div class="viz-head"><span class="lab">${tx("frise.label")}</span><span class="viz-cap">${tx("frise.dates", { count: items.length })}${m.from !== m.to ? " · " + esc(span) : ""}</span>${toggle}${full ? `<a class="btn" href="${esc(full)}" target="_blank" rel="noopener">${tx("frise.open")}</a>` : ""}</div>
     <div class="fr-scroll"><div class="fr-grid"><div class="fr-axis">${m.ticks.map(k => `<span class="fr-tick" style="left:${k.pos}%">${esc(k.label)}</span>`).join("")}</div>${lanes}</div></div>
     ${m.truncated ? `<div class="viz-cap">${tx("frise.truncated", { total: full(m.truncated) })}</div>` : ""}</div>`;
 }
@@ -636,14 +637,16 @@ function renderViz(t, M) {
   if (Viz.mapHint(p, pr.mapped)) {
     const src = `/ster-map?conv=${S.conv.id}&turn=${t.id}&tool=${last.id}`;
     out += `<div class="viz"><div class="mapbox"><div class="maphead"><span class="lab">${tx("map.label")}</span><span class="viz-cap">${tx("map.sub", { rows: rowsTxt(last.st.row_count) })}</span><a class="btn" href="${esc(src)}&full=1" target="_blank" rel="noopener">${tx("map.open")}</a><button type="button" class="btn" data-copy="${esc(q)}">${tx("map.copy")}</button></div><iframe class="mapframe" loading="lazy" src="${esc(src)}" title="${tx("map.title")}"></iframe></div></div>`;
-  } else if (pr.done && pr.mapped === 1) {
-    out += `<div class="viz mapask"><span class="viz-cap">${tx("map.one_place")}</span><button type="button" class="btn" data-ask="map.ask" data-off="${tx("off.ask_disabled")}">${tx("map.see")}</button></div>`;
+  } else if (pr.done && (pr.mapped === 1 || pr.namedPlaces >= 2)) {
+    const note = pr.mapped === 1 ? tx("map.one_place") : tx("map.named", { count: pr.namedPlaces });
+    out += `<div class="viz mapask"><span class="viz-cap">${note}</span><button type="button" class="btn" data-ask="map.ask" data-off="${tx("off.ask_disabled")}">${tx("map.see")}</button></div>`;
   }
   /* frise: dated rows (a date column, or dates ster finds on the entities), annotation dates only on request */
   const items = p.times.length ? Viz.friseItems(p, q) : Viz.entityItems(pr.items), plain = items.filter(x => !x.provenance), prov = items.length - plain.length;
   const shown = v.prov ? items : plain;
-  if (shown.length >= 2 || (v.prov && shown.length)) { const m = Viz.friseModel(shown); if (m) out += friseHtml(m, t.id, shown, prov, !!v.prov); }
+  if (shown.length >= 2 || (v.prov && shown.length)) { const m = Viz.friseModel(shown); if (m) out += friseHtml(m, t.id, shown, prov, !!v.prov, `/ster-timeline?conv=${S.conv.id}&turn=${t.id}&tool=${last.id}`); }
   else if (prov) out += `<div class="viz mapask"><span class="viz-cap">${tx("frise.only_prov", { n: prov })}</span><button type="button" class="btn" data-prov="${t.id}">${tx("frise.show")}</button></div>`;
+  else if (pr.done && pr.namedDated >= 2) out += `<div class="viz mapask"><span class="viz-cap">${tx("frise.named", { count: pr.namedDated })}</span><button type="button" class="btn" data-ask="frise.ask" data-off="${tx("off.ask_disabled")}">${tx("frise.see")}</button></div>`;
   return out;
 }
 function mountCharts() {

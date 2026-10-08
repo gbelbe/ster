@@ -96,6 +96,17 @@
     return !!(p.lat && p.lon) || (located || 0) >= 2;
   }
 
+  /** Names where an IRI belonged: the text cells that are neither numbers nor addresses, once each. ster looks them
+   *  up as labels, to say whether the rows name places or dated things that an IRI-less query hid. */
+  function labelsOf(rows) {
+    const set = new Set();
+    for (const r of rows || []) for (const c of r) {
+      const v = String(c ?? "").trim();
+      if (v.length >= 3 && v.length <= 80 && !isIri(v) && !/^-?[\d.,\s]+$/.test(v)) set.add(v);
+    }
+    return [...set].slice(0, 300);
+  }
+
   /* ---------------- time frise ---------------- */
   const DAY = 864e5;
   // Annotation dates: who made the data and when, not what the data is about. Shown only on request.
@@ -273,6 +284,6 @@
     return null;
   }
 
-  const api = { profile, candidates, config, mapHint, friseItems, entityItems, friseModel, fmtT, local, setI18n };
+  const api = { profile, candidates, config, mapHint, labelsOf, friseItems, entityItems, friseModel, fmtT, local, setI18n };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.Viz = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -19,6 +19,11 @@ class ShapingResults(unittest.TestCase):  # noqa: V102
     def test_a_list_is_asked_to_lead_with_the_entity_iri(self):
         self.assertIn("each entity's IRI in the first column", server.SYSTEM_PROMPT)
 
+    def test_any_listed_entity_keeps_its_iri_beside_its_name(self):
+        text = server.SYSTEM_PROMPT
+        self.assertIn("select their IRI as a column of its own", text)
+        self.assertIn("a name alone cannot be placed", text)
+
     def test_an_aggregate_answer_offers_the_view(self):
         text = server.SYSTEM_PROMPT
         self.assertIn("offering to show them on a map or a timeline", text)

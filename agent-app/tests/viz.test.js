@@ -287,3 +287,14 @@ test("local names are read out of IRIs", () => {
   assert.equal(Viz.local("https://example.org/a/b/c"), "c");
   assert.equal(Viz.local("plain"), "plain");
 });
+
+test("names where an IRI belonged are the text cells, once each", () => {
+  const rows = [["Store Lille", "Lille", "12", NS + "x"], ["Store Lille", "Arras", "3,5", ""], ["ab", null, "2026-09-01", "  Roubaix  "]];
+  assert.deepEqual(Viz.labelsOf(rows), ["Store Lille", "Lille", "Arras", "2026-09-01", "Roubaix"]);
+});
+
+test("names are bounded: too short, too long, and more than 300 are dropped", () => {
+  assert.deepEqual(Viz.labelsOf([["a", "x".repeat(81)]]), []);
+  assert.equal(Viz.labelsOf([Array.from({ length: 400 }, (_, i) => "name " + i)]).length, 300);
+  assert.deepEqual(Viz.labelsOf(undefined), []);
+});

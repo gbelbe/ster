@@ -92,6 +92,8 @@ The page draws a map or a timeline from your results, so shape them for it:
   The page then draws those places on a map and prints the number on each.
 - A list of places or of dated things: put each entity's IRI in the first column, then its name
   and its date.
+- Whatever entities you list or count, select their IRI as a column of its own, before the name
+  (SELECT ?store ?label ...): a name alone cannot be placed on a map or dated on a timeline.
 - If you answered with counts or totals about places or dated things and showed no map or timeline,
   end with one short line offering to show them on a map or a timeline. If the user accepts, run a
   query that returns the entity IRIs.
@@ -890,9 +892,8 @@ def ster_fetch(method: str, path: str, body: bytes | None = None, headers: dict 
         return e.code, e.read(), e.headers.get("content-type", "application/json")
 
 
-@app.get("/ster-map")  # noqa: V103
-async def ster_map(conv: str, turn: str, tool: str, full: bool = False):
-    """Send the caller to ster's map for the query a tool call ran (embedded unless *full*)."""
+def _query_of_call(conv: str, turn: str, tool: str) -> str:
+    """The SPARQL a tool call of a saved turn ran, or a 404 when there is no such call or it ran no query."""
     c = load(conv)
     t = next((t for t in c["turns"] if t["id"] == turn), None)
     query = next(
@@ -905,10 +906,27 @@ async def ster_map(conv: str, turn: str, tool: str, full: bool = False):
     )
     if not query:
         raise HTTPException(404, "no such query")
+    return query
+
+
+async def _redirect_to_ster(page: str, query: str, full: bool) -> RedirectResponse:
+    """Send the caller to ster's *page* (map or timeline) for *query*, embedded unless *full*."""
     if not await asyncio.to_thread(ensure_ster):
         raise HTTPException(503, "ster is not running")
-    url = f"http://{STER_HOST}:{STER_PORT}/map?q={quote(query)}" + ("" if full else "&embed=1")
+    url = f"http://{STER_HOST}:{STER_PORT}/{page}?q={quote(query)}" + ("" if full else "&embed=1")
     return RedirectResponse(url, status_code=302)
+
+
+@app.get("/ster-map")  # noqa: V103
+async def ster_map(conv: str, turn: str, tool: str, full: bool = False):
+    """Send the caller to ster's map for the query a tool call ran (embedded unless *full*)."""
+    return await _redirect_to_ster("map", _query_of_call(conv, turn, tool), full)
+
+
+@app.get("/ster-timeline")  # noqa: V103
+async def ster_timeline(conv: str, turn: str, tool: str, full: bool = False):
+    """Send the caller to ster's timeline for the query a tool call ran (embedded unless *full*)."""
+    return await _redirect_to_ster("timeline", _query_of_call(conv, turn, tool), full)
 
 
 @app.get("/api/locales")  # noqa: V103

@@ -973,6 +973,26 @@ class EmbeddedMap(BridgeCase):  # noqa: V102
         location = self.get(bridge, extra="&full=1")[1]
         self.assertNotIn("embed", location)
 
+    def test_the_timeline_has_the_same_frame_and_full_page_links(self):
+        bridge = self.start()
+        self.seed_query(bridge, "SELECT ?a WHERE { ?a <p> 'x' }")
+        url = "/ster-timeline?conv=abcdef012345&turn=aaaaaaaaaaaa&tool=t1"
+        code, location = bridge.redirect_of(url)
+        self.assertEqual(code, 302)
+        self.assertTrue(
+            location.startswith(f"http://127.0.0.1:{self.ster.port}/timeline?q="), location
+        )
+        self.assertTrue(location.endswith("&embed=1"))
+        self.assertNotIn("embed", bridge.redirect_of(url + "&full=1")[1])
+
+    def test_a_timeline_for_an_unknown_call_is_a_404(self):
+        bridge = self.start()
+        self.seed_query(bridge, "SELECT 1")
+        self.assertEqual(
+            bridge.redirect_of("/ster-timeline?conv=abcdef012345&turn=aaaaaaaaaaaa&tool=nope")[0],
+            404,
+        )
+
     def test_markup_in_a_query_is_escaped_in_the_address(self):
         bridge = self.start()
         self.seed_query(bridge, "</textarea><script>alert(1)</script>")

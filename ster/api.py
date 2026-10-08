@@ -153,20 +153,22 @@ class ClassOut(BaseModel):
     labels: dict[str, str]
     comment: dict[str, str]
     sub_class_of: list[str]
-    child_classes: list[str]
-    applicable_properties: list[PropertySummary]
+    child_classes: list[str]  # noqa: V107  # serialised by pydantic, read by API clients
+    applicable_properties: list[PropertySummary]  # noqa: V107  # serialised by pydantic, read by API clients
 
 
 class LocateIn(BaseModel):
-    """The row URIs a map wants placed."""
+    """The row URIs a map wants placed, and the labels of rows that gave a name where an IRI belonged."""
 
     uris: list[str] = []
+    labels: list[str] = []
 
 
 class TimelineIn(BaseModel):
-    """The row URIs a timeline wants dated."""
+    """The row URIs a timeline wants dated, and the labels of rows that gave a name where an IRI belonged."""
 
     uris: list[str] = []
+    labels: list[str] = []
     # Keep only moments on/after *after* and on/before *before* — see QueryIn.
     after: str | None = None
     before: str | None = None
@@ -1438,6 +1440,7 @@ def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         query for wgs:lat/long itself, which reported every polygon as unmappable.
         """
         from .geo_shapes import facet_catalogue, map_layers  # noqa: PLC0415
+        from .named_rows import placed_named  # noqa: PLC0415
 
         graph = _graph_for_locate(_tax())
         records = (
@@ -1451,6 +1454,8 @@ def _register_locate(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
             "places": placed,
             "layers": map_layers(graph),
             "facets": facet_catalogue(graph, [p["uri"] for p in placed]),
+            # Entities that rows name by label alone and that could be drawn: the page offers a map for them.
+            "named": placed_named(graph, body.labels),
         }
 
 
@@ -1486,11 +1491,18 @@ def _register_timeline(app: FastAPI, _tax: Any, _check_auth: Any) -> None:
         implementation of the datatype rule and of the declared interval pairs —
         the same reason /api/locate parses WKT on the server.
         """
+        from .named_rows import dated_named  # noqa: PLC0415
         from .time_shapes import span_of, timeline_items  # noqa: PLC0415
 
         graph = _graph_for_locate(_tax())
         items = timeline_items(graph, body.uris, body.after, body.before)
-        return {"items": items, "lanes": _lanes_of(items), "span": span_of(items)}
+        return {
+            "items": items,
+            "lanes": _lanes_of(items),
+            "span": span_of(items),
+            # Entities that rows name by label alone and that carry a date: the page offers a timeline for them.
+            "named": dated_named(graph, body.labels, body.after, body.before),
+        }
 
 
 def _register_trace_answers(app: FastAPI, _check_auth: Any) -> None:

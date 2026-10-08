@@ -116,7 +116,7 @@ def test_api_timeline_returns_items_lanes_and_span() -> None:
     )
     assert body.status_code == HTTPStatus.OK
     payload = body.json()
-    assert set(payload) == {"items", "lanes", "span"}
+    assert set(payload) == {"items", "lanes", "span", "named"}
 
 
 def _inline_script(page: str) -> str:
