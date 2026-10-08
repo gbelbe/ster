@@ -371,6 +371,14 @@ def _rpc(url: str, headers: dict, method: str, params: dict | None = None, timeo
         return json.load(r).get("result", {})
 
 
+def meta_namespace(instructions: str | None) -> str | None:
+    """The namespace ster's instructions put its request-metadata keys under (the part before ``/agent-…``), if any."""
+    found = re.search(
+        r'"([\w.\-]+)/agent-(?:session-id|session-question|question)"', instructions or ""
+    )
+    return found.group(1) if found else None
+
+
 def graph_of(overview: dict) -> dict:
     """What a ster serves, as its overview says it: title, ontology, file, when this process started, and the graph's
     own stamp. A new start time means a restart; a new stamp means the graph changed."""
@@ -419,7 +427,11 @@ def check_ster(url: str, headers: dict) -> dict:
         tools = [t["name"] for t in _rpc(url, headers, "tools/list").get("tools", [])]
         out["tools"] = tools
         out["missing"] = [t for t in REQUIRED_TOOLS if t not in tools]
-        ov = _rpc(url, headers, "tools/call", {"name": "get_overview", "arguments": {}})
+        # a health check: ster is asked not to journal it
+        quiet = {f"{ns}/untraced": True} if (ns := meta_namespace(init.get("instructions"))) else {}
+        ov = _rpc(
+            url, headers, "tools/call", {"name": "get_overview", "arguments": {}, "_meta": quiet}
+        )
         overview = json.loads(ov["content"][0]["text"])
         out["file"] = overview.get("file")
         out["graph"] = graph_of(overview)

@@ -252,10 +252,10 @@ def meta_for(instructions: str, conv_id: str, question: str, model: str | None =
     )
     for namespace, name in keys:
         meta[f"{namespace}/agent-{name}"] = conv_id if name == "session-id" else question
-    if keys:
-        meta[f"{keys[0][0]}/agent-name"] = AGENT_NAME
+    if namespace := runner.meta_namespace(instructions):
+        meta[f"{namespace}/agent-name"] = AGENT_NAME
         if model:
-            meta[f"{keys[0][0]}/agent-model"] = model
+            meta[f"{namespace}/agent-model"] = model
     return meta
 
 

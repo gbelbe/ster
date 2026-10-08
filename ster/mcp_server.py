@@ -290,6 +290,9 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+UNTRACED_META: Final = (
+    "com.adeo/untraced"  # _meta key of a call that is only a health check: it leaves no trace
+)
 _SESSION_ID_MAX: Final = 256  # characters of the agent session id a call may carry
 
 
@@ -315,6 +318,8 @@ class CallContext:  # pylint: disable=too-many-instance-attributes  # what one M
     # the HTTP User-Agent the call came with (set by the transport) and what that and its _meta say about the agent
     user_agent: str | None = None
     agent: dict[str, str] | None = None
+    # a call that is only a health check: it answers like any other and leaves no trace
+    untraced: bool = False
 
 
 def _tool_get_overview(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
@@ -534,6 +539,8 @@ def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[s
     try:
         if name == "run_sparql":
             return _text_result(impl(tax, call, args))
+        if call.untraced:
+            return _text_result(impl(tax, call, args))
         return _text_result(_traced_tool_call(name, impl, tax, call, args))
     # A fault inside one tool is reported as an error result; it must not take
     # down the whole JSON-RPC session.
@@ -710,6 +717,7 @@ def handle_message(
         agent_session_question=agent_session_question,
         token_usage=token_usage,
         agent=agent_of(call.user_agent if call else None, metadata),
+        untraced=metadata.get(UNTRACED_META) is True,
     )
     return _ok(msg_id, handler(params, taxonomy, call))
 
