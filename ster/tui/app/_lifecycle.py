@@ -99,6 +99,7 @@ class _LifecycleMixin(_AppState):
         self._loading = self._progressive_startup
         self._loading_from_file = taxonomy is None
         self._loading_spinner_frame = 0
+        self._opening_agent = False
         self._loading_spinner_ticks = 0
         self._loading_step: tuple[str, int, str] | None = None
         self._loading_spinner_timer: Timer | None = None
@@ -283,6 +284,7 @@ class _LifecycleMixin(_AppState):
         self.tax = taxonomy
         self._loaded_successfully = True
         self._service = self._make_service(taxonomy, self._path)
+        self._ensure_context_server()  # not after the browser is built: MCP and the agent page wait on it
         self._defer_search_rows = self._entity_count(taxonomy) > _LARGE_TAXONOMY_THRESHOLD
         self.search_rows = [] if self._defer_search_rows else data.search_rows(taxonomy, self.lang)
         self._set_loading_progress(_LIT_PREPARING, 0, "Building navigation index")
@@ -368,6 +370,17 @@ class _LifecycleMixin(_AppState):
             return
         self._browser_mounted = True
 
+    def _ensure_context_server(self) -> None:
+        """Start the API server on its own thread, once."""
+        if self._context_server_started:
+            return
+        self._context_server_started = True
+        threading.Thread(
+            target=self._start_context_server_and_report,
+            daemon=True,
+            name="ster-context-server",
+        ).start()
+
     def _start_context_server_and_report(self) -> None:
         """Start the API server (on a worker thread), then say so if the port was taken."""
         notice = _context_server_notice(_start_context_server(self.tax, self._path), self._path)
@@ -383,13 +396,7 @@ class _LifecycleMixin(_AppState):
             self._initialize_browser_direct()
             return
         self._set_loading_progress(_LIT_PREPARING, 75, "Configuring browser")
-        if not self._context_server_started:
-            threading.Thread(
-                target=self._start_context_server_and_report,
-                daemon=True,
-                name="ster-context-server",
-            ).start()
-            self._context_server_started = True
+        self._ensure_context_server()
         for tree in self.query(Tree):
             tree.show_root = False  # noqa: V101  # Textual reads it when the tree draws
             tree.guide_depth = 3  # noqa: V101  # Textual reads it when the tree draws
@@ -414,8 +421,8 @@ class _LifecycleMixin(_AppState):
             name="ster-context-server",
         ).start()
         for tree in self.query(Tree):
-            tree.show_root = False
-            tree.guide_depth = 3
+            tree.show_root = False  # noqa: V101  # Textual reads it when the tree draws
+            tree.guide_depth = 3  # noqa: V101  # Textual reads it when the tree draws
         self._sync_lint_features()
         if self.tax.owl_individuals and not self._individuals_by_class:
             self._individuals_by_class, self._untyped_individuals = data.individual_index(

@@ -28,18 +28,6 @@ _STANDARD: dict[str, dict[str, list[str]]] = {
     "skos": {"classes": ["Concept", "ConceptScheme"], "properties": ["prefLabel", "broader"]},
 }
 
-# A starter query: the common prefixes plus a SELECT skeleton to edit.
-DEFAULT_QUERY = """\
-PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX owl:  <http://www.w3.org/2002/07/owl#>
-
-SELECT ?s ?p ?o
-WHERE { ?s ?p ?o }
-LIMIT 50
-"""
-
 
 def presets() -> list[PresetQuery]:
     """The built-in preset queries (label · description · sparql)."""
@@ -274,8 +262,8 @@ def ensure_server(tax: Taxonomy, path: Path | None) -> str:
     return ""
 
 
-def server_unavailable_reason() -> str:
-    """Why the map cannot open, in terms the reader can act on.
+def server_unavailable_reason(what: str = "the map") -> str:
+    """Why *what* (the map, by default) cannot open, in terms the reader can act on.
 
     "The server isn't running" leaves someone staring at a working TUI with no
     idea what to do. The usual cause is that the configured port is already
@@ -297,8 +285,24 @@ def server_unavailable_reason() -> str:
     if holder is not None:
         from ster.viz_vowl import holder_message  # noqa: PLC0415
 
-        return f"Couldn't open the map: {holder_message(holder[0], holder[1], port)}"
-    return "Couldn't open the map: the ster server isn't running."
+        return f"Couldn't open {what}: {holder_message(holder[0], holder[1], port)}"
+    return f"Couldn't open {what}: the ster server isn't running."
+
+
+def wait_for_server(seconds: float, every: float = 0.2) -> bool:
+    """True once ster's server is up, waiting up to *seconds* for it.
+
+    The TUI starts its server on a thread beside the browser it is building, so for the first moments after the loader
+    goes the server is simply not there yet; that is not the same as it being unable to start.
+    """
+    import time  # noqa: PLC0415
+
+    deadline = time.monotonic() + seconds
+    while not server_is_running():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(every)
+    return True
 
 
 def open_browser(url: str) -> bool:

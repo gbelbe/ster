@@ -165,7 +165,10 @@ def _stub(monkeypatch, *, running=True, page=("http://127.0.0.1:8781", None), op
     from ster.tui import query
 
     monkeypatch.setattr(query, "server_is_running", lambda: running)
-    monkeypatch.setattr(query, "server_unavailable_reason", lambda: "ster is not running")
+    monkeypatch.setattr(
+        query, "server_unavailable_reason", lambda _what="the map": "ster is not running"
+    )
+    monkeypatch.setattr(query, "wait_for_server", lambda _seconds: running)
     monkeypatch.setattr(query, "open_browser", lambda _url: opened)
     monkeypatch.setattr(talk_to_graph, "page_url", lambda *_a: page)
     monkeypatch.setattr("ster.api_server.load_server_config", lambda: ("http://127.0.0.1", 8765))
@@ -180,31 +183,30 @@ def test_the_key_needs_a_file(tmp_path, monkeypatch):
 
 
 def test_the_key_says_when_ster_is_not_running(tmp_path, monkeypatch):
-    app, said = _app_with_file(tmp_path)
+    app, _ = _app_with_file(tmp_path)
     _stub(monkeypatch, running=False)
-    app.action_open_agent()
-    assert said == [("ster is not running", "warning")]
+    assert app._open_agent_page() == ("ster is not running", "warning")
 
 
 def test_the_key_says_why_the_page_did_not_start(tmp_path, monkeypatch):
-    app, said = _app_with_file(tmp_path)
+    app, _ = _app_with_file(tmp_path)
     _stub(monkeypatch, page=(None, "no free port"))
-    app.action_open_agent()
-    assert said == [("no free port", "warning")]
+    assert app._open_agent_page() == ("no free port", "warning")
 
 
 def test_the_key_says_when_no_browser_opened(tmp_path, monkeypatch):
-    app, said = _app_with_file(tmp_path)
+    app, _ = _app_with_file(tmp_path)
     _stub(monkeypatch, opened=False)
-    app.action_open_agent()
-    assert "Couldn't open a browser" in said[0][0]
+    assert "Couldn't open a browser" in app._open_agent_page()[0]
 
 
 def test_the_key_opens_the_page_and_says_where(tmp_path, monkeypatch):
-    app, said = _app_with_file(tmp_path)
+    app, _ = _app_with_file(tmp_path)
     _stub(monkeypatch)
-    app.action_open_agent()
-    assert said == [("Agent page opened in your browser — http://127.0.0.1:8781", None)]
+    assert app._open_agent_page() == (
+        "Agent page opened in your browser — http://127.0.0.1:8781",
+        None,
+    )
 
 
 # ── a launch-time override can be taken away again ────────────────────────────

@@ -23,6 +23,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # literal rather than as str, because notify() takes a Literal and a widened
 # constant silently stops satisfying it.
 _WARNING: Final[Literal["warning"]] = "warning"
+AGENT_SERVER_WAIT_S: Final = (
+    20.0  # how long the key waits for ster's own server, which starts beside the browser
+)
 
 
 _COPIED_PREVIEW = 60  # characters of the copied text echoed in the toast
@@ -40,7 +43,7 @@ class _ActionsMixin(_AppState):
             QueryScreen(self.tax, self._path), lambda _result: self._ensure_browser_ready()
         )
 
-    def action_help(self) -> None:
+    def action_help(self) -> None:  # noqa: V105
         """Open the keys-and-actions help overlay."""
         self.push_screen(HelpScreen())
 
@@ -199,27 +202,50 @@ class _ActionsMixin(_AppState):
 
         Only bound while the plugin is on. The page starts in its own process the first time and is found again after
         that. Without a usable agent it still opens, in its read-only mode: the history of earlier answers.
+
+        Waiting for ster's server and starting the page take seconds, so they run on a worker: the key answers at once
+        ("Opening the agent page…"), the TUI stays alive, and pressing it again meanwhile does not start a second page.
         """
+        if self._path is None:
+            self.notify("Open a file first — the page is about one project.", severity=_WARNING)
+            return
+        if self._opening_agent:
+            self.notify("Still opening the agent page — one moment.")
+            return
+        self._opening_agent = True
+        self.notify("Opening the agent page…")
+        self.run_worker(
+            self._open_agent_worker, thread=True, name="ster-open-agent", group="open-agent"
+        )
+
+    def _open_agent_worker(self) -> None:
+        """Off the UI thread: say how it went once ster's server is up and the page answers."""
+        try:
+            message, severity = self._open_agent_page()
+        except Exception as exc:  # noqa: BLE001  # the key must report a failure, never swallow it
+            message, severity = f"Couldn't open the agent page: {exc}", _WARNING
+        self.call_from_thread(self._agent_page_done, message, severity)
+
+    def _agent_page_done(self, message: str, severity: str | None) -> None:
+        self._opening_agent = False
+        self.notify(message, severity=severity)  # type: ignore[arg-type]
+
+    def _open_agent_page(self) -> tuple[str, str | None]:
+        """Start or find the page and open it; the message to show, and its severity."""
         from ster.api_server import load_server_config  # noqa: PLC0415
         from ster.plugins import talk_to_graph  # noqa: PLC0415
 
         from .. import query as _query
 
-        if self._path is None:
-            self.notify("Open a file first — the page is about one project.", severity=_WARNING)
-            return
-        if not _query.server_is_running():
-            self.notify(_query.server_unavailable_reason(), severity=_WARNING)
-            return
+        if not _query.wait_for_server(AGENT_SERVER_WAIT_S):
+            return _query.server_unavailable_reason("the agent page"), _WARNING
         url, port = load_server_config()
         address, why = talk_to_graph.page_url(self._path, url, port)
         if address is None:
-            self.notify(why or "Couldn't start the agent page.", severity=_WARNING)
-            return
+            return why or "Couldn't start the agent page.", _WARNING
         if not _query.open_browser(address):
-            self.notify("Couldn't open a browser for the agent page.", severity=_WARNING)
-            return
-        self.notify(f"Agent page opened in your browser — {address}")
+            return "Couldn't open a browser for the agent page.", _WARNING
+        return f"Agent page opened in your browser — {address}", None
 
     def _timeline_focus_target(self, graph: rdflib.Graph, dated_from: ReachFn) -> str | None:
         """The selected entity, when it can put anything on a time axis."""
