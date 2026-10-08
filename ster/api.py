@@ -1664,6 +1664,7 @@ def _register_mcp(
                 base_url=base_url,
                 api_post=_in_process_api(app, token, base_url),
                 open_browser=mcp_views.open_in_browser if _caller_is_local(request) else None,
+                user_agent=request.headers.get("user-agent"),
             ),
         )
         if reply is None:  # a notification takes no response body

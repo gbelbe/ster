@@ -359,6 +359,7 @@ class PayloadOptions(TypedDict, total=False):
     agent_question: str | None
     token_usage: dict[str, Any] | None
     agent_session_question: str | None
+    agent: dict[str, str] | None  # which agent and model asked, see ster.query_trace.agent
 
 
 def sparql_payload(
@@ -392,6 +393,7 @@ def sparql_payload(
         agent_question=options.get("agent_question"),
         token_usage=options.get("token_usage"),
         agent_session_question=options.get("agent_session_question"),
+        agent=options.get("agent"),
     )
     started = time.perf_counter()
     step_id = "raw-sparql"
@@ -552,6 +554,7 @@ def _is_uri(value: str) -> bool:
 def query_trace(run_id: str, export: bool = False) -> dict[str, Any]:
     """Inspect or export a trace from the active JSONL recorder."""
     from .query_trace import get_recorder
+    from .query_trace.answers import answer_for_run
     from .query_trace.jsonl import read_events
     from .query_trace.materialize import materialize_events
     from .query_trace.validation import validate_events
@@ -581,7 +584,8 @@ def query_trace(run_id: str, export: bool = False) -> dict[str, Any]:
     }
     if export:
         result["format"] = "trig"
-        result["trig"] = materialize_events(events).serialize(format="trig")
+        answer = answer_for_run(path.parent, run_id)
+        result["trig"] = materialize_events(events, answer).serialize(format="trig")
     return result
 
 

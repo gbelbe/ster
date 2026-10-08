@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .answers import answer_for_run
 from .jsonl import read_events
 from .materialize import materialize_events
 from .validation import validate_events
@@ -35,7 +36,7 @@ def main() -> None:
     if args.command == "inspect":
         _inspect(events)
         return
-    dataset = materialize_events(events)
+    dataset = materialize_events(events, answer_for_run(args.input.parent, events[0].run_id))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     dataset.serialize(destination=args.output, format="trig")
 

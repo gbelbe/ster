@@ -28,6 +28,7 @@ _FIELDS: dict[str, type | tuple[type, ...]] = {
     "answer": (str, type(None)),
     "status": str,
     "agent": (str, type(None)),
+    "model": (str, type(None)),  # the model that answered, when the agent reports it
     "conversation_id": (str, type(None)),
     "resume_session_id": (str, type(None)),  # the id the agent resumes this conversation with
     "agent_session_id": (
@@ -104,3 +105,11 @@ def read_answers(directory: str | Path) -> list[dict[str, Any]]:
         if isinstance(data, dict) and isinstance(data.get("id"), str):
             found.append(data)
     return sorted(found, key=lambda a: (str(a.get("started") or a.get("recorded")), a["id"]))
+
+
+def answer_for_run(directory: str | Path, run_id: str) -> dict[str, Any] | None:
+    """The stored answer that rests on *run_id*, if an agent reported one (the latest, when several did)."""
+    for answer in reversed(read_answers(directory)):
+        if run_id in answer.get(_RUN_IDS, []):
+            return answer
+    return None

@@ -26,6 +26,7 @@ from typing import Any
 from . import runner
 
 # What a model may call. open_view would open a browser window and export_query_trace writes a file.
+AGENT_NAME = "ster-agent-page"
 NATIVE_TOOLS = tuple(t for t in runner.STER_TOOLS if t not in ("open_view", "export_query_trace"))
 MAX_STEPS = 12
 MAX_CALLS_PER_STEP = 6  # a small model can ask for a dozen calls at once, mostly the same
@@ -239,13 +240,22 @@ def trim_instructions(text: str) -> str:
     return "\n\n".join(p.strip() for p in keep)
 
 
-def meta_for(instructions: str, conv_id: str, question: str) -> dict:
-    """The request metadata ster's instructions ask every tool call to carry, filled in here so the model need not."""
+def meta_for(instructions: str, conv_id: str, question: str, model: str | None = None) -> dict:
+    """The request metadata ster's instructions ask every tool call to carry, filled in here so the model need not.
+
+    Besides what ster asks for, the calls say who made them: this page's loop and the model it ran, so the trace
+    can name both (PROV-O associates the run with them). They go under the same namespace ster's keys are in.
+    """
     meta = {}
-    for key in re.findall(
-        r'"([\w.\-]+/agent-(?:session-id|session-question|question))"', instructions or ""
-    ):
-        meta[key] = conv_id if key.endswith("session-id") else question
+    keys = re.findall(
+        r'"([\w.\-]+)/agent-(session-id|session-question|question)"', instructions or ""
+    )
+    for namespace, name in keys:
+        meta[f"{namespace}/agent-{name}"] = conv_id if name == "session-id" else question
+    if keys:
+        meta[f"{keys[0][0]}/agent-name"] = AGENT_NAME
+        if model:
+            meta[f"{keys[0][0]}/agent-model"] = model
     return meta
 
 
@@ -345,7 +355,12 @@ async def _connect(run, job: Job, headers: dict):
     instructions = init.get("instructions") or ""
     system = job.system_prompt + "\n\n" + trim_instructions(instructions)
     allowed = {t["name"] for t in listed if t["name"] in NATIVE_TOOLS}
-    ster = _Ster(job.ster_url, headers, allowed, meta_for(instructions, run.conv["id"], job.prompt))
+    ster = _Ster(
+        job.ster_url,
+        headers,
+        allowed,
+        meta_for(instructions, run.conv["id"], job.prompt, job.model),
+    )
     return system, tool_definitions(listed), ster
 
 

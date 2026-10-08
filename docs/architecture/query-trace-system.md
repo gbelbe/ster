@@ -107,6 +107,34 @@ The run is the stable root for user-facing reporting and evaluation. It should
 have a globally unique ID, a graph content hash, a plan version, and an
 execution configuration reference.
 
+### Agent and model
+
+A run is associated with the agent that asked and the model behind it, as PROV software agents:
+
+```turtle
+<urn:kaiq:run:run-3b4f...> prov:wasAssociatedWith <urn:kaiq:agent:claude-code-2.1.292>,
+    <urn:kaiq:model:claude-haiku-4-5-20251001> .
+
+<urn:kaiq:agent:claude-code-2.1.292> a prov:SoftwareAgent, kaiq:QueryAgent ;
+    rdfs:label "claude-code" ; kaiq:version "2.1.292" .
+
+<urn:kaiq:model:claude-haiku-4-5-20251001> a prov:SoftwareAgent, kaiq:LanguageModel ;
+    rdfs:label "claude-haiku-4-5-20251001" ;
+    prov:actedOnBehalfOf <urn:kaiq:agent:claude-code-2.1.292> .
+```
+
+The agent acts for the person; the model it consulted acts on the agent's behalf. The same agent and model in two
+runs are one resource. Where each comes from, in order of precedence:
+
+1. `_meta` of the MCP call: `com.adeo/agent-name`, `com.adeo/agent-version`, `com.adeo/agent-model`. A client that
+   can set `_meta` names itself and its model here (the agent page's own model loop does).
+2. The HTTP `User-Agent` of the call (`claude-code/2.1.292 (sdk-cli)`, `opencode/1.18.34`): name and version, so an
+   agent is recorded without any cooperation. Generic clients (browsers, `curl`, Python HTTP libraries) are ignored.
+3. The answer record the runner reports (`model`, and `agent` as a display name) for the runs it rests on. No MCP
+   client sends its model in a request, so this is how a Claude Code or opencode run gets one.
+
+The first two are stored as `agent` on the `run_started` event; the third is joined when the trace is materialised.
+
 ### Trace group
 
 Represent the collection of logical steps as a `prov:Collection`.

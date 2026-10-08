@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from rdflib import Dataset, Literal, Namespace, URIRef
-from rdflib.namespace import RDF, XSD
+from rdflib.namespace import RDF, RDFS, XSD
 
+from .agent import MODEL, NAME, VERSION, with_answer
 from .model import Event
 from .validation import validate_events
 
@@ -14,8 +17,12 @@ PROV = Namespace("http://www.w3.org/ns/prov#")
 KAIQ = Namespace("https://www.adeo.com/ontology/kai-query#")
 
 
-def materialize_events(events: Iterable[Event]) -> Dataset:
-    """Build a deterministic named-graph PROV-O dataset from *events*."""
+def materialize_events(events: Iterable[Event], answer: Mapping[str, Any] | None = None) -> Dataset:
+    """Build a deterministic named-graph PROV-O dataset from *events*.
+
+    *answer* is the record an agent reported for the run (see :mod:`ster.query_trace.answers`): it completes
+    what the calls themselves said about the agent, notably the model.
+    """
     items = list(events)
     errors = validate_events(items)
     if errors:
@@ -32,6 +39,7 @@ def materialize_events(events: Iterable[Event]) -> Dataset:
     graph.add((trace_uri, RDF.type, PROV.Collection))
     graph.add((trace_uri, RDF.type, KAIQ.QueryTrace))
     graph.add((run_uri, KAIQ.hasTrace, trace_uri))
+    _add_agent(graph, run_uri, with_answer(first.payload.get("agent"), answer))
 
     steps: dict[str, URIRef] = {}
     for event in items:
@@ -72,6 +80,39 @@ def _materialize_event(
         graph.add((step_uri, KAIQ.status, KAIQ[status]))
         graph.add((step_uri, PROV.endedAtTime, _timestamp(event.timestamp)))
         _link_artifacts(graph, step_uri, payload)
+
+
+def _add_agent(graph, run_uri: URIRef, agent: Mapping[str, str] | None) -> None:
+    """The agent that asked and the model behind it, as PROV software agents associated with the run.
+
+    The agent (Claude Code, opencode, ...) acts for the person; the model it consulted acts on its behalf.
+    Both are named by what they are, so the same agent in two runs is one resource.
+    """
+    if not agent:
+        return
+    harness = model = None
+    if agent.get(NAME):
+        harness = _uri(
+            "agent", _slug(agent[NAME] + ("-" + agent[VERSION] if agent.get(VERSION) else ""))
+        )
+        graph.add((harness, RDF.type, PROV.SoftwareAgent))
+        graph.add((harness, RDF.type, KAIQ.QueryAgent))
+        graph.add((harness, RDFS.label, Literal(agent[NAME])))
+        if agent.get(VERSION):
+            graph.add((harness, KAIQ.version, Literal(agent[VERSION])))
+        graph.add((run_uri, PROV.wasAssociatedWith, harness))
+    if agent.get(MODEL):
+        model = _uri("model", _slug(agent[MODEL]))
+        graph.add((model, RDF.type, PROV.SoftwareAgent))
+        graph.add((model, RDF.type, KAIQ.LanguageModel))
+        graph.add((model, RDFS.label, Literal(agent[MODEL])))
+        graph.add((run_uri, PROV.wasAssociatedWith, model))
+    if harness and model:
+        graph.add((model, PROV.actedOnBehalfOf, harness))
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-").lower()
 
 
 def _link_artifacts(graph, step_uri: URIRef, payload: dict) -> None:

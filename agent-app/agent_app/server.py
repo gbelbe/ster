@@ -39,7 +39,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import history, native, runner
+from . import history, native, reported, runner
 from . import rules as rule_engine
 
 WEB = Path(__file__).resolve().parent
@@ -608,6 +608,7 @@ def report_answer(run: Run) -> bool:
         "answer": turn.get("answer"),
         "status": turn.get("status", "error"),
         "agent": turn.get("agent"),
+        **reported.model_field(run.events),
         "conversation_id": conv["id"],
         "resume_session_id": conv.get("session_id"),
         "run_ids": sorted(set(runs)),

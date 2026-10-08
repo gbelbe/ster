@@ -26,6 +26,7 @@ from . import mcp_context as ctx
 from .mcp_views import ApiPost, open_view
 from .model import Taxonomy
 from .query_trace import Event, get_recorder
+from .query_trace.agent import agent_of
 from .view_links import VIEWS
 
 SERVER_NAME = "ster"
@@ -289,8 +290,11 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+_SESSION_ID_MAX: Final = 256  # characters of the agent session id a call may carry
+
+
 @dataclass(frozen=True)
-class CallContext:
+class CallContext:  # pylint: disable=too-many-instance-attributes  # what one MCP call knows about its caller
     """What one MCP call knows beyond its arguments.
 
     *base_url* is the server address the request arrived on — the only address
@@ -308,6 +312,9 @@ class CallContext:
     agent_question: str | None = None
     agent_session_question: str | None = None
     token_usage: dict[str, int] | None = None
+    # the HTTP User-Agent the call came with (set by the transport) and what that and its _meta say about the agent
+    user_agent: str | None = None
+    agent: dict[str, str] | None = None
 
 
 def _tool_get_overview(tax: Taxonomy, _call: CallContext, args: dict) -> Any:
@@ -359,6 +366,7 @@ def _tool_run_sparql(tax: Taxonomy, call: CallContext, args: dict) -> Any:
         agent_question=call.agent_question,
         token_usage=call.token_usage,
         agent_session_question=call.agent_session_question,
+        agent=call.agent,
     )
     _add_question_metadata_notice(payload, call)
     # Opening is an MCP-transport concern (whether *this caller* is on ster's own
@@ -550,6 +558,7 @@ def _traced_tool_call(
         agent_question=call.agent_question,
         agent_session_question=call.agent_session_question,
         token_usage=call.token_usage,
+        agent=call.agent,
     )
     step_id = name
     recorder.record(
@@ -690,15 +699,9 @@ def handle_message(
     if not isinstance(params, dict):
         return _err(msg_id, INVALID_PARAMS, "params must be an object.")
     metadata = params.get("_meta") or {}
-    agent_session_id = metadata.get("com.adeo/agent-session-id")
-    if not isinstance(agent_session_id, str) or len(agent_session_id) > 256:
-        agent_session_id = None
-    agent_question = metadata.get("com.adeo/agent-question")
-    if not isinstance(agent_question, str) or len(agent_question) > _QUESTION_MAX:
-        agent_question = None
-    agent_session_question = metadata.get("com.adeo/agent-session-question")
-    if not isinstance(agent_session_question, str) or len(agent_session_question) > _QUESTION_MAX:
-        agent_session_question = None
+    agent_session_id = _meta_text(metadata, "com.adeo/agent-session-id", _SESSION_ID_MAX)
+    agent_question = _meta_text(metadata, "com.adeo/agent-question", _QUESTION_MAX)
+    agent_session_question = _meta_text(metadata, "com.adeo/agent-session-question", _QUESTION_MAX)
     token_usage = _normalise_token_usage(metadata.get("com.adeo/token-usage"))
     call = replace(
         call or CallContext(),
@@ -706,8 +709,15 @@ def handle_message(
         agent_question=agent_question,
         agent_session_question=agent_session_question,
         token_usage=token_usage,
+        agent=agent_of(call.user_agent if call else None, metadata),
     )
     return _ok(msg_id, handler(params, taxonomy, call))
+
+
+def _meta_text(metadata: dict, key: str, limit: int) -> str | None:
+    """The text a caller put under *key* in its request metadata, or None when it is missing, not text or too long."""
+    value = metadata.get(key)
+    return value if isinstance(value, str) and len(value) <= limit else None
 
 
 def _normalise_token_usage(value: Any) -> dict[str, Any] | None:

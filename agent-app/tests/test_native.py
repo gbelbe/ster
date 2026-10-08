@@ -52,6 +52,7 @@ class Pieces(unittest.TestCase):  # noqa: V102
         self.assertEqual(
             meta,
             {
+                "com.example/agent-name": native.AGENT_NAME,
                 "com.example/agent-session-id": "conv1",
                 "com.example/agent-session-question": "how many?",
                 "com.example/agent-question": "how many?",
@@ -60,6 +61,13 @@ class Pieces(unittest.TestCase):  # noqa: V102
 
     def test_no_metadata_when_ster_asks_for_none(self):
         self.assertEqual(native.meta_for("plain", "c", "q"), {})
+
+    def test_the_model_that_ran_is_named_under_the_namespace_ster_uses(self):
+        namespace = "com.example"
+        meta = native.meta_for(INSTRUCTIONS, "c", "q", "llama3.2:3b")
+        self.assertEqual(meta[f"{namespace}/agent-model"], "llama3.2:3b")
+        self.assertEqual(meta[f"{namespace}/agent-name"], native.AGENT_NAME)
+        self.assertNotIn(f"{namespace}/agent-model", native.meta_for(INSTRUCTIONS, "c", "q"))
 
     def test_only_read_tools_are_offered_with_their_own_schema(self):
         listed = [
@@ -313,6 +321,8 @@ class Loop(BridgeCase):  # pylint: disable=too-many-public-methods  # one test p
         self.assertEqual(
             params["_meta"],
             {
+                "com.example/agent-name": native.AGENT_NAME,
+                "com.example/agent-model": "big",
                 "com.example/agent-session-id": r["conversation_id"],
                 "com.example/agent-session-question": "which brands?",
                 "com.example/agent-question": "which brands?",
