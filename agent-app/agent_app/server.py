@@ -39,7 +39,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import history, native, reported, runner
+from . import graph_switch, history, native, reported, runner
 from . import rules as rule_engine
 
 WEB = Path(__file__).resolve().parent
@@ -450,7 +450,7 @@ async def _drive_model(run: Run, agent: runner.Agent) -> None:
         endpoint=agent.endpoint or "",
         model=model,
         api_name=info["api"],
-        prompt=run.turn["prompt"],
+        prompt=graph_switch.prompt_of(run.turn),
         system_prompt=SYSTEM_PROMPT,
         ster_url=f"http://{STER_HOST}:{STER_PORT}/mcp",
         ster_token=ster_token(),
@@ -461,7 +461,7 @@ async def _drive_model(run: Run, agent: runner.Agent) -> None:
 
 def _invocation(run: Run) -> runner.Invocation:
     return runner.Invocation(
-        prompt=run.turn["prompt"],
+        prompt=graph_switch.prompt_of(run.turn),
         system_prompt=SYSTEM_PROMPT,
         session=run.conv.get("session_id"),
         model=MODEL,
@@ -761,6 +761,7 @@ async def ask(body: dict):
         "started": time.time(),
         "events": [],
     }
+    graph_switch.begin(conv, turn, seen)
     conv["turns"].append(turn)
     save(conv)
     run = Run(conv, turn)

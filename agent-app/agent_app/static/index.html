@@ -691,7 +691,7 @@ function renderThread() {
       body = `<div class="prose">${md(M.done?.answer || M.steps.at(-1)?.text || "")}</div>`;
     }
     const foot = M.steps.length ? `<div class="a-foot"><span>${tx("foot.steps", { count: M.steps.length }).replace(/^(\S+)/, "<b>$1</b>")}</span><span><b>${M.queries}</b> SPARQL</span>${M.hasUsage ? `<span><b class="num">${fmt(fresh(M.total))}</b> ${tx("foot.new_tokens")}</span>` : ""}${M.done?.cost_usd != null ? `<span>≈ <b class="num">${usd(M.done.cost_usd)}</b></span>` : ""}<span><b class="num">${secs(M.done?.duration_ms ?? M.t)}</b></span><button class="btn" data-inspect="${t.id}">${tx("foot.inspect")}</button></div>` : "";
-    const noCall = M.done?.status === "completed" && !M.toolCount ? `<div class="a-warn">${tx("nocall.note")}</div>` : "";
+    const noCall = (t.fresh_session ? `<div class="a-warn">${tx("turn.fresh", { name: esc(t.fresh_session.name || "") })}</div>` : "") + (M.done?.status === "completed" && !M.toolCount ? `<div class="a-warn">${tx("nocall.note")}</div>` : "");
     const shown = M.steps.filter(s => !(s.last && !s.tools.length));  /* the closing step only writes the answer, which is shown below */
     const steps = shown.length ? `<div class="isteps"><div class="isteps-h">${tx("steps.heading", { count: shown.length })}</div>${shown.map(s => renderStep(t, s, M)).join("")}</div>` : "";
     return { id: t.id, selected, html: `<div class="q">${esc(t.prompt)}</div><div class="a">${steps}<div class="a-main ${steps ? "after-steps" : ""}">${noCall}${body}${renderViz(t, M)}</div>${foot}</div>` };
