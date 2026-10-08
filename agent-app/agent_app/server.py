@@ -183,8 +183,8 @@ def ster_graph(force: bool = False) -> dict | None:
     when it does not answer. Asked at most every SERVED_TTL seconds."""
     if force or time.time() - _served["at"] > SERVED_TTL or _served.get("port") != STER_PORT:
         try:
-            seen = runner.check_ster(
-                f"http://{STER_HOST}:{STER_PORT}/mcp", {"Authorization": f"Bearer {ster_token()}"}
+            seen = runner.check_ster_light(
+                f"http://{STER_HOST}:{STER_PORT}", {"Authorization": f"Bearer {ster_token()}"}
             )
             _served["graph"] = seen.get("graph") if seen.get("up") else None
         except OSError:

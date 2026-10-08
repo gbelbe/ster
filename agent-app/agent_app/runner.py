@@ -371,6 +371,35 @@ def _rpc(url: str, headers: dict, method: str, params: dict | None = None, timeo
         return json.load(r).get("result", {})
 
 
+def graph_of(overview: dict) -> dict:
+    """What a ster serves, as its overview says it: title, ontology, file, when this process started, and the graph's
+    own stamp. A new start time means a restart; a new stamp means the graph changed."""
+    return {
+        "title": overview.get("title"),
+        "ontology_uri": overview.get("ontology_uri"),
+        "file": overview.get("file"),
+        "started": (overview.get("server") or {}).get("started"),
+        **(overview.get("graph") or {}),
+    }
+
+
+def check_ster_light(base: str, headers: dict, timeout: float = 5) -> dict:
+    """Whether ster answers and what graph it serves, in one plain HTTP request.
+
+    The page asks this every few seconds. The MCP handshake ``check_ster`` makes is three requests and, because
+    ``get_overview`` is a tool call, leaves a trace each time; ster's REST overview is one request and leaves none.
+    """
+    out: dict = {"url": base, "up": False}
+    request = urllib.request.Request(f"{base}/api/overview", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            out["graph"] = graph_of(json.load(response))
+        out["up"] = True
+    except (OSError, ValueError) as exc:  # unreachable, unauthorised, not ster
+        out["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return out
+
+
 def check_ster(url: str, headers: dict) -> dict:
     """What any MCP agent needs from ster: it answers, it lists the tools, and says which file it serves."""
     out = {"url": url, "up": False}
@@ -393,15 +422,7 @@ def check_ster(url: str, headers: dict) -> dict:
         ov = _rpc(url, headers, "tools/call", {"name": "get_overview", "arguments": {}})
         overview = json.loads(ov["content"][0]["text"])
         out["file"] = overview.get("file")
-        out["graph"] = {  # what this ster serves, as get_overview says it
-            "title": overview.get("title"),
-            "ontology_uri": overview.get("ontology_uri"),
-            "file": overview.get("file"),
-            "started": (overview.get("server") or {}).get(
-                "started"
-            ),  # this ster process; a new one means a restart
-            **(overview.get("graph") or {}),
-        }
+        out["graph"] = graph_of(overview)
     except Exception as exc:  # unreachable, unauthorised, not ster
         out["error"] = f"{type(exc).__name__}: {exc}"[:200]
     return out

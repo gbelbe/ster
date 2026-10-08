@@ -64,6 +64,8 @@ class FakeSter:  # pylint: disable=too-many-instance-attributes  # a fake ster: 
                 outer.log.append(("GET", self.path, dict(self.headers), b""))
                 if self.path == "/map":
                     return self._send(200, MAP_PAGE.encode(), "text/html")
+                if self.path.startswith("/api/overview"):
+                    return self._send(200, outer.overview())
                 self._send(200, {"ok": True, "path": self.path})
 
             def do_POST(self):  # noqa: V105
@@ -90,18 +92,7 @@ class FakeSter:  # pylint: disable=too-many-instance-attributes  # a fake ster: 
                         }
                     else:
                         params = req.get("params", {})
-                        reply = outer.replies.get(
-                            params.get("name"),
-                            json.dumps(
-                                {
-                                    "file": outer.file,
-                                    "title": outer.title,
-                                    "ontology_uri": "https://example.org/o",
-                                    "graph": {"triples": 12, "fingerprint": outer.fingerprint},
-                                    "server": {"started": outer.started},
-                                }
-                            ),
-                        )
+                        reply = outer.replies.get(params.get("name"), json.dumps(outer.overview()))
                         text = reply(params.get("arguments", {})) if callable(reply) else reply
                         res = {"content": [{"type": "text", "text": text}], "isError": False}
                     return self._send(200, {"jsonrpc": "2.0", "id": req["id"], "result": res})
@@ -113,6 +104,16 @@ class FakeSter:  # pylint: disable=too-many-instance-attributes  # a fake ster: 
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/mcp"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def overview(self) -> dict:
+        """What ster says about the graph it serves, by get_overview and by GET /api/overview alike."""
+        return {
+            "file": self.file,
+            "title": self.title,
+            "ontology_uri": "https://example.org/o",
+            "graph": {"triples": 12, "fingerprint": self.fingerprint},
+            "server": {"started": self.started},
+        }
 
     def close(self):
         self.httpd.shutdown()
