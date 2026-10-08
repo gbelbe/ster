@@ -12,21 +12,56 @@ from ster.model import Taxonomy
 
 from ._constants import _ACTION_SUFFIX, _ADD_PROP_PREFIX, _CTA_PREFIX, _NAV_HINTS
 
+FALLBACK_PORTS = 9  # next ports a second ster may take when the configured one is held by another
+
 
 def _start_context_server(taxonomy: Taxonomy, path: Path | None) -> bool:
     """Bring up the API server so agents can reach the MCP endpoint.
 
-    Runs on a daemon thread beside the TUI. Best-effort: a taken port (a second
-    ster instance, say) just means no MCP this session — it must never stop the
-    editor from opening. No HTML renderer is supplied; opening the graph viewer
-    later attaches the VOWL one to this same server.
+    Runs on a daemon thread beside the TUI. Best-effort: it must never stop the
+    editor from opening. When the configured port is held by another ster (a
+    second instance, say), this one takes the next free port, so it has a
+    server of its own and the agent page it opens follows its own graph, not the
+    other instance's. A ``ster serve`` of this very file is the exception: it
+    already is the server, and a second one would only split the traffic. No
+    HTML renderer is supplied; opening the graph viewer later attaches the VOWL
+    one to this same server.
     """
     try:
         from ...api_server import start_background  # noqa: PLC0415
 
-        return start_background(taxonomy, path)
+        if start_background(taxonomy, path):
+            return True
+        if _served_by_same_file(path):
+            return False
+        return start_background(taxonomy, path, fallback_ports=FALLBACK_PORTS)
     except Exception:  # noqa: BLE001 — the editor must open regardless
         return False
+
+
+def _served_by_same_file(path: Path | None) -> bool:
+    """True when a ``ster serve`` of *path* (same build) already holds the port: the claim that would reuse it."""
+    try:
+        from ...viz_vowl import claim_port  # noqa: PLC0415
+        from ...viz_vowl._claim import REUSE  # noqa: PLC0415
+
+        return bool(claim_port(path, confirm=lambda _question: False).outcome == REUSE)
+    except Exception:  # noqa: BLE001 — a probe must never be the thing that fails
+        return False
+
+
+def _moved_notice() -> tuple[str, str] | None:
+    """The toast for a server that started on another port than the configured one, else None."""
+    from ...api_server import bound_port, configured_server  # noqa: PLC0415
+
+    bound, wanted = bound_port(), configured_server()[1]
+    if bound is None or bound == wanted:
+        return None
+    return (
+        f"MCP and the agent page use port {bound} here: {wanted} is held by another ster. "
+        f"An agent configured for {wanted} reaches that one.",
+        "information",
+    )
 
 
 def _context_server_notice(started: bool, path: Path | None) -> tuple[str, str] | None:
@@ -41,7 +76,7 @@ def _context_server_notice(started: bool, path: Path | None) -> tuple[str, str] 
     problem, so it gets no toast.
     """
     if started:
-        return None
+        return _moved_notice()
     try:
         from ...viz_vowl import claim_port  # noqa: PLC0415
         from ...viz_vowl._claim import BLOCKED, REUSE  # noqa: PLC0415

@@ -59,12 +59,13 @@ _SERVER_OWN_TESTS = frozenset(
     {
         "tests.unit.test_server_startup",
         "tests.unit.test_api_server_background",
+        "tests.unit.test_own_port",
         "tests.step_defs.test_server_startup",
     }
 )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # noqa: V103  # pytest runs autouse fixtures by itself
 def _no_background_api_server(request, monkeypatch):
     """Keep unit tests off the network — the TUI opens a real socket otherwise.
 

@@ -83,8 +83,8 @@ def _merge_config(**changes: object) -> None:
     _SERVER_CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
 
-def load_server_config() -> tuple[str, int]:
-    """Return (url, port) from persisted config, or defaults if not set."""
+def configured_server() -> tuple[str, int]:
+    """The (url, port) the config names, or the defaults: where ster would like to serve."""
     data = _read_config()
     try:
         return str(data.get("url", _DEFAULT_SERVER_URL)), int(
@@ -92,6 +92,21 @@ def load_server_config() -> tuple[str, int]:
         )
     except (TypeError, ValueError):  # a hand-edited port that is not a number
         return _DEFAULT_SERVER_URL, _DEFAULT_SERVER_PORT
+
+
+def load_server_config() -> tuple[str, int]:
+    """The (url, port) this process's own server answers on.
+
+    That is the configured port, unless another ster already holds it and this one took the next free port (see
+    ``start_background``): every link, view and page opened from here must follow the port actually bound.
+    """
+    url, port = configured_server()
+    return url, _bg.port or port
+
+
+def bound_port() -> int | None:
+    """The port this process's background server is listening on, None when it has none."""
+    return _bg.port if _bg.app is not None else None
 
 
 def save_server_config(url: str, port: int) -> None:
@@ -194,9 +209,12 @@ class _Background:
     broadcaster: Any = None
     loop: Any = None
     running: bool = False
+    port: int | None = (
+        None  # where it actually listens, which is not the configured port when that was taken
+    )
 
     def reset(self) -> None:
-        self.app = self.broadcaster = self.loop = None
+        self.app = self.broadcaster = self.loop = self.port = None
         self.running = False
 
 
@@ -206,6 +224,16 @@ _bg = _Background()
 def is_running() -> bool:
     """True when a background API server is up (vs. no server / a static fallback)."""
     return _bg.app is not None
+
+
+def is_serving() -> bool:
+    """True once the background server is bound and answering on its port.
+
+    ``is_running`` is true from the moment the app exists, which is before the bind: for a second ster that is
+    several seconds in which the server may still fail, and anything opened then would follow the configured port,
+    which belongs to the other ster.
+    """
+    return _bg.running
 
 
 def current_app() -> Any | None:
@@ -360,14 +388,32 @@ def _spawn_uvicorn(app: Any, host: str, port: int, uvicorn: Any) -> dict[str, An
     return holder
 
 
+def _bind_first_free(app: Any, host: str, ports: range, uvicorn: Any) -> tuple[Any, int] | None:
+    """``(event loop, port)`` of *app* serving on the first of *ports* that could be bound, else None.
+
+    Success only once *our* uvicorn reports started — a bare "is the port open?" probe would accept a stale server
+    squatting the port.
+    """
+    for candidate in ports:
+        holder = _spawn_uvicorn(app, host, candidate, uvicorn)
+        loop = holder.get("loop")
+        if loop is not None and _await_uvicorn_started(holder):
+            return loop, candidate
+    return None
+
+
 def start_background(
     taxonomy: Any,
     file_path: Path | None = None,
     *,
     html_renderer: HtmlRenderer | None = None,
     on_change: Callable[[], None] | None = None,
+    fallback_ports: int = 0,
 ) -> bool:
     """Start the API server on a daemon thread. True once it is actually serving.
+
+    The configured port is tried first. When another process holds it, up to *fallback_ports* next ports are tried,
+    so a second ster gets a server of its own instead of none; ``load_server_config`` then names the port bound.
 
     Idempotent: a second call re-publishes *taxonomy* onto the already-running
     server instead of starting a second one. If that call supplies an
@@ -387,7 +433,7 @@ def start_background(
         return False
     uvicorn, sse_broadcaster, create_app = deps
 
-    url, port = load_server_config()
+    url, port = configured_server()
     host = url.split("://", 1)[-1]  # strip scheme for the bind address
     token = _load_or_create_token()
     broadcaster = sse_broadcaster()
@@ -411,13 +457,11 @@ def start_background(
         app.state._ster[_LIT_HTML_FN] = _make_html_fn(app, html_renderer, token)
     _bg.app, _bg.broadcaster = app, broadcaster
 
-    holder = _spawn_uvicorn(app, host, port, uvicorn)
-    _bg.loop = holder.get("loop")
-    # Success only once *our* uvicorn reports started — a bare "is the port open?"
-    # probe would accept a stale server squatting the configured port.
-    if _bg.loop is None or not _await_uvicorn_started(holder):
+    bound = _bind_first_free(app, host, range(port, port + 1 + fallback_ports), uvicorn)
+    if bound is None:
         _bg.reset()
         return False
+    _bg.loop, _bg.port = bound
     _bg.running = True
     return True
 
@@ -443,7 +487,7 @@ def serve(
     from .store import load, save
     from .viz_vowl import render_vowl_html
 
-    cfg_url, cfg_port = load_server_config()
+    cfg_url, cfg_port = configured_server()
     _host = host if host is not None else cfg_url.split("://", 1)[-1]
     _port = port if port is not None else cfg_port
 

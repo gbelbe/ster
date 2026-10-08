@@ -16,7 +16,7 @@ OPENING = "Opening the agent page…"
 STILL = "Still opening the agent page — one moment."
 SECONDS = 20.0
 TWICE = 2
-RUNNING, WAIT = "server_is_running", "wait_for_server"
+RUNNING, WAIT = "server_is_serving", "wait_for_server"
 
 
 @pytest.fixture

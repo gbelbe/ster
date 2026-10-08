@@ -289,8 +289,15 @@ def server_unavailable_reason(what: str = "the map") -> str:
     return f"Couldn't open {what}: the ster server isn't running."
 
 
+def server_is_serving() -> bool:
+    """True once this process's own server is bound and answering: the port it listens on is then known."""
+    from ster.api_server import is_serving  # noqa: PLC0415
+
+    return is_serving()
+
+
 def wait_for_server(seconds: float, every: float = 0.2) -> bool:
-    """True once ster's server is up, waiting up to *seconds* for it.
+    """True once ster's own server is bound and answering, waiting up to *seconds* for it.
 
     The TUI starts its server on a thread beside the browser it is building, so for the first moments after the loader
     goes the server is simply not there yet; that is not the same as it being unable to start.
@@ -298,7 +305,7 @@ def wait_for_server(seconds: float, every: float = 0.2) -> bool:
     import time  # noqa: PLC0415
 
     deadline = time.monotonic() + seconds
-    while not server_is_running():
+    while not server_is_serving():
         if time.monotonic() >= deadline:
             return False
         time.sleep(every)
