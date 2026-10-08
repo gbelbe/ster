@@ -175,6 +175,7 @@ only_mutate = [
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_context_files.py",
+    "tests/unit/test_context_load_cache.py",
     "tests/unit/test_mcp_context.py",
     "tests/unit/test_mcp_server.py",
     "tests/unit/test_mcp_tool_journal.py",

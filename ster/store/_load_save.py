@@ -16,7 +16,10 @@ from ..model import Taxonomy
 from . import _to_graph
 from ._cache import (
     _get_bin_cache_path,
+    _get_context_cache_path,
     _is_cache_valid,
+    _is_merged_cache_valid,
+    _prune_stale_context_caches,
     _prune_stale_schema_caches,
     _try_load_cache,
     _try_save_cache,
@@ -56,6 +59,88 @@ def _parse_to_taxonomy(path: Path) -> Taxonomy:
     return graph_to_taxonomy(_parse_graph(path))
 
 
+_MAIN_SHARE = 10  # percent of a load with context that the editable file accounts for
+_ALMOST_DONE = 99  # percent while the handles are assigned and the merged result is cached
+_READING_END = 50  # percent reached once every context file has been read for its schema
+
+
+def _scaled(
+    callback: Callable[[int, str], None] | None, start: int, share: int
+) -> Callable[[int, str], None] | None:
+    """*callback* seen through a window: a 0-100 report becomes *start* to *start* + *share*."""
+    if callback is None:
+        return None
+    return lambda percent, message: callback(start + percent * share // 100, message)
+
+
+class _ContextProgress:
+    """Spreads the merging of context files over the progress bar, by file size.
+
+    Reading a file and merging it each take a share of the bar, so it moves with the work instead of sitting at
+    the 100% the editable file reached while the rest still had to be read.
+    """
+
+    def __init__(self, callback: Callable[[int, str], None] | None, files: list[Path]) -> None:
+        self._callback = callback
+        self._names = [Path(f).name for f in files]
+        sizes = [max(_size_of(Path(f)), 1) for f in files]
+        self._total = sum(sizes)
+        self._done_before = [sum(sizes[:i]) for i in range(len(sizes))]
+
+    def starting(self, step: str, index: int, first: int, last: int) -> None:
+        """Say that file *index* is about to be *step*-ed; the bar is at the share of bytes already done."""
+        done = self._done_before[index] / self._total
+        _report_progress(
+            self._callback,
+            first + int((last - first) * done),
+            f"{step} context {index + 1}/{len(self._names)}: {self._names[index]}",
+        )
+
+
+def _size_of(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _merge_all_context(
+    taxonomy: Taxonomy, context: list[Path], progress_callback: Callable[[int, str], None] | None
+) -> None:
+    """Read every context file once for its schema, then merge each one in, reporting as it goes."""
+    progress = _ContextProgress(progress_callback, context)
+    # Snapshot before any merging. A triple the editable file already asserts
+    # is its own even when a context file asserts it too, so the diff below
+    # can never mark it as another file's and strip it on save.
+    _report_progress(progress_callback, _MAIN_SHARE, "Reading the editable file's schema")
+    base_triples = frozenset(_to_graph.taxonomy_to_graph(taxonomy))
+    parsed: dict[Path, Graph] = {}
+    schema_graph = _context_schema_graph(taxonomy, context, parsed, progress)
+    for index, other in enumerate(context):
+        progress.starting("Merging", index, _READING_END, 100)
+        _merge_context(
+            taxonomy, Path(other), base_triples, schema_graph, parsed.pop(Path(other), None)
+        )
+    # Deliberately *not* re-normalising the hierarchy here. A context concept
+    # declaring broader on an editable one would gain the reciprocal narrower
+    # on that editable entity — and saving would then write a synthesised
+    # `narrower` into the user's file, pointing at an entity that does not
+    # exist when the file is opened on its own. The graph reads broader from
+    # the child, so cross-file links already draw; only the tree, which walks
+    # narrower downward, does not yet show them.
+    _report_progress(progress_callback, _ALMOST_DONE, "Assigning handles")
+    assign_handles(taxonomy)
+
+
+def _load_merged_cache(path: Path, context: list[Path]) -> Taxonomy | None:
+    """The taxonomy of *path* with *context* merged in, from the cache, when nothing it was built from has changed."""
+    _prune_stale_context_caches(path, context)
+    cache_path = _get_context_cache_path(path, context)
+    if not _is_merged_cache_valid(cache_path, [path, *context]):
+        return None
+    return _try_load_cache(cache_path, path)
+
+
 def load(
     path: str | Path,
     progress_callback: Callable[[int, str], None] | None = None,
@@ -68,12 +153,20 @@ def load(
     recorded in ``Taxonomy.context_source`` and excluded when saving.
 
     Uses a binary cache file in ~/.cache/ster/bin_cache to speed up subsequent
-    loads of large files IF the source file hasn't changed. Caching can be
-    disabled by setting STER_NO_CACHE=1 in the environment.
+    loads of large files IF the source file hasn't changed. With *context* there is
+    a second cache of the merged result, valid only while the editable file and every
+    context file are older than it, so reopening a project does not read its context
+    files again. Caching can be disabled by setting STER_NO_CACHE=1 in the environment.
     """
     path = Path(path)
-    _report_progress(progress_callback, 0, "Starting")
+    # With context files the editable file is only the first tenth of the work; reporting it as the whole
+    # would show 100% while the files merged in afterwards still had to be read.
+    report = _scaled(progress_callback, 0, _MAIN_SHARE) if context else progress_callback
+    _report_progress(report, 0, "Starting")
     use_cache = os.environ.get("STER_NO_CACHE") != "1"
+    if context and use_cache and (merged := _load_merged_cache(path, context)) is not None:
+        _report_progress(progress_callback, 100, "Loaded from cache")
+        return merged
     cache_path = _get_bin_cache_path(path)
 
     if use_cache:
@@ -88,37 +181,26 @@ def load(
         else None
     )
     if taxonomy is None:
-        _report_progress(progress_callback, 5, "Parsing RDF")
-        _report_progress(progress_callback, 45, "Building model")
+        _report_progress(report, 5, "Parsing RDF")
+        _report_progress(report, 45, "Building model")
         taxonomy = _parse_to_taxonomy(path)
         taxonomy.file_path = path
-        _report_progress(progress_callback, 80, "Assigning handles")
+        _report_progress(report, 80, "Assigning handles")
         assign_handles(taxonomy)
         if use_cache:
             _try_save_cache(cache_path, taxonomy)
-            _report_progress(progress_callback, 95, "Updating cache")
-        _report_progress(progress_callback, 100, "Ready")
+            _report_progress(report, 95, "Updating cache")
+        _report_progress(report, 100, "Ready")
     else:
-        _report_progress(progress_callback, 100, "Loaded from cache")
+        _report_progress(report, 100, "Loaded from cache")
 
     # Merged after the cache is written, so the cache stays a faithful copy of
     # this file alone and never depends on which context happened to be loaded.
     if context:
-        # Snapshot before any merging. A triple the editable file already asserts
-        # is its own even when a context file asserts it too, so the diff below
-        # can never mark it as another file's and strip it on save.
-        base_triples = frozenset(_to_graph.taxonomy_to_graph(taxonomy))
-        schema_graph = _context_schema_graph(taxonomy, context)
-        for other in context:
-            _merge_context(taxonomy, Path(other), base_triples, schema_graph)
-        # Deliberately *not* re-normalising the hierarchy here. A context concept
-        # declaring broader on an editable one would gain the reciprocal narrower
-        # on that editable entity — and saving would then write a synthesised
-        # `narrower` into the user's file, pointing at an entity that does not
-        # exist when the file is opened on its own. The graph reads broader from
-        # the child, so cross-file links already draw; only the tree, which walks
-        # narrower downward, does not yet show them.
-        assign_handles(taxonomy)
+        _merge_all_context(taxonomy, context, progress_callback)
+        if use_cache:
+            _report_progress(progress_callback, _ALMOST_DONE, "Updating cache")
+            _try_save_cache(_get_context_cache_path(path, context), taxonomy)
     return taxonomy
 
 
@@ -287,11 +369,28 @@ def _record_contributed(
         taxonomy.context_statements.setdefault(path, []).extend(contributed)
 
 
+def _read_context_file(path: Path, schema_graph: Graph | None, parsed: Graph | None) -> Taxonomy:
+    """The model of one context file: on its own, or classified by the schema of all of them when *schema_graph* is given.
+
+    *parsed* is the file as the schema pass already read it, so that it is not parsed a second time.
+    """
+    if schema_graph is None:
+        return load(path)
+    source = parsed if parsed is not None else _parse_graph(path)
+    merged = Graph()
+    for triple in schema_graph:
+        merged.add(triple)
+    for triple in source:
+        merged.add(triple)
+    return graph_to_taxonomy(merged)
+
+
 def _merge_context(
     taxonomy: Taxonomy,
     path: Path,
     base_triples: frozenset,
     schema_graph: Graph | None = None,
+    parsed: Graph | None = None,
 ) -> None:
     """Merge *path* into *taxonomy* read-only, recording where each entity came from.
 
@@ -306,16 +405,7 @@ def _merge_context(
     file's unmodelled triples were dropped at merge and never existed to write
     back — the retail competitor set alone carries 66 of them.
     """
-    if schema_graph is None:
-        other = load(path)
-    else:
-        source = _parse_graph(path)
-        merged = Graph()
-        for triple in schema_graph:
-            merged.add(triple)
-        for triple in source:
-            merged.add(triple)
-        other = graph_to_taxonomy(merged)
+    other = _read_context_file(path, schema_graph, parsed)
     taxonomy.context_files.append(path)
     _record_contributed(taxonomy, other, path, base_triples)
     for registry in _ENTITY_REGISTRIES:
@@ -338,8 +428,16 @@ def _merge_context(
         taxonomy.namespace_bindings.setdefault(prefix, namespace)
 
 
-def _context_schema_graph(taxonomy: Taxonomy, context: list[Path]) -> Graph:
-    """Build schema declarations needed to classify context-only instances."""
+def _context_schema_graph(
+    taxonomy: Taxonomy,
+    context: list[Path],
+    parsed: dict[Path, Graph] | None = None,
+    progress: _ContextProgress | None = None,
+) -> Graph:
+    """Build schema declarations needed to classify context-only instances.
+
+    Each file read is kept in *parsed*, when given, for the merge that follows: a file is parsed once, not twice.
+    """
     source = _to_graph.taxonomy_to_graph(taxonomy)
     schema = Graph()
     schema_types = {
@@ -359,8 +457,12 @@ def _context_schema_graph(taxonomy: Taxonomy, context: list[Path]) -> Graph:
     for subject, predicate, obj in source:
         if predicate in (RDFS.domain, RDFS.range, RDFS.subClassOf):
             schema.add((subject, predicate, obj))
-    for path in context:
+    for index, path in enumerate(context):
+        if progress is not None:
+            progress.starting("Reading", index, _MAIN_SHARE, _READING_END)
         source = _parse_graph(Path(path))
+        if parsed is not None:
+            parsed[Path(path)] = source
         context_schema_types = {*schema_types, str(SKOS.ConceptScheme)}
         subjects = {
             str(subject)

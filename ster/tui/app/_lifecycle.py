@@ -36,6 +36,7 @@ from ._constants import (
     _TREE_SELECTOR,
 )
 from ._helpers import _context_server_notice, _start_context_server
+from ._loading_quips import QUIP_EVERY, quip_for
 from ._state import _AppState
 from ._tree_widget import OntologyTree
 
@@ -98,6 +99,8 @@ class _LifecycleMixin(_AppState):
         self._loading = self._progressive_startup
         self._loading_from_file = taxonomy is None
         self._loading_spinner_frame = 0
+        self._loading_spinner_ticks = 0
+        self._loading_step: tuple[str, int, str] | None = None
         self._loading_spinner_timer: Timer | None = None
         self._context_server_started = False
         self._browser_mounted = False
@@ -321,6 +324,7 @@ class _LifecycleMixin(_AppState):
         self._set_loading_message(f"Unable to load {self.source}: {exc}\n\nPress q to quit.")
 
     def _set_loading_message(self, message: str) -> None:
+        self._loading_step = None  # a message of its own: the step the spinner would redraw is gone
         try:
             self.query_one(_LOADING_SELECTOR, Static).update(message)
         except NoMatches:
@@ -328,15 +332,26 @@ class _LifecycleMixin(_AppState):
 
     def _set_loading_progress(self, phase: str, percent: int, message: str) -> None:
         """Render a phase percentage while the loader still covers the browser."""
+        self._paint_loading_step((phase, percent, message))
+
+    def _paint_loading_step(self, step: tuple[str, int, str]) -> None:
+        """The spinner, the phase and its percentage, the step's message, and a line of commentary that rolls on."""
+        phase, percent, message = step
+        quip = quip_for(message, self._loading_spinner_ticks // QUIP_EVERY)
         self._set_loading_message(
-            f"{self._LOADING_SPINNER[self._loading_spinner_frame]} {phase} {percent}%\n{message}"
+            f"{self._LOADING_SPINNER[self._loading_spinner_frame]} {phase} {percent}%\n{message}\n{quip}"
         )
+        self._loading_step = step  # after the message, which forgets it
 
     def _advance_loading_spinner(self) -> None:
         """Animate the loader independently of the coarse phase percentage."""
         if not self._loading:
             return
         self._loading_spinner_frame = (self._loading_spinner_frame + 1) % len(self._LOADING_SPINNER)
+        self._loading_spinner_ticks += 1
+        if self._loading_step is not None:
+            self._paint_loading_step(self._loading_step)
+            return
         loading = self.query(_LOADING_SELECTOR)
         if loading:
             widget = loading.first(Static)
@@ -376,8 +391,8 @@ class _LifecycleMixin(_AppState):
             ).start()
             self._context_server_started = True
         for tree in self.query(Tree):
-            tree.show_root = False
-            tree.guide_depth = 3
+            tree.show_root = False  # noqa: V101  # Textual reads it when the tree draws
+            tree.guide_depth = 3  # noqa: V101  # Textual reads it when the tree draws
         self._sync_lint_features()
         if not self._navigation_index_built:
             self._set_loading_progress(_LIT_PREPARING, 78, "Indexing individuals")
