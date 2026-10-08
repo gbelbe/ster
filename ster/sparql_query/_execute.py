@@ -141,9 +141,10 @@ def run_query_on_taxonomy(
 
         try:
             return run_with_timeout(store, sparql_text, timeout)
-        # No child process available (a locked-down host): answering without a
-        # deadline beats not answering, and the trace says it happened.
-        except (OSError, RuntimeError) as exc:
+        # No child process available (a locked-down host, or a spawn the platform
+        # refuses with a ValueError): answering without a deadline beats not
+        # answering, and the trace says it happened.
+        except (OSError, RuntimeError, ValueError) as exc:
             _trace(f"sparql sandbox unavailable, running in-process: {exc}")
     try:
         t0 = time.time()

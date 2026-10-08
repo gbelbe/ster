@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import hashlib
 import multiprocessing as mp
+import sys
 import threading
+from multiprocessing import resource_tracker
 from typing import Any, Final
 
 from ._caching import _trace
@@ -55,10 +57,37 @@ def _serve(conn: Any, data: bytes) -> None:  # pragma: no cover - runs in the ch
         conn.send(result)
 
 
+def _has_descriptor(stream: Any) -> bool:
+    """Whether *stream* stands on a real file descriptor."""
+    try:
+        return bool(stream.fileno() >= 0)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def _start_resource_tracker() -> None:
+    """Make sure multiprocessing's resource tracker is running, whatever ``sys.stderr`` is.
+
+    Starting the tracker hands ``sys.stderr``'s file descriptor to it. A terminal UI (Textual) replaces ``sys.stderr``
+    with a capture object whose ``fileno()`` is -1, and the spawn then fails with "bad value(s) in fds_to_keep":
+    every query with a deadline failed with it for as long as the server lived inside the TUI. The process's own
+    stderr stands in for the moment it takes; once the tracker runs it is not started again, so this happens once.
+    """
+    shown = sys.stderr
+    own = sys.__stderr__
+    if not _has_descriptor(shown) and _has_descriptor(own):
+        sys.stderr = own
+    try:
+        resource_tracker.ensure_running()
+    finally:
+        sys.stderr = shown
+
+
 class _Worker:
     """One child process holding one version of the graph."""
 
     def __init__(self, store: Any, data: bytes, digest: str) -> None:
+        _start_resource_tracker()
         self.store = store  # held, so its identity cannot be reused by another graph
         self.digest = digest
         self.conn, child = _CTX.Pipe()
