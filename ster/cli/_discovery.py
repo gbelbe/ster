@@ -8,8 +8,7 @@ The top level is always searched. Subfolders are searched one level deep, and
 only when asked: a project often keeps its vocabularies in folders of their
 own, but anything deeper is more likely to be someone else's tree than part
 of this project. Some folders are never searched at all: hidden ones (``.git``,
-``.venv``, ``.ster``), ``node_modules``, and ``ontology/`` — ster's own publish
-tree, whose files are copies of the ones it would be offered beside.
+``.venv``, ``.ster``) and ``node_modules``.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from pathlib import Path
 from typing import Final
 
 RDF_SUFFIXES: Final = frozenset({".ttl", ".rdf", ".jsonld", ".owl", ".n3", ".trig", ".nt"})
-_NEVER_SEARCHED: Final = frozenset({"node_modules", "ontology", "__pycache__"})
+_NEVER_SEARCHED: Final = frozenset({"node_modules", "__pycache__"})
 
 
 def _rdf_files_in(folder: Path) -> list[Path]:

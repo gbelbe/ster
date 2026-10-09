@@ -299,8 +299,6 @@ def _home_actions() -> list[tuple[object, str]]:
         (_constants._CHANGE_FILE_SENTINEL, "🔀 Change file"),
         (True, "🖥  TTL Viewer-Editor"),  # True = "open" sentinel → the Textual viewer
         (_constants._QUERY_SENTINEL, "🔍 SPARQL Query"),
-        (_constants._PUBLISH_SENTINEL, "📦 Linked Data Publish & Version"),
-        (_constants._HTML_SENTINEL, "🌐 HTML Data Catalog"),
         (_constants._GRAPH_SENTINEL, "◈  Load Graph Viewer"),
         (_constants._MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_constants._QUIT_SENTINEL, "✕  Quit"),
@@ -311,7 +309,7 @@ def _home_actions() -> list[tuple[object, str]]:
         at = next(i for i, (s, _) in enumerate(actions) if s is _constants._MCP_SENTINEL)
         actions[at] = (_constants._AGENT_SENTINEL, "💬 Agent: talk to graph")
     if semanticdiff.is_active():
-        actions.insert(6, (_constants._HISTORY_SENTINEL, "🕘 Semantic History"))
+        actions.insert(4, (_constants._HISTORY_SENTINEL, "🕘 Semantic History"))
     return actions
 
 
@@ -416,7 +414,7 @@ def _home_action_menu(selected: Path) -> list[Path] | Path | None:
 
     Every action operates on *selected*. Returns:
       [selected]             — TTL Viewer-Editor (the file to open)
-      <action sentinel>      — SPARQL / Publish / HTML / Graph / Import
+      <action sentinel>      — SPARQL / Graph / Import
       _constants._CHANGE_FILE_SENTINEL  — reselect the file (the file list holds files + the demo)
       _constants._QUIT_SENTINEL         — Quit / Ctrl+C / plain Esc
     Falls back to a plain numbered prompt in non-interactive terminals.

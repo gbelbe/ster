@@ -3,7 +3,7 @@
 Kept in one registry rather than scattered through thirteen docstrings: an
 example is what someone copies into a script, so the set is easier to keep
 correct in one place, and a command added without examples fails a test.
-Commands whose docstring already carries an Examples section (export, convert,
+Commands whose docstring already carries an Examples section (convert,
 subclass) keep it and are not listed here.
 """
 
@@ -64,10 +64,6 @@ EXAMPLES: Final[dict[str, list[str]]] = {
         "ster serve gear.ttl --port 8080",
         "ster serve gear.ttl -x vocab/labels.ttl",
     ],
-    "publish": [
-        "ster publish gear.ttl --bump minor         # stable release",
-        "ster publish gear.ttl --channel dev --no-open",
-    ],
 }
 
 SCRIPTING_HELP: Final = f"""\
@@ -75,7 +71,7 @@ SCRIPTING_HELP: Final = f"""\
   With no terminal (CI, cron, a pipe) ster never asks a question: it stops with
   exit 2 and names the option that answers it. Pass everything explicitly:
     ster validate --file vocab/gear.ttl
-    ster export --file vocab/gear.ttl --output site/ --no-open
+    ster convert vocab/gear.ttl vocab/gear.rdf
 
 {EXIT_CODES_HELP}"""
 

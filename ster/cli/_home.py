@@ -237,7 +237,7 @@ def _home_obtain_action(
 
     A pending file (``ster file.ttl``) or a freshly picked file opens straight in the
     viewer — no action menu in between. Once a file is selected and the viewer has
-    closed, the next turn shows its action menu (SPARQL / publish / graph / import /
+    closed, the next turn shows its action menu (SPARQL / graph / import /
     change file). Returns ``action = _constants._QUIT_SENTINEL`` when the user quits at selection."""
     if pending_open is not None:  # ster PATH/file.ttl → open that file directly
         return pending_open, [pending_open]
@@ -250,7 +250,7 @@ def _home_obtain_action(
             demo = _query_launcher._load_demo_into_cwd()
             return demo, [demo]
         # A freshly picked file opens straight in the viewer — no action menu in
-        # between. The menu (SPARQL / publish / graph / import / change file) is shown
+        # between. The menu (SPARQL / graph / import / change file) is shown
         # only after the viewer closes, on the next loop turn for the same file.
         return choice, [choice]
     return selected_file, _workspace_ui._home_action_menu(selected_file)
@@ -281,7 +281,7 @@ def _home_screen(initial_file: Path | None = None) -> None:
     """Interactive home-screen loop (bare ``ster``).
 
     Pick a single taxonomy file and it opens straight in the Textual viewer. When the
-    viewer closes, its action menu appears — graph / query / publish / import, plus a
+    viewer closes, its action menu appears — graph / query / import, plus a
     "Change file" entry to switch. ``ster PATH/file.ttl`` opens that file directly first.
     """
     pending_open = initial_file

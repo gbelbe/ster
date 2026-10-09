@@ -45,8 +45,7 @@ classifiers = [
 #   rdflib   — RDF parsing / serialisation (.ttl, .rdf, .jsonld)
 #   typer    — CLI framework  (the [all] extra pulls in rich + shellingham)
 #   rich     — terminal rendering: colours, tables, prompts
-#   fastapi  — graph/publish server (Version & Publish LD opens live web pages)
-#   pylode   — HTML documentation export (VocPub / OntPub profiles)
+#   fastapi  — the graph viewer's server and the REST/MCP API
 #
 dependencies = [
     "rdflib>=7.0",
@@ -62,7 +61,6 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.30",
     "watchfiles>=0.21",           # file-change watcher for live push
-    "pylode>=3.0",                # HTML export
     "httpx>=0.27",                # HTTP client (FastAPI TestClient / server calls)
     "pydantic>=2.0",              # API models
     "pyyaml>=6.0",                # Config loading (semanticlint)
@@ -77,7 +75,7 @@ dependencies = [
 #
 #   The former html / api extras are now part of the core dependencies
 #   above, so a plain `pip install ster` (or `uv tool install ster`) ships the
-#   HTML export and the graph/publish server out of the box.
+#   graph viewer's server and the REST/MCP API out of the box.
 #
 #   dev   — test suite + all linting / security tools (mirrors CI)
 #             install:  pip install "ster[dev]"
@@ -282,7 +280,7 @@ ignore = [
     "S110",   # try/except/pass — intentional fallback pattern (curses, optional deps)
     "S310",   # urllib.urlopen — URL is constructed internally, not from user input
     "S603",   # subprocess without shell=True — called with controlled, non-user-supplied args
-    "S607",   # subprocess partial path — pip/pylode/git are trusted system tools
+    "S607",   # subprocess partial path — pip/git are trusted system tools
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -302,7 +300,7 @@ ignore = [
 
 [tool.mypy]
 python_version        = "3.12"
-ignore_missing_imports = true   # external libs without stubs (rdflib, pylode…)
+ignore_missing_imports = true   # external libs without stubs (rdflib…)
 warn_return_any       = false   # too noisy for progressive adoption
 warn_unused_ignores   = false   # some ignores are version-dependent
 pretty                = true
@@ -315,13 +313,6 @@ pretty                = true
 [tool.importlinter]
 root_packages = ["ster"]
 include_external_packages = true
-
-[[tool.importlinter.contracts]]
-name = "pyLODE only via ster.html_export"
-type = "forbidden"
-source_modules = ["ster"]
-forbidden_modules = ["pylode"]
-ignore_imports = ["ster.html_export -> pylode"]
 
 [[tool.importlinter.contracts]]
 name = "semanticlint only via the semanticlint plugin"

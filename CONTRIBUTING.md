@@ -200,8 +200,7 @@ the pull-request checklist); see [AGENTS.md](AGENTS.md) for the full version.
    complexity ratchet)*. Update the affected tests.
 5. **External dependencies** — keep them minimal (YAGNI), constrain versions,
    commit `uv.lock`, and import each heavy library from a single adapter module
-   only *(enforced by `import-linter`: `pylode`→`html_export`,
-   `fastapi`→`api`)*.
+   only *(enforced by `import-linter`: `fastapi`→`api`)*.
 6. **Hygiene** — don't suppress linter/type errors with `# noqa` / `# type:
    ignore` unless it's a confirmed false positive (say why inline); comments
    explain the **why**, not the **what**.

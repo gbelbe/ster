@@ -246,9 +246,3 @@ repointed by `api_server.publish_working_file`: the published `taxonomy` (whose
 read from live state, never closed over), and the lazily built
 `_mutation_backend` tuple, which is dropped so the next write rebuilds it
 against the new roles.
-
-**Known limitation.** `publish_dir` is derived once as
-`file_path.parent / "ontology"` and mounted as StaticFiles at app startup, and
-a mount cannot be repointed afterwards. Switching to a working file in a
-*different directory* and then publishing still targets the original session's
-`ontology/`. Files in one directory — the normal layout — are unaffected.

@@ -9,7 +9,6 @@
 
 **Dependencies**
 [![rdflib](https://img.shields.io/pypi/v/rdflib?label=rdflib&color=orange)](https://github.com/RDFLib/rdflib)
-[![pyLODE](https://img.shields.io/pypi/v/pylode?label=pyLODE&color=blue)](https://github.com/RDFLib/pyLODE)
 [![semanticlint](https://img.shields.io/pypi/v/semanticlint?label=semanticlint&color=e56b6f)](https://pypi.org/project/semanticlint/)
 [![Cytoscape.js](https://img.shields.io/github/v/tag/cytoscape/cytoscape.js?label=Cytoscape.js&color=00a6a6)](https://github.com/cytoscape/cytoscape.js)
 [![Textual](https://img.shields.io/pypi/v/textual?label=Textual&color=5a4fcf)](https://github.com/textualize/textual)
@@ -28,8 +27,8 @@
 **ster** is a terminal editor for semantic knowledge bases. Build and explore
 [SKOS](https://www.w3.org/TR/skos-reference/) taxonomies and
 [OWL](https://www.w3.org/TR/owl2-overview/) ontologies together in one
-full-screen TUI — then visualise them as interactive graphs, run SPARQL, and
-publish HTML documentation, all from your terminal. No database required.
+full-screen TUI — then visualise them as interactive graphs and run SPARQL,
+all from your terminal. No database required.
 
 > *ster* is the Breton word for *meaning*, with homonyms for *river* and *star* —
 > keep the flow, and follow your star.
@@ -68,8 +67,6 @@ Every capability below is reachable from the home menu, acting on the file you s
 | **TTL Viewer-Editor** | The unified SKOS + OWL tree editor described above |
 | **SPARQL Query** | In-TUI query editor with autocomplete and a cache-warmed engine (no cold-start delay); export results to CSV |
 | **Graph Viewer** | Opens an interactive [Cytoscape.js](https://js.cytoscape.org) VOWL-style graph in the browser — classes as circles, property edges, per-class individual toggle, drag / zoom / detail panel |
-| **HTML Data Catalog** | Generates browsable [pyLODE](https://github.com/RDFLib/pyLODE) documentation, one page per language |
-| **Linked Data Publish & Version** | Semver-tagged releases served over a local Linked-Data server |
 
 ### In-browser views
 
@@ -147,8 +144,7 @@ Prefer pip? That works too:
 pip install ster            # install / upgrade with: pip install -U ster
 ```
 
-That's everything — TUI editing, graph viewer, SPARQL, HTML export, and the
-publish server, no extras required.
+That's everything — TUI editing, graph viewer and SPARQL, no extras required.
 
 ## Quick start
 
@@ -166,8 +162,6 @@ The home screen lists the ontology and taxonomy files in the current directory
 
   ▶  🖥  TTL Viewer-Editor
      🔍 SPARQL Query
-     📦 Linked Data Publish & Version
-     🌐 HTML Data Catalog
      ◈  Load Graph Viewer
      ✕  Quit
 ```
@@ -201,7 +195,6 @@ For large ontologies or taxonomies (over 100k triples), `ster` provides several 
 | [rdflib](https://github.com/RDFLib/rdflib) | RDF parsing / serialisation and the SPARQL engine |
 | [Textual](https://github.com/textualize/textual) | The terminal UI framework |
 | [Cytoscape.js](https://github.com/cytoscape/cytoscape.js) | Browser graph rendering (VOWL viewer) |
-| [pyLODE](https://github.com/RDFLib/pyLODE) | HTML documentation export |
 
 ---
 

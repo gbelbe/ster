@@ -30,7 +30,9 @@ def test_every_command_shows_examples(command) -> None:
 
 def test_every_command_is_covered() -> None:
     """A new command must come with examples, not quietly without them."""
-    assert len(COMMANDS) >= 16
+    assert (
+        len(COMMANDS) >= 14
+    )  # a floor: removing a command lowers it, never forgetting examples for a new one
 
 
 def test_top_level_help_lists_the_exit_codes() -> None:

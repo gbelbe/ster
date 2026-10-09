@@ -56,14 +56,19 @@ def test_two_levels_down_is_too_deep(tmp_path) -> None:
     assert discover_rdf_files(tmp_path, include_subfolders=True) == []
 
 
-def test_hidden_folders_node_modules_and_the_publish_tree_are_skipped(tmp_path) -> None:
-    """ontology/ holds ster's own published copies — offering them would offer duplicates."""
-    _touch(tmp_path, ".git/x.ttl", ".venv/y.ttl", "node_modules/z.ttl", "ontology/gear.ttl")
+def test_hidden_folders_and_node_modules_are_skipped(tmp_path) -> None:
+    _touch(tmp_path, ".git/x.ttl", ".venv/y.ttl", "node_modules/z.ttl")
     assert discover_rdf_files(tmp_path, include_subfolders=True) == []
 
 
+def test_a_folder_called_ontology_is_an_ordinary_folder(tmp_path) -> None:
+    """It used to be skipped as ster's own publish output; nothing writes there any more."""
+    _touch(tmp_path, "ontology/gear.ttl")
+    assert discover_rdf_files(tmp_path, include_subfolders=True) == [tmp_path / "ontology/gear.ttl"]
+
+
 def test_subfolder_rdf_files_lists_only_the_ones_below(tmp_path) -> None:
-    _touch(tmp_path, "top.ttl", "vocab/inner.ttl", "ontology/gear.ttl")
+    _touch(tmp_path, "top.ttl", "vocab/inner.ttl")
     assert subfolder_rdf_files(tmp_path) == [tmp_path / "vocab/inner.ttl"]
 
 

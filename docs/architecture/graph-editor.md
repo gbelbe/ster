@@ -165,8 +165,7 @@ discovered to be a smaller lift than expected:
 - Fixed a real bug this surfaced: `api_server.start_background()` — the path
   `open_in_browser()` actually uses — built its `create_app(...)` call
   without forwarding `file_path`, so the graph opened from `ster`'s normal
-  "open Graph view" flow had no file path for a mutation backend (or for
-  `/onto`'s pyLODE page) to build from. Editing would have silently 503'd
+  "open Graph view" flow had no file path for a mutation backend to build from. Editing would have silently 503'd
   on the one path people actually use. See
   `test_start_background_forwards_file_path_to_create_app`.
   `serve()` (the standalone `ster serve` CLI path) already passed it correctly.

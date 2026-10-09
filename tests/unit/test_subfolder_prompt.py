@@ -61,7 +61,7 @@ def test_the_answer_is_remembered_and_not_asked_again(tmp_path, launch) -> None:
 def test_no_question_when_no_subfolder_holds_rdf(tmp_path, launch) -> None:
     answer, asked = launch
     answer(True)
-    _touch(tmp_path, "top.ttl", "notes/readme.md", "ontology/gear.ttl")
+    _touch(tmp_path, "top.ttl", "notes/readme.md", "node_modules/x.ttl")
     assert _home._found_taxonomy_files() == [tmp_path / "top.ttl"]
     assert asked == []
 

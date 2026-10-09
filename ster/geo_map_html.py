@@ -13,8 +13,7 @@ default, since editing it is the point), map centre, groups table right, and a
 drills into it, with a breadcrumb back out.
 
 Leaflet and the OpenStreetMap tiles come from a CDN, so the page needs a network
-connection when opened. Kept in its own module so the HTML lives in one place,
-the way :mod:`ster.html_export` isolates pyLODE.
+connection when opened. Kept in its own module so the HTML lives in one place.
 """
 
 from __future__ import annotations

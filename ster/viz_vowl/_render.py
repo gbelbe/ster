@@ -133,7 +133,7 @@ def render_vowl_html(
 def ensure_published_server(taxonomy: Taxonomy, file_path: Path | None = None) -> str | None:
     """Ensure the live API server is running and return its base URL.
 
-    Starts the FastAPI server (with the ``/ontology`` publish mount) if it is not
+    Starts the FastAPI server if it is not
     already up, without opening the graph page. Returns the base URL, e.g.
     ``http://127.0.0.1:8765``, or ``None`` when the ``ster[api]`` extra is not
     installed (so callers can fall back to ``file://``).

@@ -348,18 +348,6 @@ def _make_html_fn(app: Any, renderer: HtmlRenderer, token: str) -> Callable[...,
     return html_fn
 
 
-def _publish_dir_for(file_path: Path | None) -> Path | None:
-    """The project's publish tree (``ontology/``), created up-front.
-
-    Made eagerly so the StaticFiles mount exists even before the first publish.
-    """
-    if file_path is None:
-        return None
-    publish_dir = file_path.parent / "ontology"
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    return publish_dir
-
-
 def _spawn_uvicorn(app: Any, host: str, port: int, uvicorn: Any) -> dict[str, Any]:
     """Run *app* under uvicorn on a daemon thread; return the thread's status holder."""
     holder: dict[str, Any] = {}
@@ -449,7 +437,6 @@ def start_background(
         broadcaster,
         save_fn,
         file_path=file_path,
-        publish_dir=_publish_dir_for(file_path),
     )
     app.state._ster["broadcaster"] = broadcaster
     app.state._ster["token"] = token

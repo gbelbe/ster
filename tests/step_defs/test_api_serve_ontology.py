@@ -43,14 +43,6 @@ def given_api_minimal(ctx: dict) -> None:
     ctx["client"] = TestClient(app, raise_server_exceptions=False)
 
 
-@given("a running ster API with a minimal taxonomy and no file path")
-def given_api_no_file(ctx: dict) -> None:
-    from ster.api import SSEBroadcaster, create_app
-
-    app = create_app(_minimal_taxonomy(), TOKEN, SSEBroadcaster(), lambda _: None, file_path=None)
-    ctx["client"] = TestClient(app, raise_server_exceptions=False)
-
-
 @given("a running ster API with a VOWL renderer configured")
 def given_api_vowl(ctx: dict) -> None:
     from ster.api import SSEBroadcaster, create_app

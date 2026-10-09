@@ -143,27 +143,3 @@ def cmd_serve(
         port=port,
         context=[c.resolve() for c in (context_files or [])],
     )
-
-
-def _open_dev_artifacts_in_browser(
-    taxonomy: object, file_path: Path, publish_dir: Path, artifacts: list[Path]
-) -> None:
-    """Open the freshly-published dev TTL + HTML on the running graph server.
-
-    Ensures the server is up so the pages are served at /ontology/dev/...; if the live
-    server can't start (its port is busy) it falls back to opening the files via file://.
-    """
-    from .. import viz_vowl as _viz
-    from ..publish import open_dev_artifacts
-
-    base = _viz.ensure_published_server(taxonomy, file_path)  # type: ignore[arg-type]
-    urls = open_dev_artifacts(publish_dir, artifacts, base)
-    if not urls:
-        return
-    if base:
-        console.print(f"[green]✓[/green]  Opened dev pages: {'  '.join(urls)}")
-    else:
-        console.print(
-            f"[yellow]![/yellow]  No live server (port busy) — "
-            f"opened files directly: {'  '.join(urls)}"
-        )

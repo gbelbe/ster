@@ -1,7 +1,7 @@
 Feature: Vocabulary serving endpoints
   As a linked-data publisher
   I want ster's API server to serve my ontology over HTTP
-  So that browsers get documentation and RDF clients get machine-readable Turtle
+  So that RDF clients get machine-readable Turtle
 
   Scenario: Turtle is served when the client requests text/turtle
     Given a running ster API with a minimal taxonomy
@@ -16,10 +16,11 @@ Feature: Vocabulary serving endpoints
     Then the response status is 200
     And the Content-Type is "text/turtle"
 
-  Scenario: 503 when browser requests HTML but no file is configured
-    Given a running ster API with a minimal taxonomy and no file path
+  Scenario: Turtle is served even to a browser that asks for HTML
+    Given a running ster API with a minimal taxonomy
     When the client requests "/onto" with Accept "text/html"
-    Then the response status is 503
+    Then the response status is 200
+    And the Content-Type is "text/turtle"
 
   Scenario: VoWL visualization is served at /viz
     Given a running ster API with a VOWL renderer configured

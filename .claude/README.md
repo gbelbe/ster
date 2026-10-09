@@ -116,7 +116,6 @@ It encodes the common root causes of local-vs-CI divergence and how to fix them.
   (the package/shim-contract pattern used for every oversized-file split —
   `domain/`, `cli/`, `nav/logic/`, `viz_vowl/`, `tui/app/`, `store/`,
   `sparql_query/`, `tui/config_modal/`, `git/manager/`), `core-service.md`
-  (commands/undo core), `detail-presenter.md` (entity detail views),
-  `ontology-versioning.md` (publishing).
+  (commands/undo core), `detail-presenter.md` (entity detail views).
 - Try it: open the app with `uv run ster show ster/tui/mixed-gear-demo.ttl`, then
   run `/ci` once to see the gate.

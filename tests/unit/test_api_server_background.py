@@ -123,19 +123,6 @@ def test_push_taxonomy_updates_state_and_notifies(monkeypatch):
     assert bc.notified_with is loop
 
 
-# ── _publish_dir_for ──────────────────────────────────────────────────────────
-
-
-def test_publish_dir_for_none_file_returns_none():
-    assert srv._publish_dir_for(None) is None
-
-
-def test_publish_dir_for_creates_ontology_sibling(tmp_path):
-    result = srv._publish_dir_for(tmp_path / "onto.ttl")
-    assert result == tmp_path / "ontology"
-    assert result.is_dir(), "the mount must exist before the first publish"
-
-
 # ── _server_deps ──────────────────────────────────────────────────────────────
 
 

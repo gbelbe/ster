@@ -366,15 +366,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dominate"
-version = "2.9.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fb/f3/1c8088ff19a0fcd9c3234802a0ee47006ea64bd8852f1019194f0e3583ff/dominate-2.9.1.tar.gz", hash = "sha256:558284687d9b8aae1904e3d6051ad132dd4a8c0cf551b37ea4e7e42a31d19dc4", size = 37715, upload-time = "2023-12-24T20:45:19.192Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/19/0380af745f151a1648657bbcef0fb49ac28bf09083d94498163ffd9b32dc/dominate-2.9.1-py2.py3-none-any.whl", hash = "sha256:cb7b6b79d33b15ae0a6e87856b984879927c7c2ebb29522df4c75b28ffd9b989", size = 29976, upload-time = "2023-12-24T20:45:17.154Z" },
-]
-
-[[package]]
 name = "execnet"
 version = "2.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -661,33 +652,6 @@ wheels = [
 ]
 
 [[package]]
-name = "kurra"
-version = "3.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pyshacl" },
-    { name = "rdflib" },
-    { name = "rich" },
-    { name = "shacl-rules" },
-    { name = "sparqlib" },
-    { name = "typer" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/79/fdb2ec242c91bd43ad910512108e31d811ff15cf8f503b15c054dd92bf3a/kurra-3.0.0.tar.gz", hash = "sha256:789c17a1f6b7b2f4679dad9022e2e2151fd3d8f76cfd45e5bc238dda05f023bd", size = 115932, upload-time = "2026-07-16T12:27:39.279Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/4d/f62207cc3f783808c30a97b8b278715a289ea756b01445b611b13eec4df0/kurra-3.0.0-py3-none-any.whl", hash = "sha256:eb79760243f5cb7e4f7934c870cecf3259c1333e6fdce91668855d1987001b89", size = 35599, upload-time = "2026-07-16T12:27:37.887Z" },
-]
-
-[[package]]
-name = "lark"
-version = "1.3.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/da/34/28fff3ab31ccff1fd4f6c7c7b0ceb2b6968d8ea4950663eadcb5720591a0/lark-1.3.1.tar.gz", hash = "sha256:b426a7a6d6d53189d318f2b6236ab5d6429eaf09259f1ca33eb716eed10d2905", size = 382732, upload-time = "2025-10-27T18:25:56.653Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/3d/14ce75ef66813643812f3093ab17e46d3a206942ce7376d31ec2d36229e7/lark-1.3.1-py3-none-any.whl", hash = "sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12", size = 113151, upload-time = "2025-10-27T18:25:54.882Z" },
-]
-
-[[package]]
 name = "libcst"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -849,15 +813,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/35/24/cd70d5ae6d35962be752feccb7dca80b5e0c2d450e995b16abd6275f3296/mando-0.7.1.tar.gz", hash = "sha256:18baa999b4b613faefb00eac4efadcf14f510b59b924b66e08289aa1de8c3500", size = 37868, upload-time = "2022-02-24T08:12:27.316Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/f0/834e479e47e499b6478e807fb57b31cc2db696c4db30557bb6f5aea4a90b/mando-0.7.1-py2.py3-none-any.whl", hash = "sha256:26ef1d70928b6057ee3ca12583d73c63e05c49de8972d620c278a7b206581a8a", size = 28149, upload-time = "2022-02-24T08:12:25.24Z" },
-]
-
-[[package]]
-name = "markdown"
-version = "3.10.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2b/f4/69fa6ed85ae003c2378ffa8f6d2e3234662abd02c10d216c0ba96081a238/markdown-3.10.2.tar.gz", hash = "sha256:994d51325d25ad8aa7ce4ebaec003febcce822c3f8c911e3b17c52f7f589f950", size = 368805, upload-time = "2026-02-09T14:57:26.942Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/1f/77fa3081e4f66ca3576c896ae5d31c3002ac6607f9747d2e3aa49227e464/markdown-3.10.2-py3-none-any.whl", hash = "sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36", size = 108180, upload-time = "2026-02-09T14:57:25.787Z" },
 ]
 
 [[package]]
@@ -1383,24 +1338,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pylode"
-version = "3.5.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dominate" },
-    { name = "html5lib" },
-    { name = "httpx" },
-    { name = "kurra" },
-    { name = "markdown" },
-    { name = "rdflib" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/fd/289410b4d036d3c38c34c31a040c540cf7a39fbb9cbe84f47eecbd61af00/pylode-3.5.1.tar.gz", hash = "sha256:8341304f04ed99a544a25ea193cb7ed8d8dc8ac810f90854ea81e5de89768aae", size = 207284, upload-time = "2026-06-20T13:32:07.87Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/0a/af24a5901e62e735fb0a5a7e2337d5342c39eec6668ed1e0dd22f86e8976/pylode-3.5.1-py3-none-any.whl", hash = "sha256:399a8db1b8fe1f79533462ecab020c90e86dc4623499dce1503c1bdf36f319c2", size = 221299, upload-time = "2026-06-20T13:32:06.084Z" },
-]
-
-[[package]]
 name = "pyoxigraph"
 version = "0.5.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1705,20 +1642,6 @@ wheels = [
 ]
 
 [[package]]
-name = "rich-click"
-version = "1.9.8"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "rich" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/ea/21e4867ea0ef881ffd4c0550fc21a061435e50d6324bcd034396633cbc18/rich_click-1.9.8.tar.gz", hash = "sha256:4008f921da88b5d91646c134ec881c1500e5a6b3f093e90e8f29400e09608371", size = 75363, upload-time = "2026-05-28T19:54:59.144Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/97/a87901aef6b7e7e4a34c6dd6cc17dca8594a592ef9d9dd765fca2b7facf7/rich_click-1.9.8-py3-none-any.whl", hash = "sha256:12873865396e6927835d4eabb1cc3996edcd65b7ac9b2391a29eca4f335a2f93", size = 72189, upload-time = "2026-05-28T19:54:57.867Z" },
-]
-
-[[package]]
 name = "ruff"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1827,22 +1750,6 @@ wheels = [
 ]
 
 [[package]]
-name = "shacl-rules"
-version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "lark" },
-    { name = "rdflib" },
-    { name = "rich" },
-    { name = "rich-click" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/41/15e1769564914c5aa3def18401f511df1eae615dac53805c63a9d26a95cf/shacl_rules-0.1.5.tar.gz", hash = "sha256:97c24ac057dc59bdf19e7594cfdea56dc7ffe4bc5a229f9b0b0433760a346677", size = 221791, upload-time = "2026-07-17T13:32:41.139Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/37/f6dfaa3b51bc8d47181c6f5b9e2963876cf6baa411f545f10abec3a09296/shacl_rules-0.1.5-py3-none-any.whl", hash = "sha256:84d3b1be6c13dda6825b230e1ffc842ce0903fc8c071a92c1a45ab760f2647b9", size = 83730, upload-time = "2026-07-17T13:32:42.355Z" },
-]
-
-[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1870,18 +1777,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sparqlib"
-version = "0.5.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "lark" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/4f/53156a73916287a75795eec8e46c9ff3926748c6f05d0d7b06a28a0b39f3/sparqlib-0.5.0.tar.gz", hash = "sha256:824b48c889980fa4613f3c591422a2c9613843ad0d43d64f17be5f2bf984c2a3", size = 142926, upload-time = "2026-02-09T05:09:43.58Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/2e/4d087ed8c62a340bf7e2ffba6f9ff9d6a0201c3b20086e1a1bd05c0964a0/sparqlib-0.5.0-py3-none-any.whl", hash = "sha256:4c6932c9ce7ef021f1db339216d38991e822dee3f12d05f7b40dd86c6776d401", size = 32529, upload-time = "2026-02-09T05:09:42.435Z" },
-]
-
-[[package]]
 name = "starlette"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1904,7 +1799,6 @@ dependencies = [
     { name = "msgpack" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pylode" },
     { name = "pyoxigraph" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -2014,7 +1908,6 @@ requires-dist = [
     { name = "pylint", marker = "extra == 'all'", specifier = ">=3.3" },
     { name = "pylint", marker = "extra == 'craftcov'", specifier = ">=3.3" },
     { name = "pylint", marker = "extra == 'dev'", specifier = ">=3.3" },
-    { name = "pylode", specifier = ">=3.0" },
     { name = "pyoxigraph", specifier = ">=0.5.9" },
     { name = "pytest", marker = "extra == 'all'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
@@ -2169,18 +2062,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/96/e07752635b98536177fa1f37671c8f3cdde2e724c6bcf6034b2cfb571565/tomlkit-0.15.1.tar.gz", hash = "sha256:e25bbf38843005246210a12982776f27f99cb9be67160e14434d0c0d21ee1e97", size = 180129, upload-time = "2026-07-17T01:48:04.562Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl", hash = "sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304", size = 49449, upload-time = "2026-07-17T01:48:05.728Z" },
-]
-
-[[package]]
-name = "tqdm"
-version = "4.70.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953", size = 80184, upload-time = "2026-07-27T11:33:13.167Z" },
 ]
 
 [[package]]

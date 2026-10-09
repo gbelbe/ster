@@ -393,7 +393,6 @@ def create_app(
     *,
     html_fn: Any = None,  # Callable[[], str] — returns rendered HTML for GET /
     file_path: Path | None = None,
-    publish_dir: Path | None = None,
     context: list[Path] | None = None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
@@ -456,15 +455,6 @@ def create_app(
 
     # Expose mutable state so api_server can update the taxonomy reference
     app.state._ster = _st  # type: ignore[attr-defined]
-
-    if publish_dir is not None and publish_dir.exists():
-        from fastapi.staticfiles import StaticFiles
-
-        app.mount(
-            f"/{publish_dir.name}",
-            StaticFiles(directory=str(publish_dir), html=True),
-            name="published",
-        )
 
     # ── Endpoints ─────────────────────────────────────────────────────────────
 
@@ -655,10 +645,7 @@ def _register_pages(app: FastAPI, _st: dict[str, Any], token: str) -> None:
         return _trace_timeline_response(_st, page, page_size, idle_seconds, after, before)
 
     @app.get("/onto", response_class=Response, include_in_schema=False)
-    def serve_ontology(request: Request) -> Response:
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept:
-            return _serve_pylode(_st[_LIT_FILE_PATH])
+    def serve_ontology() -> Response:
         return _serve_turtle(_st[_LIT_TAXONOMY])
 
 
@@ -1834,20 +1821,3 @@ def _serve_turtle(taxonomy: Taxonomy) -> Response:
     g = taxonomy_to_graph(taxonomy)
     ttl: str = g.serialize(format="turtle")
     return Response(ttl, media_type="text/turtle; charset=utf-8")
-
-
-def _serve_pylode(file_path: Path | None) -> Response:
-    if file_path is None:
-        raise HTTPException(status_code=503, detail="No ontology file path configured")
-
-    from .html_export import render_html
-
-    try:
-        html = render_html(file_path)
-    except RuntimeError:
-        raise HTTPException(
-            status_code=501,
-            detail="pyLODE is not installed. Run: pip install 'ster[html]'",
-        )
-
-    return HTMLResponse(html)

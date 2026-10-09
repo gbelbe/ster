@@ -19,10 +19,8 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
     falls through to the open-file path.
     """
     actions: dict[Path, Callable[[list[Path]], None]] = {
-        _constants._HTML_SENTINEL: _export._run_html_export_interactive,
         _constants._GRAPH_SENTINEL: _export._run_graph_viz_interactive,
         _constants._QUERY_SENTINEL: _launch_query,
-        _constants._PUBLISH_SENTINEL: _publish._run_publish_interactive,
         _constants._MCP_SENTINEL: _publish._run_mcp_connect_interactive,
         _constants._AGENT_SENTINEL: _agent._run_agent_page_interactive,
     }

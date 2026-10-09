@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -568,7 +567,7 @@ def test_fresh_file_selection_opens_viewer_directly(tmp_path, monkeypatch):
 
 def test_action_menu_shown_once_a_file_is_selected(tmp_path, monkeypatch):
     """After the viewer closes, the same (already-selected) file gets its action menu
-    on the next loop turn — that's where publish / import / change-file live."""
+    on the next loop turn — that's where import / change-file live."""
     from ster import cli
 
     f = tmp_path / "a.ttl"
@@ -1248,82 +1247,7 @@ def test_load_workspace_returns_workspace(tmp_ttl):
     assert tmp_ttl in ws.taxonomies
 
 
-# ── cmd_publish (git-tag-driven stable + dev channels) ────────────────────────
-
-_ONTO_TTL = """\
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
-@prefix t: <https://ex.org/onto#> .
-<https://ex.org/onto> a owl:Ontology .
-t:Top a skos:Concept ; skos:prefLabel "Top"@en .
-"""
-
-
-def _git_repo_with_onto(tmp_path: Path) -> Path:
-    """Init a git repo containing a committed onto.ttl; return the file path."""
-    import subprocess
-
-    def g(*args: str) -> None:
-        subprocess.run(["git", "-C", str(tmp_path), *args], capture_output=True)
-
-    subprocess.run(["git", "init", str(tmp_path)], capture_output=True)
-    g("config", "user.email", "t@t.com")
-    g("config", "user.name", "T")
-    ttl = tmp_path / "onto.ttl"
-    ttl.write_text(_ONTO_TTL)
-    g("add", ".")
-    g("commit", "-m", "init")
-    return ttl
-
-
-def test_cmd_publish_stable_creates_ontology_tag(tmp_path):
-    import subprocess
-
-    ttl = _git_repo_with_onto(tmp_path)
-    result = _runner.invoke(
-        app, ["publish", str(ttl), "--bump", "minor", "--dir", str(tmp_path / "ontology")]
-    )
-    assert result.exit_code == 0, result.output
-    tags = subprocess.run(
-        ["git", "-C", str(tmp_path), "tag", "--list"], capture_output=True, text=True
-    ).stdout
-    assert "onto/v0.2.0" in tags
-    assert (tmp_path / "ontology" / "v0.2.0" / "onto.ttl").exists()
-
-
-def test_cmd_publish_stable_invalid_bump_exits(tmp_path):
-    ttl = _git_repo_with_onto(tmp_path)
-    result = _runner.invoke(
-        app, ["publish", str(ttl), "--bump", "huge", "--dir", str(tmp_path / "ontology")]
-    )
-    assert result.exit_code == 2
-
-
-def test_cmd_publish_dev_writes_dev_dir(tmp_path):
-    ttl = tmp_path / "onto.ttl"
-    ttl.write_text(_ONTO_TTL)
-    result = _runner.invoke(
-        app,
-        ["publish", str(ttl), "--channel", "dev", "--no-open", "--dir", str(tmp_path / "ontology")],
-    )
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / "ontology" / "dev" / "onto.ttl").exists()
-
-
-def test_cmd_publish_missing_file_exits(tmp_path):
-    result = _runner.invoke(app, ["publish", str(tmp_path / "nope.ttl")])
-    assert result.exit_code == 3
-
-
-def test_cmd_publish_blocked_without_ontology_uri(tmp_path):
-    ttl = tmp_path / "bad.ttl"
-    ttl.write_text(
-        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
-        "@prefix t: <https://ex.org/t#> .\n"
-        't:Top a skos:Concept ; skos:prefLabel "Top"@en .\n'
-    )
-    result = _runner.invoke(app, ["publish", str(ttl), "--dir", str(tmp_path / "ontology")])
-    assert result.exit_code == 1
+# ── interactive arrow menu ───────────────────────────────────────────────────
 
 
 def _fake_tty(monkeypatch, keys: list[bytes]):
@@ -1387,144 +1311,6 @@ def test_run_arrow_menu_bare_escape_quits(tmp_path, monkeypatch):
     assert _run_arrow_menu(tmp_path / "f.ttl", [(True, "Open"), (object(), "Two")]) is None
 
 
-# ── cmd_export ────────────────────────────────────────────────────────────────
-
-
-def test_cmd_export_generates_html_and_prints_created_files(tmp_ttl, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    out_file = tmp_path / "html" / "test_en.html"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text("<html></html>", encoding="utf-8")
-    with (
-        patch("ster.html_export.generate_html", return_value=[out_file]),
-        patch("webbrowser.open") as browser_open,
-    ):
-        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-    assert result.exit_code == 0
-    assert "Generated 1 file(s)" in result.stdout
-    browser_open.assert_called_once()
-
-
-def test_cmd_export_no_open_writes_the_files_and_opens_nothing(tmp_ttl, tmp_path, monkeypatch):
-    """export is the documentation build, so a pipeline wants the files and not
-    a browser it has no display for. Until this flag there was no way to decline.
-    """
-    monkeypatch.chdir(tmp_path)
-    out_file = tmp_path / "html" / "test_en.html"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text("<html></html>", encoding="utf-8")
-
-    with (
-        patch("ster.html_export.generate_html", return_value=[out_file]),
-        patch("webbrowser.open") as browser_open,
-    ):
-        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl), "--no-open"])
-
-    assert result.exit_code == 0
-    assert "Generated 1 file(s)" in result.stdout
-    browser_open.assert_not_called()
-
-
-def test_cmd_export_no_open_still_says_where_the_file_is(tmp_ttl, tmp_path, monkeypatch):
-    """Suppressing the browser must not suppress the answer, or the command
-    looks like it did nothing."""
-    monkeypatch.chdir(tmp_path)
-    out_file = tmp_path / "html" / "test_en.html"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text("<html></html>", encoding="utf-8")
-
-    with (
-        patch("ster.html_export.generate_html", return_value=[out_file]),
-        patch("webbrowser.open"),
-    ):
-        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl), "--no-open"])
-
-    assert "Open it with:" in result.stdout
-
-
-def test_cmd_export_opens_by_default(tmp_ttl, tmp_path, monkeypatch):
-    """Interactive use is the common case; a script is the one that opts out."""
-    monkeypatch.chdir(tmp_path)
-    out_file = tmp_path / "html" / "test_en.html"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text("<html></html>", encoding="utf-8")
-
-    with (
-        patch("ster.html_export.generate_html", return_value=[out_file]),
-        patch("webbrowser.open") as browser_open,
-    ):
-        _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-
-    browser_open.assert_called_once()
-
-
-def test_cmd_export_reports_runtime_error(tmp_ttl):
-    with patch("ster.html_export.generate_html", side_effect=RuntimeError("pyLODE missing")):
-        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-    assert result.exit_code == 5
-
-
-def test_cmd_export_reports_unexpected_error(tmp_ttl):
-    with patch("ster.html_export.generate_html", side_effect=ValueError("boom")):
-        result = _runner.invoke(app, ["export", "--file", str(tmp_ttl)])
-    assert result.exit_code == 5
-
-
-def test_cmd_export_stops_when_ontology_uri_is_declined(tmp_path):
-    bare = tmp_path / "bare.ttl"
-    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("ster.cli._export._ensure_ontology_uri", return_value=False):
-        result = _runner.invoke(app, ["export", "--file", str(bare)])
-    assert result.exit_code == 2
-
-
-# ── _ensure_ontology_uri ────────────────────────────────────────────────────────
-
-
-def test_ensure_ontology_uri_true_when_scheme_present(tmp_ttl):
-    from ster.cli._export import _ensure_ontology_uri
-
-    assert _ensure_ontology_uri(tmp_ttl) is True
-
-
-def test_ensure_ontology_uri_prompts_and_saves_when_missing(tmp_path):
-    from ster.cli._export import _ensure_ontology_uri
-
-    bare = tmp_path / "bare.ttl"
-    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("rich.prompt.Prompt.ask", side_effect=["My Ontology", "https://example.org/onto"]):
-        assert _ensure_ontology_uri(bare) is True
-    from ster import store
-
-    saved = store.load(bare)
-    assert saved.ontology_uri == "https://example.org/onto"
-
-
-def test_ensure_ontology_uri_rejects_uri_with_space(tmp_path):
-    from ster.cli._export import _ensure_ontology_uri
-
-    bare = tmp_path / "bare.ttl"
-    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("rich.prompt.Prompt.ask", side_effect=["Name", "not a valid uri"]):
-        assert _ensure_ontology_uri(bare) is False
-
-
-def test_ensure_ontology_uri_cancelled(tmp_path):
-    from ster.cli._export import _ensure_ontology_uri
-
-    bare = tmp_path / "bare.ttl"
-    bare.write_text("@prefix ex: <https://example.org/> .\nex:x a ex:Thing .\n", encoding="utf-8")
-    with patch("rich.prompt.Prompt.ask", side_effect=KeyboardInterrupt):
-        assert _ensure_ontology_uri(bare) is False
-
-
-def test_ensure_ontology_uri_false_when_load_fails(tmp_path):
-    from ster.cli._export import _ensure_ontology_uri
-
-    missing = tmp_path / "does-not-exist.ttl"
-    assert _ensure_ontology_uri(missing) is False
-
-
 # ── init-ci / serve (ster/cli/_serve.py) ────────────────────────────────────
 
 
@@ -1562,44 +1348,6 @@ def test_cmd_serve_invokes_api_server(tmp_ttl):
     _, kwargs = mock_serve.call_args
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["port"] == 9999
-
-
-def test_open_dev_artifacts_in_browser_live_server(tmp_path, tmp_ttl):
-    from ster.cli._serve import _open_dev_artifacts_in_browser
-
-    with (
-        patch("ster.viz_vowl.ensure_published_server", return_value="http://127.0.0.1:8000"),
-        patch(
-            "ster.publish.open_dev_artifacts",
-            return_value=["http://127.0.0.1:8000/a", "http://127.0.0.1:8000/b"],
-        ),
-    ):
-        _open_dev_artifacts_in_browser(
-            MagicMock(), tmp_ttl, tmp_path, [tmp_path / "a.html", tmp_path / "b.html"]
-        )
-
-
-def test_open_dev_artifacts_in_browser_no_live_server_falls_back(tmp_path, tmp_ttl):
-    from ster.cli._serve import _open_dev_artifacts_in_browser
-
-    with (
-        patch("ster.viz_vowl.ensure_published_server", return_value=None),
-        patch(
-            "ster.publish.open_dev_artifacts",
-            return_value=["file:///a.html"],
-        ),
-    ):
-        _open_dev_artifacts_in_browser(MagicMock(), tmp_ttl, tmp_path, [tmp_path / "a.html"])
-
-
-def test_open_dev_artifacts_in_browser_no_urls_returns_early(tmp_path, tmp_ttl):
-    from ster.cli._serve import _open_dev_artifacts_in_browser
-
-    with (
-        patch("ster.viz_vowl.ensure_published_server", return_value=None),
-        patch("ster.publish.open_dev_artifacts", return_value=[]),
-    ):
-        _open_dev_artifacts_in_browser(MagicMock(), tmp_ttl, tmp_path, [])
 
 
 def test_resolve_broken_mappings_declined(tmp_path):

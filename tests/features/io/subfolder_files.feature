@@ -15,7 +15,7 @@ Feature: Offer RDF files from subfolders, and remember the answers
     Then ster offers only "gear.ttl"
 
   Scenario: Deeper, hidden and generated folders are never offered
-    Given the folder also holds "vocab/old/draft.ttl", ".git/x.ttl" and "ontology/gear.ttl"
+    Given the folder also holds "vocab/old/draft.ttl", ".git/x.ttl" and "node_modules/gear.ttl"
     When ster starts and I agree to include subfolders
     Then ster offers "gear.ttl" and "vocab/labels.ttl"
 

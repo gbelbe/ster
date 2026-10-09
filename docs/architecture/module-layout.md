@@ -92,7 +92,7 @@ package split behind this same shim contract:
 
 - **`ster.cli`** (was `ster/cli.py`, 2,697 lines) → `ster/cli/` — 13
   submodules by concern (bootstrap in `_app.py`, file picker, workspace UI,
-  edit commands, export, publish, serve, home screen, …) plus `__init__.py`
+  edit commands, serve, home screen, …) plus `__init__.py`
   (the shim) and `__main__.py`. Flat module-level functions, so the shim is
   a plain re-export list.
 - **`ster.nav.logic`** (was `ster/nav/logic.py`) → `ster/nav/logic/` — split
