@@ -19,7 +19,6 @@ def launch(
     lang: str = "en",
     path: Path | None = None,
     open_query: bool = False,
-    progressive_startup: bool = False,
 ) -> None:
     """Open the Textual ontology browser for *taxonomy* (blocks until quit).
 
@@ -36,7 +35,6 @@ def launch(
             lang=lang,
             path=path,
             open_query=open_query,
-            progressive_startup=progressive_startup,
         )
     )
 

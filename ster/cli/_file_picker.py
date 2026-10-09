@@ -174,9 +174,8 @@ def _pick_file_prompt_loop(
     initial_sel: int,
     default_num: str | None,
     prompt_text: str,
-    create_idx: int,
-    quit_idx: int,
 ) -> Path | None:
+    create_idx, quit_idx = len(files) + 1, len(files) + 2  # 1-based, after the files
     while True:
         try:
             choice = ask.text(prompt_text, default=default_num or "", hint=_FILE_OPTION_HINT)
@@ -244,9 +243,7 @@ def _pick_file_interactive(
     else:
         prompt_text = f"Select [bold](1–{QUIT_IDX})[/bold]"
 
-    return _pick_file_prompt_loop(
-        files, initial_sel, default_num, prompt_text, CREATE_IDX, QUIT_IDX
-    )
+    return _pick_file_prompt_loop(files, initial_sel, default_num, prompt_text)
 
 
 def _picker_item_label(

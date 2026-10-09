@@ -19,6 +19,7 @@ from ._constants import _READ_ONLY_MESSAGE
 from ._state import _AppState
 
 _LIT_WARNING: Final = "warning"
+_MIN_FILES_TO_SWITCH: Final = 2  # one file has nothing to switch to
 _LIT_WORKING_FILE: Final = "Working file"  # the notification title, shared by all three paths
 
 
@@ -61,7 +62,7 @@ class _WorkingFileMixin(_AppState):
             self.notify(_READ_ONLY_MESSAGE, severity=_LIT_WARNING)
             return
         files = self.loaded_files()
-        if len(files) < 2:
+        if len(files) < _MIN_FILES_TO_SWITCH:
             self.notify(
                 "Only one file is open. Reopen with context files to switch between them.",
                 title=_LIT_WORKING_FILE,
@@ -80,11 +81,11 @@ class _WorkingFileMixin(_AppState):
         except Exception:  # noqa: BLE001 — keyboard use before a first paint
             return 0, 0
 
-    def on_working_file_chip_pressed(self, event: WorkingFileChip.Pressed) -> None:
+    def on_working_file_chip_pressed(self, event: WorkingFileChip.Pressed) -> None:  # noqa: V105
         event.stop()
         self.action_working_file()
 
-    def on_working_file_menu_chosen(self, event: WorkingFileMenu.Chosen) -> None:
+    def on_working_file_menu_chosen(self, event: WorkingFileMenu.Chosen) -> None:  # noqa: V105
         event.stop()
         self.switch_working_file(event.path)
 

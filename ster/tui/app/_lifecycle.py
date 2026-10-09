@@ -433,6 +433,14 @@ class _LifecycleMixin(_AppState):
         self._folded_panels = self._default_folded()
         self._build_main_trees()
         self._start_search_rows_worker()
+        self._present_browser()
+
+    def _present_browser(self) -> None:
+        """Title the panes, focus the main tree and schedule the first paint.
+
+        The tail both ways of finishing browser start-up share, kept in one place so
+        the two cannot drift (a pane titled in one path and not the other).
+        """
         self.query_one(_TREE_SELECTOR, Tree).border_title = "Mixed SKOS/OWL"
         self.query_one(_ONTOLOGY_TREE_SELECTOR, Tree).border_title = "Ontology"
         self.query_one(_PROPERTY_TREE_SELECTOR, Tree).border_title = "Properties"
@@ -475,13 +483,7 @@ class _LifecycleMixin(_AppState):
             return
         self._set_loading_progress(_LIT_PREPARING, 98, "Finalizing browser")
         self._start_search_rows_worker()
-        self.query_one(_TREE_SELECTOR, Tree).border_title = "Mixed SKOS/OWL"
-        self.query_one(_ONTOLOGY_TREE_SELECTOR, Tree).border_title = "Ontology"
-        self.query_one(_PROPERTY_TREE_SELECTOR, Tree).border_title = "Properties"
-        self.query_one(_DETAIL_SELECTOR, DetailView).border_title = "Details"
-        self.query_one(_TREE_SELECTOR, Tree).focus()
-        self.call_after_refresh(self._initial_show)
-        self._update_lang_indicator()
+        self._present_browser()
         self._set_loading_progress(_LIT_PREPARING, 100, "Ready")
         self._loading = False
         loading = self.query(_LOADING_SELECTOR)

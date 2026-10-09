@@ -25,10 +25,11 @@ from ster.cli import (
     app,
 )
 
-pytestmark = pytest.mark.tui
+pytestmark = pytest.mark.tui  # noqa: V107
+PICKS_BEFORE_QUIT = 2
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # noqa: V103
 def _pretend_there_is_a_terminal(monkeypatch):
     """`_open_viewer` refuses to start the Textual app without a tty.
 
@@ -546,7 +547,9 @@ def test_home_screen_change_file_reselects(tmp_path, monkeypatch):
         patch("ster.cli._workspace_ui.context_files_for", return_value=[]),
     ):
         _home_screen()
-    assert select.call_count == 2  # picked a file, chose 'Change file', picked again, quit
+    assert (
+        select.call_count == PICKS_BEFORE_QUIT
+    )  # picked a file, chose 'Change file', picked again, quit
 
 
 def test_open_selected_in_viewer_reports_a_workspace_error(tmp_path, monkeypatch):

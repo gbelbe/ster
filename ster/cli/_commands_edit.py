@@ -24,7 +24,7 @@ from . import _app, _export, _file_picker, _mcp_option, _options, _taxonomy_io, 
 
 
 @_app.app.command("show")
-def cmd_show(
+def cmd_show(  # noqa: PLR0913 - every CLI option is a parameter; the signature is the interface
     file: Path | None = typer.Argument(
         None, help="Taxonomy file (.ttl / .rdf / .jsonld / .trig). Auto-detected if omitted."
     ),
@@ -85,7 +85,7 @@ def cmd_show(
 
 
 @_app.app.command("add")
-def cmd_add(
+def cmd_add(  # noqa: PLR0913 - every CLI option is a parameter; the signature is the interface
     name: str = typer.Argument(
         ...,
         help="Local name or full URI for the new concept. "
