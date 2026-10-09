@@ -330,6 +330,7 @@ class OntologyApp(
         Binding("a", "open_agent", "Agent"),
         Binding("d", "cycle_theme", "Theme", show=False),  # still works; hint hidden
         Binding("r", "toggle_source", "Source"),
+        Binding("R", "refetch", "Re-fetch", show=False),  # SPARQL endpoint sessions
         Binding("f", "working_file", "Working file"),
         Binding("comma", "open_config", "Config"),
         Binding("question_mark", "help", "Help"),

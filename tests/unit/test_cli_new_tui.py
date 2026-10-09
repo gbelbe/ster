@@ -363,7 +363,9 @@ def test_select_home_file_picks_from_multiple(tmp_path, monkeypatch):
 def test_select_home_file_quit_returns_none(tmp_path, monkeypatch):
     _no_tty(monkeypatch)
     files = [tmp_path / "a.ttl", tmp_path / "b.ttl"]
-    with patch("ster.cli.Prompt.ask", return_value="4"):  # 4 = Quit (2 files, then demo at 3)
+    with patch(
+        "ster.cli.Prompt.ask", return_value="5"
+    ):  # 5 = Quit (2 files, then demo at 3, endpoint at 4)
         assert _select_home_file(files) is None
 
 

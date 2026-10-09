@@ -18,7 +18,16 @@ _LIT_PARENT: Final = "--parent"
 _LIT_HANDLE: Final = "HANDLE"
 
 
-from . import _app, _export, _file_picker, _mcp_option, _options, _taxonomy_io, _viewer
+from . import (
+    _app,
+    _endpoint,
+    _export,
+    _file_picker,
+    _mcp_option,
+    _options,
+    _taxonomy_io,
+    _viewer,
+)
 
 # ──────────────────────────── show ───────────────────────────────────────────
 
@@ -47,6 +56,12 @@ def cmd_show(  # noqa: PLR0913 - every CLI option is a parameter; the signature 
     ),
     context_files: list[Path] | None = _options.context_files(),
     mcp: bool | None = _mcp_option.option(),  # type: ignore[assignment]
+    endpoint: str | None = _options.endpoint(),
+    graph: str | None = _options.endpoint_graph(),
+    query: str | None = _options.endpoint_query(),
+    limit: int | None = _options.endpoint_limit(),
+    header: list[str] | None = _options.endpoint_header(),
+    timeout: float | None = _options.endpoint_timeout(),
 ) -> None:
     """Open the interactive taxonomy browser (the Textual New-TUI) and commit on exit.
 
@@ -60,6 +75,11 @@ def cmd_show(  # noqa: PLR0913 - every CLI option is a parameter; the signature 
     Pass --plain to print the tree non-interactively and exit.
     """
     _mcp_option.apply(mcp)
+    if endpoint is not None:
+        _show_endpoint(
+            file, endpoint, graph, query, limit, header, lang, (plain, handles), concept, timeout
+        )
+        return
     taxonomy_file = _file_picker._resolve_file(file)
     # The interactive viewer diagnoses an unreadable file itself, in a modal that
     # can also apply the fix; only the printing paths need the text report.
@@ -79,6 +99,27 @@ def cmd_show(  # noqa: PLR0913 - every CLI option is a parameter; the signature 
     # No prompt on this path: `ster show file.ttl` names what it wants, so the
     # context is whatever --context-files gave and nothing else.
     _viewer._open_viewer(taxonomy_file, lang=lang, context=list(context_files or []))
+
+
+def _show_endpoint(  # noqa: PLR0913  # the CLI's own options, passed through
+    file: Path | None,
+    endpoint: str,
+    graph: str | None,
+    query: str | None,
+    limit: int | None,
+    header: list[str] | None,
+    lang: str,
+    print_flags: tuple[bool, bool],
+    concept: str | None,
+    timeout: float | None = None,
+) -> None:
+    """``ster show --endpoint``: a read-only snapshot, so no FILE and no editing."""
+    if file is not None:
+        _app.err.print("[red]Give a FILE or --endpoint, not both.[/red]")
+        raise typer.Exit(ExitCode.USAGE)
+    source = _endpoint.build_source(endpoint, graph, query, limit, header, timeout)
+    plain, handles = print_flags
+    _endpoint.show(source, lang, plain=plain, handles=handles, concept=concept)
 
 
 # ──────────────────────────── add ────────────────────────────────────────────

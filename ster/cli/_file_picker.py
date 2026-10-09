@@ -267,6 +267,9 @@ def _picker_item_label(
     elif val == _constants._DEMO_SENTINEL:
         plain = "🎒 Load demo ontology / taxonomy"
         coloured = f"{GR}{plain}{R}"
+    elif val == _constants._ENDPOINT_SENTINEL:
+        plain = "🌐 Open a SPARQL endpoint (read-only)"
+        coloured = f"{GR}{plain}{R}"
     elif val is None:
         plain = "+ Create new taxonomy"
         coloured = f"{GR}{plain}{R}"

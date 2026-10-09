@@ -10,6 +10,7 @@ callers (e.g. format conversion) that need one directly."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import IO
 
 from rdflib import RDF, BNode, Dataset, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDFS, XSD
@@ -104,6 +105,33 @@ def _bindings_graph(prefixes: dict[str, str]) -> Graph:
     return g
 
 
+def _native_index_from_stream(
+    stream: IO[bytes], ox_format: str
+) -> tuple[_Index, dict[str, str]] | None:
+    """Parse *stream* in Rust into ster's index and the prefixes it declared.
+
+    None means "this parser cannot do it" — a missing pyoxigraph, or bytes it
+    rejects — so the caller falls back to rdflib. Shared by the file path and by
+    anything that holds the bytes already (a SPARQL endpoint's response).
+    """
+    try:
+        import pyoxigraph  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    index: dict[str, list[tuple[Node, Node]]] = {}
+    subjects_by_type: dict[str, list[str]] = {}
+    class_refs: set[str] = set()
+    try:
+        parser = pyoxigraph.parse(stream, format=getattr(pyoxigraph.RdfFormat, ox_format))
+        for quad in parser:
+            _index_quad(quad, index, subjects_by_type, class_refs)
+        prefixes = dict(parser.prefixes)
+    except Exception:  # noqa: BLE001 — any parse failure falls back to rdflib
+        return None
+    return (index, subjects_by_type, class_refs), prefixes
+
+
 def _native_index(fmt: str, path: Path) -> tuple[_Index, Graph] | None:
     """Parse *path* in Rust into ster's index, or None to use the rdflib path.
 
@@ -115,21 +143,13 @@ def _native_index(fmt: str, path: Path) -> tuple[_Index, Graph] | None:
     if ox_format is None:
         return None
     try:
-        import pyoxigraph  # noqa: PLC0415
-    except ImportError:
-        return None
-
-    index: dict[str, list[tuple[Node, Node]]] = {}
-    subjects_by_type: dict[str, list[str]] = {}
-    class_refs: set[str] = set()
-    try:
         with path.open("rb") as handle:
-            parser = pyoxigraph.parse(handle, format=getattr(pyoxigraph.RdfFormat, ox_format))
-            for quad in parser:
-                _index_quad(quad, index, subjects_by_type, class_refs)
-            prefixes = dict(parser.prefixes)
-    except Exception:  # noqa: BLE001 — any parse failure falls back to rdflib
+            parsed = _native_index_from_stream(handle, ox_format)
+    except OSError:
         return None
+    if parsed is None:
+        return None
+    indexed, prefixes = parsed
 
     if fmt == "xml":
         # Losing the bindings would silently change what ster round-trips, so an
@@ -137,7 +157,7 @@ def _native_index(fmt: str, path: Path) -> tuple[_Index, Graph] | None:
         if (xml_prefixes := _xmlns_prefixes(path)) is None:
             return None
         prefixes = xml_prefixes
-    return (index, subjects_by_type, class_refs), _bindings_graph(prefixes)
+    return indexed, _bindings_graph(prefixes)
 
 
 def _index_quad(

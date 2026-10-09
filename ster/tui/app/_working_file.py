@@ -157,9 +157,7 @@ class _WorkingFileMixin(_AppState):
         """Install the reloaded session and repaint everything the roles changed."""
         self._install_working_file(taxonomy, editable, context)
         self._service = self._make_service(taxonomy, editable)
-        self._refresh_search_rows()
-        self._invalidate_lint()
-        self._rebuild_tree()  # the lock glyphs move with the roles
+        self._refresh_for_new_model()  # the lock glyphs move with the roles
         self._refresh_working_file_chip()
         self._show(self._detail_uri)
         self._publish_working_file()

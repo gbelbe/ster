@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ster.model import Taxonomy
+from ster.sparql_endpoint import EndpointSource
 
 
 def launch(
@@ -66,3 +67,25 @@ def launch_file(
     )
     run_app(app)
     return app.tax if app._loaded_successfully else None
+
+
+def launch_endpoint(source: EndpointSource, lang: str = "en") -> None:
+    """Open the read-only browser on a SPARQL endpoint's snapshot (blocks until quit).
+
+    The fetch runs inside the app's own loading screen, so its spinner animates
+    while the endpoint answers; ``R`` fetches again.
+    """
+    from ster.sparql_endpoint import loader_for
+
+    from ._run import run_app
+    from .app import OntologyApp
+
+    run_app(
+        OntologyApp(
+            None,
+            source=source.url,
+            lang=lang,
+            progressive_startup=True,
+            loader=loader_for(source),
+        )
+    )

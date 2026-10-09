@@ -253,7 +253,12 @@ def _select_home_file(found: list[Path]) -> Path | None:
 
     console.print("[bold]Select a file:[/bold]\n")
     # Local files, then the (fresh-each-time) demo, then Quit.
-    item_values: list[Path | None] = [*found, _constants._DEMO_SENTINEL, _constants._QUIT_SENTINEL]
+    item_values: list[Path | None] = [
+        *found,
+        _constants._DEMO_SENTINEL,
+        _constants._ENDPOINT_SENTINEL,
+        _constants._QUIT_SENTINEL,
+    ]
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
@@ -274,9 +279,12 @@ def _select_home_file_numeric(found: list[Path]) -> Path | None:
     (first file, or the demo when the folder is empty)."""
     for i, f in enumerate(found, 1):
         console.print(f"{_LIT_CYAN_OPEN}{i}{_LIT_CYAN_CLOSE}{f.name}")
-    demo_idx, quit_idx = len(found) + 1, len(found) + 2
+    demo_idx, endpoint_idx, quit_idx = len(found) + 1, len(found) + 2, len(found) + 3
     console.print(
         f"{_LIT_CYAN_OPEN}{demo_idx}[/cyan]  [green]🎒 Load demo ontology / taxonomy[/green]"
+    )
+    console.print(
+        f"{_LIT_CYAN_OPEN}{endpoint_idx}[/cyan]  [green]🌐 Open a SPARQL endpoint (read-only)[/green]"
     )
     console.print(f"{_LIT_CYAN_OPEN}{quit_idx}[/cyan]  [red]✕  Quit[/red]")
     choice = ask.text(f"Select (1–{quit_idx})", default=str(demo_idx if not found else 1))
@@ -288,6 +296,8 @@ def _select_home_file_numeric(found: list[Path]) -> Path | None:
         return None  # Quit
     if idx == demo_idx - 1:
         return _constants._DEMO_SENTINEL
+    if idx == endpoint_idx - 1:
+        return _constants._ENDPOINT_SENTINEL
     return found[idx] if 0 <= idx < len(found) else _constants._DEMO_SENTINEL
 
 

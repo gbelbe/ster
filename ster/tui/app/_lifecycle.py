@@ -20,6 +20,7 @@ from textual.widgets.tree import TreeNode
 from ster.metadata_coverage import MetaProp
 from ster.model import Taxonomy
 from ster.nav.logic import DetailField
+from ster.sparql_endpoint import Progress, SourceLoader
 
 from .. import data, detail
 from ..context_menu import ContextMenu
@@ -41,6 +42,7 @@ from ._state import _AppState
 from ._tree_widget import OntologyTree
 
 _LIT_PREPARING: Final = "Preparing"
+_REFETCH: Final = "refetch"  # the busy-overlay job and the worker group of a re-fetch
 
 
 class StaticHeader(Header):
@@ -87,8 +89,12 @@ class _LifecycleMixin(_AppState):
         open_query: bool = False,
         progressive_startup: bool = False,
         context: list[Path] | None = None,
+        loader: SourceLoader | None = None,
     ) -> None:
         super().__init__()
+        # Where the model comes from when it is not a file (a SPARQL endpoint): called
+        # off the UI thread, with a progress callback, and re-called by "re-fetch".
+        self._loader = loader
         # Files merged in read-only: the tree locks their rows and save excludes
         # them, so the whole graph is visible while one file stays editable.
         # Not `_context`: Textual's DOMNode already owns that name, and shadowing
@@ -260,24 +266,69 @@ class _LifecycleMixin(_AppState):
             self.search_rows = data.search_rows(self.tax, self.lang)
 
     def _load_taxonomy_worker(self) -> None:
-        """Load the source file away from Textual's event loop."""
-        from ster import store
+        """Load the source (a file, or the loader) away from Textual's event loop."""
 
-        if self._path is None:
-            self.call_from_thread(self._show_load_error, ValueError("No taxonomy file was given."))
-            return
+        def progress(percent: int, message: str) -> None:
+            self.call_from_thread(self._set_loading_progress, "Loading", percent, message)
+
         try:
-            taxonomy = store.load(
-                self._path,
-                progress_callback=lambda percent, message: self.call_from_thread(
-                    self._set_loading_progress, "Loading", percent, message
-                ),
-                context=self._context_files,
-            )
+            taxonomy, notice = self._read_source(progress)
         except Exception as exc:  # noqa: BLE001 — loading errors belong in the TUI
             self.call_from_thread(self._show_load_error, exc)
             return
         self.call_from_thread(self._finish_loading, taxonomy)
+        if notice:
+            self.call_from_thread(self.notify, notice, severity="warning")
+
+    def _read_source(self, progress: Progress | None) -> tuple[Taxonomy, str | None]:
+        """The model from its source, and an optional notice to show once it is up."""
+        if self._loader is not None:
+            return self._loader(progress)
+        if self._path is None:
+            raise ValueError("No taxonomy file was given.")
+        from ster import store
+
+        return store.load(self._path, progress_callback=progress, context=self._context_files), None
+
+    def action_refetch(self) -> None:
+        """Ask the source again (a SPARQL endpoint) and swap the fresh model in."""
+        if self._loader is None:
+            self.notify("This session reads a file; there is nothing to re-fetch.")
+            return
+        self.run_worker(
+            self._refetch_worker, thread=True, exclusive=True, group=_REFETCH, name="ster-refetch"
+        )
+
+    def _refetch_worker(self) -> None:
+        """Re-run the loader off the UI thread; a failure keeps what is on screen."""
+        self.call_from_thread(self._begin_activity, _REFETCH, "Fetching from the endpoint")
+        try:
+            taxonomy, notice = self._read_source(None)
+            index = data.individual_index(taxonomy, self.lang)
+        except Exception as exc:  # noqa: BLE001 — the old data stays; say why
+            self.call_from_thread(self.notify, f"Re-fetch failed: {exc}", severity="error")
+            return
+        finally:
+            self.call_from_thread(self._end_activity, _REFETCH)
+        self.call_from_thread(self._apply_refetched, taxonomy, index, notice)
+
+    def _apply_refetched(self, taxonomy: Taxonomy, index, notice: str | None) -> None:  # type: ignore[no-untyped-def]
+        """Swap in the re-fetched model, repaint, and update any live graph/map server."""
+        self.tax = taxonomy
+        self._individuals_by_class, self._untyped_individuals = index
+        self._navigation_index_built = True
+        self._refresh_for_new_model()
+        self._show(detail.OVERVIEW_URI)
+        try:
+            from ster.api_server import push_taxonomy  # noqa: PLC0415
+
+            push_taxonomy(taxonomy)  # the open graph, map and timeline follow
+        except Exception:  # noqa: BLE001 — a view of the old data is not worth failing for
+            pass
+        self.notify(
+            notice or "Re-fetched from the endpoint.",
+            severity="warning" if notice else "information",
+        )
 
     def _finish_loading(self, taxonomy: Taxonomy) -> None:
         """Install the loaded model and replace the loading message in this app."""
@@ -585,10 +636,19 @@ class _LifecycleMixin(_AppState):
             taxonomy, self.lang
         )
         self._navigation_index_built = True
+        self._refresh_for_new_model()
+        self._show(detail.OVERVIEW_URI)
+
+    def _refresh_for_new_model(self) -> None:
+        """Repaint everything derived from ``self.tax`` after the model was swapped.
+
+        The three steps every swap repeated — search rows, the lint result and the
+        tree — in one place, so a swap cannot forget one (a stale tree beside a
+        fresh model is the failure this guards against).
+        """
         self._refresh_search_rows()
         self._invalidate_lint()
         self._rebuild_tree()
-        self._show(detail.OVERVIEW_URI)
 
     def on_unmount(self) -> None:  # noqa: V105
         """Flush a pending background save when the app closes."""

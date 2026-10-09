@@ -108,6 +108,7 @@ from ._normalize import (
     _normalize_scheme_links,
 )
 from ._provenance import Provenance, provenance
+from ._snapshot import attach_query_store, taxonomy_from_bytes
 from ._to_graph import (
     _CONCEPT_LABEL_PREDS,
     _CONCEPT_LIST_PREDS,
@@ -133,6 +134,8 @@ from ._to_graph import (
 )
 
 __all__ = [
+    "attach_query_store",
+    "taxonomy_from_bytes",
     "ALT_IMAGE_PREDICATES",
     "ALT_URL_PREDICATES",
     "ALT_VIDEO_PREDICATES",

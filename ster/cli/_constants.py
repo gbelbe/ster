@@ -11,6 +11,7 @@ _GRAPH_SENTINEL: Path = Path(".__ster_graph__")
 _CHANGE_FILE_SENTINEL: Path = Path(".__ster_change_file__")  # home menu → reselect the file
 _QUERY_SENTINEL: Path = Path(".__ster_query__")
 _DEMO_SENTINEL: Path = Path(".__ster_demo__")  # home menu → load the bundled sample
+_ENDPOINT_SENTINEL: Path = Path(".__ster_endpoint__")  # file list → open a SPARQL endpoint
 _MCP_SENTINEL: Path = Path(".__ster_mcp__")  # home menu → start MCP + copy endpoint
 _AGENT_SENTINEL: Path = Path(".__ster_agent__")  # home menu → the talk-to-graph page
 _HISTORY_SENTINEL: Path = Path(".__ster_history__")  # home menu → semantic history
@@ -28,6 +29,7 @@ _MENU_COLOURS: dict[object, str] = {
     _GRAPH_SENTINEL: _app._ANSI_YELLOW,
     _QUERY_SENTINEL: _app._ANSI_GREEN,
     _DEMO_SENTINEL: _app._ANSI_GREEN,
+    _ENDPOINT_SENTINEL: _app._ANSI_GREEN,
     _MCP_SENTINEL: _app._ANSI_MAGENTA,
     _AGENT_SENTINEL: _app._ANSI_MAGENTA,
     _HISTORY_SENTINEL: _app._ANSI_YELLOW,

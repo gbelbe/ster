@@ -126,6 +126,36 @@ and answer questions about it; it cannot change it.
 
 ---
 
+## Browse a SPARQL endpoint
+
+No file? Point ster at a triple store (GraphDB, Fuseki, …) and browse, query and
+draw what it holds, read-only:
+
+```bash
+ster show --endpoint https://graphdb.example/repositories/arch          # default graph
+ster show -e https://graphdb.example/repositories/arch --graph https://example.org/graphs/arch
+ster show -e https://graphdb.example/repositories/arch --query my.rq    # your own CONSTRUCT
+ster show -e URL --limit 20000 --header 'Authorization: Bearer …'
+```
+
+ster sends one CONSTRUCT and keeps the answer in memory, so it is a **snapshot**:
+press `R` in the viewer to fetch again, and editing is refused (there is no file
+to save to). `--limit` caps the triples fetched for the default and named-graph
+forms (default 100,000, or the last value you chose in the menu), and ster tells
+you when it was reached. Headers are sent as given and never saved. The same
+flow is in the file list as *Open a SPARQL endpoint*.
+
+For scripts and CI, a failure prints one line to stderr, leaves stdout empty and
+uses ster's exit codes: **2** for a URL, header or option that cannot be sent (a
+malformed URL, a `user:password@` in the URL, a bad `--header`), **3** when the
+endpoint cannot be reached or refuses (DNS, refused, an HTTP error with the
+server's own message, a redirect, a timeout, a dropped connection), **4** when it
+answers with something that is not RDF. `--timeout SECONDS` (default 600) bounds
+both the wait for an answer and the whole transfer. ster never follows a
+redirect (a header would travel to the new host); the error names the new URL.
+Credentials and query strings are left out of every message, so pass tokens with
+`--header`, never in the URL.
+
 ## Installation
 
 ster is a CLI app, so the cleanest install is as an isolated

@@ -10,7 +10,16 @@ import typer
 from .. import ask
 from ..display import console
 from ..project import Project, _git_root
-from . import _app, _constants, _file_picker, _query_launcher, _state, _viewer, _workspace_ui
+from . import (
+    _app,
+    _constants,
+    _endpoint,
+    _file_picker,
+    _query_launcher,
+    _state,
+    _viewer,
+    _workspace_ui,
+)
 from ._discovery import discover_rdf_files, subfolder_rdf_files
 from ._exit import ExitCode
 
@@ -246,6 +255,9 @@ def _home_obtain_action(
         choice = _workspace_ui._select_home_file(found)
         if choice is None:  # Quit / cancel
             return None, _constants._QUIT_SENTINEL
+        if choice == _constants._ENDPOINT_SENTINEL:  # read-only; back to the list afterwards
+            _endpoint.run_endpoint_interactive()
+            return None, _constants._CHANGE_FILE_SENTINEL
         if choice == _constants._DEMO_SENTINEL:  # a fresh demo, opened directly
             demo = _query_launcher._load_demo_into_cwd()
             return demo, [demo]
