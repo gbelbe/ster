@@ -53,6 +53,8 @@ dependencies = [
     "rich>=13.0",
     "textual[syntax]>=0.80",      # modern TUI (New-TUI tree browser); [syntax] = TextArea Markdown highlighting
     "idna>=3.15",
+    "anyio>=4.0",                 # imported directly by ster.api (already a hard dependency of starlette)
+    "packaging>=23.0",            # PEP 440 comparison in the update check (ster.cli._app)
     # Not fastapi[standard]: that extra now pulls fastapi-cloud-cli, which brings
     # sentry-sdk, rignore and fastar — 5.7 MB of commercial cloud tooling and a
     # telemetry SDK that ster never imports. An offline terminal tool has no
