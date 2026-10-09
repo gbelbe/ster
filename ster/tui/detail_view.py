@@ -467,6 +467,11 @@ class DetailView(VerticalScroll):
         """Rebuild the pane to show *uri* (or a placeholder when None). *issue_fields*
         (the semanticlint plugin's per-entity 'Quality issues' rows) are inserted right
         after the Identity section when present."""
+        if not self.is_attached:
+            # The app is closing (Textual reports every widget detached once an exit is
+            # requested) while a late timer or click still asked for a draw. There is nothing
+            # left to draw into, and mounting would raise MountError.
+            return
         self.remove_children()
         if uri is None:
             self.mount(Static(PLACEHOLDER))
