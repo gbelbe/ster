@@ -147,6 +147,12 @@ def _worker_for(store: Any) -> _Worker:
     return worker
 
 
+def warm(store: Any) -> None:
+    """Start the worker for *store* now, so the first query finds it already holding the graph."""
+    with _LOCK:
+        _worker_for(store)
+
+
 def timeout_message(timeout: float) -> str:
     return (
         f"Query stopped after {timeout:g}s. Narrow it: bind subjects or predicates, "

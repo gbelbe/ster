@@ -23,10 +23,21 @@ def _warm(taxonomy: Any, done: threading.Event) -> None:
     try:
         overview(taxonomy)
         vocabulary(taxonomy)
+        _warm_sparql_worker(taxonomy)
     except Exception:  # noqa: BLE001 — a tool call will report the same fault with its details
         pass
     finally:
         done.set()
+
+
+def _warm_sparql_worker(taxonomy: Any) -> None:
+    """Have the child process that answers run_sparql load the graph too, instead of the first query doing it."""
+    from .sparql_query._sandbox import warm  # noqa: PLC0415
+    from .store import full_graph_oxigraph  # noqa: PLC0415
+
+    store = full_graph_oxigraph(taxonomy)
+    if store is not None:
+        warm(store)
 
 
 def start(taxonomy: Any) -> None:

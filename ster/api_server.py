@@ -248,6 +248,7 @@ def push_taxonomy(taxonomy: Any) -> None:
     if _bg.app is None:
         return
     _bg.app.state._ster[_LIT_TAXONOMY] = taxonomy
+    warmup.start(taxonomy)
     _bg.broadcaster.notify(_bg.loop)
 
 
@@ -289,6 +290,7 @@ def publish_working_file(taxonomy: Any, file_path: Path, context: list[Path]) ->
         return
     state = _bg.app.state._ster
     state[_LIT_TAXONOMY] = taxonomy
+    warmup.start(taxonomy)
     state["file_path"] = file_path
     state["context"] = list(context)
     state.pop("_mutation_backend", None)

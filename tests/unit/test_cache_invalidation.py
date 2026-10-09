@@ -10,9 +10,9 @@ fields untouched, so the fingerprint was unchanged and every run kept reading
 the pre-fix taxonomy. The same thing would happen to a user upgrading ster —
 they would keep the old behaviour until the file itself changed.
 
-Mixing the version in fixes both cases at once, and cannot be forgotten: a
-release has a distinct version by construction, and a development build carries
-its commit hash.
+Mixing in the source of the model and the loader fixes both cases at once and
+cannot be forgotten, since it is read from the code itself. A release that left
+both alone keeps its cache; it no longer costs a user a minutes-long reload.
 """
 
 from __future__ import annotations
@@ -20,17 +20,18 @@ from __future__ import annotations
 from ster.store._cache import _get_bin_cache_path, _model_schema_fingerprint
 
 
-def test_the_fingerprint_follows_the_build(monkeypatch) -> None:
-    """Two builds of ster must not share a cache entry."""
+def test_the_fingerprint_follows_the_loader_code(monkeypatch) -> None:
+    """Two builds whose loader differs must not share a cache entry."""
     _model_schema_fingerprint.cache_clear()
-    monkeypatch.setattr("ster._version.__version__", "1.2.3", raising=False)
+    monkeypatch.setattr("ster.store._cache._loader_source_hash", lambda: "loader-a")
     first = _model_schema_fingerprint()
 
     _model_schema_fingerprint.cache_clear()
-    monkeypatch.setattr("ster._version.__version__", "1.2.4", raising=False)
+    monkeypatch.setattr("ster.store._cache._loader_source_hash", lambda: "loader-b")
     second = _model_schema_fingerprint()
+    _model_schema_fingerprint.cache_clear()
 
-    assert first != second, "a new build reused the previous build's cache"
+    assert first != second, "a changed loader reused the previous build's cache"
 
 
 def test_the_same_build_keeps_its_cache(monkeypatch) -> None:

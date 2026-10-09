@@ -158,3 +158,39 @@ def test_a_symlinked_cache_is_never_unlinked(source):
 
     assert link.is_symlink(), "a symlink is someone else's business"
     assert target.exists()
+
+
+# ── what the key follows: the code that fills the model, not the release number ──
+
+
+def test_a_new_release_that_left_the_loader_alone_keeps_the_cache(monkeypatch):
+    before = store._model_schema_fingerprint()
+    monkeypatch.setattr("ster._version.__version__", "9.9.9")
+    store._model_schema_fingerprint.cache_clear()
+    try:
+        assert store._model_schema_fingerprint() == before
+    finally:
+        store._model_schema_fingerprint.cache_clear()
+
+
+def test_a_change_to_the_loader_source_looks_elsewhere(monkeypatch):
+    before = store._cache._loader_source_hash()
+    real = Path.read_bytes
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda self: real(self) + (b"# edited" if self.name == "_load_save.py" else b""),
+    )
+
+    assert store._cache._loader_source_hash() != before
+
+
+def test_unreadable_sources_fall_back_to_the_version(monkeypatch):
+    def refuse(_self):
+        raise OSError("no sources")
+
+    monkeypatch.setattr(Path, "read_bytes", refuse)
+
+    from ster._version import __version__
+
+    assert store._cache._loader_source_hash() == __version__

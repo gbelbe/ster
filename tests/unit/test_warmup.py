@@ -65,3 +65,37 @@ def test_the_rest_overview_answers_503_with_retry_after_while_loading(loading, t
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "10"
     assert "still loading" in response.json()["detail"]
+
+
+def test_the_sparql_worker_is_started_during_warmup(monkeypatch):
+    started = threading.Event()
+    monkeypatch.setattr("ster.mcp_context.overview", lambda *_a: None)
+    monkeypatch.setattr("ster.mcp_context.vocabulary", lambda *_a: None)
+    monkeypatch.setattr("ster.store.full_graph_oxigraph", lambda _t: "the-store")
+    monkeypatch.setattr(
+        "ster.sparql_query._sandbox.warm",
+        lambda store: started.set() if store == "the-store" else None,
+    )
+    tax = Taxonomy()
+
+    warmup.start(tax)
+
+    assert started.wait(5)
+
+
+def test_a_republished_model_is_warmed_again(monkeypatch):
+    from ster import api_server
+
+    seen = []
+    monkeypatch.setattr(warmup, "start", seen.append)
+    monkeypatch.setattr(
+        api_server._bg, "app", type("A", (), {"state": type("S", (), {"_ster": {}})()})()
+    )
+    monkeypatch.setattr(
+        api_server._bg, "broadcaster", type("B", (), {"notify": lambda *_a: None})()
+    )
+    tax = Taxonomy()
+
+    api_server.push_taxonomy(tax)
+
+    assert seen == [tax]

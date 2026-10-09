@@ -25,7 +25,7 @@ def _bin_cache_dir() -> Path:
 
 @lru_cache(maxsize=1)
 def _model_schema_fingerprint() -> str:
-    """A short hash of this build: every model dataclass, its fields, and the version.
+    """A short hash of the code that builds the cached model: every model dataclass, its fields, and the loader.
 
     Unpickling does not validate the class: a Taxonomy pickled before a field
     existed is restored *without* it, no exception raised, and the first access
@@ -35,26 +35,38 @@ def _model_schema_fingerprint() -> str:
 
     The shape alone is not enough. It catches a field being added or removed, but
     not a change to the logic that *fills* one — which is the more common kind of
-    change, and just as stale. A fix to how the residue is computed left every
-    field name untouched, so every run went on reading the pre-fix taxonomy; a
-    user upgrading ster would have kept the old behaviour until their file
-    changed.
-
-    So the version goes in too. It cannot be forgotten: a release has a distinct
-    version by construction, and a development build carries its commit hash.
+    change, and just as stale. So the source of the model and of the loader goes in
+    too: a change to the code that decides what the cached model holds looks
+    elsewhere, while a release that touched neither keeps the cache (it used to be
+    keyed on the ster version, which discarded a minutes-long load on every upgrade).
     """
     from dataclasses import fields, is_dataclass  # noqa: PLC0415
 
     from .. import model as _model  # noqa: PLC0415
-    from .._version import __version__  # noqa: PLC0415
 
     shape = [
         f"{name}:{','.join(f.name for f in fields(obj))}"
         for name in sorted(dir(_model))
         if isinstance(obj := getattr(_model, name), type) and is_dataclass(obj)
     ]
-    shape.append(f"ster:{__version__}")
+    shape.append(f"code:{_loader_source_hash()}")
     return hashlib.md5("|".join(shape).encode(), usedforsecurity=False).hexdigest()[:8]
+
+
+def _loader_source_hash() -> str:
+    """A hash of the model and the store package's source, or the ster version when it cannot be read."""
+    package = Path(__file__).resolve().parent
+    sources = [package.parent / "model.py", *sorted(package.glob("*.py"))]
+    digest = hashlib.sha256()
+    try:
+        for source in sources:
+            digest.update(source.name.encode())
+            digest.update(source.read_bytes())
+    except OSError:  # a build shipped without its sources: the version is the best stand-in left
+        from .._version import __version__  # noqa: PLC0415
+
+        return __version__
+    return digest.hexdigest()[:16]
 
 
 def _cache_stem(path: Path) -> str:
