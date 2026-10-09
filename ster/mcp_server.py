@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from . import mcp_context as ctx
+from . import warmup
 from .mcp_views import ApiPost, open_view
 from .model import Taxonomy
 from .query_trace import Event, get_recorder
@@ -526,6 +527,10 @@ def _handle_tools_list(_params: dict, _tax: Taxonomy, _call: CallContext) -> dic
     return {"tools": TOOLS}
 
 
+# the tools that read the whole graph; the others answer from the model already in memory
+_NEEDS_GRAPH: Final = frozenset({"get_overview", "get_vocabulary", "run_sparql"})
+
+
 def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[str, Any]:
     # Normalise to str: a missing or null name becomes "", which matches no tool
     # and falls through to the unknown_tool result below.
@@ -534,6 +539,16 @@ def _handle_tools_call(params: dict, tax: Taxonomy, call: CallContext) -> dict[s
     if impl is None:
         return _text_result({"error": "unknown_tool", "tool": name}, is_error=True)
     args = params.get("arguments") or {}
+    loading = warmup.loading_seconds(tax) if name in _NEEDS_GRAPH else None
+    if loading is not None:
+        return _text_result(
+            {
+                _ERROR: warmup.LOADING,
+                "message": warmup.loading_message(loading),
+                "seconds": loading,
+            },
+            is_error=True,
+        )
     missing = next((arg for arg in _REQUIRED.get(name, []) if not args.get(arg)), None)
     if missing:
         return _text_result({"error": "missing_argument", "argument": missing}, is_error=True)

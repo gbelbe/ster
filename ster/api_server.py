@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from . import warmup
+
 # A renderer for the server's HTML landing pages: (taxonomy, root_uri, token) -> html.
 # Injected by the caller so this module stays free of any front-end feature
 # (the VOWL graph passes ``render_vowl_html``; the MCP server passes nothing).
@@ -412,6 +414,7 @@ def start_background(
     if _bg.app is not None:
         state = _bg.app.state._ster
         state[_LIT_TAXONOMY] = taxonomy
+        warmup.start(taxonomy)
         if html_renderer is not None and state.get(_LIT_HTML_FN) is None:
             state[_LIT_HTML_FN] = _make_html_fn(_bg.app, html_renderer, state["token"])
         return True
@@ -440,6 +443,7 @@ def start_background(
     )
     app.state._ster["broadcaster"] = broadcaster
     app.state._ster["token"] = token
+    warmup.start(taxonomy)
     if html_renderer is not None:
         app.state._ster[_LIT_HTML_FN] = _make_html_fn(app, html_renderer, token)
     _bg.app, _bg.broadcaster = app, broadcaster
@@ -513,6 +517,7 @@ def serve(
         file_path=file_path,
         context=context,
     )
+    warmup.start(taxonomy)
     # Also store broadcaster in shared state so the watcher can reach it
     app.state._ster["broadcaster"] = broadcaster  # type: ignore[attr-defined]
     app.state._ster[_LIT_HTML_FN] = _make_html_fn(app, _renderer, token)  # type: ignore[attr-defined]

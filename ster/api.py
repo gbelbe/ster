@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from . import warmup
 from .handles import assign_handles
 from .model import Label, LabelType, OWLIndividual, Taxonomy
 
@@ -246,6 +247,17 @@ class SSEBroadcaster:
 
 
 # ── App factory ───────────────────────────────────────────────────────────────
+
+
+def _refuse_while_loading(taxonomy: Any) -> None:
+    """Answer 503 at once while the graph is still being loaded, rather than keeping the caller waiting."""
+    seconds = warmup.loading_seconds(taxonomy)
+    if seconds is not None:
+        raise HTTPException(
+            status_code=503,
+            detail=warmup.loading_message(seconds),
+            headers={"Retry-After": "10"},
+        )
 
 
 def _labelled_things_query(things: Any) -> str:
@@ -1064,6 +1076,7 @@ def _register_mutation_routes(
     ) -> dict[str, Any]:
         from .mcp_context import overview  # noqa: PLC0415
 
+        _refuse_while_loading(_st[_LIT_TAXONOMY])
         return overview(_st[_LIT_TAXONOMY], lang)
 
     @app.get(
@@ -1076,6 +1089,7 @@ def _register_mutation_routes(
         with counts, rather than the ones a vocabulary says ought to be."""
         from .mcp_context import vocabulary  # noqa: PLC0415
 
+        _refuse_while_loading(_st[_LIT_TAXONOMY])
         return vocabulary(_st[_LIT_TAXONOMY])
 
     @app.post(
