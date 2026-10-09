@@ -35,3 +35,14 @@ def _run_history_interactive(files: list[Path]) -> None:  # pragma: no cover - i
         console.print(f"\n  [yellow]No commit has touched {selected.name} yet.[/yellow]\n")
         return
     run_history(history)
+
+
+def _explain_missing_package(_files: list[Path]) -> None:
+    """The menu row of a plugin that is on but cannot run: what is missing and the command that fixes it."""
+    from .. import plugins
+
+    problem = (
+        plugins.missing_dependency("semanticdiff")
+        or "Semantic History is installed now: reopen this menu."
+    )
+    console.print(f"\n  [yellow]{problem}[/yellow]\n")

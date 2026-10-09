@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from ster import plugins
 from ster.cli import _constants, _query_launcher, _workspace_ui
-from ster.plugins import semanticdiff
+from ster.plugins import dependency, semanticdiff
 
 
 def test_plugin_is_inactive_when_disabled(monkeypatch) -> None:
@@ -62,12 +62,15 @@ def test_dependency_guard_installs_rdfdiff_with_the_running_interpreter(monkeypa
         command.extend(args)
         return SimpleNamespace(returncode=0, stdout="installed", stderr="")
 
-    monkeypatch.setattr(semanticdiff.deps.subprocess, "run", run)
+    monkeypatch.setattr(dependency.subprocess, "run", run)
+    monkeypatch.setattr(
+        dependency.importlib.util, "find_spec", lambda _name: object()
+    )  # an interpreter with pip
 
     ok, output = semanticdiff.deps.install()
 
     assert ok is True
-    assert command[:3] == [semanticdiff.deps.sys.executable, "-m", "pip"]
+    assert command[:3] == [dependency.sys.executable, "-m", "pip"]
     assert command[-1] == "rdfdiff>=0.1"
     assert output == "installed"
 

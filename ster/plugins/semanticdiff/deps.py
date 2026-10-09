@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import subprocess
-import sys
 
 REQUIREMENT = "rdfdiff>=0.1"
 
@@ -22,11 +20,7 @@ def is_installed() -> bool:
 
 
 def install(requirement: str = REQUIREMENT) -> tuple[bool, str]:
-    """Install rdfdiff into ster's interpreter and return its outcome."""
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", requirement],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0, proc.stdout + proc.stderr
+    """Install *requirement* into the running interpreter (pip, or uv where there is no pip); (ok, output)."""
+    from ..dependency import install as _install  # noqa: PLC0415
+
+    return _install(requirement)

@@ -303,13 +303,26 @@ def _home_actions() -> list[tuple[object, str]]:
         (_constants._MCP_SENTINEL, "🔌 Connect AI Agent (MCP)"),
         (_constants._QUIT_SENTINEL, "✕  Quit"),
     ]
+    from ster import plugins
     from ster.plugins import semanticdiff, talk_to_graph
 
     if talk_to_graph.agent_ready():  # a usable agent: the page replaces the connect instructions
         at = next(i for i, (s, _) in enumerate(actions) if s is _constants._MCP_SENTINEL)
         actions[at] = (_constants._AGENT_SENTINEL, "💬 Agent: talk to graph")
     if semanticdiff.is_active():
-        actions.insert(4, (_constants._HISTORY_SENTINEL, "🕘 Semantic History"))
+        history = "🕘 Semantic History"
+    elif plugins.is_enabled(
+        semanticdiff.PLUGIN_ID
+    ):  # on, but its package is missing: say so rather than vanish
+        history = "🕘 Semantic History (not installed: select for the fix)"
+    else:
+        history = None
+    if history:
+        agent_rows = (_constants._MCP_SENTINEL, _constants._AGENT_SENTINEL)
+        before = next(i for i, (sentinel, _) in enumerate(actions) if sentinel in agent_rows)
+        actions.insert(
+            before, (_constants._HISTORY_SENTINEL, history)
+        )  # just above the MCP / agent row
     return actions
 
 

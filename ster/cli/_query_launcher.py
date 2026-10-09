@@ -24,12 +24,17 @@ def _dispatch_menu_action(selected: object, found: list[Path]) -> bool:
         _constants._MCP_SENTINEL: _publish._run_mcp_connect_interactive,
         _constants._AGENT_SENTINEL: _agent._run_agent_page_interactive,
     }
+    from .. import plugins
     from ..plugins import semanticdiff
 
     if semanticdiff.is_active():
         from . import _history
 
         actions[_constants._HISTORY_SENTINEL] = _history._run_history_interactive
+    elif plugins.is_enabled(semanticdiff.PLUGIN_ID):
+        from . import _history
+
+        actions[_constants._HISTORY_SENTINEL] = _history._explain_missing_package
     action = actions.get(selected) if isinstance(selected, Path) else None
     if action is None:
         return False

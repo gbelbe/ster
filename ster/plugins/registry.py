@@ -24,6 +24,8 @@ class PluginSpec:
     name: str
     description: str
     dependency: str = ""
+    module: str = ""  # the import name of that package, when the plugin needs one installed
+    extra: str = ""  # the ster extra that installs it (``ster[<extra>]``)
 
 
 # The single source of truth for which plugins exist. Order = display order.
@@ -37,6 +39,8 @@ _PLUGINS: tuple[PluginSpec, ...] = (
             "overview — the same checks CI runs, surfaced as you edit."
         ),
         dependency="semanticlint>=0.2",
+        module="semanticlint",
+        extra="semanticlint",
     ),
     PluginSpec(
         id="semanticdiff",
@@ -46,6 +50,8 @@ _PLUGINS: tuple[PluginSpec, ...] = (
             "deprecations, and removals rather than as raw text."
         ),
         dependency="rdfdiff>=0.1.1",
+        module="semanticdiff",
+        extra="rdfdiff",
     ),
     PluginSpec(
         id="mcp",

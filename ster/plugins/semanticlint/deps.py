@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import subprocess
-import sys
 
 # The pip requirement the plugin needs; kept in sync with the registry spec.
 REQUIREMENT = "semanticlint>=0.2"
@@ -35,11 +33,7 @@ def is_installed() -> bool:
 
 
 def install(requirement: str = REQUIREMENT) -> tuple[bool, str]:
-    """Pip-install *requirement* into the running interpreter. Returns (ok, output)."""
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", requirement],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0, (proc.stdout + proc.stderr)
+    """Install *requirement* into the running interpreter (pip, or uv where there is no pip); (ok, output)."""
+    from ..dependency import install as _install  # noqa: PLC0415
+
+    return _install(requirement)

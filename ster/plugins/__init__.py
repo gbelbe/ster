@@ -13,11 +13,21 @@ The public surface is intentionally tiny::
     plugins.get("semanticlint")    # -> PluginSpec | None
     plugins.is_enabled("semanticlint")
     plugins.set_enabled("semanticlint", True)
+    plugins.missing_dependency("semanticdiff")   # -> why it cannot run and how to fix it, or None
 """
 
 from __future__ import annotations
 
+from .dependency import missing_dependency
 from .registry import PluginSpec, all_plugins, get
 from .state import is_enabled, override, set_enabled
 
-__all__ = ["PluginSpec", "all_plugins", "get", "is_enabled", "override", "set_enabled"]
+__all__ = [
+    "PluginSpec",
+    "all_plugins",
+    "get",
+    "is_enabled",
+    "missing_dependency",
+    "override",
+    "set_enabled",
+]

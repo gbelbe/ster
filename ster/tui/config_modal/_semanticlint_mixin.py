@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Final
 
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.widgets import Button, Checkbox, Input, Static
 
 from ster.tui.check import Check
@@ -103,17 +104,13 @@ class _SemanticLintMixin(_ModalState):
 
         Yields a single FormGroup so this also works standalone when the tab is added
         dynamically via TabbedContent.add_pane (no `with` compose-context needed)."""
-        from ster.plugins.semanticlint import config, deps
+        from ster import plugins
+        from ster.plugins.semanticlint import config
 
         cfg = config.load_config()
         sections: list = []
-        if not deps.is_installed():
-            sections.append(
-                Static(
-                    "[yellow]semanticlint is not installed.[/] Run: pip install 'ster[semanticlint]'",
-                    classes=_LIT_CFG_HINT,
-                )
-            )
+        if problem := plugins.missing_dependency("semanticlint"):
+            sections.append(Static(f"[yellow]{escape(problem)}[/]", classes=_LIT_CFG_HINT))
         sections.append(
             self._sl_section(
                 "Features",

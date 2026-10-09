@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.markup import escape
 from textual.widgets import Checkbox, Static, TabbedContent, TabPane
 
 from ster.tui.check import Check
@@ -31,14 +32,28 @@ class _PluginsMixin(_ModalState):
             Vertical(
                 Check(spec.name, value=plugins.is_enabled(spec.id), id=f"cfg-plugin-{spec.id}"),
                 Static(spec.description, classes="cfg-plugin-desc"),
+                *self._plugin_problem(spec.id),
                 classes="cfg-plugin-block",
             )
             for spec in plugins.all_plugins()
         ]
         yield FormGroup(*blocks, id="cfg-plugins-group")  # one Tab stop, arrows rove the cards
 
+    def _plugin_problem(self, plugin_id: str) -> list[Static]:
+        """A warning line under a plugin's card when its package is missing, with the command that fixes it.
+
+        Shown whether or not the plugin is on: switching on a plugin that cannot run used to do nothing and say nothing.
+        """
+        from ster import plugins
+
+        problem = plugins.missing_dependency(plugin_id)
+        return (
+            [Static(f"[yellow]{escape(problem)}[/]", classes="cfg-plugin-desc")] if problem else []
+        )
+
     async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:  # noqa: V105
-        """Add / remove the Semantic Lint tab live when the plugin is toggled."""
+        """Add / remove the Semantic Lint tab live when the plugin is toggled; say so when it cannot run."""
+        self._warn_when_plugin_cannot_run(event)
         if event.checkbox.id != "cfg-plugin-semanticlint":
             if event.checkbox.id != "cfg-plugin-mcp":
                 return
@@ -64,6 +79,17 @@ class _PluginsMixin(_ModalState):
             await tabbed.add_pane(pane)
         elif not event.value and mounted:
             await tabbed.remove_pane("cfg-tab-semanticlint")
+
+    def _warn_when_plugin_cannot_run(self, event: Checkbox.Changed) -> None:
+        """A toast when a plugin was just switched on and its package is not installed."""
+        from ster import plugins
+
+        prefix = "cfg-plugin-"
+        card = event.checkbox.id or ""
+        if not (event.value and card.startswith(prefix)):
+            return
+        if problem := plugins.missing_dependency(card.removeprefix(prefix)):
+            self.notify(problem, severity="warning", timeout=15)
 
     def _trace_panel(self):
         from ster.plugins.query_trace import TracePanel
