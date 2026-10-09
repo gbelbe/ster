@@ -20,6 +20,7 @@ from typing import Any, Final, TypedDict, Unpack
 
 from .model import Taxonomy, is_builtin_uri
 from .query_trace import Event, get_recorder
+from .single_flight import single_flight
 
 # Entity kinds, in the order a URI is looked up. A dispatch table rather than an
 # if/elif chain so adding a kind is one row.
@@ -266,9 +267,14 @@ def vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
     answer. Same lifetime as the other per-model caches: a reload or a mutation
     builds a new Taxonomy and the count goes with the old one.
     """
-    cached = getattr(taxonomy, "_ster_vocabulary", None)
-    if cached is not None:
-        return cached  # type: ignore[return-value]
+    return single_flight(
+        ("vocabulary", id(taxonomy)),
+        lambda: getattr(taxonomy, "_ster_vocabulary", None),
+        lambda: _remember_vocabulary(taxonomy),
+    )
+
+
+def _remember_vocabulary(taxonomy: Taxonomy) -> dict[str, Any]:
     computed = _compute_vocabulary(taxonomy)
     try:
         taxonomy._ster_vocabulary = computed  # type: ignore[attr-defined]

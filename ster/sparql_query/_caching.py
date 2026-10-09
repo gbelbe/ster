@@ -23,6 +23,7 @@ from pathlib import Path
 
 import rdflib
 
+from ..single_flight import single_flight
 from ._types import UriIndex
 from ._uri_index import build_uri_index
 
@@ -67,33 +68,36 @@ def _trace(msg: str) -> None:
 
 
 def load_graph_cached(paths: list[Path]) -> rdflib.Graph:
-    """Return a cached graph, re-parsing only when a file has changed on disk."""
+    """Return a cached graph, re-parsing only when a file has changed on disk.
+
+    Callers that arrive while a parse is running wait for it rather than parsing the same files again.
+    """
     key = _cache_key(paths)
-    # Fast path: no lock needed for a read-only hit
-    cached = _graph_cache.get(key)
-    if cached is not None:
-        _trace(f"load_graph_cached HIT {[p.name for p in paths]}")
-        return cached
-    _trace(f"load_graph_cached MISS — parsing {[p.name for p in paths]}")
-    t0 = time.time()
-    g = load_graph(paths)
-    _trace(f"load_graph_cached parse done in {time.time() - t0:.2f}s")
-    with _graph_cache_lock:
-        if key not in _graph_cache:
-            _graph_cache[key] = g
-    return _graph_cache.get(key, g)
+
+    def parse() -> rdflib.Graph:
+        _trace(f"load_graph_cached MISS — parsing {[p.name for p in paths]}")
+        t0 = time.time()
+        g = load_graph(paths)
+        _trace(f"load_graph_cached parse done in {time.time() - t0:.2f}s")
+        with _graph_cache_lock:
+            return _graph_cache.setdefault(key, g)
+
+    return single_flight(("graph", key), lambda: _graph_cache.get(key), parse)
 
 
 def build_uri_index_cached(paths: list[Path]) -> UriIndex:
     """Return a cached URI completion index, rebuilding when any file changes."""
+    key = _cache_key(paths)
+    return single_flight(
+        ("uri-index", key),
+        lambda: _uri_index_cache.get(key),
+        lambda: _build_uri_index(paths, key),
+    )
+
+
+def _build_uri_index(paths: list[Path], key: tuple) -> UriIndex:
     from ..model import Taxonomy  # avoid circular at module level  # noqa: PLC0415
 
-    key = _cache_key(paths)
-    # Fast path
-    cached = _uri_index_cache.get(key)
-    if cached is not None:
-        _trace(f"build_uri_index_cached HIT {[p.name for p in paths]}")
-        return cached
     _trace(f"build_uri_index_cached MISS — building index {[p.name for p in paths]}")
     t0 = time.time()
     load_graph_cached(paths)

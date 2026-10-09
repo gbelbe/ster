@@ -201,6 +201,25 @@ def ster_state(force: bool = False) -> dict:
     return {"state": "up", "graph": ster_graph(force)}
 
 
+LOADING_WAIT_S = (
+    60.0  # how long a question waits for a ster that listens but is still loading its graph
+)
+
+
+def wait_until_answering(timeout: float = LOADING_WAIT_S) -> dict | None:
+    """The graph ster serves once it answers HTTP, or None when it is still silent after *timeout* seconds.
+
+    A ster that is loading a large graph already accepts connections but cannot answer; an agent started now would
+    find its MCP tools unreachable and say so. Waiting here keeps the question from being lost.
+    """
+    deadline = time.time() + timeout
+    while True:
+        graph = ster_graph(True)
+        if graph or time.time() >= deadline:
+            return graph
+        time.sleep(2)
+
+
 def ster_token() -> str:
     return TOKEN_FILE.read_text().strip()
 
@@ -724,6 +743,13 @@ async def ask(body: dict):
     if not agent:
         raise HTTPException(409, runner.why_none(RECIPES, CUSTOM, WANT)["text"])
     seen = await asyncio.to_thread(ster_state, True)
+    if seen["state"] == "up" and not seen["graph"]:
+        seen["graph"] = await asyncio.to_thread(wait_until_answering)
+        if not seen["graph"]:
+            raise HTTPException(
+                503,
+                "ster is still loading this graph and cannot answer yet; ask again in a minute or two.",
+            )
     turn = {
         "id": uuid.uuid4().hex[:12],
         "prompt": prompt,

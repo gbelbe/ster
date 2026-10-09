@@ -14,6 +14,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
+from .single_flight import single_flight
 from .sparql_query import run_query_on_taxonomy
 
 _PREFIXES = """\
@@ -96,9 +97,14 @@ def graph_fingerprint(taxonomy: Any) -> dict[str, Any]:
     from one load to the next), so only structure-free triples affect the hash. Computed once per store build.
     Two graphs with the same stamp are, for an agent's purposes, the same graph; any edit changes it.
     """
-    cached = getattr(taxonomy, "_ster_fingerprint", None)
-    if cached is not None:
-        return cached  # type: ignore[no-any-return]
+    return single_flight(
+        ("fingerprint", id(taxonomy)),
+        lambda: getattr(taxonomy, "_ster_fingerprint", None),
+        lambda: _compute_fingerprint(taxonomy),
+    )
+
+
+def _compute_fingerprint(taxonomy: Any) -> dict[str, Any]:
     from .store import full_graph_rdflib  # noqa: PLC0415
 
     total = count = 0
