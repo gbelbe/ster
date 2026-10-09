@@ -23,20 +23,37 @@ def _start_context_server(taxonomy: Taxonomy, path: Path | None) -> bool:
     second instance, say), this one takes the next free port, so it has a
     server of its own and the agent page it opens follows its own graph, not the
     other instance's. A ``ster serve`` of this very file is the exception: it
-    already is the server, and a second one would only split the traffic. No
-    HTML renderer is supplied; opening the graph viewer later attaches the VOWL
-    one to this same server.
+    already is the server, and a second one would only split the traffic. The
+    graph page renderer is supplied but imported only when a page is first
+    asked for, so an agent's ``/viz`` link works before the viewer was ever
+    opened and starting the editor still does not pay for the visualisation.
     """
     try:
         from ...api_server import start_background  # noqa: PLC0415
 
-        if start_background(taxonomy, path):
+        render = _graph_page_renderer(path)
+        if start_background(taxonomy, path, html_renderer=render):
             return True
         if _served_by_same_file(path):
             return False
-        return start_background(taxonomy, path, fallback_ports=FALLBACK_PORTS)
+        return start_background(taxonomy, path, html_renderer=render, fallback_ports=FALLBACK_PORTS)
     except Exception:  # noqa: BLE001 — the editor must open regardless
         return False
+
+
+def _graph_page_renderer(path: Path | None):  # noqa: ANN202 — the server's HtmlRenderer
+    """The graph page renderer for *path*, which loads the visualisation on its first call."""
+
+    def render(
+        taxonomy: Taxonomy, root_uri: str | None, token: str, full: bool = False, sparql: str = ""
+    ) -> str:
+        from ...viz_vowl._render import render_vowl_html  # noqa: PLC0415
+
+        return render_vowl_html(
+            taxonomy, path, api_token=token, root_uri=root_uri, full=full, sparql=sparql
+        )
+
+    return render
 
 
 def _served_by_same_file(path: Path | None) -> bool:

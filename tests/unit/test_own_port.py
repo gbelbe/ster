@@ -110,26 +110,27 @@ def test_a_stopped_server_gives_the_configured_port_back():
 
 
 def test_the_tui_tries_the_configured_port_first_and_asks_nothing_else_when_it_works(monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(k) or True)
+    calls: list[set] = []
+    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(set(k)) or True)
     assert _helpers._start_context_server("TAX", None) is True
-    assert calls == [{}]
+    assert calls == [{"html_renderer"}]
 
 
 def test_the_tui_takes_a_free_port_when_the_configured_one_is_held_by_another_ster(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(k) or bool(k))
+    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(k) or ("fallback_ports" in k))
     monkeypatch.setattr(_helpers, "_served_by_same_file", lambda _path: False)
     assert _helpers._start_context_server("TAX", None) is True
-    assert calls == [{}, {"fallback_ports": _helpers.FALLBACK_PORTS}]
+    assert [set(c) for c in calls] == [{"html_renderer"}, {"html_renderer", "fallback_ports"}]
+    assert calls[1]["fallback_ports"] == _helpers.FALLBACK_PORTS
 
 
 def test_the_tui_leaves_a_same_file_ster_serve_as_the_server(monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(k) or False)
+    calls: list[set] = []
+    monkeypatch.setattr(srv, START, lambda *a, **k: calls.append(set(k)) or False)
     monkeypatch.setattr(_helpers, "_served_by_same_file", lambda _path: True)
     assert _helpers._start_context_server("TAX", None) is False
-    assert calls == [{}]
+    assert calls == [{"html_renderer"}]
 
 
 def test_the_probe_for_a_same_file_server_is_false_when_it_cannot_run(monkeypatch):

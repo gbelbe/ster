@@ -36,8 +36,8 @@ def test_start_context_server_starts_the_background_server(monkeypatch):
     assert calls["path"] == "zoo.ttl"
 
 
-def test_start_context_server_supplies_no_html_renderer(monkeypatch):
-    """MCP needs a server, not a landing page — the graph viewer attaches that."""
+def test_start_context_server_supplies_a_graph_page_renderer(monkeypatch):
+    """An agent's /viz link must work before the graph viewer was ever opened."""
     calls: dict = {}
 
     def _fake(taxonomy, path=None, **kwargs):
@@ -46,7 +46,31 @@ def test_start_context_server_supplies_no_html_renderer(monkeypatch):
 
     monkeypatch.setattr(srv, "start_background", _fake)
     _start_context_server("TAX", None)
-    assert calls.get("html_renderer") is None
+    assert callable(calls.get("html_renderer"))
+
+
+def test_the_graph_page_renderer_loads_the_visualisation_only_when_called(monkeypatch):
+    """Starting the editor must not pay for the visualisation stack."""
+    import sys
+
+    from ster.tui.app._helpers import _graph_page_renderer
+
+    monkeypatch.delitem(sys.modules, "ster.viz_vowl._render", raising=False)
+    render = _graph_page_renderer(None)
+    assert "ster.viz_vowl._render" not in sys.modules
+
+    seen: dict = {}
+
+    def fake_render(taxonomy, path, **kwargs):
+        seen.update(taxonomy=taxonomy, path=path, **kwargs)
+        return "<html>g</html>"
+
+    import ster.viz_vowl._render as vowl_render
+
+    monkeypatch.setattr(vowl_render, "render_vowl_html", fake_render)
+    assert render("TAX", "urn:root", "tok", True, "SELECT 1") == "<html>g</html>"
+    assert seen["api_token"] == "tok" and seen["root_uri"] == "urn:root"
+    assert seen["full"] is True and seen["sparql"] == "SELECT 1"
 
 
 def test_start_context_server_reports_failure_without_raising(monkeypatch):
