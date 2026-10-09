@@ -50,6 +50,7 @@ from ._app import (
     app,
     err,
 )
+from ._cache_cmd import cmd_cache_clear  # noqa: F401  (registers `ster cache clear`)
 from ._commands_edit import (
     _validate_concept_issues,
     _validate_orphan_issues,

@@ -152,10 +152,32 @@ def test_a_context_file_that_changed_is_read_again_and_its_change_is_seen(projec
 def test_an_editable_file_that_changed_is_read_again(project, parses):
     main, context = project
     store.load(main, context=context)
-    os.utime(main, (FUTURE, FUTURE))
+    main.write_text(MAIN + "ex:Added a owl:Class .\n", encoding=TEXT)
     parses.clear()
     store.load(main, context=context)
     assert _contexts_read(parses, context) != []
+
+
+def test_a_cache_with_no_manifest_is_rebuilt_not_trusted(project, parses):
+    main, context = project
+    store.load(main, context=context)
+    store._cache._manifest_path(store._cache._get_context_cache_path(main, context)).unlink()
+    parses.clear()
+    store.load(main, context=context)
+    assert _contexts_read(parses, context) == context
+
+
+def test_a_damaged_cache_is_rebuilt_and_rewritten(project, parses):
+    main, context = project
+    store.load(main, context=context)
+    store._cache._get_context_cache_path(main, context).write_bytes(b"not a pickle")
+    parses.clear()
+    taxonomy = store.load(main, context=context)
+    assert _contexts_read(parses, context) == context
+    parses.clear()
+    store.load(main, context=context)
+    assert _contexts_read(parses, context) == []
+    assert "https://example.org/t#Alpha" in taxonomy.owl_classes
 
 
 def test_a_different_list_of_context_files_has_its_own_cache(project, parses):

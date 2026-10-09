@@ -21,8 +21,10 @@ from ._cache import (
     _is_merged_cache_valid,
     _prune_stale_context_caches,
     _prune_stale_schema_caches,
+    _source_manifest,
     _try_load_cache,
     _try_save_cache,
+    _write_manifest,
 )
 from ._format import _detect_format
 from ._from_graph import _capture_residue, _taxonomy_from_index, graph_to_taxonomy
@@ -141,6 +143,22 @@ def _load_merged_cache(path: Path, context: list[Path]) -> Taxonomy | None:
     return _try_load_cache(cache_path, path)
 
 
+def _manifest_of(sources: list[Path]) -> dict[str, dict] | None:
+    """What *sources* are right now, or None when one cannot be read (the load itself will say why)."""
+    try:
+        return _source_manifest(sources)
+    except OSError:
+        return None
+
+
+def _save_merged_cache(path: Path, context: list[Path], taxonomy: Taxonomy, manifest) -> None:
+    """Save the merged *taxonomy* and, when the files could be read, the manifest that vouches for it."""
+    cache_path = _get_context_cache_path(path, context)
+    _try_save_cache(cache_path, taxonomy)
+    if manifest is not None:
+        _write_manifest(cache_path, manifest)
+
+
 def load(
     path: str | Path,
     progress_callback: Callable[[int, str], None] | None = None,
@@ -155,8 +173,8 @@ def load(
     Uses a binary cache file in ~/.cache/ster/bin_cache to speed up subsequent
     loads of large files IF the source file hasn't changed. With *context* there is
     a second cache of the merged result, valid only while the editable file and every
-    context file are older than it, so reopening a project does not read its context
-    files again. Caching can be disabled by setting STER_NO_CACHE=1 in the environment.
+    context file still match the manifest saved with it (size, time, then content), so
+    reopening a project does not read its context files again. Caching can be disabled by setting STER_NO_CACHE=1 in the environment.
     """
     path = Path(path)
     # With context files the editable file is only the first tenth of the work; reporting it as the whole
@@ -167,6 +185,8 @@ def load(
     if context and use_cache and (merged := _load_merged_cache(path, context)) is not None:
         _report_progress(progress_callback, 100, "Loaded from cache")
         return merged
+    # Taken before anything is read, so a file edited while the load runs is seen as changed next time.
+    manifest = _manifest_of([path, *context]) if context and use_cache else None
     cache_path = _get_bin_cache_path(path)
 
     if use_cache:
@@ -200,7 +220,7 @@ def load(
         _merge_all_context(taxonomy, context, progress_callback)
         if use_cache:
             _report_progress(progress_callback, _ALMOST_DONE, "Updating cache")
-            _try_save_cache(_get_context_cache_path(path, context), taxonomy)
+            _save_merged_cache(path, context, taxonomy, manifest)
     return taxonomy
 
 

@@ -4,12 +4,18 @@ stale entries left behind whenever the model shape changes."""
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pickle
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Final
 
 from ..model import Taxonomy
+
+_ENCODING: Final = "utf-8"
+_MANIFEST_SUFFIX: Final = ".manifest.json"
+_HASH_CHUNK: Final = 1 << 20
 
 
 def _bin_cache_dir() -> Path:
@@ -84,6 +90,7 @@ def _prune_stale_context_caches(path: Path, context: list[Path]) -> None:
         for stale in keep.parent.glob(f"{keep.name.rsplit('_', 1)[0]}_*.pickle"):
             if stale != keep and not stale.is_symlink():
                 stale.unlink(missing_ok=True)
+                _manifest_path(stale).unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -123,29 +130,114 @@ def _is_cache_valid(cache_path: Path, source_path: Path) -> bool:
     return True
 
 
-def _is_merged_cache_valid(cache_path: Path, sources: list[Path]) -> bool:
-    """True when the merged cache is newer than every file that went into it, the editable one and each context file.
+def _manifest_path(cache_path: Path) -> Path:
+    """Where the record of the source files behind *cache_path* is kept, beside it."""
+    return cache_path.with_name(cache_path.name + _MANIFEST_SUFFIX)
 
-    A file that cannot be read, or has gone, makes the cache invalid: it can no longer vouch for what it holds.
-    """
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(_HASH_CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_manifest(sources: list[Path]) -> dict[str, dict[str, Any]]:
+    """Size, modification time and content hash of each of *sources*, by absolute path."""
+    manifest: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        path = Path(source)
+        stat = path.stat()
+        manifest[str(path.resolve())] = {
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": _file_sha256(path),
+        }
+    return manifest
+
+
+def _write_manifest(cache_path: Path, manifest: dict[str, dict[str, Any]]) -> None:
+    """Record *manifest* beside *cache_path*, owner-only. Best-effort: without it the cache is simply not trusted."""
+    target = _manifest_path(cache_path)
     try:
-        newest = max(Path(source).stat().st_mtime for source in sources)
+        cache_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
+        with os.fdopen(fd, "w", encoding=_ENCODING) as handle:
+            json.dump(manifest, handle)
+    except OSError:
+        pass
+
+
+def _read_manifest(cache_path: Path) -> dict[str, dict[str, Any]] | None:
+    try:
+        data = json.loads(_manifest_path(cache_path).read_text(encoding=_ENCODING))
     except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _unchanged(recorded: Any, path: Path) -> bool:
+    """True when *path* still is what *recorded* says: same size and time, else same content."""
+    try:
+        stat = path.stat()
+        if not isinstance(recorded, dict) or stat.st_size != recorded.get("size"):
+            return False
+        return stat.st_mtime_ns == recorded.get("mtime_ns") or (
+            _file_sha256(path) == recorded.get("sha256")
+        )
+    except OSError:
         return False
-    return _is_cache_valid_after(cache_path, newest)
 
 
-def _is_cache_valid_after(cache_path: Path, newest_source_mtime: float) -> bool:
-    """The cache file is ours, private, and written after *newest_source_mtime*."""
+def _is_ours(cache_path: Path) -> bool:
+    """The cache file exists, is not a link, and belongs to the current user."""
     if not cache_path.is_file() or cache_path.is_symlink():
         return False
     try:
-        stat = cache_path.stat()
+        owner = cache_path.stat().st_uid
     except OSError:
         return False
-    if stat.st_mtime <= newest_source_mtime:
+    return not hasattr(os, "getuid") or owner == os.getuid()
+
+
+def _is_merged_cache_valid(cache_path: Path, sources: list[Path]) -> bool:
+    """True when every file the merged cache was built from, the editable one and each context file, is unchanged.
+
+    Judged by the manifest saved beside the cache, not by timestamps: a file restored with an
+    older time but different content must not keep serving the old graph, and a file merely
+    touched need not throw a slow rebuild away. A missing or unreadable manifest, a file added,
+    removed or gone all make the cache invalid: it can no longer vouch for what it holds.
+    """
+    if not _is_ours(cache_path):
         return False
-    return not hasattr(os, "getuid") or stat.st_uid == os.getuid()
+    manifest = _read_manifest(cache_path)
+    if manifest is None:
+        return False
+    try:
+        wanted = {str(Path(source).resolve()): Path(source) for source in sources}
+    except OSError:
+        return False
+    return manifest.keys() == wanted.keys() and all(
+        _unchanged(manifest[key], path) for key, path in wanted.items()
+    )
+
+
+def clear_merged_caches() -> int:
+    """Delete every saved binary graph and its manifest; the number of files removed.
+
+    Only the binary-cache folder is touched, so vendored scripts and other files kept
+    under ``~/.cache/ster`` stay where they are.
+    """
+    removed = 0
+    try:
+        for entry in _bin_cache_dir().iterdir():
+            if entry.is_file() or entry.is_symlink():
+                entry.unlink(missing_ok=True)
+                removed += 1
+    except OSError:
+        pass
+    return removed
 
 
 def _try_load_cache(cache_path: Path, source_path: Path) -> Taxonomy | None:
