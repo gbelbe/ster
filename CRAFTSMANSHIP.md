@@ -452,8 +452,81 @@ gate entirely on a PR where that's the right call.
 kill a meaningful mutation: assert the observable result, cover the relevant
 boundary/error branch, and avoid merely executing the line. Mutation selection
 is diff-scoped and per function. A changed function passes at 80% mutation
-score, or, below 80%, only when it improves at least 20% over its first recorded
-per-function score in `.mutation-baseline.json`.
+score, or, below 80%, only when it already has a recorded score in
+`.mutation-baseline.json` and improves on it by at least 20%. A function with no
+recorded score — new, or never measured — must reach 80% outright; there is no
+"first run records the baseline" grace. Design its tests for 80% before the
+first push (see `templates/tdd-bdd-yagni.snippet.md`, "Design the tests before
+the code").
+
+## What to expect before you push — a checklist from real PRs
+
+The gates are mechanical, and a few of their behaviours surprise whoever meets them for the first time —
+a person or a coding agent. Know these in advance and the first push is the last one.
+
+**Refactor First (`scripts/check_refactor_first.py`)**
+
+- It compares the *committed* range (`origin/main...HEAD`). With uncommitted changes it can print
+  nothing at all, which looks like a pass. Commit first, then run it.
+- A **new file** has no "before", so it must be at **0** detectable smells — all eight, in tests and
+  helpers as much as in source. A touched **existing** file must end **lower** than it began, even if
+  your edit added nothing: touching it is what triggers the duty to fix one instance of each heuristic
+  present. Plan for this when you append a test to a file with older smells.
+- The smells that show up most in new code, and the fix:
+  - *unused function / class / method* (vulture, CG002): code that a framework calls by name or
+    registration — pytest and pytest-bdd tests and steps, `unittest.TestCase` classes, Textual
+    `on_*`/`action_*` handlers, FastAPI route functions, `http.server` `do_GET` — looks unused.
+    Say so on the flagged line with vulture's own code: `# noqa: V103` (function), `V105` (method),
+    `V102` (class), `V101` (attribute), `V107` (variable), with a reason if it is not obvious.
+    Vulture is run over the **whole corpus**, as craftCov does: run `craftcov.py --format json
+    --no-diff --no-cache` for the real findings, not `vulture <one file>`, which reports things another
+    file uses.
+  - *magic number* (PLR2004, CG009): a named constant; for HTTP status codes `http.HTTPStatus.OK`.
+  - *too many arguments* (PLR0913, CG018, more than 5): a small frozen dataclass as parameter object.
+  - *too many statements / branches* (PLR0915 / PLR0912): split into named helpers.
+  - *too many attributes / methods* (R0902 / R0904): split the class, or, for a plain record or a test
+    suite, `# pylint: disable=too-many-instance-attributes  # <why>` on the class line.
+  - *duplicate code* (CG024) counts across files: the same list in a source file and a test, or the
+    same fixture in two test modules, is flagged in both. Import one copy.
+- Fixing a whole new package to 0 is real work. If it is not worth it, `Tidy-Exempt:` is the documented
+  escape — with an honest reason, since a reviewer reads it.
+
+**Tidy First ratchet (`scripts/check_tidy_ratchet.sh`)**
+
+- It reads the commit messages in `origin/main..HEAD`. After a rebase onto a base that squash-merged
+  your earlier work, the `tidy(...)` commit that satisfied it may no longer be in the range: check.
+- A pre-commit hook that reformats files makes `git commit` fail; if its output is filtered, no commit
+  is made and nothing says so. Check `git log -1` after committing.
+
+**Complexity ratchet**
+
+- A touched function over 15 must end **lower**, not just no worse: moving the route handlers out of an
+  over-15 `register_*` function was what made a one-parameter change pass.
+- In touched code, a string literal repeated more than twice (S1192) fails; name it once.
+
+**Patch coverage**
+
+- Only code that the *one* coverage run executes counts. Tests run in another step, another directory
+  outside `testpaths`, or a separate job leave their code at 0%: put them in the same run.
+- Code inside a string (JavaScript or HTML embedded in a Python module) is not measured at all.
+- If any test in the coverage job fails, the patch-coverage step is **skipped**, not failed. A red job
+  whose failure is one flaky test therefore says nothing about coverage: read the *tests* step first.
+
+**Stacked pull requests**
+
+- When the base PR is **squash-merged**, merging `main` into the stacked branch conflicts on every file
+  both touched (add/add). Rebase your own commits instead: `git log --first-parent --no-merges
+  <old-base>..HEAD` lists them; cherry-pick them onto `origin/main` and push with `--force-with-lease`.
+- A gate that compares to `main` counts the base PR's code as yours until it merges (for example a
+  mutation ratchet): say so in the PR description so the reviewer does not read it as your regression.
+
+**Local gate and hooks**
+
+- Prek stashes unstaged changes into a user-global directory (`~/.cache/prek/patches/`) when a hook
+  rewrites files; leftovers make a later full run refuse to start. They are replayed into your tree, so
+  look at what they hold before deleting them.
+- GitHub sometimes answers a push with `Internal Server Error`. Retry after a minute or two before
+  suspecting the branch.
 
 ## Reporting — visible, not just enforced
 

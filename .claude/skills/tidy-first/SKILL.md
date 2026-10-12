@@ -45,6 +45,13 @@ check_complexity_ratchet.py` (CI's `complexity` gate) checks these
 mechanically too, independent of craftCov; see CRAFTSMANSHIP.md's "The
 complexity ratchet."
 
+## Before you push
+
+Read `CRAFTSMANSHIP.md`'s **"What to expect before you push"** first. It lists what the gates do that is easy to
+miss: new files must start at 0 detectable smells, a touched file must end lower than it began, framework-called
+code needs a vulture `noqa` code, the refactor gate prints nothing on uncommitted changes, and a failing test
+hides the patch-coverage step. Run the gates on the *committed* range, then push once.
+
 ## Where the mechanical parts live
 
 - `scripts/check_tidy_ratchet.sh` — the pre-push/CI ratchet (commit-message
