@@ -34,6 +34,12 @@ if [[ -z "$BASE" ]]; then
 fi
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
+  if [[ -n "${CI:-}${GITHUB_ACTIONS:-}" ]]; then
+    # a missing base in CI is a checkout without history (fetch-depth: 0) or a wrong base branch:
+    # passing here would leave the gate green forever without ever having looked at a commit
+    echo "✗ tidy ratchet: '$BASE' not found; fetch the full history (fetch-depth: 0) and check the base" >&2
+    exit 1
+  fi
   echo "⚠ tidy ratchet: '$BASE' not found locally — skipping (git fetch it first)" >&2
   exit 0
 fi
