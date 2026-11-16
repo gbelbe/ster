@@ -1,6 +1,12 @@
 ---
 name: tidy-first
-description: Before writing a feature or fix, check the code you're about to touch against the craftsmanship catalog (Beck's Tidy First, Fowler's Refactoring smells, Clean Code, Feathers' legacy-code method) and tidy it first as its own commit, separate from the behavioral one. Use before starting any change to an existing file, class, or function, before writing new code (as a design checklist), and when the tidy-ratchet (pre-push hook / CI) blocks a push for missing a tidy(<type>): or test(characterize): commit.
+description: >-
+  Before writing a feature or fix, check the code you're about to touch against the
+  craftsmanship catalog (Beck's Tidy First, Fowler's Refactoring smells, Clean Code, Feathers'
+  legacy-code method) and tidy it first as its own commit, separate from the behavioral one.
+  Use before starting any change to an existing file, class, or function, before writing new
+  code (as a design checklist), and when the tidy-ratchet (pre-push hook / CI) blocks a push
+  for missing a tidy(<type>): or test(characterize): commit.
 ---
 
 # Tidy First
@@ -45,6 +51,13 @@ check_complexity_ratchet.py` (CI's `complexity` gate) checks these
 mechanically too, independent of craftCov; see CRAFTSMANSHIP.md's "The
 complexity ratchet."
 
+## Before you push
+
+Read `CRAFTSMANSHIP.md`'s **"What to expect before you push"** first. It lists what the gates do that is easy to
+miss: new files must start at 0 detectable smells, a touched file must end lower than it began, framework-called
+code needs a vulture `noqa` code, the refactor gate prints nothing on uncommitted changes, and a failing test
+hides the patch-coverage step. Run the gates on the *committed* range, then push once.
+
 ## Where the mechanical parts live
 
 - `scripts/check_tidy_ratchet.sh` — the pre-push/CI ratchet (commit-message
@@ -61,3 +74,10 @@ complexity ratchet."
   become the rule").
 - `catalog.yaml` — machine-readable mirror of the catalog table, for tooling
   that wants to consume it programmatically rather than parse markdown.
+
+## Numbers and exemptions come from the repo's config
+
+The thresholds the gates use, and what a `Tidy-Exempt:` trailer may waive, are in
+`craft-gate.toml` (or `[tool.craft-gate]` in `pyproject.toml`) at the repo root. Read it rather
+than assuming the defaults, and never loosen a value to make a gate pass: fix the code.
+`CRAFTSMANSHIP.md`'s "Configuration" section has the rules.
