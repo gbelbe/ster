@@ -1,5 +1,5 @@
 # The actual catalog data — edit this, not CRAFTSMANSHIP.md's tables
-# directly (those are generated: scripts/render_catalog.py). See
+# directly (those are generated: tools/render_catalog.py). See
 # CONTRIBUTING.md's "Adding a heuristic or rule."
 #
 # kind: tidying (Beck, structural-only, existing code)
@@ -15,8 +15,8 @@
 # `detector` (optional) wires an entry to scripts/craftcov.py's automatic
 # scan. Present only where a real mechanical proxy exists; most entries have
 # none on purpose — a false-positive-prone regex for something like Feature
-# Envy would be worse than not detecting it at all. See craftcov.py's module
-# docstring for the full honesty-about-limits explanation.
+# Envy would be worse than not detecting it at all. See scripts/craftcov_core's
+# package docstring (`craftcov.py --help`) for the full honesty-about-limits explanation.
 #   tool: ruff   rules: [<rule codes>]   — the only detector kind so far.
 
 - id: guard-clauses
@@ -241,8 +241,7 @@
   smell: One logical decision is duplicated as near-identical conditionals in several places
   action: Consolidate into one decision point
   # Broader proxy than the smell's own name: the detector (a ported,
-  # rolling-hash line-window match — see scripts/craftcov.py's "duplicate
-  # code" section) flags any exact-duplicate block >= min_lines, not
+  # rolling-hash line-window match — see scripts/craftcov_core/dupes.py) flags any exact-duplicate block >= min_lines, not
   # specifically conditionals. Same kind of imprecision as
   # introduce-parameter-object's "too many args" proxy for the narrower
   # "same group repeats" smell — a real trade, not an oversight.
